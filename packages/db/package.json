@@ -1,0 +1,22 @@
+{
+  "name": "@meridian/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.36.4",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

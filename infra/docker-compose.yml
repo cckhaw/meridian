@@ -1,0 +1,30 @@
+# Local development stack. Production uses AlloyDB (sharded), MongoDB Atlas,
+# Redis Cluster, managed Kafka and Temporal Cloud / self-hosted Temporal.
+name: meridian
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: meridian, POSTGRES_PASSWORD: meridian, POSTGRES_DB: meridian }
+    ports: ["5432:5432"]
+    volumes: ["pg:/var/lib/postgresql/data"]
+  mongo:
+    image: mongo:7
+    ports: ["27017:27017"]
+    volumes: ["mongo:/data/db"]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+  kafka:
+    image: apache/kafka:3.8.0
+    ports: ["9092:9092"]
+  temporal:
+    image: temporalio/auto-setup:1.25
+    environment: { DB: postgres12, DB_PORT: "5432", POSTGRES_USER: meridian, POSTGRES_PWD: meridian, POSTGRES_SEEDS: postgres }
+    depends_on: [postgres]
+    ports: ["7233:7233"]
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    environment: { TEMPORAL_ADDRESS: "temporal:7233" }
+    ports: ["8080:8080"]
+    depends_on: [temporal]
+volumes: { pg: {}, mongo: {} }
