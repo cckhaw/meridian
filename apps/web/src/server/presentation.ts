@@ -1,5 +1,5 @@
-import { DEFAULT_REGIONAL, type RegionalSettings } from '@meridian/types';
-import { DEFAULT_BRAND_NAME, DEFAULT_THEME, getBranding, getDb, getRegional, themeCss, type ThemeId } from '@meridian/core';
+import { DEFAULT_REGIONAL, DEFAULT_THEME, themeCss, type RegionalSettings, type ThemeId } from '@meridian/types';
+import { DEFAULT_BRAND_NAME, getBranding, getDb, getRegional } from '@meridian/core';
 
 export interface Presentation { name: string; theme: ThemeId; logoUrl: string | null; regional: RegionalSettings; css: string }
 

@@ -171,7 +171,9 @@ export async function updateApplication(q: Queryable, id: string, access: AppAcc
 
 export async function uploadDocument(q: Queryable, id: string, access: AppAccess, kind: Parameters<typeof addDocument>[2], bytes: Buffer) {
   const a = await load(q, id, access);
-  if (a.status !== 'DRAFT') throw rejected('Documents can only be added while the application is open.');
+  // Identity documents are frozen once KYC is decided; the customer's signature is captured last, at the counter.
+  const ok = a.status === 'DRAFT' || (a.status === 'KYC_APPROVED' && kind === 'SIGNATURE' && access.channel === 'RETAIL_ASSISTED');
+  if (!ok) throw rejected('Documents can only be added while the application is open.');
   return addDocument(q, id, kind, bytes);
 }
 
@@ -182,7 +184,11 @@ export async function submitKyc(q: Queryable, id: string, access: AppAccess, att
     if (!attestation) throw invalid('The in-person attestation is required.');
     if (a.customerId) { // an existing, already-verified customer needs no new check
       const c = await getCustomer(q, a.customerId);
-      if (c.kycStatus === 'VERIFIED') { await q.query(`UPDATE applications SET status='KYC_APPROVED', updated_at=now() WHERE id=$1`, [id]); return (await q.query('SELECT * FROM applications WHERE id=$1', [id])).rows[0]!; }
+      if (c.kycStatus === 'VERIFIED') {
+        if (!attestation.idSighted || !attestation.faceMatches) throw rejected('Confirm that you have checked the customer in person.');
+        await audit(q, access.staff!.username, 'application', id, 'RETURNING_CUSTOMER_CONFIRMED', { customerId: a.customerId });
+        await q.query(`UPDATE applications SET status='KYC_APPROVED', updated_at=now() WHERE id=$1`, [id]); return (await q.query('SELECT * FROM applications WHERE id=$1', [id])).rows[0]!;
+      }
     }
     await attestInPerson(q, id, access.staff!, attestation, s);
   } else await submitRemote(q, id, s);
@@ -212,14 +218,20 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     if (access.channel === 'RETAIL_ASSISTED' && !consent.authorisedAssistant) throw rejected('The customer must authorise the assistant to complete this order on their behalf.');
     const quote = await quoteBasket(q, { lines: a.lines, channel: access.channel, customerId: a.customerId });
     if (quote.violations.length) throw rejected(quote.violations.join(' '));
-    if (quote.requiresShipping && !a.address) throw rejected('A delivery address is required for this order.');
+    if (quote.requiresShipping && access.channel === 'SELF_SERVE' && !a.address) throw rejected('A delivery address is required for this order.');
 
     // customer: existing (assisted) or created now from the verified identity
     let customerId = a.customerId as string | null;
     const p = a.personal as Personal;
     if (!customerId) {
-      const created = await createCustomer(q, { segment: 'CONSUMER', displayName: p.fullName.trim(), idDocument: p.idNumber.trim(), email: p.email, phone: p.phone, marketCode: await storeMarket(q) });
-      customerId = created.customer.id as string;
+      try {
+        const created = await createCustomer(q, { segment: 'CONSUMER', displayName: p.fullName.trim(), idDocument: p.idNumber.trim(), email: p.email, phone: p.phone, marketCode: await storeMarket(q) });
+        customerId = created.customer.id as string;
+      } catch (e) {
+        // Never echo the existing customer's id back to an applicant.
+        if (e instanceof DomainError && e.code === 'CONFLICT') throw rejected('This ID is already registered with us. Please visit a store so we can help you.');
+        throw e;
+      }
     }
     await markVerified(q, customerId);
     await q.query(`UPDATE kyc_cases SET customer_id=$2 WHERE application_id=$1`, [id, customerId]);
@@ -319,7 +331,7 @@ export async function applicationView(q: Queryable, id: string, access: AppAcces
     personal: { ...personalSafe, idNumberMasked: case_?.idNumberMasked }, personalProblems: personalProblems(p),
     address: a.address, consent: a.consent, termsVersion: st.termsVersion, termsUrl: st.termsUrl, privacyUrl: st.privacyUrl,
     kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW' } : null,
-    documents: docs, order, customerId: a.customerId,
+    documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
   };
 }
 

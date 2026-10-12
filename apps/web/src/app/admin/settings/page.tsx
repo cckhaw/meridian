@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useApi } from '@/lib/api';
 import { AppearanceSettings } from './appearance';
 import { RegionalSettingsForm } from './regional';
+import { StorefrontSettings } from './storefront';
 
-const TABS = [['regional', 'Regional'], ['appearance', 'Appearance']] as const;
+const TABS = [['regional', 'Regional'], ['appearance', 'Appearance'], ['storefront', 'Store-front']] as const;
 
 export default function SettingsPage() {
   const { data, error, loading, reload } = useApi('/settings');
@@ -24,6 +25,7 @@ export default function SettingsPage() {
       {data && (
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
           {tab === 'regional' && <RegionalSettingsForm initial={data.regional} locked={data.currencyLocked} onSaved={reload} />}
+          {tab === 'storefront' && <StorefrontSettings />}
           {tab === 'appearance' && <AppearanceSettings branding={data.branding} themes={data.themes} guidance={data.logoGuidance} onSaved={reload} />}
         </div>
       )}

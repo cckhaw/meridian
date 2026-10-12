@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as core from '@meridian/core';
 import { DomainError, forbidden, getDb, type Db, type Permission, type SessionUser } from '@meridian/core';
-import { formatMoney } from '@meridian/types';
+import { formatMoney, THEMES } from '@meridian/types';
 import { z, ZodError } from 'zod';
 import { assertCustomer, assertOrder } from './access';
 import { clearCookie, clientIp, readToken, sameOrigin, sessionCookie } from './session';
@@ -222,7 +222,7 @@ open('GET', '/branding/logo', async ({ db, req }) => {
 });
 get('/settings', 'settings:manage', async ({ db }) => ({
   regional: await core.getRegional(db), currencyLocked: await core.hasTransactions(db), branding: brandingView(await core.getBranding(db)),
-  themes: Object.values(core.THEMES), logoGuidance: core.LOGO_RECOMMENDATION,
+  themes: Object.values(THEMES), logoGuidance: core.LOGO_RECOMMENDATION,
 }));
 post('/settings/regional', 'settings:manage', async ({ db, user, body }) => {
   const r = await core.setRegional(db, user.username, { ...regionalSchema.parse(body), exponent: 2 });

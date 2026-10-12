@@ -51,7 +51,6 @@ export function getDb(): Promise<Db> {
   return g.__meridianDb;
 }
 export * from './settings.js';
-export * from './themes.js';
 export * from './apikeys.js';
 export * from './field-crypto.js';
 export * from './gateways.js';

@@ -175,7 +175,8 @@ export async function attestInPerson(q: Queryable, appId: string, staff: { usern
 
 // ───────────────────────── compliance review ─────────────────────────
 export async function listKycCases(q: Queryable, f: { status?: string; limit?: number } = {}): Promise<Row[]> {
-  const params: unknown[] = []; const where: string[] = [];
+  // A case exists as soon as details are typed in; it only reaches the queue once the applicant (or the store) has submitted it.
+  const params: unknown[] = []; const where: string[] = [`(k.status <> 'PENDING' OR a.status = 'KYC_REVIEW')`];
   if (f.status) where.push(`k.status = $${params.push(f.status)}`);
   params.push(Math.min(f.limit ?? 50, 200));
   return (await q.query(
@@ -216,6 +217,10 @@ export async function decideKycCase(q: Queryable, caseId: string, reviewer: stri
   if (d.decision === 'APPROVE') {
     const hard = hardFailures(app.personal as Personal, s, todayStr());
     if (hard.length) throw rejected(`This cannot be approved: ${hard.join(' ')}`);
+    // An online applicant whose ID already belongs to a customer must never be attached to that customer's account: the existing owner would be billed.
+    if (app.channel === 'SELF_SERVE' && (c.flags as string[]).includes('DUPLICATE_IDENTITY')) {
+      throw rejected('This ID is already registered to an existing customer, so it cannot be approved online. Reject it (the customer can visit a store) or send it back.');
+    }
     // Whoever attested in person cannot also approve their own flagged case.
     if (c.attestation?.by === reviewer) throw rejected('A different person must review a case you attested.');
     await setOutcome(q, app, c, { case: 'APPROVED', app: 'KYC_APPROVED', by: reviewer, reason: reason ?? 'Approved after review' });

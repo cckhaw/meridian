@@ -173,6 +173,8 @@ describe('self-serve sign-up, KYC and payment', () => {
     const c = (await listKycCases(db, { status: 'PENDING' })).find((x) => x.applicationId === dup.id)!;
     expect(c.flags).toContain('DUPLICATE_IDENTITY');
     expect(existing.customer.id).toBeTruthy();
+    // approving it online would attach the applicant to someone else's account: refused
+    await expect(decideKycCase(db, c.id, 'compliance.officer', { decision: 'APPROVE' }, await getStoreSettings(db))).rejects.toThrow(/already registered/);
     // a reviewer can send it back, and the applicant can fix and resubmit
     await decideKycCase(db, c.id, 'compliance.officer', { decision: 'RETURN', reason: 'Photo is blurry' }, await getStoreSettings(db));
     const v = await applicationView(db, dup.id, dup.acc) as any;
@@ -321,7 +323,9 @@ describe('assisted sale (customer is in the store)', () => {
     await submitKyc(db, id, acc, { idSighted: true, faceMatches: true, notes: 'NRIC checked' });
     expect((await applicationView(db, id, acc) as any)).toMatchObject({ status: 'KYC_APPROVED', kyc: { method: 'IN_PERSON' } });
     await expect(checkout(db, id, acc, { assistedPayment: { method: 'CASH', confirmed: true, reference: 'RCPT-1' } })).rejects.toThrow(/authorise/);
-    await db.query(`UPDATE applications SET consent=$2 WHERE id=$1`, [id, JSON.stringify({ ...consent, termsVersion: '1', authorisedAssistant: true })]);
+    await expect(uploadDocument(db, id, acc, 'ID_FRONT', png())).rejects.toThrow(/open/); // identity evidence is frozen after approval
+    await uploadDocument(db, id, acc, 'SIGNATURE', png());                                  // the signature is captured last
+    await updateApplication(db, id, acc, { consent: { ...consent, authorisedAssistant: true } });
     const out = await checkout(db, id, acc, { assistedPayment: { method: 'CASH', confirmed: true, reference: 'RCPT-1' } });
     expect(out.order.state).toBe('COMPLETED');
     expect(out.order).toMatchObject({ channel: 'RETAIL_ASSISTED', storeId: 'STORE-SG-001', salespersonId: 'store.clerk' });

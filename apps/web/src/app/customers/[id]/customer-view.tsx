@@ -19,7 +19,7 @@ export function CustomerView({ id }: { id: string }) {
   const cust = c.customer;
   return (
     <>
-      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{label(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
+      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{label(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><Badge tone={cust.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{cust.kycStatus === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {can('billing:read') && <Stat label="Outstanding" value={money(c.outstandingMinor)} />}

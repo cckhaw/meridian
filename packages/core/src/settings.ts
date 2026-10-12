@@ -5,7 +5,7 @@ import { market, type Market } from './config.js';
 
 import type { Queryable } from './db.js';
 import { invalid, rejected } from './errors.js';
-import { DEFAULT_THEME, isThemeId, type ThemeId } from './themes.js';
+import { DEFAULT_THEME, isThemeId, type ThemeId } from '@meridian/types';
 
 // ───────────────────────── regional ─────────────────────────
 export async function getRegional(q: Queryable): Promise<RegionalSettings> {

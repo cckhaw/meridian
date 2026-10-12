@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contrast, THEME_IDS, THEMES, themeCss, type Rgb } from './themes.js';
+import { contrast, THEME_IDS, THEMES, themeCss, type Rgb } from '@meridian/types';
 
 const SURFACES = { light: { bg: [255, 255, 255] as Rgb, surface2: [250, 250, 252] as Rgb }, dark: { bg: [0, 0, 0] as Rgb, surface: [28, 28, 30] as Rgb, surface2: [44, 44, 46] as Rgb } };
 
