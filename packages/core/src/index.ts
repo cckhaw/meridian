@@ -6,6 +6,8 @@ import { seedDemo, seedReference } from './seed.js';
 export * from './audit.js';
 export * from './auth.js';
 export * from './passwords.js';
+export * from './paging.js';
+export * from './search.js';
 export * from './rbac.js';
 export * from './billing.js';
 export * from './cases.js';

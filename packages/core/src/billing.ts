@@ -8,6 +8,8 @@ import type { Db, Queryable, Row } from './db.js';
 import { addDays, addMonths, dayOf, diffDays, fmt, today, toDate, type DateStr } from './dates.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { postJournal } from './ledger.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
+import { customerIdsMatching, likePrefix, parseQuery } from './search.js';
 import { taxSplit } from './tax.js';
 
 export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; description: string; amountMinor: number; taxInclusive: boolean }
@@ -146,19 +148,24 @@ export async function getInvoice(q: Queryable, id: string): Promise<Row> {
   return { ...inv, balanceMinor: invoiceBalance(inv), lines, payments, taxName: (await marketFor(q, inv.marketCode)).taxName };
 }
 
-export async function listInvoices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; limit?: number; offset?: number } = {}) {
-  const params: unknown[] = []; const where: string[] = [];
-  const p = (v: unknown) => `$${params.push(v)}`;
+export async function listInvoices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
   if (f.customerId) where.push(`i.customer_id = ${p(f.customerId)}`);
   if (f.accountId) where.push(`i.account_id = ${p(f.accountId)}`);
   if (f.status) where.push(`i.status = ${p(f.status)}`);
-  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = (await q.query(`SELECT count(*) AS n FROM invoices i ${w}`, params)).rows[0]!.n;
-  const lim = p(Math.min(f.limit ?? 25, 100)); const off = p(f.offset ?? 0);
-  const items = (await q.query(
+  // Search: an invoice number prefix (INV-2026-00…), otherwise whoever the customer is.
+  const text = (f.q ?? '').trim();
+  if (/^inv/i.test(text)) where.push(`i.number LIKE ${p(likePrefix(text.toUpperCase()))}`);
+  else { const ids = customerIdsMatching(await parseQuery(q, text), p); if (ids) where.push(`i.customer_id IN (${ids})`); }
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(i.issue_date, i.number) < (${p(cur[0])}::date, ${p(cur[1])}::text)`);
+  const rows = (await q.query(
     `SELECT i.*, i.total_minor - i.paid_minor - i.credited_minor AS balance_minor, c.display_name AS customer_name
-     FROM invoices i JOIN customers c ON c.id = i.customer_id ${w} ORDER BY i.issue_date DESC, i.number DESC LIMIT ${lim} OFFSET ${off}`, params)).rows;
-  return { items, total };
+     FROM invoices i JOIN customers c ON c.id = i.customer_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY i.issue_date DESC, i.number DESC LIMIT ${p(limit + 1)}`, params)).rows;
+  return toPage(rows, limit, (r) => [String(r.issueDate).slice(0, 10), r.number as string]);
 }
 
 export async function payInvoice(db: Db, invoiceId: string, o: { amountMinor?: number; method: 'CASH' | 'CREDIT_CARD' | 'QR'; reference?: string; idempotencyKey?: string; date?: DateStr }, actor = 'system') {

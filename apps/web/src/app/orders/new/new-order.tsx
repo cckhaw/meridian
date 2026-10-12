@@ -1,8 +1,8 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, LargeTitle, SectionTitle, Select, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Field, Input, LargeTitle, LoadMore, SectionTitle, Select, Spinner } from '@meridian/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { post, useAction, useApi } from '@/lib/api';
+import { api, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { label, money } from '@/lib/format';
 
@@ -35,18 +35,20 @@ export function NewOrder() {
   const meta = useApi('/meta');
   const manual = meta.data?.paymentMode === 'manual';
   const cashier = can('order:payment') && !portal;
-  const offers = useApi(`/catalog?level=OFFER&status=ACTIVE&market=${me?.marketCode ?? 'SG'}&q=${encodeURIComponent(offerQ)}`);
-  const found = useApi(!quick && !portal && custQ.length >= 2 ? `/customers?q=${encodeURIComponent(custQ)}&limit=6` : null);
+  const offerTerm = useDebounced(offerQ.trim());
+  const offers = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${me?.marketCode ?? 'SG'}${quick ? '&kind=PHYSICAL_GOOD' : ''}&q=${encodeURIComponent(offerTerm)}`);
+  const custTerm = useDebounced(custQ.trim());
+  const found = useApi(!quick && !portal && custTerm.length >= 2 ? `/customers?q=${encodeURIComponent(custTerm)}&limit=6` : null);
   const cust = useApi(!quick && customerId ? `/customers/${customerId}` : null);
-  const stores = useApi(retail && !me?.storeId && can('inventory:read') ? '/inventory' : null);
+  const stores = useApi<{ items: string[] }>(retail && !me?.storeId && can('inventory:read') ? '/inventory/locations' : null);
   const { run, busy, error } = useAction();
 
   useEffect(() => { // deep link from a recommendation
     const pre = sp.get('offerId');
-    if (pre && offers.data && lines.length === 0) { const o = offers.data.items.find((x: any) => x.id === pre); if (o) setLines([{ offer: o, quantity: 1, msisdn: '' }]); }
-  }, [offers.data]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (pre && lines.length === 0) void api(`/catalog/${encodeURIComponent(pre)}`).then((o) => { if (o.level === 'OFFER' && o.status === 'ACTIVE') setLines((ls) => (ls.length ? ls : [{ offer: o, quantity: 1, msisdn: '' }])); }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visible = (offers.data?.items ?? []).filter((o: any) => !quick || o.kind === 'PHYSICAL_GOOD');
+  const visible: any[] = offers.items;
   const taxBps = meta.data?.markets?.[cust.data?.customer.marketCode ?? me?.marketCode ?? 'SG']?.taxBps ?? 0;
   const totals = useMemo(() => {
     let now = 0, monthly = 0;
@@ -58,7 +60,7 @@ export function NewOrder() {
   }, [lines, taxBps]);
   const hasService = lines.some((l) => l.offer.kind !== 'PHYSICAL_GOOD');
   if (channels.length === 0) return <Alert tone="info">Your role cannot create orders.</Alert>;
-  const storeOptions = [...new Set<string>((stores.data?.items ?? []).map((s: any) => s.locationId).filter((l: string) => l.startsWith('STORE-')))];
+  const storeOptions = (stores.data?.items ?? []).filter((l) => l.startsWith('STORE-'));
 
   const add = (o: any) => setLines((ls) => ls.find((l) => l.offer.id === o.id) ? ls.map((l) => (l.offer.id === o.id ? { ...l, quantity: l.quantity + 1 } : l)) : [...ls, { offer: o, quantity: 1, msisdn: '' }]);
   const needsRef = manual && cashier && pay.received && pay.method !== 'INSTALLMENT' && totals.now > 0;
@@ -104,8 +106,8 @@ export function NewOrder() {
 
           <div>
             <SectionTitle action={<Input type="search" aria-label="Search offers" placeholder="Search offers…" value={offerQ} onChange={(e) => setOfferQ(e.target.value)} className="!min-h-[36px] !w-44" />}>Offers</SectionTitle>
-            {offers.loading && !offers.data && <Spinner />}
-            {offers.data && visible.length === 0 && <Alert tone="info">No sellable offers{quick ? ' for quick sale' : ''}. {can('catalog:write') ? 'Create and activate offers in the catalog.' : 'Ask a product configurator to activate offers.'}</Alert>}
+            {offers.loading && offers.items.length === 0 && <Spinner />}
+            {!offers.loading && visible.length === 0 && <Alert tone="info">No sellable offers{quick ? ' for quick sale' : ''}. {can('catalog:write') ? 'Create and activate offers in the catalog.' : 'Ask a product configurator to activate offers.'}</Alert>}
             <div className="grid gap-3 sm:grid-cols-2">
               {visible.map((o: any) => {
                 const rec = o.prices.find((p: any) => p.type === 'RECURRING'), once = o.prices.find((p: any) => p.type === 'ONE_TIME');
@@ -118,6 +120,7 @@ export function NewOrder() {
                 );
               })}
             </div>
+            {visible.length > 0 && <LoadMore shown={visible.length} hasMore={offers.hasMore} loading={offers.loadingMore} onMore={offers.loadMore} noun="offers" />}
           </div>
         </div>
 

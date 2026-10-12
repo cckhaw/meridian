@@ -3,6 +3,8 @@ import type { Account, Customer, CustomerSegment } from '@meridian/types';
 import { marketFor } from './settings.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, tsPage, type Page } from './paging.js';
+import { customerIdsMatching, parseQuery } from './search.js';
 import { shardFor } from './shard.js';
 
 export interface NewCustomer {
@@ -72,30 +74,45 @@ export async function getCustomer(q: Queryable, id: string): Promise<Customer & 
   return strip(r);
 }
 
-export async function searchCustomers(q: Queryable, f: { q?: string; segment?: string; limit?: number; offset?: number }) {
-  const params: unknown[] = [];
-  const p = (v: unknown) => `$${params.push(v)}`;
+export async function searchCustomers(q: Queryable, f: { q?: string; segment?: string; limit?: number; cursor?: string }): Promise<Page<Row>> {
+  const limit = pageSize(f.limit);
+  const { params, p } = sqlBuilder();
   const where: string[] = [];
   if (f.segment) where.push(`c.segment = ${p(f.segment)}`);
-  if (f.q?.trim()) {
-    const like = p(`%${f.q.trim()}%`);
-    where.push(`(c.display_name ILIKE ${like} OR c.email ILIKE ${like} OR c.phone ILIKE ${like} OR c.id::text = ${p(f.q.trim())}
-      OR EXISTS (SELECT 1 FROM services s WHERE s.customer_id = c.id AND s.identifier ILIKE ${like}))`);
-  }
-  const lim = p(Math.min(f.limit ?? 25, 100)); const off = p(f.offset ?? 0);
-  const sql = `SELECT c.*, (SELECT count(*) FROM services s WHERE s.customer_id = c.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count,
-      (SELECT count(*) FROM customers k WHERE k.parent_customer_id = c.id) AS child_count
-    FROM customers c ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.created_at DESC, c.id LIMIT ${lim} OFFSET ${off}`;
-  const rows = (await q.query(sql, params)).rows.map(strip);
-  const total = (await q.query(`SELECT count(*) AS n FROM customers c ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`, params.slice(0, params.length - 2))).rows[0]!.n;
-  return { items: rows, total };
+  const ids = customerIdsMatching(await parseQuery(q, f.q), p);
+  if (ids) where.push(`c.id IN (${ids})`);
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(c.created_at, c.id) < (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT c.*, c.created_at::text AS cursor_ts, (SELECT count(*) FROM services s WHERE s.customer_id = c.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count,
+       (SELECT count(*) FROM customers k WHERE k.parent_customer_id = c.id) AS child_count
+     FROM customers c ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.created_at DESC, c.id DESC LIMIT ${p(limit + 1)}`, params)).rows;
+  const page = tsPage(rows as Array<Row & { id: string; cursorTs: string }>, limit);
+  return { items: page.items.map(strip), nextCursor: page.nextCursor };
 }
 
-/** Direct children (departments / sub-accounts) of a customer, or the whole subtree with `deep`. */
-export async function listChildren(q: Queryable, customerId: string, deep = false, limit = 100) {
+/**
+ * Direct children (departments / sub-accounts) of a customer, or the whole subtree with `deep`. Paged and searchable by name, so an enterprise with
+ * tens of thousands of departments opens instantly.
+ */
+export async function listChildren(q: Queryable, customerId: string, o: { deep?: boolean; limit?: number; cursor?: string; q?: string } = {}): Promise<Page<Row>> {
   const c = await getCustomer(q, customerId);
-  if (deep) return (await q.query(`SELECT * FROM customers WHERE hierarchy_path <@ $1::ltree AND id <> $2 ORDER BY hierarchy_path LIMIT $3`, [c.hierarchyPath, customerId, limit])).rows.map(strip);
-  return (await q.query(`SELECT * FROM customers WHERE parent_customer_id = $1 ORDER BY display_name LIMIT $2`, [customerId, limit])).rows.map(strip);
+  const limit = pageSize(o.limit);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
+  const words = await parseQuery(q, o.q);
+  if (o.deep) where.push(`k.hierarchy_path <@ ${p(c.hierarchyPath)}::ltree`, `k.id <> ${p(customerId)}`); else where.push(`k.parent_customer_id = ${p(customerId)}`);
+  if (words.kind === 'words') where.push(`to_tsvector('simple', k.display_name) @@ to_tsquery('simple', ${p(words.tsquery)})`);
+  else if (words.kind !== 'empty') where.push(`k.id IN (${customerIdsMatching(words, p)})`);
+  const orderCol = o.deep ? 'k.hierarchy_path::text' : 'k.display_name';
+  const cur = decodeCursor(o.cursor, 2);
+  if (cur) where.push(`(${orderCol}, k.id) > (${p(cur[0])}::text, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT k.*, ${orderCol} AS cursor_ord, (SELECT count(*) FROM customers g WHERE g.parent_customer_id = k.id) AS child_count,
+       (SELECT count(*) FROM services s WHERE s.customer_id = k.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count
+     FROM customers k WHERE ${where.join(' AND ')} ORDER BY ${orderCol}, k.id LIMIT ${p(limit + 1)}`, params)).rows;
+  const page = toPage(rows as Array<Row & { cursorOrd: string; id: string }>, limit, (r) => [r.cursorOrd, r.id]);
+  return { items: page.items.map(({ cursorOrd: _o, ...rest }) => strip(rest)), nextCursor: page.nextCursor };
 }
 
 export async function addToGroup(q: Queryable, groupCustomerId: string, memberCustomerId: string, role: 'OWNER' | 'MEMBER' | 'DEPARTMENT' = 'MEMBER') {
@@ -116,4 +133,63 @@ export async function updateCustomer(q: Queryable, id: string, patch: { displayN
     [id, patch.displayName ?? null, patch.email ?? null, patch.phone ?? null, patch.status ?? null],
   );
   return getCustomer(q, id);
+}
+
+// ───────────────────────── hierarchy navigation: group → customer → account → services ─────────────────────────
+
+/** The accounts of one customer, oldest first, a page at a time, each with its open balance and live service count (computed for the page only). */
+export async function listAccounts(q: Queryable, customerId: string, f: { q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 20, 100);
+  const { params, p } = sqlBuilder();
+  const where = [`a.customer_id = ${p(customerId)}`];
+  const text = (f.q ?? '').trim();
+  if (text) where.push(`lower(a.name) LIKE ${p(`%${text.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`)}`); // bounded by the customer, so a substring match is cheap
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(a.created_at, a.id) > (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(`SELECT a.*, a.created_at::text AS cursor_ts FROM accounts a WHERE ${where.join(' AND ')} ORDER BY a.created_at, a.id LIMIT ${p(limit + 1)}`, params)).rows;
+  const page = tsPage(rows as Array<Row & { id: string; cursorTs: string }>, limit);
+  const ids = page.items.map((a) => a.id as string);
+  const bal = new Map<string, number>(), svc = new Map<string, number>();
+  if (ids.length) {
+    for (const r of (await q.query(`SELECT account_id, sum(total_minor - paid_minor - credited_minor) AS b FROM invoices WHERE account_id = ANY($1) AND status IN ('ISSUED','OVERDUE') GROUP BY account_id`, [ids])).rows) bal.set(r.accountId, Number(r.b));
+    for (const r of (await q.query(`SELECT account_id, count(*) AS n FROM services WHERE account_id = ANY($1) AND status IN ('ACTIVE','SUSPENDED') GROUP BY account_id`, [ids])).rows) svc.set(r.accountId, Number(r.n));
+  }
+  return { items: page.items.map((a) => ({ ...a, balanceMinor: bal.get(a.id as string) ?? 0, serviceCount: svc.get(a.id as string) ?? 0 })), nextCursor: page.nextCursor };
+}
+
+export async function getAccount(q: Queryable, accountId: string): Promise<Row> {
+  const a = (await q.query('SELECT * FROM accounts WHERE id=$1', [accountId])).rows[0];
+  if (!a) throw notFound('account', accountId);
+  const [bal, svc, cust] = await Promise.all([
+    q.query(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS b FROM invoices WHERE account_id=$1 AND status IN ('ISSUED','OVERDUE')`, [accountId]),
+    q.query(`SELECT count(*) AS n FROM services WHERE account_id=$1 AND status IN ('ACTIVE','SUSPENDED')`, [accountId]),
+    q.query('SELECT id, display_name, segment FROM customers WHERE id=$1', [a.customerId]),
+  ]);
+  return { ...a, balanceMinor: Number(bal.rows[0]!.b), serviceCount: Number(svc.rows[0]!.n), customer: cust.rows[0] };
+}
+
+/** Members of a group customer, paged and searchable by name. */
+export async function listGroupMembers(q: Queryable, groupId: string, f: { q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 20, 100);
+  const { params, p } = sqlBuilder();
+  const where = [`m.group_customer_id = ${p(groupId)}`];
+  const pq = await parseQuery(q, f.q);
+  if (pq.kind === 'words') where.push(`to_tsvector('simple', c.display_name) @@ to_tsquery('simple', ${p(pq.tsquery)})`);
+  else if (pq.kind !== 'empty') where.push(`c.id IN (${customerIdsMatching(pq, p)})`);
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(c.display_name, c.id) > (${p(cur[0])}::text, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT c.id, c.display_name, c.segment, c.status, m.role, (SELECT count(*) FROM services s WHERE s.customer_id = c.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count
+       FROM group_memberships m JOIN customers c ON c.id = m.member_customer_id WHERE ${where.join(' AND ')} ORDER BY c.display_name, c.id LIMIT ${p(limit + 1)}`, params)).rows;
+  return toPage(rows, limit, (r) => [r.displayName as string, r.id as string]);
+}
+
+/** Where a customer sits: the chain of parent customers above it (enterprise → department …) and the groups it belongs to. Both are short lists. */
+export async function customerLineage(q: Queryable, customerId: string): Promise<{ ancestors: Row[]; groups: Row[] }> {
+  const c = await getCustomer(q, customerId);
+  const [anc, groups] = await Promise.all([
+    q.query(`SELECT id, display_name, segment FROM customers WHERE hierarchy_path @> $1::ltree AND id <> $2 ORDER BY nlevel(hierarchy_path) LIMIT 12`, [c.hierarchyPath, customerId]),
+    q.query(`SELECT g.id, g.display_name, g.segment, m.role FROM group_memberships m JOIN customers g ON g.id = m.group_customer_id WHERE m.member_customer_id = $1 ORDER BY g.display_name LIMIT 12`, [customerId]),
+  ]);
+  return { ancestors: anc.rows, groups: groups.rows };
 }

@@ -112,13 +112,13 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
     ...(has('catalog:read') ? { mrrMinor: d.mrrMinor, topOffers: d.topOffers } : {}),
   };
 });
-get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId') }));
+get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
 get('/meta', null, ({ user }) => ({ markets: core.MARKETS, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode() }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', () => Object.values(core.ROLES).map(({ id, label, summary, scope, permissions, creditLimitMinor }) => ({ id, label, summary, scope, permissions, creditLimitMinor })));
-get('/users', 'user:manage', async ({ db }) => ({ items: await core.listUsers(db) }));
+get('/users', 'user:manage', ({ db, query }) => core.listUsers(db, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 const newUser = z.object({
   username: z.string().min(3).max(50), displayName: z.string().min(1).max(100), email: blank(z.string().email()), roles: z.array(z.string()).min(1),
   storeId: blank(z.string().max(50)), dealerId: blank(z.string().max(50)), customerId: blank(uuid), marketCode: blank(z.string().length(2)), password: blank(z.string().max(128)),
@@ -180,14 +180,15 @@ const nodePatch = z.object({
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
   partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(),
 });
-/** Roles that cannot edit the catalog only ever see sellable (ACTIVE) nodes. */
-const pruneInactive = (nodes: core.CatalogTreeNode[]): core.CatalogTreeNode[] =>
-  nodes.filter((n) => n.status === 'ACTIVE').map((n) => ({ ...n, children: pruneInactive(n.children) }));
 
-get('/catalog', 'catalog:read', async ({ db, user, query }) => ({
-  items: await core.listNodes(db, { status: user.permissions.has('catalog:write') ? str(query, 'status') : 'ACTIVE', level: str(query, 'level'), kind: str(query, 'kind'), q: str(query, 'q'), market: str(query, 'market'), pathPrefix: str(query, 'path'), channel: str(query, 'channel') }),
-}));
-get('/catalog/tree', 'catalog:read', async ({ db, user }) => { const t = await core.catalogTree(db); return { items: user.permissions.has('catalog:write') ? t : pruneInactive(t) }; });
+/** Sales-only roles see only live nodes; editors see everything. */
+const liveOnly = (user: { permissions: Set<string> }) => !user.permissions.has('catalog:write');
+get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { status: liveOnly(user) ? 'ACTIVE' : str(query, 'status'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), q: str(query, 'q'), market: str(query, 'market'), channel: str(query, 'channel'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+// The catalog browser loads one level at a time: children of a node, word search, one node's detail. Nothing returns the whole tree.
+get('/catalog/browse', 'catalog:read', ({ db, user, query }) => core.browseChildren(db, { parentId: str(query, 'parent') || null, activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/catalog/search', 'catalog:read', ({ db, user, query }) => core.searchNodes(db, { q: str(query, 'q') ?? '', level: str(query, 'level'), activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/catalog/summary', 'catalog:read', ({ db, user }) => core.catalogSummary(db, { activeOnly: liveOnly(user) }));
+get('/catalog/:id/detail', 'catalog:read', ({ db, user, params }) => core.nodeDetail(db, params.id!, { activeOnly: liveOnly(user) }));
 get('/catalog/:id', 'catalog:read', async ({ db, user, params }) => {
   const n = await core.getNode(db, params.id!);
   if (n.status !== 'ACTIVE' && !user.permissions.has('catalog:write')) throw new DomainError('NOT_FOUND', 'not found');
@@ -266,7 +267,7 @@ const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string(
 const DOC_BODY = 3_800_000;
 
 clientRoute('GET', '/store/config', async ({ db }) => core.storeConfig(db));
-clientRoute('GET', '/store/catalog', async ({ db }) => core.storeCatalog(db, 'SELF_SERVE'));
+clientRoute('GET', '/store/catalog', async ({ db, query }) => core.storeCatalog(db, 'SELF_SERVE', { q: str(query, 'q'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 clientRoute('POST', '/store/quote', async ({ db, body }) => core.quoteBasket(db, { ...cartSchema.parse(body), channel: 'SELF_SERVE' }));
 clientRoute('POST', '/store/applications', async ({ db, body, req, client }) => {
   const b = cartSchema.parse(body);
@@ -304,7 +305,7 @@ open('POST', '/webhooks/gateway/:gateway', async ({ db, raw, req, params }) => {
 // ───────────────────────── assisted sales (shop assistant, with the customer present) ─────────────────────────
 const staffAccess = (u: SessionUser): core.AppAccess => ({ channel: 'RETAIL_ASSISTED', staff: { username: u.username, storeId: u.scope.storeId ?? null, canSeeAll: !!u.scope.unrestricted } });
 get('/assisted/config', 'store:assist', ({ db }) => core.storeConfig(db));
-get('/assisted/catalog', 'store:assist', ({ db }) => core.storeCatalog(db, 'RETAIL_ASSISTED'));
+get('/assisted/catalog', 'store:assist', async ({ db, query }) => { const { offers, ...rest } = await core.storeCatalog(db, 'RETAIL_ASSISTED', { q: str(query, 'q'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }); return { items: offers, ...rest }; });
 post('/assisted/quote', 'store:assist', ({ db, body }) => core.quoteBasket(db, { ...cartSchema.extend({ customerId: uuid.optional() }).parse(body), channel: 'RETAIL_ASSISTED' }));
 get('/assisted/applications', 'store:assist', async ({ db, user }) => {
   const a = staffAccess(user).staff!;
@@ -342,7 +343,7 @@ post('/assisted/applications/:id/checkout', 'order:create:RETAIL_ASSISTED', asyn
 post('/assisted/applications/:id/cancel', 'store:assist', async ({ db, user, params }) => { await core.cancelApplication(db, params.id!, staffAccess(user)); return { ok: true }; });
 
 // ───────────────────────── KYC review (compliance) ─────────────────────────
-get('/kyc/cases', 'kyc:review', async ({ db, query }) => ({ items: await core.listKycCases(db, { status: str(query, 'status') }) }));
+get('/kyc/cases', 'kyc:review', ({ db, query }) => core.listKycCases(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/kyc/cases/:id', 'kyc:review', ({ db, user, params }) => core.getKycCase(db, params.id!, user.username));
 get('/kyc/documents/:id', 'kyc:review', async ({ db, user, params }) => {
   const d = await core.getKycDocument(db, params.id!, user.username);
@@ -377,7 +378,7 @@ const newCustomer = z.object({
   marketCode: z.string().length(2).optional(), email: blank(z.string().email()), phone: blank(z.string().max(30)),
   parentCustomerId: uuid.optional(), account: z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).optional(),
 });
-get('/customers', 'customer:search', ({ db, query }) => core.searchCustomers(db, { q: str(query, 'q'), segment: str(query, 'segment'), limit: num(query, 'limit'), offset: num(query, 'offset') }));
+get('/customers', 'customer:search', ({ db, query }) => core.searchCustomers(db, { q: str(query, 'q'), segment: str(query, 'segment'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/customers', 'customer:create', async ({ db, user, body }) => {
   const r = await core.createCustomer(db, newCustomer.parse(body));
   await core.audit(db, user.username, 'customer', r.customer.id, 'CREATED');
@@ -392,16 +393,24 @@ function redact360(u: SessionUser, c: core.Row) {
     recentInvoices: has('billing:read') ? c.recentInvoices : [], outstandingMinor: has('billing:read') ? c.outstandingMinor : null, overdueMinor: has('billing:read') ? c.overdueMinor : null,
     cases: has('case:read') ? c.cases : [], recentOrders: has('order:read') ? c.recentOrders : [], serviceSummary: has('service:read') ? c.serviceSummary : [],
     recommendations: has('customer:write') ? c.recommendations : [],
-    accounts: has('billing:read') ? c.accounts : c.accounts.map((a: core.Row) => ({ ...a, balanceMinor: null })),
+    accounts: noBalance(u, c.accounts),
   };
 }
+const noBalance = (u: SessionUser, accounts: core.Row[]) => (u.permissions.has('billing:read') ? accounts : accounts.map((a) => ({ ...a, balanceMinor: null })));
 get('/customers/:id', 'customer:read', async ({ db, user, params }) => { assertCustomer(user, params.id!); return redact360(user, await core.customer360(db, params.id!)); });
 patch('/customers/:id', 'customer:write', async ({ db, user, params, body }) => {
   const r = await core.updateCustomer(db, params.id!, z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional() }).parse(body));
   await core.audit(db, user.username, 'customer', params.id!, 'UPDATED');
   return r;
 });
-get('/customers/:id/children', 'customer:search', ({ db, params, query }) => core.listChildren(db, params.id!, query.get('deep') === '1'));
+get('/customers/:id/children', 'customer:search', ({ db, params, query }) => core.listChildren(db, params.id!, { deep: query.get('deep') === '1', q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/customers/:id/accounts', 'customer:read', async ({ db, user, params, query }) => {
+  assertCustomer(user, params.id!);
+  const page = await core.listAccounts(db, params.id!, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') });
+  return { ...page, items: noBalance(user, page.items) };
+});
+get('/customers/:id/members', 'customer:search', ({ db, params, query }) => core.listGroupMembers(db, params.id!, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/accounts/:id', 'customer:read', async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return noBalance(user, [a])[0]; });
 post('/customers/:id/accounts', 'customer:write', ({ db, params, body }) => core.createAccount(db, params.id!, z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).parse(body)));
 post('/customers/:id/group', 'customer:write', ({ db, params, body }) => {
   const b = z.object({ memberCustomerId: uuid, role: z.enum(['OWNER', 'MEMBER', 'DEPARTMENT']).optional() }).parse(body);
@@ -410,7 +419,7 @@ post('/customers/:id/group', 'customer:write', ({ db, params, body }) => {
 
 // ───────────────────────── services ─────────────────────────
 get('/services', 'service:read', ({ db, user, query }) => core.listServices(db, {
-  customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), offset: num(query, 'offset'),
+  customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
 }));
 const svcAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('suspend'), reason: z.string().optional() }), z.object({ action: z.literal('resume') }),
@@ -440,6 +449,12 @@ post('/services/:id/actions', null, async ({ db, user, params, body }) => {
     case 'cancel-port-out': return core.cancelPortOut(db, id, actor);
   }
 });
+get('/services/:id', 'service:read', async ({ db, user, params }) => {
+  const s = (await db.query('SELECT s.*, c.name AS offer_name FROM services s LEFT JOIN catalog_nodes c ON c.id = s.offer_id WHERE s.id=$1', [params.id])).rows[0];
+  if (!s) throw new DomainError('NOT_FOUND', 'service not found');
+  assertCustomer(user, s.customerId);
+  return s;
+});
 get('/services/:id/etc', 'service:read', async ({ db, user, params }) => {
   const s = (await db.query('SELECT * FROM services WHERE id=$1', [params.id])).rows[0];
   if (!s) throw new DomainError('NOT_FOUND', 'service not found');
@@ -458,7 +473,7 @@ const orderBody = z.object({
 });
 get('/orders', 'order:read', ({ db, user, query }) => core.listOrders(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), storeId: user.scope.storeId, dealerId: user.scope.dealerId,
-  state: str(query, 'state'), channel: str(query, 'channel'), limit: num(query, 'limit'), offset: num(query, 'offset'),
+  state: str(query, 'state'), channel: str(query, 'channel'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
 }));
 post('/orders', null, async ({ db, user, body, req }) => {
   // Authorise the channel before validating anything else: a role that cannot sell here learns nothing about the payload rules.
@@ -515,7 +530,7 @@ post('/orders/:id/actions', null, async ({ db, user, params, body }) => {
 
 // ───────────────────────── billing ─────────────────────────
 get('/invoices', 'billing:read', ({ db, user, query }) => core.listInvoices(db, {
-  customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), limit: num(query, 'limit'), offset: num(query, 'offset'),
+  customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
 }));
 get('/invoices/:id', 'billing:read', async ({ db, user, params }) => { const i = await core.getInvoice(db, params.id!); assertCustomer(user, i.customerId); return i; });
 post('/invoices/:id/pay', 'billing:pay', async ({ db, user, params, body }) => {
@@ -534,7 +549,7 @@ post('/jobs/expire-applications', 'billing:run', async ({ db, user }) => { const
 post('/billing/dunning', 'billing:run', ({ db, user, body }) => core.runDunning(db, z.object({ asOf: date.optional() }).parse(body ?? {}).asOf).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'DUNNING_RUN', { ...r }); return r; }));
 
 // ───────────────────────── finance ─────────────────────────
-get('/gl', 'finance:read', ({ db, query }) => core.listGl(db, { exported: query.get('exported') === null ? undefined : query.get('exported') === '1', limit: num(query, 'limit'), offset: num(query, 'offset') }));
+get('/gl', 'finance:read', ({ db, query }) => core.listGl(db, { exported: query.get('exported') === null ? undefined : query.get('exported') === '1', limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/gl/reconcile', 'finance:read', ({ db }) => core.reconcile(db));
 get('/gl/batches', 'finance:read', async ({ db }) => ({ items: await core.listBatches(db) }));
 const csv = (body: string, name: string, extra: Record<string, string> = {}) =>
@@ -548,7 +563,7 @@ post('/gl/export', 'finance:export', async ({ db, user }) => {
 });
 
 // ───────────────────────── cases / inventory ─────────────────────────
-get('/cases', 'case:read', ({ db, user, query }) => core.listCases(db, { customerId: user.scope.customerId ?? str(query, 'customerId'), status: str(query, 'status'), type: str(query, 'type'), limit: num(query, 'limit'), offset: num(query, 'offset') }));
+get('/cases', 'case:read', ({ db, user, query }) => core.listCases(db, { customerId: user.scope.customerId ?? str(query, 'customerId'), status: str(query, 'status'), type: str(query, 'type'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/cases', 'case:create', async ({ db, user, body }) => {
   const b = z.object({ customerId: uuid.optional(), serviceId: uuid.optional(), type: z.enum(core.CASE_TYPES), subject: z.string().min(1).max(200), priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).optional(), note: z.string().max(2000).optional() }).parse(body);
   const customerId = user.scope.customerId ?? b.customerId;
@@ -558,7 +573,8 @@ post('/cases', 'case:create', async ({ db, user, body }) => {
 });
 get('/cases/:id', 'case:read', async ({ db, user, params }) => { const c = await core.getCase(db, params.id!); assertCustomer(user, c.customerId); return c; });
 patch('/cases/:id', 'case:write', ({ db, user, params, body }) => core.updateCase(db, params.id!, z.object({ status: z.string().optional(), priority: z.string().optional(), note: z.string().max(2000).optional() }).parse(body), user.username));
-get('/inventory', 'inventory:read', ({ db, user, query }) => core.listStock(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku') }).then((items) => ({ items })));
+get('/inventory', 'inventory:read', ({ db, user, query }) => core.listStock(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/inventory/locations', 'inventory:read', async ({ db, user }) => ({ items: user.scope.storeId ? [user.scope.storeId] : await core.listStockLocations(db) }));
 post('/inventory/adjust', 'inventory:write', async ({ db, user, body }) => {
   const b = z.object({ locationId: z.string().min(1).max(50), sku: z.string().min(1).max(50), delta: z.number().int() }).parse(body);
   if (user.scope.storeId && b.locationId !== user.scope.storeId) throw forbidden('You can only adjust your own store’s stock.');

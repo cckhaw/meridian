@@ -31,6 +31,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 
 - [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
 - [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies
+- [Working with millions of records](docs/SCALE.md): paging, search and indexes behind every list
 - [Operating Meridian](docs/OPERATIONS.md): environment, runbook, payments, scale, upgrades
 - [Security model](docs/SECURITY.md): what is protected, and what still needs work
 - [Roles and permissions](docs/ROLES.md): generated from the code that enforces them

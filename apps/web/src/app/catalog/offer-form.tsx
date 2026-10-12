@@ -2,11 +2,12 @@
 import { Alert, Button, Card, Field, Input, Select, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { label, step, toInput, toMinor } from '@/lib/format';
-import { slug, type TreeNode } from './node-modals';
+import { NodePicker, type Picked } from './node-picker';
+import { slug } from './node-modals';
 
 const KINDS = ['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE', 'FIBER', 'IOT_CONNECTIVITY', 'VAS', 'NON_TELCO_SUBSCRIPTION', 'PHYSICAL_GOOD'];
 const CHANNELS = ['SELF_SERVE', 'RETAIL_ASSISTED', 'QUICK_SALE', 'TELESALES', 'DEALER', 'CALL_CENTER'];
@@ -43,17 +44,21 @@ function fromOffer(o: any, market: string): FormState {
 export function OfferForm({ offerId, parentId, fromId }: { offerId?: string; parentId?: string | null; fromId?: string | null }) {
   const sourceId = offerId ?? fromId ?? null;
   const meta = useApi('/meta');
-  const tree = useApi('/catalog/tree');
-  const src = useApi(sourceId ? `/catalog/${sourceId}` : null);
-  const usage = useApi(offerId ? `/catalog/${offerId}/usage` : null);
-  if ((meta.loading && !meta.data) || (tree.loading && !tree.data) || (sourceId && src.loading && !src.data) || (offerId && usage.loading && !usage.data)) return <Spinner />;
-  if (meta.error || tree.error || src.error) return <Alert>{meta.error ?? tree.error ?? src.error}</Alert>;
-  return <Inner key={sourceId ?? 'new'} offerId={offerId} parentId={parentId ?? null} fromId={fromId ?? null} source={src.data} markets={meta.data?.markets ?? {}} roots={tree.data?.items ?? []} sold={(usage.data?.services ?? 0) + (usage.data?.orders ?? 0)} />;
+  const src = useApi(sourceId ? `/catalog/${sourceId}/detail` : null);
+  const parent = useApi(!sourceId && parentId ? `/catalog/${parentId}/detail` : null);
+  if ((meta.loading && !meta.data) || (sourceId && src.loading && !src.data) || (parent.loading && !parent.data)) return <Spinner />;
+  if (meta.error || src.error || parent.error) return <Alert>{meta.error ?? src.error ?? parent.error}</Alert>;
+  const d = src.data;
+  // Names for what the form refers to by id (the group it sits in, the offers it depends on), so nothing has to be looked up from a full tree.
+  const names: Record<string, string> = {};
+  for (const t of [...(d?.trail ?? []), ...(parent.data?.trail ?? [])]) names[t.id] = t.name;
+  if (parent.data) names[parent.data.node.id] = parent.data.node.name;
+  for (const r of [...(d?.requires ?? []), ...(d?.excludes ?? [])]) names[r.id] = 'name' in r ? (r.level === 'OFFER' ? r.name : `Any ${r.name}`) : `${r.id} (missing)`;
+  const where = (d?.trail ?? parent.data?.trail ?? []).concat(parent.data ? [parent.data.node] : []).map((t: any) => t.name).join(' › ');
+  return <Inner key={sourceId ?? 'new'} offerId={offerId} parentId={parentId ?? null} fromId={fromId ?? null} source={d?.node} names={names} where={where} markets={meta.data?.markets ?? {}} sold={(d?.usage?.services ?? 0) + (d?.usage?.orders ?? 0)} />;
 }
 
-const flatten = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((n) => [n, ...flatten(n.children)]);
-
-function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { offerId?: string; parentId: string | null; fromId: string | null; source: any; markets: Record<string, any>; roots: TreeNode[]; sold: number }) {
+function Inner({ offerId, parentId, fromId, source, names: initialNames, where: initialWhere, markets, sold }: { offerId?: string; parentId: string | null; fromId: string | null; source: any; names: Record<string, string>; where: string; markets: Record<string, any>; sold: number }) {
   const { me } = useAuth();
   const router = useRouter();
   const editing = !!offerId;
@@ -65,8 +70,10 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
   });
   const { run, busy, error } = useAction();
   const createdId = useRef('');
-  const all = useMemo(() => flatten(roots), [roots]);
-  const groups = all.filter((n) => n.level === 'GROUP');
+  const [names, setNames] = useState(initialNames);
+  const [where, setWhere] = useState(initialWhere);
+  const [choosing, setChoosing] = useState(!f.parentId);
+  const remember = (n: Picked) => setNames((m) => ({ ...m, [n.id]: n.level === 'OFFER' ? n.name : `Any ${n.name}` }));
   const set = (k: keyof FormState) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const tick = (k: 'taxInclusive' | 'shipping' | 'install' | 'sim') => (e: { target: { checked: boolean } }) => setF({ ...f, [k]: e.target.checked });
 
@@ -117,12 +124,13 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
       )}
       <Card>
         <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-          <Field label="Group" hint="Where the offer sits in the hierarchy.">
-            <Select required value={f.parentId} onChange={set('parentId')}>
-              <option value="">Choose…</option>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.path.split('/').map((p) => all.find((n) => n.id === p)?.name ?? p).join(' › ')}</option>)}
-            </Select>
-          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Group" hint="Where the offer sits in the hierarchy.">
+              {f.parentId && !choosing
+                ? <div className="flex min-h-tap items-center justify-between gap-3 rounded-control bg-surface2 px-3"><span className="truncate">{where || names[f.parentId] || f.parentId}</span><button type="button" className="shrink-0 text-subhead text-accent" onClick={() => setChoosing(true)}>Change</button></div>
+                : <NodePicker levels={['GROUP']} placeholder="Search groups…" onPick={(n) => { setF({ ...f, parentId: n.id }); setWhere([...(n.trail ?? []).map((t) => t.name), n.name].join(' › ')); setChoosing(false); }} />}
+            </Field>
+          </div>
           <Field label="Display name"><Input required value={f.name} onChange={set('name')} maxLength={100} /></Field>
           <Field label="ID" hint={editing ? 'Cannot be changed once created.' : 'Lowercase letters, digits and dashes. Leave blank to derive from the name.'}>
             <Input value={f.id} onChange={set('id')} disabled={editing} pattern="[a-z0-9][a-z0-9\-]*" placeholder={slug(f.name)} />
@@ -168,8 +176,8 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
           </fieldset>
 
           <div className="sm:col-span-2 grid gap-4 sm:grid-cols-2">
-            <DependencyPicker title="Customer must first have" help="The customer needs one of these in the same order, or already own it. Pick a whole category or group to mean “any offer beneath it”." value={f.requires} nodes={all} taken={chosen} allowGroups onChange={(requires) => setF({ ...f, requires })} />
-            <DependencyPicker title="Cannot be bought together with" help="Offers that cannot be in the same order as this one." value={f.excludes} nodes={all} taken={chosen} onChange={(excludes) => setF({ ...f, excludes })} />
+            <DependencyPicker title="Customer must first have" help="The customer needs one of these in the same order, or already own it. Pick a whole category or group to mean “any offer beneath it”." value={f.requires} names={names} remember={remember} levels={['OFFER', 'GROUP', 'CATEGORY', 'NETWORK_TYPE']} taken={chosen} onChange={(requires) => setF({ ...f, requires })} />
+            <DependencyPicker title="Cannot be bought together with" help="Offers that cannot be in the same order as this one." value={f.excludes} names={names} remember={remember} levels={['OFFER']} taken={chosen} onChange={(excludes) => setF({ ...f, excludes })} />
           </div>
 
           {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
@@ -183,18 +191,14 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
   );
 }
 
-/** Chips for what is selected, plus a dropdown to add: offers, or (when allowed) a whole group/category/network type. */
-function DependencyPicker({ title, help, value, nodes, taken, allowGroups, onChange }: { title: string; help: string; value: string[]; nodes: TreeNode[]; taken: Set<string>; allowGroups?: boolean; onChange: (v: string[]) => void }) {
-  const name = (id: string) => { const n = nodes.find((x) => x.id === id); return n ? (n.level === 'OFFER' ? n.name : `Any ${n.name}`) : `${id} (missing)`; };
-  const options = nodes.filter((n) => !taken.has(n.id) && (allowGroups ? true : n.level === 'OFFER'));
+/** Chips for what is selected, plus a search to add: offers, or (when allowed) a whole group/category/network type. */
+function DependencyPicker({ title, help, value, names, remember, levels, taken, onChange }: { title: string; help: string; value: string[]; names: Record<string, string>; remember: (n: Picked) => void; levels: string[]; taken: Set<string>; onChange: (v: string[]) => void }) {
+  const name = (id: string) => names[id] ?? id;
   const note = `${title} — selected`;
   return (
     <div>
       <Field label={title} hint={help}>
-        <Select value="" onChange={(e) => e.target.value && onChange([...value, e.target.value])}>
-          <option value="">Add…</option>
-          {options.map((n) => <option key={n.id} value={n.id}>{'— '.repeat(Math.max(0, n.path.split('/').length - 1))}{n.level === 'OFFER' ? n.name : `Any ${n.name} (${label(n.level)})`}</option>)}
-        </Select>
+        <NodePicker levels={levels} exclude={taken} placeholder="Search to add…" onPick={(n) => { remember(n); onChange([...value, n.id]); }} />
       </Field>
       <ul aria-label={note} className="mt-2 flex flex-wrap gap-2">
         {value.map((id) => (

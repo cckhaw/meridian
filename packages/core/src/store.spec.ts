@@ -115,7 +115,7 @@ describe('self-serve sign-up, KYC and payment', () => {
     await expect(checkout(db, id, acc)).rejects.toThrow(/Identity verification/);
 
     // compliance officer
-    const queue = await listKycCases(db, { status: 'PENDING' });
+    const queue = (await listKycCases(db, { status: "PENDING" })).items;
     const c = queue.find((x) => x.applicationId === id)!;
     const detail = await getKycCase(db, c.id, 'compliance.officer');
     expect(detail.idNumber).toMatch(/^S\d{7}A$/);
@@ -183,7 +183,7 @@ describe('self-serve sign-up, KYC and payment', () => {
     await updateApplication(db, dup.id, dup.acc, { personal: person({ idNumber: 'DUP-12345' }) });
     await uploadAll(dup.id, dup.acc);
     await submitKyc(db, dup.id, dup.acc);
-    const c = (await listKycCases(db, { status: 'PENDING' })).find((x) => x.applicationId === dup.id)!;
+    const c = (await listKycCases(db, { status: "PENDING" })).items.find((x) => x.applicationId === dup.id)!;
     expect(c.flags).toContain('DUPLICATE_IDENTITY');
     expect(existing.customer.id).toBeTruthy();
     // approving it online would attach the applicant to someone else's account: refused
@@ -230,7 +230,7 @@ describe('self-serve sign-up, KYC and payment', () => {
     await updateApplication(db, a.id, a.acc, { personal: person(), consent: { ...consent } });
     await uploadAll(a.id, a.acc);
     await submitKyc(db, a.id, a.acc);
-    const c = (await listKycCases(db, { status: 'PENDING' })).find((x) => x.applicationId === a.id)!;
+    const c = (await listKycCases(db, { status: "PENDING" })).items.find((x) => x.applicationId === a.id)!;
     await decideKycCase(db, c.id, 'officer', { decision: 'APPROVE' }, await getStoreSettings(db));
     await expect(checkout(db, a.id, a.acc)).rejects.toThrow(/delivery address/);
     await db.query(`UPDATE applications SET address=$2 WHERE id=$1`, [a.id, JSON.stringify(address)]);
@@ -294,7 +294,7 @@ describe('payment gateways', () => {
     await updateApplication(db, id, acc, { personal: person(), consent: { ...consent } });
     await uploadAll(id, acc);
     await submitKyc(db, id, acc);
-    const c = (await listKycCases(db, { status: 'PENDING' })).find((x) => x.applicationId === id)!;
+    const c = (await listKycCases(db, { status: "PENDING" })).items.find((x) => x.applicationId === id)!;
     await decideKycCase(db, c.id, 'officer', { decision: 'APPROVE' }, await getStoreSettings(db));
     const out = await checkout(db, id, acc);
     const intent = (await db.query(`SELECT * FROM payment_intents WHERE order_id=$1`, [out.order.id])).rows[0]!;

@@ -1,16 +1,32 @@
-import type { Queryable } from './db.js';
+import type { Queryable, Row } from './db.js';
 import { invalid, notFound, rejected } from './errors.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
+import { likePrefix } from './search.js';
 
 export const MAIN_WAREHOUSE = 'WH-MAIN';
 
-export async function listStock(q: Queryable, f: { locationId?: string; sku?: string } = {}) {
-  const params: unknown[] = []; const where: string[] = [];
-  if (f.locationId) where.push(`location_id = $${params.push(f.locationId)}`);
-  if (f.sku) where.push(`sku ILIKE $${params.push(`%${f.sku}%`)}`);
-  return (await q.query(
-    `SELECT location_id, sku, on_hand, reserved, on_hand - reserved AS available FROM inventory_stock ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY location_id, sku`,
-    params,
-  )).rows;
+export async function listStock(q: Queryable, f: { locationId?: string; sku?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
+  if (f.locationId) where.push(`location_id = ${p(f.locationId)}`);
+  if (f.sku?.trim()) where.push(`sku LIKE ${p(likePrefix(f.sku.trim().toUpperCase()))}`); // SKUs are upper-case; prefix search uses the index
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(location_id, sku) > (${p(cur[0])}::text, ${p(cur[1])}::text)`);
+  const rows = (await q.query(
+    `SELECT location_id, sku, on_hand, reserved, on_hand - reserved AS available FROM inventory_stock ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY location_id, sku LIMIT ${p(limit + 1)}`, params)).rows;
+  return toPage(rows, limit, (r) => [r.locationId as string, r.sku as string]);
+}
+
+/** Distinct locations holding stock — a small list (stores and warehouses), derived without scanning every SKU row via a recursive skip-scan. */
+export async function listStockLocations(q: Queryable): Promise<string[]> {
+  const r = await q.query(
+    `WITH RECURSIVE loc AS (
+       (SELECT location_id FROM inventory_stock ORDER BY location_id LIMIT 1)
+       UNION ALL
+       SELECT (SELECT location_id FROM inventory_stock WHERE location_id > loc.location_id ORDER BY location_id LIMIT 1) FROM loc WHERE loc.location_id IS NOT NULL
+     ) SELECT location_id FROM loc WHERE location_id IS NOT NULL LIMIT 500`);
+  return r.rows.map((x) => x.locationId as string);
 }
 
 /** Goods receipt (positive) or write-off / count correction (negative). Never lets on_hand drop below reserved. */

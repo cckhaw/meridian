@@ -2,15 +2,10 @@
 import { Alert, Button, Field, Input, Modal, Select } from '@meridian/ui';
 import { useState } from 'react';
 import { del, patch, post, useAction } from '@/lib/api';
+import type { CNode as TreeNode } from './catalog-ui';
+import { NodePicker } from './node-picker';
 
-/** A node as returned by GET /catalog/tree. Offer-only fields are optional on the other levels. */
-export interface TreeNode {
-  id: string; name: string; level: 'NETWORK_TYPE' | 'CATEGORY' | 'GROUP' | 'OFFER' | 'LINE_ITEM'; status: string; path: string; parentId?: string | null;
-  networkType?: string; kind?: string; description?: string; prices?: any[]; contract?: any; fulfilment?: any; requires?: string[]; excludes?: string[]; salesChannels?: string[]; markets?: string[];
-  itemType?: string; quantity?: number; unit?: string; unlimited?: boolean; sku?: string; sortOrder?: number;
-  children: TreeNode[]; offerCount: number; activeOfferCount: number; usage?: { services: number; orders: number };
-  [k: string]: any;
-}
+export type { TreeNode };
 
 const NOUN: Record<string, string> = { NETWORK_TYPE: 'network type', CATEGORY: 'category', GROUP: 'group', OFFER: 'offer', LINE_ITEM: 'line item' };
 const PARENT_LEVEL: Record<string, TreeNode['level'] | undefined> = { CATEGORY: 'NETWORK_TYPE', GROUP: 'CATEGORY', OFFER: 'GROUP' };
@@ -56,7 +51,7 @@ export function AddNodeModal({ level, parent, onClose, onDone }: { level: TreeNo
   );
 }
 
-export function EditNodeModal({ node, all, onClose, onDone }: { node: TreeNode; all: TreeNode[]; onClose: () => void; onDone: () => void }) {
+export function EditNodeModal({ node, parentName, onClose, onDone }: { node: TreeNode; parentName?: string; onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState(node.name);
   const [networkType, setNetworkType] = useState(node.networkType ?? 'mobile');
   const [status, setStatus] = useState(node.status);
@@ -64,7 +59,8 @@ export function EditNodeModal({ node, all, onClose, onDone }: { node: TreeNode; 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const act = useAction();
   const parentLevel = PARENT_LEVEL[node.level];
-  const parents = parentLevel ? all.filter((n) => n.level === parentLevel) : [];
+  const [newParentName, setNewParentName] = useState<string | null>(null);
+  const [changingParent, setChangingParent] = useState(false);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,9 +90,9 @@ export function EditNodeModal({ node, all, onClose, onDone }: { node: TreeNode; 
         )}
         {parentLevel && (
           <Field label={`Belongs to (${NOUN[parentLevel]})`} hint="Moving re-parents everything beneath it; sold offers keep their history.">
-            <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
-              {parents.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </Select>
+            {changingParent
+              ? <NodePicker levels={[parentLevel]} placeholder={`Search ${NOUN[parentLevel]}s…`} onPick={(n) => { setParentId(n.id); setNewParentName(n.name); setChangingParent(false); }} />
+              : <div className="flex min-h-tap items-center justify-between gap-3 rounded-control bg-surface2 px-3"><span className="truncate">{newParentName ?? parentName ?? node.parentId}</span><button type="button" className="shrink-0 text-subhead text-accent" onClick={() => setChangingParent(true)}>Change</button></div>}
           </Field>
         )}
         <Field label="Status" hint="Only active nodes are visible to sales channels. Retiring hides everything beneath it.">
@@ -104,7 +100,7 @@ export function EditNodeModal({ node, all, onClose, onDone }: { node: TreeNode; 
             <option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="RETIRED">Retired</option>
           </Select>
         </Field>
-        <p className="text-footnote text-label2">Contains {node.offerCount} offer{node.offerCount === 1 ? '' : 's'} · id <code>{node.id}</code></p>
+        <p className="text-footnote text-label2">{node.level === 'OFFER' ? '' : `Contains ${node.offerCount} offer${node.offerCount === 1 ? '' : 's'} · `}id <code>{node.id}</code></p>
         <div className="flex flex-wrap items-center justify-between gap-2">
           {confirmDelete ? (
             <span className="flex items-center gap-2">

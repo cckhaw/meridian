@@ -1,14 +1,14 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, LargeTitle, SectionTitle, Spinner, Stat, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Empty, LargeTitle, LoadMore, SectionTitle, Spinner, Stat, TableWrap, Td, Th } from '@meridian/ui';
 import { useState } from 'react';
-import { useAction, useApi } from '@/lib/api';
+import { useAction, useApi, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { d, dt, money } from '@/lib/format';
 
 export default function Finance() {
   const { can } = useAuth();
   const recon = useApi('/gl/reconcile');
-  const gl = useApi('/gl?limit=30');
+  const gl = usePaged('/gl?limit=30');
   const batches = useApi('/gl/batches');
   const [msg, setMsg] = useState<string | null>(null);
   const { run, busy, error } = useAction(async () => { await Promise.all([recon.reload(), gl.reload(), batches.reload()]); });
@@ -45,8 +45,8 @@ export default function Finance() {
         </>
       )}
 
-      <SectionTitle action={can('finance:export') ? <Button disabled={busy || !gl.data?.unexported.n} onClick={exportNow}>{busy ? 'Exporting…' : 'Export to SAP (CSV)'}</Button> : undefined}>Journal export</SectionTitle>
-      {gl.data && <p className="mb-3 text-subhead text-label2">{gl.data.unexported.n.toLocaleString()} journal lines waiting to be exported ({money(gl.data.unexported.debit)} debits).</p>}
+      <SectionTitle action={can('finance:export') ? <Button disabled={busy || !gl.extra?.unexported.n} onClick={exportNow}>{busy ? 'Exporting…' : 'Export to SAP (CSV)'}</Button> : undefined}>Journal export</SectionTitle>
+      {gl.extra && <p className="mb-3 text-subhead text-label2">{gl.extra.unexported.n.toLocaleString()} journal lines waiting to be exported ({money(gl.extra.unexported.debit)} debits).</p>}
       {error && <Alert>{error}</Alert>}{msg && <Alert tone="info">{msg}</Alert>}
       {batches.data && batches.data.items.length > 0 && (
         <TableWrap><thead><tr><Th>Batch</Th><Th>Created</Th><Th right>Lines</Th><Th right>Debits = credits</Th><Th /></tr></thead><tbody>
@@ -55,11 +55,15 @@ export default function Finance() {
       )}
 
       <SectionTitle>Latest journal lines</SectionTitle>
-      {gl.data && (gl.data.items.length === 0 ? <Empty>No journal entries yet.</Empty> : (
+      {!gl.loading && gl.items.length === 0 && <Empty>No journal entries yet.</Empty>}
+      {gl.items.length > 0 && (
+        <>
         <TableWrap><thead><tr><Th>Date</Th><Th>Account</Th><Th>Description</Th><Th right>Debit</Th><Th right>Credit</Th><Th>Posted</Th></tr></thead><tbody>
-          {gl.data.items.map((e: any) => <tr key={e.id}><Td>{d(e.entryDate)}</Td><Td className="font-mono">{e.accountCode}</Td><Td>{e.description}</Td><Td right>{e.debitMinor ? money(e.debitMinor, e.currency) : ''}</Td><Td right>{e.creditMinor ? money(e.creditMinor, e.currency) : ''}</Td><Td>{e.exportedBatchId ? <Badge tone="success">Exported</Badge> : <Badge>Pending</Badge>}</Td></tr>)}
+          {gl.items.map((e: any) => <tr key={e.id}><Td>{d(e.entryDate)}</Td><Td className="font-mono">{e.accountCode}</Td><Td>{e.description}</Td><Td right>{e.debitMinor ? money(e.debitMinor, e.currency) : ''}</Td><Td right>{e.creditMinor ? money(e.creditMinor, e.currency) : ''}</Td><Td>{e.exportedBatchId ? <Badge tone="success">Exported</Badge> : <Badge>Pending</Badge>}</Td></tr>)}
         </tbody></TableWrap>
-      ))}
+        <LoadMore shown={gl.items.length} hasMore={gl.hasMore} loading={gl.loadingMore} onMore={gl.loadMore} noun="journal lines" />
+        </>
+      )}
     </>
   );
 }

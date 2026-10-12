@@ -1,8 +1,8 @@
 'use client';
-import { Alert, Badge, Empty, LargeTitle, Segmented, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Empty, LargeTitle, LoadMore, Segmented, Spinner, TableWrap, Td, Th } from '@meridian/ui';
 import Link from 'next/link';
 import { useState } from 'react';
-import { useApi } from '@/lib/api';
+import { usePaged } from '@/lib/api';
 import { dt, label } from '@/lib/format';
 import { FLAG_TEXT, ID_TYPE_LABEL } from './flags';
 
@@ -10,18 +10,20 @@ const FILTERS = [{ value: 'PENDING', label: 'Needs review' }, { value: 'APPROVED
 
 export default function KycQueue() {
   const [status, setStatus] = useState('PENDING');
-  const { data, error, loading } = useApi(`/kyc/cases?status=${status}`);
+  const list = usePaged(`/kyc/cases?limit=25&status=${status}`);
   return (
     <>
       <LargeTitle subtitle="Identity checks for online sign-ups and cases that store staff could not approve on their own.">KYC reviews</LargeTitle>
       <div className="mb-4"><Segmented label="Status" value={status} options={FILTERS} onChange={setStatus} /></div>
-      {error && <Alert>{error}</Alert>}
-      {loading && !data && <Spinner />}
-      {data && (data.items.length === 0 ? <Empty>{status === 'PENDING' ? 'Nothing waiting for review.' : 'No cases.'}</Empty> : (
+      {list.error && <Alert>{list.error}</Alert>}
+      {list.loading && list.items.length === 0 && <Spinner />}
+      {!list.loading && list.items.length === 0 && !list.error && <Empty>{status === 'PENDING' ? 'Nothing waiting for review.' : 'No cases.'}</Empty>}
+      {list.items.length > 0 && (
+        <>
         <TableWrap>
           <thead><tr><Th>Applicant</Th><Th>ID</Th><Th>Channel</Th><Th>Checks</Th><Th>Submitted</Th><Th>Status</Th></tr></thead>
           <tbody>
-            {data.items.map((c: any) => (
+            {list.items.map((c: any) => (
               <tr key={c.id}>
                 <Td><Link className="font-medium text-accent" href={`/kyc/${c.id}`}>{c.fullName}</Link></Td>
                 <Td className="text-label2">{ID_TYPE_LABEL[c.idType] ?? c.idType} {c.idNumberMasked}</Td>
@@ -33,7 +35,9 @@ export default function KycQueue() {
             ))}
           </tbody>
         </TableWrap>
-      ))}
+        <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="cases" />
+        </>
+      )}
     </>
   );
 }

@@ -2,8 +2,9 @@ import type { OfferNode } from '@meridian/types';
 import { monthlyFee } from './catalog.js';
 import { GL, GL_NAMES } from './config.js';
 import type { Db, Queryable, Row } from './db.js';
-import { getCustomer, listChildren } from './customers.js';
+import { customerLineage, getCustomer, listAccounts, listChildren } from './customers.js';
 import { today } from './dates.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 
 // ───────────────────────── Customer 360 ─────────────────────────
 export interface Recommendation { id: string; title: string; reason: string; offerId?: string; kind: 'UPSELL' | 'RETENTION' | 'CROSS_SELL' | 'COLLECTIONS' }
@@ -30,32 +31,47 @@ async function recommend(q: Queryable, customerId: string, overdue: number): Pro
 
 export async function customer360(q: Queryable, id: string): Promise<Row> {
   const customer = await getCustomer(q, id);
-  const [accounts, svcSummary, orders, invoices, cases, children, groupMembers, memberOf, balance] = await Promise.all([
-    q.query(`SELECT a.*, COALESCE((SELECT sum(i.total_minor - i.paid_minor - i.credited_minor) FROM invoices i WHERE i.account_id = a.id AND i.status IN ('ISSUED','OVERDUE')),0) AS balance_minor,
-      (SELECT count(*) FROM services s WHERE s.account_id = a.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count FROM accounts a WHERE a.customer_id=$1 ORDER BY a.created_at`, [id]),
+  // Everything here is a count or a short slice. Accounts, services, members and departments are listed (paged) by their own calls.
+  const [accounts, svcSummary, orders, invoices, cases, children, memberCount, lineage, balance, acctCount] = await Promise.all([
+    listAccounts(q, id, { limit: 20 }),
     q.query(`SELECT type, status, count(*) AS n FROM services WHERE customer_id=$1 GROUP BY type, status ORDER BY type, status`, [id]),
     q.query(`SELECT o.id, o.state, o.channel, o.total_minor, o.currency, o.created_at,
         (SELECT string_agg(ol.description, ', ') FROM order_lines ol WHERE ol.order_id = o.id) AS summary FROM orders o WHERE o.customer_id=$1 ORDER BY o.created_at DESC LIMIT 10`, [id]),
     q.query(`SELECT i.id, i.number, i.status, i.issue_date, i.due_date, i.total_minor, i.currency, i.total_minor - i.paid_minor - i.credited_minor AS balance_minor FROM invoices i WHERE i.customer_id=$1 ORDER BY i.issue_date DESC, i.number DESC LIMIT 10`, [id]),
     q.query(`SELECT id, number, type, status, priority, subject, created_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
-    listChildren(q, id, false, 25),
-    q.query(`SELECT m.role, c.id, c.display_name FROM group_memberships m JOIN customers c ON c.id = m.member_customer_id WHERE m.group_customer_id=$1 ORDER BY m.role, c.display_name`, [id]),
-    q.query(`SELECT m.role, c.id, c.display_name FROM group_memberships m JOIN customers c ON c.id = m.group_customer_id WHERE m.member_customer_id=$1`, [id]),
+    listChildren(q, id, { limit: 10 }),
+    q.query(`SELECT count(*) AS n FROM group_memberships WHERE group_customer_id=$1`, [id]),
+    customerLineage(q, id),
     q.query(`SELECT COALESCE(sum(CASE WHEN status='OVERDUE' THEN total_minor - paid_minor - credited_minor END),0) AS overdue,
       COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS outstanding FROM invoices WHERE customer_id=$1 AND status IN ('ISSUED','OVERDUE')`, [id]),
+    q.query(`SELECT count(*) AS n FROM accounts WHERE customer_id=$1`, [id]),
   ]);
   const b = balance.rows[0]!;
   const childCount = (await q.query('SELECT count(*) AS n FROM customers WHERE parent_customer_id=$1', [id])).rows[0]!.n;
   return {
-    customer, accounts: accounts.rows, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows,
-    children: children, childCount, groupMembers: groupMembers.rows, memberOf: memberOf.rows,
+    customer, accounts: accounts.items, accountCount: acctCount.rows[0]!.n, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows,
+    children: children.items, childCount, memberCount: memberCount.rows[0]!.n, ancestors: lineage.ancestors, memberOf: lineage.groups,
     outstandingMinor: b.outstanding, overdueMinor: b.overdue,
     recommendations: await recommend(q, id, b.overdue),
   };
 }
 
 // ───────────────────────── Dashboard ─────────────────────────
+// The dashboard's totals scan whole tables, so on a big database they are computed at most once per interval and shared by everyone who opens it.
+// MERIDIAN_DASHBOARD_TTL is in seconds (default 30 in production, 0 = always live elsewhere).
+const dashCache = new WeakMap<object, { at: number; value: Row }>();
+const dashTtlMs = () => Number(process.env.MERIDIAN_DASHBOARD_TTL ?? (process.env.NODE_ENV === 'production' ? 30 : 0)) * 1000;
+
 export async function dashboard(q: Queryable): Promise<Row> {
+  const ttl = dashTtlMs();
+  const hit = ttl > 0 ? dashCache.get(q) : undefined;
+  if (hit && Date.now() - hit.at < ttl) return hit.value;
+  const value = await computeDashboard(q);
+  if (ttl > 0) dashCache.set(q, { at: Date.now(), value });
+  return value;
+}
+
+async function computeDashboard(q: Queryable): Promise<Row> {
   const one = async (sql: string) => (await q.query(sql)).rows[0]!;
   const [cust, svc, orders, ar, rev, cases, byOffer, byState, recentOrders] = await Promise.all([
     one('SELECT count(*) AS n FROM customers'),
@@ -102,12 +118,16 @@ export function glCsv(rows: Row[], companyCode = process.env.MERIDIAN_SAP_COMPAN
   return [head.join(','), ...body].join('\r\n') + '\r\n';
 }
 
-export async function listGl(q: Queryable, f: { exported?: boolean; limit?: number; offset?: number } = {}) {
-  const w = f.exported === undefined ? '' : f.exported ? 'WHERE exported_batch_id IS NOT NULL' : 'WHERE exported_batch_id IS NULL';
-  const total = (await q.query(`SELECT count(*) AS n FROM gl_entries ${w}`)).rows[0]!.n;
-  const items = (await q.query(`SELECT * FROM gl_entries ${w} ORDER BY id DESC LIMIT $1 OFFSET $2`, [Math.min(f.limit ?? 50, 500), f.offset ?? 0])).rows;
+export async function listGl(q: Queryable, f: { exported?: boolean; limit?: number; cursor?: string } = {}): Promise<Page<Row> & { unexported: Row }> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
+  if (f.exported !== undefined) where.push(f.exported ? 'exported_batch_id IS NOT NULL' : 'exported_batch_id IS NULL');
+  const cur = decodeCursor(f.cursor, 1);
+  if (cur) where.push(`id < ${p(cur[0])}::bigint`);
+  const rows = (await q.query(`SELECT * FROM gl_entries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${p(limit + 1)}`, params)).rows;
   const unexported = (await q.query(`SELECT count(*) AS n, COALESCE(sum(debit_minor),0) AS debit FROM gl_entries WHERE exported_batch_id IS NULL`)).rows[0]!;
-  return { items, total, unexported };
+  return { ...toPage(rows, limit, (r) => [r.id as number]), unexported };
 }
 
 /** Snapshots every not-yet-exported journal into a batch (marking them exported) and returns the CSV. Idempotent per entry. */
@@ -153,19 +173,26 @@ export async function reconcile(q: Queryable): Promise<{ ok: boolean; checks: Re
   return { ok: checks.every((c) => c.ok), checks, trialBalance };
 }
 
+/** Commission by store and agent. Bounded to the top 200 earners; the grouping runs over an index-friendly filter, never the whole ledger unfiltered for scoped roles. */
 export async function commissionReport(q: Queryable, f: { storeId?: string; dealerId?: string } = {}) {
   const params: unknown[] = []; const where: string[] = [];
   if (f.storeId) where.push(`store_id = $${params.push(f.storeId)}`);
   if (f.dealerId) where.push(`dealer_id = $${params.push(f.dealerId)}`);
   return (await q.query(
     `SELECT COALESCE(store_id,'-') AS store_id, COALESCE(salesperson_id, dealer_id, '-') AS agent, count(*) AS orders, sum(basis_minor) AS basis_minor, sum(amount_minor) AS commission_minor, max(currency) AS currency
-     FROM commissions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY 1, 2 ORDER BY commission_minor DESC`, params)).rows;
+     FROM commissions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY 1, 2 ORDER BY commission_minor DESC LIMIT 200`, params)).rows;
 }
 
-export async function auditLog(q: Queryable, f: { entity?: string; entityId?: string; limit?: number } = {}) {
-  const params: unknown[] = []; const where: string[] = [];
-  if (f.entity) where.push(`entity = $${params.push(f.entity)}`);
-  if (f.entityId) where.push(`entity_id = $${params.push(f.entityId)}`);
-  return (await q.query(`SELECT * FROM audit_log ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${Math.min(f.limit ?? 100, 500)}`, params)).rows;
+export async function auditLog(q: Queryable, f: { entity?: string; entityId?: string; actor?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
+  if (f.entity) where.push(`entity = ${p(f.entity)}`);
+  if (f.entityId) where.push(`entity_id = ${p(f.entityId)}`);
+  if (f.actor?.trim()) where.push(`actor = ${p(f.actor.trim())}`);
+  const cur = decodeCursor(f.cursor, 1);
+  if (cur) where.push(`id < ${p(cur[0])}::bigint`);
+  const rows = (await q.query(`SELECT * FROM audit_log ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${p(limit + 1)}`, params)).rows;
+  return toPage(rows, limit, (r) => [r.id as number]);
 }
 export { today };

@@ -192,7 +192,7 @@ describe('role-based access', () => {
   it('records denied attempts in the audit log', async () => {
     const agent = await staff(['call-center']);
     await call('GET', '/gl/reconcile', { cookie: agent.cookie });
-    const rows = (await call('GET', '/audit?entity=authz', { cookie: await root() })).json;
+    const rows = (await call('GET', '/audit?entity=authz', { cookie: await root() })).json.items;
     expect(rows.some((r: any) => r.actor === agent.username && r.action === 'DENIED')).toBe(true);
   });
 
@@ -321,7 +321,7 @@ describe('orders, payments and retries', () => {
     const a = await send(), b = await send();
     expect(b.json.id).toBe(a.json.id);
     expect(b.headers.get('x-idempotent-replay')).toBe('true');
-    expect((await call('GET', `/orders?customerId=${c}`, { cookie: agent.cookie })).json.total).toBe(1);
+    expect((await call('GET', `/orders?customerId=${c}`, { cookie: agent.cookie })).json.items).toHaveLength(1);
   });
 });
 
@@ -376,9 +376,12 @@ describe('catalog hierarchy and dependencies', () => {
     const c = await root();
     await call('POST', '/catalog', { cookie: c, body: { level: 'NETWORK_TYPE', id: 'draft-net', name: 'Draft net', networkType: 'none', status: 'DRAFT' } });
     const agent = await staff(['call-center']);
-    const tree = await call('GET', '/catalog/tree', { cookie: agent.cookie });
-    expect(tree.status).toBe(200);
-    expect(JSON.stringify(tree.json)).not.toContain('draft-net');
+    const top = await call('GET', '/catalog/browse', { cookie: agent.cookie });
+    expect(top.status).toBe(200);
+    expect(JSON.stringify(top.json)).not.toContain('draft-net');
+    expect(JSON.stringify((await call('GET', '/catalog/search?q=draft', { cookie: agent.cookie })).json)).not.toContain('draft-net');
+    expect((await call('GET', '/catalog/draft-net/detail', { cookie: agent.cookie })).status).toBe(404);
+    expect(JSON.stringify((await call('GET', '/catalog/browse', { cookie: c })).json)).toContain('draft-net');
     expect((await call('PATCH', '/catalog/draft-net', { cookie: agent.cookie, body: { name: 'x' } })).status).toBe(403);
     expect((await call('DELETE', '/catalog/draft-net', { cookie: agent.cookie })).status).toBe(403);
   });
@@ -472,7 +475,7 @@ describe('store-front API, KYC review and assisted sales', () => {
     const made = await call('POST', '/settings/api-clients', { cookie: su, body: { name: 'External shop' } });
     expect(made.status).toBe(201);
     key = made.json.key;
-    expect(JSON.stringify((await call('GET', '/settings/store', { cookie: su })).json)).not.toContain(key.split('_').pop()!);
+    expect(JSON.stringify((await call('GET', '/settings/store', { cookie: su })).json)).not.toContain(key.slice(-16));
     // browser-style cross-origin calls are not how this API is used, but a key works without an Origin header and a session cookie does not
     const cat = await call('GET', '/store/catalog', { origin: null, headers: bearer(key) });
     expect(cat.status).toBe(200);
@@ -594,7 +597,7 @@ describe('store-front API, KYC review and assisted sales', () => {
 });
 
 describe('offer line items API', () => {
-  it('creates, edits, copies and removes line items; the tree nests them under their offer', async () => {
+  it('creates, edits, copies and removes line items; an offer detail lists them', async () => {
     const c = await root();
     const made = await call('POST', '/catalog', { cookie: c, body: { level: 'LINE_ITEM', id: 'plan-sim-5g-bonus', name: 'Bonus data', parentId: 'plan-sim-5g', itemType: 'DATA', quantity: 20, unit: 'GB' } });
     expect(made.status).toBe(200);
@@ -603,16 +606,15 @@ describe('offer line items API', () => {
     expect((await call('POST', '/catalog', { cookie: c, body: { level: 'LINE_ITEM', id: 'x2', name: 'Bad', parentId: 'plan-sim-5g', itemType: 'TELEPORT' } })).status).toBe(400);
     const patched = await call('PATCH', '/catalog/plan-sim-5g-bonus', { cookie: c, body: { unlimited: true, name: 'Unlimited bonus' } });
     expect(patched.json).toMatchObject({ unlimited: true, name: 'Unlimited bonus' });
-    const tree = (await call('GET', '/catalog/tree', { cookie: c })).json.items;
-    const find = (ns: any[], id: string): any => { for (const n of ns) { if (n.id === id) return n; const r = find(n.children, id); if (r) return r; } };
-    expect(find(tree, 'plan-sim-5g').children.map((x: any) => x.id)).toContain('plan-sim-5g-bonus');
+    const detail = (await call('GET', '/catalog/plan-sim-5g/detail', { cookie: c })).json;
+    expect(detail.lineItems.map((x: any) => x.id)).toContain('plan-sim-5g-bonus');
 
     const agent = await staff(['call-center']);
     expect((await call('PATCH', '/catalog/plan-sim-5g-bonus', { cookie: agent.cookie, body: { name: 'x' } })).status).toBe(403);
     // a role that can only read the catalog never sees draft/retired line items
     await call('PATCH', '/catalog/plan-sim-5g-bonus', { cookie: c, body: { status: 'RETIRED' } });
-    const seen = (await call('GET', '/catalog/tree', { cookie: agent.cookie })).json.items;
-    expect(find(seen, 'plan-sim-5g')?.children.map((x: any) => x.id) ?? []).not.toContain('plan-sim-5g-bonus');
+    const seen = (await call('GET', '/catalog/plan-sim-5g/detail', { cookie: agent.cookie })).json;
+    expect(seen.lineItems.map((x: any) => x.id)).not.toContain('plan-sim-5g-bonus');
 
     await call('POST', '/catalog', { cookie: c, body: { level: 'OFFER', id: 'copy-target', name: 'Copy', parentId: 'grp-vas', markets: ['SG'], kind: 'VAS', prices: [{ type: 'RECURRING', amount: { amountMinor: 100, currency: 'SGD' }, periodMonths: 1, taxInclusive: true }], fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [] } } });
     const copied = await call('POST', '/catalog/copy-target/line-items/copy-from', { cookie: c, body: { fromId: 'plan-sim-5g' } });

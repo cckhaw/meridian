@@ -1,13 +1,15 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, SearchField, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
 import { useState } from 'react';
-import { patch, post, useAction, useApi } from '@/lib/api';
+import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { dt, label, money } from '@/lib/format';
 
 interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null }
 
 export default function Users() {
-  const users = useApi('/users');
+  const [q, setQ] = useState('');
+  const term = useDebounced(q.trim());
+  const users = usePaged(`/users?limit=25&q=${encodeURIComponent(term)}`);
   const roles = useApi('/roles');
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<any>(null);
@@ -26,15 +28,17 @@ export default function Users() {
           <button className="ml-3 text-accent" onClick={() => setSecret(null)}>Dismiss</button>
         </Alert></div>
       )}
-      <div className="mb-4 flex justify-end"><Button onClick={() => { setCreating(!creating); setEditing(null); }}>{creating ? 'Close' : 'New user'}</Button></div>
+      <div className="mb-4 flex items-center gap-3"><SearchField label="Search users" placeholder="Username starts with…" value={q} onChange={setQ} className="md:max-w-sm md:flex-1" /><span className="flex-1" /><Button onClick={() => { setCreating(!creating); setEditing(null); }}>{creating ? 'Close' : 'New user'}</Button></div>
       {creating && <UserForm roles={roleList} onDone={(r) => { setCreating(false); if (r?.temporaryPassword) setSecret({ who: r.user.username, password: r.temporaryPassword }); void users.reload(); }} />}
       {editing && <EditUser user={editing} roles={roleList} onDone={() => { setEditing(null); void users.reload(); }} />}
       {act.error && <Alert>{act.error}</Alert>}
       {users.error && <Alert>{users.error}</Alert>}
-      {users.loading && !users.data && <Spinner />}
-      {users.data && (users.data.items.length === 0 ? <Empty>No staff users yet. Create the first one above.</Empty> : (
+      {users.loading && users.items.length === 0 && <Spinner />}
+      {!users.loading && users.items.length === 0 && !users.error && <Empty>{term ? 'No users match.' : 'No staff users yet. Create the first one above.'}</Empty>}
+      {users.items.length > 0 && (
+        <>
         <TableWrap><thead><tr><Th>User</Th><Th>Roles</Th><Th>Scope</Th><Th>Status</Th><Th>Last sign-in</Th><Th /></tr></thead><tbody>
-          {users.data.items.map((u: any) => (
+          {users.items.map((u: any) => (
             <tr key={u.id}>
               <Td><span className="font-medium">{u.displayName}</span><div className="font-mono text-caption text-label2">{u.username}</div></Td>
               <Td><span className="flex flex-wrap gap-1">{u.roles.map((r: string) => <Badge key={r}>{roleLabel(r)}</Badge>)}</span></Td>
@@ -49,7 +53,9 @@ export default function Users() {
             </tr>
           ))}
         </tbody></TableWrap>
-      ))}
+        <LoadMore shown={users.items.length} hasMore={users.hasMore} loading={users.loadingMore} onMore={users.loadMore} noun="users" />
+        </>
+      )}
 
       <SectionTitle>What each role can do</SectionTitle>
       <div className="grid gap-3 md:grid-cols-2">

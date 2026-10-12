@@ -57,3 +57,11 @@ body { background: rgb(var(--bg-grouped)); color: rgb(var(--label)); }
 @media (min-width: 1024px) { html[data-sidebar='hidden'] .shell-reveal { display: flex; } }
 @keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 .sheet-in { animation: sheet-up 340ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+
+/* Drilling into a list pushes it in from the right; going back brings it in from the left (enter and exit follow the same path). */
+@keyframes push-fwd  { from { transform: translateX(28px);  opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes push-back { from { transform: translateX(-28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.push-fwd  { animation: push-fwd  300ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+.push-back { animation: push-back 300ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .push-fwd, .push-back, .sheet-in { animation: fade-in 160ms ease both; } }

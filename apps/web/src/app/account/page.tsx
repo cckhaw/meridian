@@ -1,5 +1,6 @@
 'use client';
 import { Alert, Spinner } from '@meridian/ui';
+import { Suspense } from 'react';
 import { useAuth } from '@/lib/auth';
 import { CustomerView } from '../customers/[id]/customer-view';
 
@@ -8,5 +9,5 @@ export default function Account() {
   const { me } = useAuth();
   if (!me) return <Spinner />;
   if (!me.customerId) return <Alert tone="info">This login is not linked to a customer account.</Alert>;
-  return <CustomerView id={me.customerId} />;
+  return <Suspense><CustomerView id={me.customerId} /></Suspense>;
 }

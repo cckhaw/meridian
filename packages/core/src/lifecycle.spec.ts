@@ -31,8 +31,8 @@ describe('customer hierarchy', () => {
     const co = await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Co', idDocument: 'UEN1' });
     const d1 = await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Co HR', idDocument: 'UEN1', parentCustomerId: co.customer.id });
     const d2 = await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Co HR Payroll', idDocument: 'UEN1', parentCustomerId: d1.customer.id });
-    expect((await listChildren(db, co.customer.id)).map((r) => r.displayName)).toEqual(['Co HR']);
-    expect((await listChildren(db, co.customer.id, true)).map((r) => r.displayName).sort()).toEqual(['Co HR', 'Co HR Payroll']);
+    expect((await listChildren(db, co.customer.id)).items.map((r) => r.displayName)).toEqual(['Co HR']);
+    expect((await listChildren(db, co.customer.id, { deep: true })).items.map((r) => r.displayName).sort()).toEqual(['Co HR', 'Co HR Payroll']);
     expect(d2.customer.hierarchyPath.split('.')).toHaveLength(3);
   });
 

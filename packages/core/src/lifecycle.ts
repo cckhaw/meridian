@@ -1,7 +1,9 @@
 import { audit } from './audit.js';
 import { etcQuoteForOffer } from './catalog.js';
 import { issueInvoice, invoiceBalance } from './billing.js';
-import { marketFor } from './settings.js';
+import { getRegional, marketFor } from './settings.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
+import { likePrefix } from './search.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { GL } from './config.js';
@@ -162,19 +164,26 @@ export async function cancelPortOut(db: Db, id: string, actor = 'system') {
   });
 }
 
-export async function listServices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; q?: string; limit?: number; offset?: number }) {
-  const params: unknown[] = []; const where: string[] = [];
-  const p = (v: unknown) => `$${params.push(v)}`;
+export async function listServices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; q?: string; limit?: number; cursor?: string }): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
   if (f.customerId) where.push(`s.customer_id = ${p(f.customerId)}`);
   if (f.accountId) where.push(`s.account_id = ${p(f.accountId)}`);
   if (f.status) where.push(`s.status = ${p(f.status)}`);
-  if (f.q) where.push(`s.identifier ILIKE ${p(`%${f.q}%`)}`);
-  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = (await q.query(`SELECT count(*) AS n FROM services s ${w}`, params)).rows[0]!.n;
-  const lim = p(Math.min(f.limit ?? 50, 200)); const off = p(f.offset ?? 0);
-  const items = (await q.query(
-    `SELECT s.*, c.name AS offer_name FROM services s LEFT JOIN catalog_nodes c ON c.id = s.offer_id ${w} ORDER BY s.identifier LIMIT ${lim} OFFSET ${off}`, params)).rows;
-  return { items, total };
+  const text = (f.q ?? '').trim().replace(/[\s()-]/g, '');
+  if (text) { // a number (or part of its start); with or without the country code
+    const dial = (await getRegional(q)).dialCode;
+    const bare = text.replace(/^\+/, '');
+    const prefixes = text.startsWith('+') ? [text] : /^\d+$/.test(text) ? [`+${bare}`, `${dial}${bare}`, text] : [text.toUpperCase()];
+    where.push(`(${prefixes.map((x) => `s.identifier LIKE ${p(likePrefix(x))}`).join(' OR ')})`);
+  }
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(s.identifier, s.id) > (${p(cur[0])}::text, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT s.*, c.name AS offer_name FROM services s LEFT JOIN catalog_nodes c ON c.id = s.offer_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY s.identifier, s.id LIMIT ${p(limit + 1)}`, params)).rows;
+  return toPage(rows, limit, (r) => [r.identifier as string, r.id as string]);
 }
 
 export { invoiceBalance };
