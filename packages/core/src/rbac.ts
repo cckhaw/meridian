@@ -18,6 +18,7 @@ const CORE_PERMISSIONS = [
   'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer',
   'mnp:manage',
   'order:read', 'order:payment', 'order:fulfil', 'order:cancel',
+  'order:override', // approve a cancellation or return the policy would only allow with a supervisor's say-so
   'billing:read', 'billing:pay', 'billing:credit', 'billing:run',
   'finance:read', 'finance:export',
   'catalog:read', 'catalog:write',
@@ -114,7 +115,7 @@ export const ROLES: Record<RoleId, RoleDef> = {
     id: 'customer-service', label: 'Customer Service', scope: 'staff', home: '/cases', creditLimitMinor: 20_000,
     summary: 'Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer', 'mnp:manage',
-      'order:read', 'order:cancel', 'billing:read', 'billing:credit', 'case:read', 'case:create', 'case:write', 'catalog:read'],
+      'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,

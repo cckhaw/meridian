@@ -19,6 +19,8 @@ The order's overall state is derived from its parts: an open installation shows 
 
 ## Cancellation
 
+*The numbers in the next three sections (24 hours, 50.00, 14 days, 21 days) are the standard policy. Each is a rule you can change in Settings → Cancellation, described below.*
+
 Cancelling an order cancels **every part that has not passed its point of no return**. The rest stays, and the screen says why. Each cancelled part is refunded on its own: stock is released, the appointment slot is freed, and the refund is posted to the ledger.
 
 | Situation | Result |
@@ -52,15 +54,28 @@ Steps that do not apply are skipped (no device step for a quick sale, no payment
 
 Device colours and storage are edited on the offer (Catalog → Edit offer → Colours and storage). Bundle discounts are managed at Catalog → Bundle discounts.
 
-## Policy settings
+## The cancellation rule base (Settings → Cancellation)
 
-| Environment variable | Default |
+Nothing above is hard-coded. Every decision comes from rules the super user edits in **Settings → Cancellation**, and changes apply to every order straight away (recorded in the audit log). The standard policy described in this document is installed the first time it is needed, and **Restore the standard policy** brings it back.
+
+A rule says *what it decides*, *which part of an order it applies to*, *when* (conditions), and *then what* (outcome):
+
+| Decides | Question it answers |
 |---|---|
-| `MERIDIAN_RETURN_DAYS` | 14 |
-| `MERIDIAN_INSTALL_LATE_HOURS` | 24 |
-| `MERIDIAN_INSTALL_LATE_FEE_MINOR` | 5000 (minor units, e.g. 50.00) |
-| `MERIDIAN_INSTALL_AT_RISK_DAYS` | 14 |
-| `MERIDIAN_INSTALL_AUTO_CANCEL_DAYS` | 21 |
+| **Cancelling** | May this part be cancelled, and what is kept? |
+| **Returns** | May delivered goods be returned, and for how much? |
+| **Flag as late** | When is an open part flagged for follow-up? (the sweep) |
+| **Cancel automatically** | When does the system cancel a part itself and refund it? (the sweep) |
+
+**Rules are tried top to bottom and the first enabled one that fits decides.** Use ↑ ↓ to change the order. If none fits, the **fallback** (refuse, or allow with a full refund) applies.
+
+**Conditions** (all must be true): where the part is (not started / shipped or dispatched / delivered, installed or active), hours until the installation visit, hours or days since the order was paid, days since delivery, hours since it was shipped or dispatched, the condition of returned goods (as new / damaged / missing parts), who is acting (customer, staff, system), sales channel, customer segment, market, payment method, amount paid, whether it is financed, whether it has a contract, and the kind of product. Compare with *is*, *is not*, *less than*, *at most*, *more than*, *at least*, *one of*, *none of*.
+
+**Outcomes**: allow or refuse; a fixed fee and/or a percentage of what was paid kept from the refund (with optional minimum and maximum); the percentage refunded (for restocking charges); for returns, the most that may be deducted for damage; and **supervisor approval** (allowed only for people holding the `order:override` permission, which Customer Service has).
+
+Each rule reads back as a plain sentence (“Before the technician is dispatched, less than 24 hours before the visit: it can be cancelled; SGD 50.00 is kept.”). The same sentences, or a message you write, become the **cancellation terms** shown in the order wizard's review. **Try it** on the settings page simulates a situation and shows which rule decided, what it refunds, and why the rules above it did not apply.
+
+Fixed by physics, whatever the rules say: goods that have shipped cannot be cancelled (they can be returned), and a service that is switched on cannot be un-activated by cancelling (it is terminated).
 
 ## Payment structure
 

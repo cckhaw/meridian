@@ -373,6 +373,53 @@ get('/settings/store', 'settings:manage', async ({ db }) => ({
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
 post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body)));
+// ── cancellation rules (Settings → Cancellation) ──
+const conditionSchema = z.object({
+  fact: z.string().max(40), op: z.enum(['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'not_in', 'contains']),
+  value: z.union([z.string().max(60), z.number(), z.boolean(), z.array(z.string().max(60)).max(20)]),
+});
+const outcomeSchema = z.object({
+  allow: z.boolean(), feeFixedMinor: z.number().int().optional(), feePercentBps: z.number().int().optional(), feeMinMinor: z.number().int().optional(), feeMaxMinor: z.number().int().optional(),
+  refundBps: z.number().int().optional(), maxDeductionBps: z.number().int().optional(), requiresOverride: z.boolean().optional(),
+});
+const cancelRuleBody = z.object({
+  id: z.string().max(60), name: z.string().max(120), action: z.enum(core.RULE_ACTIONS as [string, ...string[]]), group: z.enum(core.RULE_GROUPS as [string, ...string[]]),
+  priority: z.number().int().optional(), enabled: z.boolean().default(true), when: z.array(conditionSchema).max(10).default([]), outcome: outcomeSchema,
+  message: z.string().max(300).optional(), showInTerms: z.boolean().default(true),
+});
+const asRule = (b: z.infer<typeof cancelRuleBody>, priority: number) => ({ ...b, priority: b.priority ?? priority, message: b.message?.trim() || undefined }) as unknown as core.CancellationRule;
+const cancellationView = async (db: core.Db) => {
+  const currency = (await core.getRegional(db)).currency;
+  const rules = await core.listRules(db);
+  return {
+    rules, settings: await core.getCancellationSettings(db), facts: core.FACTS, ops: core.OPS.map(([id, label, types]) => ({ id, label, types })), currency,
+    descriptions: Object.fromEntries(rules.map((r) => [r.id, core.describeRule(r, currency)])),
+  };
+};
+get('/settings/cancellation', 'settings:manage', ({ db }) => cancellationView(db));
+post('/settings/cancellation/rules', 'settings:manage', async ({ db, user, body }) => {
+  const b = cancelRuleBody.parse(body);
+  const max = Math.max(0, ...(await core.listRules(db)).filter((r) => r.action === b.action).map((r) => r.priority));
+  await core.saveRule(db, user.username, asRule(b, max + 10), true);
+  return cancellationView(db);
+});
+patch('/settings/cancellation/rules/:id', 'settings:manage', async ({ db, user, params, body }) => {
+  const b = cancelRuleBody.parse({ ...(body as object), id: params.id });
+  await core.saveRule(db, user.username, asRule(b, 0), false);
+  return cancellationView(db);
+});
+route('DELETE', '/settings/cancellation/rules/:id', 'settings:manage', async ({ db, user, params }) => { await core.deleteRule(db, user.username, params.id!); return cancellationView(db); });
+post('/settings/cancellation/rules/:id/move', 'settings:manage', async ({ db, user, params, body }) => { await core.moveRule(db, user.username, params.id!, z.object({ direction: z.enum(['up', 'down']) }).parse(body).direction); return cancellationView(db); });
+post('/settings/cancellation/preview', 'settings:manage', async ({ db, body }) => {
+  const b = cancelRuleBody.partial({ id: true, name: true, outcome: true }).parse(body);
+  return core.previewRule(asRule({ ...b, id: b.id ?? 'preview', name: b.name ?? 'Preview', outcome: b.outcome ?? { allow: true } } as z.infer<typeof cancelRuleBody>, 0), (await core.getRegional(db)).currency);
+});
+post('/settings/cancellation/default', 'settings:manage', async ({ db, user, body }) => { await core.setCancellationSettings(db, user.username, { defaultAllow: z.object({ defaultAllow: z.boolean() }).parse(body).defaultAllow }); return cancellationView(db); });
+post('/settings/cancellation/reset', 'settings:manage', async ({ db, user }) => { await core.resetRules(db, user.username); return cancellationView(db); });
+post('/settings/cancellation/simulate', 'settings:manage', async ({ db, body }) => {
+  const b = z.object({ action: z.enum(core.RULE_ACTIONS as [string, ...string[]]), group: z.enum(['GOODS', 'INSTALL', 'ACTIVATION']), facts: z.record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).default({}), paidMinor: z.number().int().min(0).default(0), canOverride: z.boolean().default(false) }).parse(body);
+  return core.simulate(db, { ...b, action: b.action as core.RuleAction, group: b.group, facts: b.facts as core.Facts, currency: (await core.getRegional(db)).currency });
+});
 post('/settings/api-clients', 'settings:manage', async ({ db, user, body }) => {
   const r = await core.createApiClient(db, user.username, z.object({ name: z.string().min(1).max(60) }).parse(body));
   return Response.json({ client: r.client, key: r.key }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
@@ -537,20 +584,25 @@ post('/orders', null, async ({ db, user, body, req }) => {
     throw e;
   }
 });
-get('/orders/:id', 'order:read', async ({ db, user, params }) => { const o = await core.getOrder(db, params.id!); assertOrder(user, o); return o; });
+get('/orders/:id', 'order:read', async ({ db, user, params }) => {
+  const o = await core.getOrder(db, params.id!, { initiatedBy: user.scope.customerId ? 'CUSTOMER' : 'STAFF', canOverride: user.permissions.has('order:override') });
+  assertOrder(user, o);
+  return o;
+});
 const orderAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('confirm_payment'), reference: z.string().max(100).optional() }), z.object({ type: z.literal('schedule_installation'), slot: z.string() }),
   z.object({ type: z.literal('dispatch_technician') }), z.object({ type: z.literal('complete_installation') }),
   z.object({ type: z.literal('ship'), trackingNumber: z.string().max(100).optional() }), z.object({ type: z.literal('deliver') }),
   z.object({ type: z.literal('cancel'), reason: z.string().max(300).default('cancelled by user'), groups: z.array(z.enum(['ACTIVATION', 'GOODS', 'INSTALL'])).max(3).optional() }),
-  z.object({ type: z.literal('return'), reason: z.string().min(3).max(300), deductionMinor: z.number().int().min(0).optional() }),
+  z.object({ type: z.literal('return'), reason: z.string().min(3).max(300), deductionMinor: z.number().int().min(0).optional(), condition: z.enum(['GOOD', 'DAMAGED', 'INCOMPLETE']).optional() }),
 ]);
 post('/orders/:id/actions', null, async ({ db, user, params, body }) => {
   const a = orderAction.parse(body);
   need(user, a.type === 'cancel' || a.type === 'return' ? 'order:cancel' : a.type === 'confirm_payment' ? 'order:payment' : 'order:fulfil');
   assertOrder(user, await core.getOrder(db, params.id!));
-  if (a.type === 'cancel') return core.cancelOrder(db, params.id!, a.reason, user.username, { groups: a.groups });
-  if (a.type === 'return') return core.returnGoods(db, params.id!, { reason: a.reason, deductionMinor: a.deductionMinor }, user.username);
+  const canOverride = user.permissions.has('order:override');
+  if (a.type === 'cancel') return core.cancelOrder(db, params.id!, a.reason, user.username, { groups: a.groups, canOverride, initiatedBy: user.scope.customerId ? 'CUSTOMER' : 'STAFF' });
+  if (a.type === 'return') return core.returnGoods(db, params.id!, { reason: a.reason, deductionMinor: a.deductionMinor, condition: a.condition }, user.username, { canOverride });
   return core.advanceOrder(db, params.id!, a, user.username);
 });
 

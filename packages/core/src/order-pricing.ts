@@ -1,7 +1,7 @@
 import type { DeviceVariant, OfferNode, OrderChannel, PaymentMethod } from '@meridian/types';
 import { listBundleRules, matches, ruleSatisfied, type BundleRule } from './bundles.js';
 import { checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
-import { orderPolicy } from './config.js';
+import { autoCancelDays, termsFor } from './cancellation.js';
 import { getCustomer } from './customers.js';
 import type { Queryable, Row } from './db.js';
 import { invalid, rejected } from './errors.js';
@@ -163,8 +163,6 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
     }
   }
 
-  const policy = orderPolicy();
-  void policy;
   let dueNow = 0, net = 0, plan = 0, inst = 0, disc = 0;
   for (const l of lines) {
     if (l.payMode === 'INSTALLMENT') {
@@ -181,17 +179,8 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
   return { customer, marketCode, currency: mk.currency, taxName: mk.taxName, taxBps: mk.taxBps, lines, dueNow, net, monthlyPlanMinor: plan, monthlyInstalmentMinor: inst, discountMinor: disc, bundles, problems, hasService };
 }
 
-/** What the customer is told about changing their mind, per part of the order. Computed from the same policy the system enforces. */
-export function cancellationTerms(kinds: GroupKind[], currency: string): Array<{ group: GroupKind; title: string; text: string }> {
-  const p = orderPolicy();
-  const fee = (p.installLateFeeMinor / 100).toFixed(2);
-  const all: Record<GroupKind, { title: string; text: string }> = {
-    GOODS: { title: 'Device and goods', text: `Cancel for a full refund until it ships. Once shipped it cannot be cancelled; return it within ${p.returnDays} days of delivery for a refund (less a deduction if it is damaged).` },
-    INSTALL: { title: 'Installation', text: `Cancel for a full refund until the visit is within ${p.installLateHours} hours; after that a ${currency} ${fee} call-out fee is kept. It cannot be cancelled once the technician is dispatched. If it is not completed within ${p.installAutoCancelDays} days it is cancelled and refunded automatically.` },
-    ACTIVATION: { title: 'Mobile and other services', text: 'Cancel for a full refund until the service is switched on. Orders with a device switch on when the device is delivered. After that, the service is ended under its contract terms.' },
-  };
-  return kinds.map((k) => ({ group: k, ...all[k] }));
-}
+/** What the customer is told about changing their mind, per part of the order, written from the cancellation rules in force. */
+export const cancellationTerms = (q: Queryable, kinds: GroupKind[], currency: string) => termsFor(q, kinds, currency);
 
 /** Add-ons this customer can actually buy with this basket: prerequisites met (by the basket or what they own), no conflicts, sold on this channel. */
 export async function eligibleAddons(q: Queryable, o: { customerId?: string | null; offerIds: string[]; channel: OrderChannel; marketCode: string; q?: string; limit?: number; cursor?: string }) {
@@ -222,15 +211,14 @@ export interface OrderQuote {
   problems: string[];
   groups: Array<{ group: GroupKind; title: string; text: string; items: string[] }>;
   needs: { delivery: boolean; installation: boolean; customer: boolean };
-  installationSlaDays: number;
+  installationSlaDays: number | null;
 }
 
 /** Everything the order wizard's review step shows, from the same pricing the order will be charged with. Saves nothing. */
 export async function quoteOrder(q: Queryable, input: PricingInput): Promise<OrderQuote> {
   const p = await priceBasket(q, input, { soft: true });
   const kinds = [...new Set(p.lines.map((l) => l.group))];
-  const terms = cancellationTerms(kinds, p.currency);
-  const policy = orderPolicy();
+  const terms = await cancellationTerms(q, kinds, p.currency);
   return {
     currency: p.currency, taxName: p.taxName, taxBps: p.taxBps, bundles: p.bundles, problems: p.problems,
     lines: p.lines.map((l) => ({
@@ -244,7 +232,7 @@ export async function quoteOrder(q: Queryable, input: PricingInput): Promise<Ord
     dueNowMinor: p.dueNow, monthlyPlanMinor: p.monthlyPlanMinor, monthlyInstalmentMinor: p.monthlyInstalmentMinor, monthlyTotalMinor: p.monthlyPlanMinor + p.monthlyInstalmentMinor, discountMinor: p.discountMinor,
     groups: terms.map((t) => ({ ...t, items: p.lines.filter((l) => l.group === t.group).map((l) => l.offer.name) })),
     needs: { delivery: kinds.includes('GOODS') && !RETAIL_CHANNELS.includes(input.channel), installation: kinds.includes('INSTALL'), customer: p.hasService },
-    installationSlaDays: policy.installAutoCancelDays,
+    installationSlaDays: kinds.includes('INSTALL') ? await autoCancelDays(q, 'INSTALL') : null,
   };
 }
 

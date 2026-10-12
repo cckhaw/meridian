@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { OfferNode, OrderChannel, OrderState, PaymentMethod } from '@meridian/types';
 import { ruleSatisfied, listBundleRules } from './bundles.js';
-import { COMMISSION_BPS, GL, orderPolicy, paymentMode } from './config.js';
+import { decide, deadlineDays, getCancellationSettings, listRules, type CancellationDecision, type Facts } from './cancellation.js';
+import { COMMISSION_BPS, GL, paymentMode } from './config.js';
 import { marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { monthlyFee } from './catalog.js';
@@ -57,7 +58,7 @@ async function setState(q: Queryable, o: Row, to: OrderState, actor: string, rea
 }
 /** A line in the timeline for something that happened to part of the order without changing its overall state. */
 /** Amounts in timeline notes, written the way people read them (currency exponent respected). */
-const fmt = (minor: number, currency: string) => { const f = new Intl.NumberFormat('en', { style: 'currency', currency }); return f.format(minor / 10 ** (f.resolvedOptions().maximumFractionDigits ?? 2)); };
+const fmt = (minor: number, currency: string) => { const f = new Intl.NumberFormat('en', { style: 'currency', currency }); return f.format(minor / 10 ** (f.resolvedOptions().maximumFractionDigits ?? 2)).replace(/\u00a0/g, ' '); };
 const note = (q: Queryable, o: Row, actor: string, reason: string) =>
   q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$3,$4,$5)', [o.shardId, o.id, o.state, actor, reason]);
 
@@ -207,16 +208,9 @@ async function drive(q: Queryable, o: Row, ctx: Ctx): Promise<void> {
 /** Creates one group per kind of work in the order. Goods handed over at a retail counter are finished at once. */
 async function openGroups(q: Queryable, o: Row, ctx: Ctx) {
   const lines = await orderLines(q, o.id);
-  const policy = orderPolicy();
   const kinds = [...new Set(lines.map((l) => l.fulfilGroup as GroupKind))];
   for (const kind of kinds) {
-    const details: Record<string, unknown> = {};
-    let dueAt: Date | null = null;
-    if (kind === 'INSTALL') {
-      dueAt = new Date(Date.now() + policy.installAtRiskDays * DAY);
-      details.autoCancelAt = new Date(Date.now() + policy.installAutoCancelDays * DAY).toISOString();
-    }
-    await q.query('INSERT INTO order_groups (order_id, kind, due_at, details) VALUES ($1,$2,$3,$4)', [o.id, kind, dueAt, JSON.stringify(details)]);
+    await q.query('INSERT INTO order_groups (order_id, kind) VALUES ($1,$2)', [o.id, kind]);
   }
   if (kinds.includes('GOODS') && RETAIL_CHANNELS.includes(o.channel)) {
     await consumeReservations(q, o.id, 'GOODS'); // handed over at the counter
@@ -548,100 +542,127 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
 }
 
 // ───────────────────────── cancellation, returns and the installation SLA ─────────────────────────
+// What may be cancelled, returned, flagged or auto-cancelled, and what it costs, is decided by the rule base in cancellation.ts (Settings → Cancellation).
+// The engine below only enforces what physics demands: shipped goods cannot be cancelled, and an active service cannot be un-activated.
 export interface GroupPolicy {
-  kind: GroupKind; status: string; canCancel: boolean; why?: string; feeMinor: number; refundMinor: number; clawbackMinor: number;
-  returnable: boolean; returnUntil?: string; atRisk?: boolean;
+  kind: GroupKind; status: string; canCancel: boolean; needsOverride: boolean; why?: string; ruleId?: string; ruleName?: string;
+  feeMinor: number; refundMinor: number; clawbackMinor: number; returnable: boolean; returnUntil?: string; atRisk?: boolean;
 }
+export interface Who { initiatedBy: 'CUSTOMER' | 'STAFF' | 'SYSTEM'; canOverride: boolean }
+const STAFF: Who = { initiatedBy: 'STAFF', canOverride: false };
 
-const WHY: Record<GroupKind, Record<string, string>> = {
-  GOODS: { LOCKED: 'The goods have shipped (past the point of no return). Once delivered they can be returned within the cooling-off period.', DONE: 'The goods were delivered: raise a return instead of a cancellation.', RETURNED: 'The goods were returned.', CANCELLED: 'Already cancelled.' },
-  INSTALL: { LOCKED: 'The technician has been dispatched (past the point of no return).', DONE: 'The installation is complete: terminate the service instead.', CANCELLED: 'Already cancelled.', RETURNED: 'Already cancelled.' },
-  ACTIVATION: { DONE: 'The service is already active: terminate it under its contract terms instead.', CANCELLED: 'Already cancelled.', LOCKED: 'The service is being activated.', RETURNED: 'Already cancelled.' },
-};
+type Line = Row & { offer: OfferNode };
+const paidFor = (lines: Line[], kind: GroupKind) => lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE').reduce((s, l) => s + l.paidNowMinor, 0);
+const physicallyCancellable = (kind: GroupKind, status: string) => (kind === 'INSTALL' ? status === 'PENDING' || status === 'LOCKED' : status === 'PENDING');
 
-interface CancelPlan { per: Map<GroupKind, { paid: number; fee: number; claw: number; refund: number }>; clawLineIds: string[] }
+async function factsFor(q: Queryable, o: Row, g: Row, lines: Line[], now: Date, who: Who, extra: { returnCondition?: string } = {}): Promise<Facts> {
+  const kind = g.kind as GroupKind;
+  const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
+  const seg = (await q.query('SELECT segment FROM customers WHERE id=$1', [o.customerId])).rows[0]?.segment as string | undefined;
+  const hrs = (from: unknown) => (from ? (now.getTime() - new Date(from as string).getTime()) / 3_600_000 : null);
+  const slot = kind === 'INSTALL' && o.fulfilment?.slot ? new Date(o.fulfilment.slot) : null;
+  const opened = hrs(g.createdAt) ?? 0;
+  return {
+    groupStatus: g.status, hoursToVisit: slot ? (slot.getTime() - now.getTime()) / 3_600_000 : null, hoursOpen: opened, daysOpen: opened / 24,
+    hoursSinceLocked: hrs(g.lockedAt), daysSinceDelivered: kind === 'GOODS' && g.status === 'DONE' && g.doneAt ? (hrs(g.doneAt) as number) / 24 : null,
+    returnCondition: extra.returnCondition ?? null, initiatedBy: who.initiatedBy, channel: o.channel, segment: seg ?? null, market: String(o.marketCode).trim(), paymentMethod: o.paymentMethod,
+    paidMinor: mine.reduce((s, l) => s + l.paidNowMinor, 0), hasInstalments: mine.some((l) => l.payMode === 'INSTALLMENT'), hasContract: mine.some((l) => (l.offer.contract?.termMonths ?? 0) > 0),
+    offerKinds: [...new Set(mine.map((l) => l.offer.kind as string))],
+  };
+}
+const loadRules = async (q: Queryable) => ({ rules: await listRules(q), settings: await getCancellationSettings(q) });
+
+interface CancelPlan { per: Map<GroupKind, { paid: number; fee: number; claw: number; refund: number; decision: CancellationDecision }>; clawLineIds: string[] }
 
 /**
- * Works out what cancelling these parts together would refund: each part's money paid, any call-out fee, and the bundle discount taken back from
+ * Works out what cancelling these parts together would refund: each part's money paid, what its rule keeps, and the bundle discount taken back from
  * what stays behind. Planned jointly so that cancelling a whole bundle never claws a discount back from a part that is leaving anyway.
  */
-async function planCancel(q: Queryable, o: Row, lines: Array<Row & { offer: OfferNode }>, kinds: GroupKind[], now: Date, waiveFee: boolean): Promise<CancelPlan> {
-  const pol = orderPolicy();
+async function planCancel(q: Queryable, o: Row, gs: Row[], lines: Line[], kinds: GroupKind[], now: Date, who: Who, action: 'CANCEL' | 'AUTO_CANCEL' = 'CANCEL'): Promise<CancelPlan> {
+  const { rules, settings } = await loadRules(q);
   const leaving = new Set(lines.filter((l) => kinds.includes(l.fulfilGroup) && l.status === 'ACTIVE').map((l) => l.id));
   const cl = await clawback(q, lines, leaving);
   let toTake = cl.total;
   const per: CancelPlan['per'] = new Map();
   for (const kind of kinds) {
-    const paid = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE').reduce((s, l) => s + l.paidNowMinor, 0);
-    let fee = 0;
-    if (kind === 'INSTALL' && !waiveFee) {
-      const slot = o.fulfilment?.slot ? new Date(o.fulfilment.slot) : null;
-      if (slot && slot.getTime() - now.getTime() < pol.installLateHours * 3_600_000) fee = Math.min(pol.installLateFeeMinor, paid);
-    }
+    const g = findGroup(gs, kind)!;
+    const paid = paidFor(lines, kind);
+    const decision = decide(rules, settings, { action, group: kind, facts: await factsFor(q, o, g, lines, now, who), paidMinor: paid, canOverride: who.canOverride });
+    const fee = decision.allow ? Math.min(paid, decision.retainedMinor) : 0;
     const claw = Math.min(Math.max(0, paid - fee), toTake);
     toTake -= claw;
-    per.set(kind, { paid, fee, claw, refund: Math.max(0, paid - fee - claw) });
+    per.set(kind, { paid, fee, claw, refund: Math.max(0, paid - fee - claw), decision });
   }
   return { per, clawLineIds: cl.lineIds };
 }
 
-async function policyFor(q: Queryable, o: Row, g: Row, lines: Array<Row & { offer: OfferNode }>, now: Date, waiveFee = false): Promise<GroupPolicy> {
-  const pol = orderPolicy();
+async function policyFor(q: Queryable, o: Row, g: Row, gs: Row[], lines: Line[], now: Date, who: Who): Promise<GroupPolicy> {
   const kind = g.kind as GroupKind;
-  const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
-  const paid = mine.reduce((s, l) => s + l.paidNowMinor, 0);
-  const base: GroupPolicy = { kind, status: g.status, canCancel: false, feeMinor: 0, refundMinor: 0, clawbackMinor: 0, returnable: false };
+  const base: GroupPolicy = { kind, status: g.status, canCancel: false, needsOverride: false, feeMinor: 0, refundMinor: 0, clawbackMinor: 0, returnable: false };
   if (g.atRisk) base.atRisk = true;
-  if (g.status === 'DONE' && kind === 'GOODS' && g.doneAt) {
-    const until = new Date(new Date(g.doneAt).getTime() + pol.returnDays * DAY);
-    if (until.getTime() >= now.getTime()) { base.returnable = true; base.returnUntil = until.toISOString(); base.refundMinor = paid; }
+  if (g.status === 'CANCELLED' || g.status === 'RETURNED') return { ...base, why: g.status === 'RETURNED' ? 'Returned.' : 'Already cancelled.' };
+  const { rules, settings } = await loadRules(q);
+  if (g.status === 'DONE' && kind === 'GOODS') {
+    const paid = paidFor(lines, kind);
+    const r = decide(rules, settings, { action: 'RETURN', group: kind, facts: await factsFor(q, o, g, lines, now, who, { returnCondition: 'GOOD' }), paidMinor: paid, canOverride: who.canOverride });
+    const days = deadlineDays(r.matched, 'daysSinceDelivered');
+    base.returnable = r.allow || r.needsOverride;
+    if (r.allow) { base.refundMinor = Math.max(0, paid - r.retainedMinor); if (days !== null && g.doneAt) base.returnUntil = new Date(new Date(g.doneAt).getTime() + days * DAY).toISOString(); }
+    base.needsOverride = r.needsOverride;
+    base.ruleId = r.rule?.id; base.ruleName = r.rule?.name;
   }
-  if (g.status !== 'PENDING') { base.why = WHY[kind][g.status] ?? 'This part can no longer be cancelled.'; return base; }
-  const plan = (await planCancel(q, o, lines, [kind], now, waiveFee)).per.get(kind)!;
-  return { ...base, canCancel: true, feeMinor: plan.fee, clawbackMinor: plan.claw, refundMinor: plan.refund };
+  const facts = await factsFor(q, o, g, lines, now, who);
+  const dec = decide(rules, settings, { action: 'CANCEL', group: kind, facts, paidMinor: paidFor(lines, kind), canOverride: who.canOverride });
+  const physical = physicallyCancellable(kind, g.status);
+  if (!physical || !dec.allow) {
+    return { ...base, needsOverride: base.needsOverride || (physical && dec.needsOverride), ruleId: base.ruleId ?? dec.rule?.id, ruleName: base.ruleName ?? dec.rule?.name,
+      why: !physical && dec.allow ? 'This part can no longer be cancelled.' : dec.message };
+  }
+  const plan = (await planCancel(q, o, gs, lines, [kind], new Date(now), who)).per.get(kind)!;
+  return { ...base, canCancel: true, ruleId: dec.rule?.id, ruleName: dec.rule?.name, feeMinor: plan.fee, clawbackMinor: plan.claw, refundMinor: plan.refund, why: plan.fee > 0 || plan.decision.message ? plan.decision.message : undefined };
 }
 
 /** What can still be cancelled, what each part would refund, and why the rest cannot. Used by the order screen and by cancellation itself. */
-export async function cancellationPreview(q: Queryable, orderId: string, now = new Date()): Promise<GroupPolicy[]> {
+export async function cancellationPreview(q: Queryable, orderId: string, now = new Date(), who: Who = STAFF): Promise<GroupPolicy[]> {
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0];
   if (!o) throw notFound('order', orderId);
   const [gs, lines] = await Promise.all([groupRows(q, orderId), orderLines(q, orderId)]);
-  return Promise.all(gs.map((g) => policyFor(q, o, g, lines, now)));
+  return Promise.all(gs.map((g) => policyFor(q, o, g, gs, lines, now, who)));
 }
 
 /** What "Cancel order" would do right now: every cancellable part together, with the combined refund. */
-export async function cancelAllPreview(q: Queryable, o: Row, now = new Date()): Promise<{ kinds: GroupKind[]; refundMinor: number; feeMinor: number; clawbackMinor: number }> {
+export async function cancelAllPreview(q: Queryable, o: Row, now = new Date(), who: Who = STAFF): Promise<{ kinds: GroupKind[]; refundMinor: number; feeMinor: number; clawbackMinor: number }> {
   const [gs, lines] = await Promise.all([groupRows(q, o.id), orderLines(q, o.id)]);
-  const kinds = (await Promise.all(gs.map((g) => policyFor(q, o, g, lines, now)))).filter((p) => p.canCancel).map((p) => p.kind);
+  const kinds = (await Promise.all(gs.map((g) => policyFor(q, o, g, gs, lines, now, who)))).filter((p) => p.canCancel).map((p) => p.kind);
   if (!kinds.length) return { kinds, refundMinor: 0, feeMinor: 0, clawbackMinor: 0 };
-  const plan = await planCancel(q, o, lines, kinds, now, false);
-  const all = [...plan.per.values()];
+  const all = [...(await planCancel(q, o, gs, lines, kinds, now, who)).per.values()];
   return { kinds, refundMinor: all.reduce((s, p) => s + p.refund, 0), feeMinor: all.reduce((s, p) => s + p.fee, 0), clawbackMinor: all.reduce((s, p) => s + p.claw, 0) };
 }
 
-
-async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: string, actor: string, waiveFee = false) {
+async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: string, actor: string, who: Who, action: 'CANCEL' | 'AUTO_CANCEL' = 'CANCEL', now = new Date()) {
   const [gs, lines] = [await groupRows(q, o.id), await orderLines(q, o.id)];
-  const plan = await planCancel(q, o, lines, kinds, new Date(), waiveFee);
+  const plan = await planCancel(q, o, gs, lines, kinds, now, who, action);
   for (const kind of kinds) {
     const g = findGroup(gs, kind)!;
     const p = plan.per.get(kind)!;
+    if (!p.decision.allow || !physicallyCancellable(kind, g.status)) throw rejected(p.decision.message || 'that part can no longer be cancelled');
     const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
     await releaseReservations(q, o.id, kind);
     const r = await refund(q, o, mine, { retainMinor: p.fee, clawbackMinor: p.claw, label: `Cancelled ${kind.toLowerCase()}` });
     await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND fulfil_group=$2 AND status='ACTIVE'`, [o.id, kind]);
-    if (kind === 'INSTALL') await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [o.id]);
-    await patchGroup(q, g.id, `status='CANCELLED', cancelled_at=now(), refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ cancelReason: reason })]);
+    if (kind === 'INSTALL') await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status IN ('BOOKED','DISPATCHED')`, [o.id]);
+    await patchGroup(q, g.id, `status='CANCELLED', cancelled_at=now(), refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ cancelReason: reason, rule: p.decision.rule?.id ?? null })]);
     await note(q, o, actor, `${({ GOODS: 'Delivery', INSTALL: 'Installation', ACTIVATION: 'Service activation' })[kind]} cancelled${r.refundMinor ? `, ${fmt(r.refundMinor, o.currency)} refunded` : ''}${r.retainedMinor ? `, ${fmt(r.retainedMinor, o.currency)} kept` : ''}: ${reason}`);
   }
   if (plan.clawLineIds.length) await q.query(`UPDATE order_lines SET discount_rules='{}' WHERE id = ANY($1::uuid[])`, [plan.clawLineIds]); // the bundle is broken: that discount has been taken back
 }
 
 /**
- * Cancels the parts of an order that have not passed their point of no return, each refunded on its own (stock goes back, appointments are released).
- * By default every cancellable part is cancelled and the rest stay; pass `groups` to cancel just some. Orders not yet paid are cancelled whole.
+ * Cancels the parts of an order the rules allow, each refunded on its own (stock goes back, appointments are released). By default every cancellable
+ * part is cancelled and the rest stay; pass `groups` to cancel just some. Orders not yet paid are cancelled whole.
  */
-export async function cancelOrder(db: Db, orderId: string, reason: string, actor = 'system', opts: { groups?: GroupKind[] } = {}): Promise<Row> {
+export async function cancelOrder(db: Db, orderId: string, reason: string, actor = 'system', opts: { groups?: GroupKind[]; initiatedBy?: Who['initiatedBy']; canOverride?: boolean } = {}): Promise<Row> {
+  const who: Who = { initiatedBy: opts.initiatedBy ?? (actor === 'system' ? 'SYSTEM' : 'STAFF'), canOverride: !!opts.canOverride };
   return db.tx(async (q) => {
     const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
     if (!o) throw notFound('order', orderId);
@@ -655,36 +676,45 @@ export async function cancelOrder(db: Db, orderId: string, reason: string, actor
     }
     const lines = await orderLines(q, orderId);
     const now = new Date();
-    const policies = await Promise.all(gs.map((g) => policyFor(q, o, g, lines, now)));
+    const policies = await Promise.all(gs.map((g) => policyFor(q, o, g, gs, lines, now, who)));
     const asked = opts.groups?.length ? opts.groups : null;
     if (asked) for (const k of asked) { const p = policies.find((x) => x.kind === k); if (!p) throw rejected(`this order has no ${k.toLowerCase()} part`); if (!p.canCancel) throw rejected(p.why ?? 'that part can no longer be cancelled'); }
     const kinds = (asked ?? policies.filter((p) => p.canCancel).map((p) => p.kind));
-    if (!kinds.length) throw rejected('past the point of no return (goods shipped or technician dispatched); raise a return or termination instead');
-    await cancelGroups(q, o, kinds, reason || 'cancelled', actor);
+    if (!kinds.length) {
+      const whys = [...new Set(policies.filter((p) => p.why && !['Already cancelled.', 'Returned.'].includes(p.why)).map((p) => p.why!))];
+      throw rejected(`Past the point of no return${whys.length ? `: ${whys.join(' ')}` : ' (goods shipped or technician dispatched); raise a return or termination instead'}`);
+    }
+    await cancelGroups(q, o, kinds, reason || 'cancelled', actor, who);
     await progress(q, o, { actor }); // what is left may now be able to finish (e.g. a plan no longer waiting for a cancelled device)
     return getOrder(q, orderId);
   });
 }
 
-/** Return of delivered goods inside the cooling-off period: refund (less any damage deduction), stock back, device contract ended without a termination charge. */
-export async function returnGoods(db: Db, orderId: string, o2: { reason: string; deductionMinor?: number; restock?: boolean }, actor = 'system'): Promise<Row> {
+/** Return of delivered goods as the rules allow: refund (less what the rule keeps and any damage deduction), stock back, device contract ended without a termination charge. */
+export async function returnGoods(db: Db, orderId: string, o2: { reason: string; deductionMinor?: number; condition?: string; restock?: boolean }, actor = 'system', opts: { canOverride?: boolean } = {}): Promise<Row> {
+  const who: Who = { initiatedBy: 'STAFF', canOverride: !!opts.canOverride };
   return db.tx(async (q) => {
     const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
     if (!o) throw notFound('order', orderId);
     const gs = await groupRows(q, orderId);
     const g = findGroup(gs, 'GOODS');
     if (!g) throw rejected('this order has no goods to return');
-    const lines = await orderLines(q, orderId);
-    const pol = await policyFor(q, o, g, lines, new Date());
     if (g.status === 'RETURNED') throw rejected('these goods were already returned');
-    if (!pol.returnable) throw rejected(g.status === 'DONE' ? `the ${orderPolicy().returnDays}-day return period has ended` : g.status === 'CANCELLED' ? 'these goods were cancelled, not delivered' : 'the goods have not been delivered yet: wait for delivery, then return them');
+    if (g.status === 'CANCELLED') throw rejected('these goods were cancelled, not delivered');
+    const lines = await orderLines(q, orderId);
     const mine = lines.filter((l) => l.fulfilGroup === 'GOODS' && l.status === 'ACTIVE');
     const paid = mine.reduce((s, l) => s + l.paidNowMinor, 0);
+    const { rules, settings } = await loadRules(q);
+    const dec = decide(rules, settings, { action: 'RETURN', group: 'GOODS', facts: await factsFor(q, o, g, lines, new Date(), who, { returnCondition: o2.condition ?? 'GOOD' }), paidMinor: paid, canOverride: who.canOverride });
+    if (g.status !== 'DONE' || !dec.allow) throw rejected(g.status !== 'DONE' ? 'the goods have not been delivered yet: wait for delivery, then return them' : dec.message);
+    const cap = Math.floor((paid * dec.maxDeductionBps) / 10_000);
+    if ((o2.deductionMinor ?? 0) > cap) throw rejected(`the damage deduction for this return can be at most ${fmt(cap, o.currency)}`);
     const deduction = Math.max(0, Math.min(paid, o2.deductionMinor ?? 0));
+    const keep = Math.min(paid, dec.retainedMinor + deduction);
     const claw = await clawback(q, lines, new Set(mine.map((l) => l.id)));
-    const r = await refund(q, o, mine, { retainMinor: deduction, clawbackMinor: Math.min(claw.total, Math.max(0, paid - deduction)), label: 'Goods returned' });
+    const r = await refund(q, o, mine, { retainMinor: keep, clawbackMinor: Math.min(claw.total, Math.max(0, paid - keep)), label: 'Goods returned' });
     if (claw.lineIds.length) await q.query(`UPDATE order_lines SET discount_rules='{}' WHERE id = ANY($1::uuid[])`, [claw.lineIds]);
-    if (o2.restock !== false) await restockConsumed(q, orderId, 'GOODS');
+    if (o2.restock !== false && (o2.condition ?? 'GOOD') === 'GOOD') await restockConsumed(q, orderId, 'GOODS');
     // A device bought on a contract goes back with the contract: the line ends, instalments stop, no early-termination charge.
     const offerIds = mine.filter((l) => createsService(l.offer)).map((l) => l.offerId);
     if (offerIds.length) {
@@ -692,36 +722,51 @@ export async function returnGoods(db: Db, orderId: string, o2: { reason: string;
       for (const s of svc) await q.query('UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1', [s.id]);
     }
     await q.query(`UPDATE order_lines SET status='RETURNED' WHERE order_id=$1 AND fulfil_group='GOODS' AND status='ACTIVE'`, [orderId]);
-    await patchGroup(q, g.id, `status='RETURNED', refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ returnReason: o2.reason, returnedAt: new Date().toISOString() })]);
+    await patchGroup(q, g.id, `status='RETURNED', refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ returnReason: o2.reason, returnCondition: o2.condition ?? 'GOOD', rule: dec.rule?.id ?? null, returnedAt: new Date().toISOString() })]);
     await note(q, o, actor, `Goods returned${r.refundMinor ? `, ${fmt(r.refundMinor, o.currency)} refunded` : ''}${r.retainedMinor ? `, ${fmt(r.retainedMinor, o.currency)} kept` : ''}: ${o2.reason}`);
-    await audit(q, actor, 'order', orderId, 'GOODS_RETURNED', { refundMinor: r.refundMinor, deductionMinor: deduction });
+    await audit(q, actor, 'order', orderId, 'GOODS_RETURNED', { refundMinor: r.refundMinor, deductionMinor: deduction, rule: dec.rule?.id ?? null });
     return getOrder(q, orderId);
   });
 }
 
 /**
- * The installation service level. An installation still open after the "at risk" age is flagged for follow-up; one that has not even been dispatched
- * by the auto-cancel age is cancelled with a full refund (no call-out fee: the delay is ours). Run daily.
+ * The service-level sweep, driven by the rule base: open parts matching a "flag as at risk" rule are flagged for follow-up, and open parts matching an
+ * "automatically cancel" rule are cancelled (refunded as that rule says). Run it daily.
  */
 export async function sweepOrders(db: Db, now = new Date(), actor = 'system'): Promise<{ atRisk: number; cancelled: number }> {
-  const flagged = (await db.query(`SELECT g.id, g.order_id FROM order_groups g WHERE g.kind='INSTALL' AND g.status IN ('PENDING','LOCKED') AND NOT g.at_risk AND g.due_at < $1`, [now.toISOString()])).rows;
-  for (const g of flagged) await db.tx(async (q) => {
-    await patchGroup(q, g.id, 'at_risk = true');
-    await audit(q, actor, 'order', g.orderId, 'INSTALL_AT_RISK', { dueAt: now.toISOString() });
-  });
-  const late = (await db.query(`SELECT g.order_id FROM order_groups g WHERE g.kind='INSTALL' AND g.status='PENDING' AND (g.details->>'autoCancelAt')::timestamptz < $1`, [now.toISOString()])).rows;
-  let cancelled = 0;
-  for (const g of late) await db.tx(async (q) => {
-    const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [g.orderId])).rows[0];
-    if (!o || TERMINAL.includes(o.state)) return;
-    await cancelGroups(q, o, ['INSTALL'], `installation not completed within ${orderPolicy().installAutoCancelDays} days`, actor, true);
-    await progress(q, o, { actor });
-    cancelled++;
-  });
-  return { atRisk: flagged.length, cancelled };
+  const who: Who = { initiatedBy: 'SYSTEM', canOverride: false };
+  const { rules, settings } = await loadRules(db);
+  if (!rules.some((r) => r.enabled && (r.action === 'FLAG_AT_RISK' || r.action === 'AUTO_CANCEL'))) return { atRisk: 0, cancelled: 0 };
+  let atRisk = 0, cancelled = 0, cursor = '00000000-0000-0000-0000-000000000000';
+  for (;;) {
+    const page = (await db.query(`SELECT id, order_id FROM order_groups WHERE status IN ('PENDING','LOCKED') AND id > $1 ORDER BY id LIMIT 200`, [cursor])).rows;
+    if (!page.length) break;
+    cursor = page[page.length - 1]!.id;
+    for (const pg of page) await db.tx(async (q) => {
+      const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [pg.orderId])).rows[0];
+      if (!o || TERMINAL.includes(o.state)) return;
+      const gs = await groupRows(q, o.id);
+      const g = gs.find((x) => x.id === pg.id);
+      if (!g || !OPEN_GROUP.includes(g.status)) return;
+      const lines = await orderLines(q, o.id);
+      const facts = await factsFor(q, o, g, lines, now, who);
+      const paid = paidFor(lines, g.kind);
+      const flag = g.atRisk ? null : decide(rules, settings, { action: 'FLAG_AT_RISK', group: g.kind, facts, paidMinor: paid });
+      if (flag?.matched && flag.allow) { await patchGroup(q, g.id, 'at_risk = true'); await audit(q, actor, 'order', o.id, `${g.kind}_AT_RISK`, { rule: flag.rule!.id }); atRisk++; }
+      if (g.status === 'PENDING') {
+        const auto = decide(rules, settings, { action: 'AUTO_CANCEL', group: g.kind, facts, paidMinor: paid });
+        if (auto.matched && auto.allow && physicallyCancellable(g.kind, g.status)) {
+          await cancelGroups(q, o, [g.kind], `automatic: ${auto.matched.name}`, actor, who, 'AUTO_CANCEL', now);
+          await progress(q, o, { actor });
+          cancelled++;
+        }
+      }
+    });
+  }
+  return { atRisk, cancelled };
 }
 
-export async function getOrder(q: Queryable, id: string): Promise<Row> {
+export async function getOrder(q: Queryable, id: string, who: Who = STAFF): Promise<Row> {
   const o = (await q.query(
     `SELECT o.*, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id=$1`, [id])).rows[0];
   if (!o) throw notFound('order', id);
@@ -731,7 +776,7 @@ export async function getOrder(q: Queryable, id: string): Promise<Row> {
     q.query('SELECT id, method, status, amount_minor, refunded_minor, reference FROM payments WHERE order_id=$1', [id]),
     q.query('SELECT id, type, identifier, status FROM services WHERE order_id=$1 ORDER BY identifier LIMIT 50', [id]),
     q.query('SELECT slot_start, slot_end, status FROM installation_appointments WHERE order_id=$1 ORDER BY slot_start', [id]),
-    cancellationPreview(q, id),
+    cancellationPreview(q, id, new Date(), who),
   ]);
   const svcCount = (await q.query('SELECT count(*) AS n FROM services WHERE order_id=$1', [id])).rows[0]!.n;
   const open = !TERMINAL.includes(o.state);
@@ -740,7 +785,7 @@ export async function getOrder(q: Queryable, id: string): Promise<Row> {
   return {
     ...o, lines: lines.rows, history: history.rows, payments: payments.rows, services: services.rows, serviceCount: svcCount, appointments: appts.rows,
     groups: groups.map((g) => { const m = meta.get(g.kind); const closed = g.status === 'CANCELLED' || g.status === 'RETURNED'; return { ...g, lockedAt: m?.lockedAt ?? null, doneAt: m?.doneAt ?? null, dueAt: m?.dueAt ?? null, refundedMinor: m?.refundedMinor ?? 0, feeMinor: closed ? m?.feeMinor ?? 0 : g.feeMinor, details: m?.details ?? {} }; }),
-    cancelAll: open ? await cancelAllPreview(q, o) : null,
+    cancelAll: open ? await cancelAllPreview(q, o, new Date(), who) : null,
     nextActions: nextActions(o, [...meta.values()]), cancellable,
   };
 }

@@ -136,7 +136,7 @@ describe('returns and the installation service level', () => {
     const old = await placeOrder(db, { customerId: customer.id, channel: 'SELF_SERVE', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: 'plan-phone-24' }] });
     await advanceOrder(db, old.id, { type: 'ship' }); await advanceOrder(db, old.id, { type: 'deliver' });
     await db.query(`UPDATE order_groups SET done_at = now() - interval '15 days' WHERE order_id=$1 AND kind='GOODS'`, [old.id]);
-    await expect(returnGoods(db, old.id, { reason: 'late' })).rejects.toThrow(/14-day return period has ended/);
+    await expect(returnGoods(db, old.id, { reason: 'late' })).rejects.toThrow(/return period has ended/);
   });
 
   it('flags an installation at risk after 14 days and cancels it with a full refund after 21, even inside the late-cancel window', async () => {
@@ -151,7 +151,7 @@ describe('returns and the installation service level', () => {
     const o = await getOrder(db, placed.id);
     expect(o.state).toBe('CANCELLED');
     expect(o.refundedMinor).toBe(placed.totalMinor);
-    expect(o.history.some((h: any) => /not completed within 21 days/.test(h.reason ?? ''))).toBe(true);
+    expect(o.history.some((h: any) => /cancel and refund after 21 days/.test(h.reason ?? ''))).toBe(true);
   });
 
   it('never auto-cancels an installation that has been dispatched', async () => {
@@ -258,8 +258,8 @@ describe('payment structure, variants and bundles', () => {
     expect(withPhone.items.map((i) => i.offer.id)).not.toContain('plan-phone-24');
   });
 
-  it('explains the cancellation terms per part in words', () => {
-    const t = cancellationTerms(['GOODS', 'INSTALL', 'ACTIVATION'], 'SGD');
+  it('explains the cancellation terms per part in words', async () => {
+    const t = await cancellationTerms(db, ['GOODS', 'INSTALL', 'ACTIVATION'], 'SGD');
     expect(t.find((x) => x.group === 'INSTALL')!.text).toMatch(/24 hours.*50\.00.*21 days/);
     expect(t.find((x) => x.group === 'GOODS')!.text).toMatch(/14 days of delivery/);
   });

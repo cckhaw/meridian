@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, LargeTitle, SectionTitle, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Field, Input, LargeTitle, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
 import Link from 'next/link';
 import { use, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
@@ -21,6 +21,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
   const [slot, setSlot] = useState('');
   const [reason, setReason] = useState('');
   const [deduction, setDeduction] = useState('');
+  const [condition, setCondition] = useState('GOOD');
   const [confirming, setConfirming] = useState<string | null>(null);
   if (error) return <Alert>{error}</Alert>;
   if (loading && !o) return <Spinner />;
@@ -57,18 +58,19 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
                   <p className="mt-1 text-subhead text-label2">
                     {g.status === 'CANCELLED' ? `Cancelled${g.refundedMinor > 0 ? ` · ${money(g.refundedMinor, o.currency)} refunded` : ''}${g.feeMinor > 0 ? ` · ${money(g.feeMinor, o.currency)} kept` : ''}${g.details?.cancelReason ? ` · ${g.details.cancelReason}` : ''}`
                       : g.status === 'RETURNED' ? `Returned · ${money(g.refundedMinor, o.currency)} refunded${g.feeMinor > 0 ? ` · ${money(g.feeMinor, o.currency)} kept` : ''}`
-                      : g.canCancel ? `Can still be cancelled${g.refundMinor > 0 ? `: refunds ${money(g.refundMinor, o.currency)}` : ''}${g.feeMinor > 0 ? `, keeping a ${money(g.feeMinor, o.currency)} call-out fee (the visit is soon)` : ''}${g.clawbackMinor > 0 ? `, less ${money(g.clawbackMinor, o.currency)} of bundle discount that would no longer apply` : ''}.`
-                      : g.returnable ? `Delivered. Can be returned until ${d(g.returnUntil)} for up to ${money(g.refundMinor, o.currency)}.` : g.why}
+                      : g.canCancel ? `Can still be cancelled${g.refundMinor > 0 ? `: refunds ${money(g.refundMinor, o.currency)}` : ''}${g.feeMinor > 0 ? `, keeping ${money(g.feeMinor, o.currency)}` : ''}${g.clawbackMinor > 0 ? `, less ${money(g.clawbackMinor, o.currency)} of bundle discount that would no longer apply` : ''}.`
+                      : g.returnable ? `Delivered. Can be returned${g.returnUntil ? ` until ${d(g.returnUntil)}` : ''} for up to ${money(g.refundMinor, o.currency)}.${g.needsOverride ? ' Needs a supervisor’s approval.' : ''}` : g.needsOverride ? `${g.why}${can('order:override') ? '' : ' Ask a supervisor to approve it.'}` : g.why}
                     {g.kind === 'GOODS' && g.details?.trackingNumber && <span> Tracking <span className="font-mono">{g.details.trackingNumber}</span>.</span>}
                   </p>
-                  {can('order:cancel') && g.returnable && (
-                    <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_160px_auto] sm:items-end">
+                  {can('order:cancel') && g.returnable && (!g.needsOverride || can('order:override')) && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_150px_150px_auto] sm:items-end">
                       <Field label="Reason for the return"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+                      <Field label="Condition"><Select value={condition} onChange={(e) => setCondition(e.target.value)}><option value="GOOD">As new</option><option value="DAMAGED">Damaged</option><option value="INCOMPLETE">Missing parts</option></Select></Field>
                       <Field label="Damage deduction"><Input type="number" min="0" value={deduction} onChange={(e) => setDeduction(e.target.value)} placeholder="0.00" /></Field>
-                      <Button variant="destructive" disabled={busy || reason.trim().length < 3} onClick={() => { if (confirm('Return these goods and refund the customer?')) void act('return', { reason, deductionMinor: deduction ? toMinor(deduction) : undefined }); }}>Return goods</Button>
+                      <Button variant="destructive" disabled={busy || reason.trim().length < 3} onClick={() => { if (confirm('Return these goods and refund the customer?')) void act('return', { reason, condition, deductionMinor: deduction ? toMinor(deduction) : undefined }); }}>Return goods</Button>
                     </div>
                   )}
-                  {can('order:cancel') && g.canCancel && o.groups.filter((x: any) => x.canCancel).length > 1 && (
+                  {can('order:cancel') && (g.canCancel || (g.needsOverride && can('order:override'))) && o.groups.filter((x: any) => x.canCancel || x.needsOverride).length > 1 && (
                     confirming === g.kind
                       ? <div className="mt-3 flex gap-2"><Button variant="destructive" disabled={busy} onClick={() => { setConfirming(null); void act('cancel', { reason: reason || 'cancelled by user', groups: [g.kind] }); }}>Confirm: cancel the {gt(g.kind).toLowerCase()}</Button><Button variant="secondary" onClick={() => setConfirming(null)}>Keep</Button></div>
                       : <Button className="mt-3" variant="secondary" onClick={() => setConfirming(g.kind)}>Cancel only the {gt(g.kind).toLowerCase()}…</Button>
@@ -116,7 +118,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
                 )}
                 <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
                 <Button variant="destructive" className="w-full" disabled={busy} onClick={() => act('cancel', { reason: reason || 'cancelled by user' })}>Cancel order</Button></>
-              ) : <Alert tone="info">Past the point of no return: goods shipped, the technician dispatched or the service switched on. Delivered goods can be returned within the cooling-off period; services are ended under their contract terms.</Alert>}
+              ) : o.groups.some((g: any) => g.needsOverride) ? <Alert tone="info">Cancelling this order needs a supervisor’s approval under the cancellation rules. Ask someone with override approval to do it.</Alert> : <Alert tone="info">Past the point of no return: goods shipped, the technician dispatched or the service switched on. Delivered goods can be returned within the cooling-off period; services are ended under their contract terms.</Alert>}
             </Card>
           )}
           <Card>

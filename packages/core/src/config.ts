@@ -61,19 +61,3 @@ export function configIssues(env: NodeJS.ProcessEnv = process.env, superuserProb
 export type PaymentMode = 'simulated' | 'manual';
 export const paymentMode = (env: NodeJS.ProcessEnv = process.env): PaymentMode =>
   env.MERIDIAN_PAYMENT_MODE === 'simulated' || env.MERIDIAN_PAYMENT_MODE === 'manual' ? env.MERIDIAN_PAYMENT_MODE : env.NODE_ENV === 'production' ? 'manual' : 'simulated';
-
-/**
- * Order cancellation and return policy. Every number can be overridden in the environment.
- *  returnDays          goods can be returned this long after delivery (cooling-off), minus a deduction if the device is damaged
- *  installLateHours    cancelling an installation closer than this to the booked visit keeps a call-out fee
- *  installLateFeeMinor the call-out fee (minor units of the order currency)
- *  installAtRiskDays   an installation still open after this many days is flagged "at risk" for follow-up
- *  installAutoCancelDays  and cancelled automatically (with a full refund) after this many
- */
-export const orderPolicy = () => ({
-  returnDays: Number(process.env.MERIDIAN_RETURN_DAYS ?? 14),
-  installLateHours: Number(process.env.MERIDIAN_INSTALL_LATE_HOURS ?? 24),
-  installLateFeeMinor: Number(process.env.MERIDIAN_INSTALL_LATE_FEE_MINOR ?? 5000),
-  installAtRiskDays: Number(process.env.MERIDIAN_INSTALL_AT_RISK_DAYS ?? 14),
-  installAutoCancelDays: Number(process.env.MERIDIAN_INSTALL_AUTO_CANCEL_DAYS ?? 21),
-});

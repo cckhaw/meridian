@@ -61,3 +61,4 @@ export * from './gateways.js';
 export * from './kyc.js';
 export * from './store.js';
 export * from './store-settings.js';
+export * from './cancellation.js';

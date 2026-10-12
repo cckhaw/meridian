@@ -317,7 +317,7 @@ export function DeliveryStep({ w }: { w: Wizard }) {
       )}
       {needs.installation && (
         <Card>
-          <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order. Installations not completed within ${w.quote.installationSlaDays} days are cancelled and refunded.`}>
+          <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order.${w.quote.installationSlaDays ? ` Installations not completed within ${w.quote.installationSlaDays} days are cancelled and refunded.` : ''}`}>
             <Input type="datetime-local" min={min} value={w.slot} onChange={(e) => w.setSlot(e.target.value)} />
           </Field>
           {!needs.delivery && <div className="mt-3"><Field label="Installation address"><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} /></Field></div>}
