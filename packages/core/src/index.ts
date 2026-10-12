@@ -52,3 +52,9 @@ export function getDb(): Promise<Db> {
 }
 export * from './settings.js';
 export * from './themes.js';
+export * from './apikeys.js';
+export * from './field-crypto.js';
+export * from './gateways.js';
+export * from './kyc.js';
+export * from './store.js';
+export * from './store-settings.js';

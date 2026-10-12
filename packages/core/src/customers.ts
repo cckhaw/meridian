@@ -18,9 +18,9 @@ export interface NewCustomer {
 }
 
 const label = (id: string) => 'c_' + id.replaceAll('-', '_'); // ltree labels allow [A-Za-z0-9_]
-const mask = (doc: string) => (doc.length <= 4 ? '****' : doc.slice(0, 1) + '*'.repeat(doc.length - 4) + doc.slice(-3));
+export const maskIdDocument = (doc: string) => (doc.length <= 4 ? '****' : doc.slice(0, 1) + '*'.repeat(doc.length - 4) + doc.slice(-3));
 // Keyed hash for duplicate detection. Set MERIDIAN_ID_PEPPER in production; raw ID documents are never stored.
-const hashDoc = (doc: string) => createHmac('sha256', process.env.MERIDIAN_ID_PEPPER ?? 'dev-only-pepper').update(doc.trim().toUpperCase()).digest('hex');
+export const hashIdDocument = (doc: string) => createHmac('sha256', process.env.MERIDIAN_ID_PEPPER ?? 'dev-only-pepper').update(doc.trim().toUpperCase()).digest('hex');
 
 /** Internal-only columns never leave the service (the ID hash exists purely for duplicate detection). */
 const strip = <T extends Row>(r: T): T => { const { idDocumentHash: _h, ...rest } = r; return rest as T; };
@@ -30,7 +30,7 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
   const id = randomUUID();
   const shardId = shardFor(id);
   const marketCode = input.marketCode ?? 'SG';
-  const hash = hashDoc(input.idDocument);
+  const hash = hashIdDocument(input.idDocument);
   // Individuals must be unique by ID document; enterprises/departments may legitimately share one.
   if (input.segment === 'CONSUMER' || input.segment === 'FAMILY') {
     const dup = (await q.query('SELECT id FROM customers WHERE id_document_hash=$1 AND market_code=$2 LIMIT 1', [hash, marketCode])).rows[0];
@@ -45,7 +45,7 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
   await q.query(
     `INSERT INTO customers (id, shard_id, segment, display_name, id_document_ref, id_document_hash, market_code, parent_customer_id, hierarchy_path, email, phone)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [id, shardId, input.segment, input.displayName.trim(), mask(input.idDocument), hash, marketCode, input.parentCustomerId ?? null, path, input.email ?? null, input.phone ?? null],
+    [id, shardId, input.segment, input.displayName.trim(), maskIdDocument(input.idDocument), hash, marketCode, input.parentCustomerId ?? null, path, input.email ?? null, input.phone ?? null],
   );
   const customer = await getCustomer(q, id);
   if (input.account === false) return { customer };
