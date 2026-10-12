@@ -2,9 +2,9 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import type { CatalogNode, EtcQuote, OfferNode } from '@meridian/types';
 import type { Model } from 'mongoose';
-import { quoteEtc } from '../etc/etc.calculator.js';
+import { quoteEtc } from '@meridian/core/etc';
 import { CatalogNodeDoc } from './catalog.schema.js';
-import { validateOffer, validateParent } from './hierarchy.js';
+import { validateOffer, validateParent } from '@meridian/core/hierarchy';
 
 @Injectable()
 export class CatalogService {

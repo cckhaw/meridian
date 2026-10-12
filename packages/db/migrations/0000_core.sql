@@ -4,7 +4,6 @@
 -- High-cardinality tables (services, order_lines, usage) are additionally HASH partitioned so a
 -- single IoT enterprise with millions of devices does not create an unbounded hot partition.
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS ltree;
 
 CREATE TABLE shard_map (

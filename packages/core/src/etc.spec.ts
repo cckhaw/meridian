@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { monthsElapsed, quoteEtc } from './etc.calculator.js';
+import { monthsElapsed, quoteEtc } from './etc.js';
 
 const contract = (term: 12 | 24 | 36) => ({
   termMonths: term,

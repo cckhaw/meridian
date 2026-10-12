@@ -25,7 +25,7 @@ export function AppShell({ persona, onPersonaChange, activeHref, linkComponent, 
   const Link = linkComponent ?? (({ href, className, children: c, ...r }) => <a href={href} className={className} {...r}>{c}</a>);
 
   const items = current.nav.map((n) => {
-    const active = n.href === activeHref;
+    const active = n.href.split('?')[0] === activeHref;
     return (
       <Link key={n.id} href={n.href} aria-current={active ? 'page' : undefined}
         className={`flex min-h-tap items-center gap-3 rounded-control px-3 text-body ${active ? 'bg-accent/10 font-semibold text-accent' : 'text-label hover:bg-surface2'}`}>
@@ -63,12 +63,12 @@ export function AppShell({ persona, onPersonaChange, activeHref, linkComponent, 
         {children}
       </main>
 
-      <nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 flex justify-around border-t border-separator bg-bg/80 pb-[var(--sab)] backdrop-blur-chrome md:hidden">
-        {current.nav.slice(0, 5).map((n) => {
-          const active = n.href === activeHref;
+      <nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 flex overflow-x-auto border-t border-separator bg-bg/80 pb-[var(--sab)] backdrop-blur-chrome md:hidden">
+        {current.nav.map((n) => {
+          const active = n.href.split('?')[0] === activeHref;
           return (
             <Link key={n.id} href={n.href} aria-current={active ? 'page' : undefined}
-              className={`flex min-h-[56px] min-w-tap flex-1 flex-col items-center justify-center text-caption ${active ? 'text-accent' : 'text-label2'}`}>
+              className={`flex min-h-[56px] min-w-[76px] flex-1 shrink-0 flex-col items-center justify-center whitespace-nowrap px-2 text-caption ${active ? 'text-accent' : 'text-label2'}`}>
               <span aria-hidden className="text-title3 leading-none">{ICON[n.icon] ?? '•'}</span>{n.label}
             </Link>
           );
