@@ -144,22 +144,55 @@ post('/users/:id/reset-password', 'user:manage', async (c) => { await guardUserC
 post('/users/:id/unlock', 'user:manage', async (c) => { await guardUserChange(c, c.params.id!); await core.unlockUser(c.db, c.user.username, c.params.id!); return { ok: true }; });
 
 // ───────────────────────── catalog ─────────────────────────
+const CHANNEL_ENUM = z.enum(core.CHANNELS);
+const priceSchema = z.object({ type: z.enum(['ONE_TIME', 'RECURRING', 'USAGE']), amount: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }), periodMonths: z.number().int().min(1).max(60).optional(), taxInclusive: z.boolean() });
+const contractSchema = z.object({
+  termMonths: z.union([z.literal(0), z.literal(12), z.literal(24), z.literal(36)]),
+  etc: z.object({ method: z.enum(['SUBSIDY_AMORTISED', 'REMAINING_RECURRING_PERCENT']), percentOfRemaining: z.number().min(0).max(100).optional(), capSubsidyFraction: z.number().min(0).max(1).optional(), waiveInLastMonths: z.number().int().min(0).max(12).optional() }).optional(),
+  subsidy: z.object({ deviceRetailPrice: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }), subsidyAmount: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }) }).optional(),
+});
+const fulfilmentSchema = z.object({ requiresShipping: z.boolean(), requiresInstallation: z.boolean(), requiresSimActivation: z.boolean(), inventorySkus: z.array(z.string().max(50)).max(20) });
+const offerFields = {
+  kind: z.enum(['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE', 'VAS', 'NON_TELCO_SUBSCRIPTION', 'PHYSICAL_GOOD', 'FIBER', 'IOT_CONNECTIVITY']),
+  description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
+  partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]),
+};
+const nodeInput = z.discriminatedUnion('level', [
+  z.object({ level: z.literal('NETWORK_TYPE'), id: z.string().max(60), name: z.string().min(1).max(100), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
+  z.object({ level: z.literal('CATEGORY'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
+  z.object({ level: z.literal('GROUP'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
+  z.object({ level: z.literal('OFFER'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional(), markets: z.array(z.string().length(2)).default([]), ...offerFields }),
+]);
+const nodePatch = z.object({
+  status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
+  kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
+  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(),
+});
+/** Roles that cannot edit the catalog only ever see sellable (ACTIVE) nodes. */
+const pruneInactive = (nodes: core.CatalogTreeNode[]): core.CatalogTreeNode[] =>
+  nodes.filter((n) => n.status === 'ACTIVE').map((n) => ({ ...n, children: pruneInactive(n.children) }));
+
 get('/catalog', 'catalog:read', async ({ db, user, query }) => ({
-  // Roles that cannot edit the catalog only ever see sellable (ACTIVE) offers.
-  items: await core.listNodes(db, { status: user.permissions.has('catalog:write') ? str(query, 'status') : 'ACTIVE', level: str(query, 'level'), kind: str(query, 'kind'), q: str(query, 'q'), market: str(query, 'market'), pathPrefix: str(query, 'path') }),
+  items: await core.listNodes(db, { status: user.permissions.has('catalog:write') ? str(query, 'status') : 'ACTIVE', level: str(query, 'level'), kind: str(query, 'kind'), q: str(query, 'q'), market: str(query, 'market'), pathPrefix: str(query, 'path'), channel: str(query, 'channel') }),
 }));
+get('/catalog/tree', 'catalog:read', async ({ db, user }) => { const t = await core.catalogTree(db); return { items: user.permissions.has('catalog:write') ? t : pruneInactive(t) }; });
 get('/catalog/:id', 'catalog:read', async ({ db, user, params }) => {
   const n = await core.getNode(db, params.id!);
   if (n.status !== 'ACTIVE' && !user.permissions.has('catalog:write')) throw new DomainError('NOT_FOUND', 'not found');
   return n;
 });
-post('/catalog', 'catalog:write', ({ db, user, body }) => core.createNode(db, body as core.NodeInput).then(async (n) => { await core.audit(db, user.username, 'catalog', n.id, 'NODE_CREATED', { level: n.level }); return n; }));
+get('/catalog/:id/usage', 'catalog:write', ({ db, params }) => core.nodeUsage(db, params.id!));
+post('/catalog', 'catalog:write', ({ db, user, body }) => core.createNode(db, nodeInput.parse(body) as unknown as core.NodeInput, user.username));
 patch('/catalog/:id', 'catalog:write', async ({ db, user, params, body }) => {
-  const status = z.object({ status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']) }).parse(body).status;
-  const n = await core.setStatus(db, params.id!, status);
-  await core.audit(db, user.username, 'catalog', params.id!, `STATUS_${status}`);
-  return n;
+  const { status, ...fields } = nodePatch.parse(body);
+  const edited = Object.values(fields).some((v) => v !== undefined);
+  if (edited) await core.updateNode(db, params.id!, fields as core.NodePatch, user.username);
+  return status ? core.setStatus(db, params.id!, status, user.username) : core.getNode(db, params.id!);
 });
+post('/catalog/:id/move', 'catalog:write', ({ db, user, params, body }) => core.moveNode(db, params.id!, z.object({ parentId: z.string().nullable() }).parse(body).parentId, user.username));
+post('/catalog/:id/reorder', 'catalog:write', async ({ db, user, params, body }) => { await core.reorderNode(db, params.id!, z.object({ direction: z.enum(['up', 'down']) }).parse(body).direction, user.username); return { ok: true }; });
+route('DELETE', '/catalog/:id', 'catalog:write', async ({ db, user, params }) => { await core.deleteNode(db, params.id!, user.username); return { ok: true }; });
 get('/catalog/:id/etc', 'catalog:read', ({ db, params, query }) =>
   core.etcQuoteForOffer(db, params.id!, new Date(query.get('contractStart') ?? Date.now()), new Date(query.get('terminationDate') ?? Date.now())));
 

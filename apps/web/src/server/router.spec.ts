@@ -338,3 +338,48 @@ describe('production safety', () => {
     } finally { process.env = keep; }
   });
 });
+
+describe('catalog hierarchy and dependencies', () => {
+  it('edits, moves, reorders and deletes at every level, and refuses unsafe changes', async () => {
+    const c = await root();
+    const mk = (body: unknown) => call('POST', '/catalog', { cookie: c, body });
+    expect((await mk({ level: 'NETWORK_TYPE', id: 'sat', name: 'Satellite', networkType: 'none' })).status).toBe(200);
+    expect((await mk({ level: 'CATEGORY', id: 'sat-roam', name: 'Roaming', parentId: 'sat' })).status).toBe(200);
+    expect((await mk({ level: 'GROUP', id: 'grp-sat-a', name: 'Plans A', parentId: 'sat-roam' })).status).toBe(200);
+    // Renaming keeps ids (paths derive from ids); moving re-parents.
+    expect((await call('PATCH', '/catalog/sat-roam', { cookie: c, body: { name: 'Roaming 2' } })).json.name).toBe('Roaming 2');
+    expect((await mk({ level: 'CATEGORY', id: 'sat-b', name: 'B', parentId: 'sat' })).status).toBe(200);
+    const moved = await call('POST', '/catalog/grp-sat-a/move', { cookie: c, body: { parentId: 'sat-b' } });
+    expect(moved.status).toBe(200);
+    expect(moved.json.path).toBe('sat/sat-b/grp-sat-a');
+    expect((await call('POST', '/catalog/sat-b/reorder', { cookie: c, body: { direction: 'up' } })).status).toBe(200);
+    // Non-empty nodes cannot be deleted; empty ones can.
+    expect((await call('DELETE', '/catalog/sat-b', { cookie: c })).status).toBeGreaterThanOrEqual(400);
+    expect((await call('DELETE', '/catalog/sat-roam', { cookie: c })).status).toBe(200);
+    expect((await call('GET', '/catalog/sat-roam', { cookie: c })).status).toBe(404);
+  });
+
+  it('stores dependencies on an offer and rejects cycles and unknown targets', async () => {
+    const c = await root();
+    const offer = (id: string, extra: Record<string, unknown> = {}) => call('POST', '/catalog', { cookie: c, body: {
+      level: 'OFFER', id, name: id, parentId: 'grp-insurance', markets: ['SG'], kind: 'VAS', prices: [{ type: 'RECURRING', amount: { amountMinor: 500, currency: 'SGD' }, periodMinutes: undefined, periodMonths: 1, taxInclusive: true }],
+      fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [] }, ...extra } });
+    expect((await offer('care-a', { requires: ['grp-device'] })).status).toBe(200);
+    expect((await offer('care-b', { requires: ['no-such-offer'] })).status).toBeGreaterThanOrEqual(400);
+    expect((await offer('care-c', { requires: ['care-a'] })).status).toBe(200);
+    const cyc = await call('PATCH', '/catalog/care-a', { cookie: c, body: { requires: ['care-c'] } });
+    expect(cyc.status).toBeGreaterThanOrEqual(400);
+    expect((await call('PATCH', '/catalog/care-a', { cookie: c, body: { description: 'ok', salesChannels: ['SELF_SERVE'] } })).json.salesChannels).toEqual(['SELF_SERVE']);
+  });
+
+  it('hides unsold structure from roles without catalog:write', async () => {
+    const c = await root();
+    await call('POST', '/catalog', { cookie: c, body: { level: 'NETWORK_TYPE', id: 'draft-net', name: 'Draft net', networkType: 'none', status: 'DRAFT' } });
+    const agent = await staff(['call-center']);
+    const tree = await call('GET', '/catalog/tree', { cookie: agent.cookie });
+    expect(tree.status).toBe(200);
+    expect(JSON.stringify(tree.json)).not.toContain('draft-net');
+    expect((await call('PATCH', '/catalog/draft-net', { cookie: agent.cookie, body: { name: 'x' } })).status).toBe(403);
+    expect((await call('DELETE', '/catalog/draft-net', { cookie: agent.cookie })).status).toBe(403);
+  });
+});

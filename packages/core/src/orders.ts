@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OfferNode, OrderChannel, OrderState, PaymentMethod } from '@meridian/types';
 import { COMMISSION_BPS, GL, market, paymentMode } from './config.js';
 import type { Db, Queryable, Row } from './db.js';
-import { getOffer, monthlyFee } from './catalog.js';
+import { checkDependencies, getOffer, monthlyFee } from './catalog.js';
 import { getCustomer } from './customers.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve } from './inventory.js';
@@ -90,13 +90,12 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
         offers.set(o.id, o);
       }
     }
-    const ids = new Set(offers.keys());
+    // Prerequisites ("a phone before its care plan") are met by the same order or by what the customer already owns; conflicts are order-local.
+    const violations = await checkDependencies(q, customerId, [...offers.keys()]);
+    if (violations.length) throw rejected(violations.join(' '));
     for (const o of offers.values()) {
-      const missing = o.requires.filter((r) => !ids.has(r));
-      if (missing.length) throw rejected(`${o.name} requires ${missing.join(', ')} in the same order`);
-      const clash = o.excludes.filter((r) => ids.has(r));
-      if (clash.length) throw rejected(`${o.name} cannot be combined with ${clash.join(', ')}`);
       if (input.channel === 'QUICK_SALE' && (o.kind !== 'PHYSICAL_GOOD' || o.contract?.termMonths)) throw rejected('quick-sale supports outright goods only');
+      if (o.salesChannels?.length && !o.salesChannels.includes(input.channel)) throw rejected(`${o.name} is not sold through this channel`);
     }
     const hasService = [...offers.values()].some(createsService);
     if (hasService && customer.displayName === 'Walk-in customer') throw rejected('services need a registered customer');

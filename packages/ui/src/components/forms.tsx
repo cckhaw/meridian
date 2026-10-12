@@ -1,4 +1,5 @@
-import { cloneElement, isValidElement, useId, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+'use client';
+import { cloneElement, isValidElement, useEffect, useId, useRef, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 
 const cx = (...p: Array<string | false | undefined>) => p.filter(Boolean).join(' ');
 const control = 'min-h-tap w-full rounded-control border border-separator bg-surface px-3 text-body text-label placeholder:text-label2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50';
@@ -53,3 +54,47 @@ export const Empty = ({ children }: { children: ReactNode }) => <p className="ro
 export const SectionTitle = ({ children, action }: { children: ReactNode; action?: ReactNode }) => (
   <div className="mb-3 mt-8 flex items-center justify-between gap-3 first:mt-0"><h2 className="text-title3 font-semibold">{children}</h2>{action}</div>
 );
+
+/**
+ * Accessible modal dialog: labelled, closes on Escape or backdrop click, moves focus in and returns it on close, and stops the page scrolling behind it.
+ */
+export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const first = ref.current?.querySelector<HTMLElement>('input, select, textarea, button:not([data-close])');
+    first?.focus();
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Tab' || !ref.current) return;
+      const f = [...ref.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea')];
+      if (!f.length) return;
+      const firstEl = f[0]!, lastEl = f[f.length - 1]!;
+      if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; previous?.focus(); };
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-end bg-black/40 p-0 sm:place-items-center sm:p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        className={cx('max-h-[92dvh] w-full overflow-y-auto rounded-t-card bg-surface p-5 shadow-card sm:rounded-card sm:p-6', wide ? 'sm:max-w-2xl' : 'sm:max-w-md')}>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h2 id={titleId} className="text-title3 font-semibold">{title}</h2>
+          <button data-close aria-label="Close" onClick={onClose} className="-mr-2 -mt-2 min-h-tap min-w-tap rounded-full text-title3 text-label2 hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Small icon-only button with a required accessible name (e.g. the pencil on an offer panel). */
+export function IconButton({ label, children, onClick, href, tone }: { label: string; children: ReactNode; onClick?: () => void; href?: string; tone?: 'danger' }) {
+  const cls = cx('inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-full text-body hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent', tone === 'danger' ? 'text-danger' : 'text-label2 hover:text-label');
+  return href ? <a href={href} aria-label={label} title={label} className={cls}>{children}</a> : <button type="button" aria-label={label} title={label} onClick={onClick} className={cls}>{children}</button>;
+}
