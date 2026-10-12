@@ -26,6 +26,8 @@ describe('customer hierarchy', () => {
     const a = await createCustomer(db, { segment: 'CONSUMER', displayName: 'A', idDocument: 'S9999999Z' });
     await expect(createCustomer(db, { segment: 'CONSUMER', displayName: 'B', idDocument: 's9999999z' })).rejects.toThrow(/already exists/);
     expect(a.customer.idDocumentRef).not.toContain('9999999'); // masked, raw document never stored
+    expect(a.customer).not.toHaveProperty('idDocumentHash'); // internal duplicate-detection hash is not exposed
+    expect((await searchCustomers(db, { q: 'A' })).items[0]).not.toHaveProperty('idDocumentHash');
     const co = await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Co', idDocument: 'UEN1' });
     const d1 = await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Co HR', idDocument: 'UEN1', parentCustomerId: co.customer.id });
     const d2 = await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Co HR Payroll', idDocument: 'UEN1', parentCustomerId: d1.customer.id });

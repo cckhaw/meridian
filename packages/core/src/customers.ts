@@ -22,6 +22,9 @@ const mask = (doc: string) => (doc.length <= 4 ? '****' : doc.slice(0, 1) + '*'.
 // Keyed hash for duplicate detection. Set MERIDIAN_ID_PEPPER in production; raw ID documents are never stored.
 const hashDoc = (doc: string) => createHmac('sha256', process.env.MERIDIAN_ID_PEPPER ?? 'dev-only-pepper').update(doc.trim().toUpperCase()).digest('hex');
 
+/** Internal-only columns never leave the service (the ID hash exists purely for duplicate detection). */
+const strip = <T extends Row>(r: T): T => { const { idDocumentHash: _h, ...rest } = r; return rest as T; };
+
 export async function createCustomer(q: Queryable, input: NewCustomer): Promise<{ customer: Customer; account?: Account }> {
   if (!input.displayName.trim()) throw invalid('displayName is required');
   const id = randomUUID();
@@ -66,7 +69,7 @@ export async function createAccount(q: Queryable, customerId: string, o: { name?
 export async function getCustomer(q: Queryable, id: string): Promise<Customer & Row> {
   const r = (await q.query<Customer & Row>('SELECT * FROM customers WHERE id=$1', [id])).rows[0];
   if (!r) throw notFound('customer', id);
-  return r;
+  return strip(r);
 }
 
 export async function searchCustomers(q: Queryable, f: { q?: string; segment?: string; limit?: number; offset?: number }) {
@@ -83,7 +86,7 @@ export async function searchCustomers(q: Queryable, f: { q?: string; segment?: s
   const sql = `SELECT c.*, (SELECT count(*) FROM services s WHERE s.customer_id = c.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count,
       (SELECT count(*) FROM customers k WHERE k.parent_customer_id = c.id) AS child_count
     FROM customers c ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.created_at DESC, c.id LIMIT ${lim} OFFSET ${off}`;
-  const rows = (await q.query(sql, params)).rows;
+  const rows = (await q.query(sql, params)).rows.map(strip);
   const total = (await q.query(`SELECT count(*) AS n FROM customers c ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`, params.slice(0, params.length - 2))).rows[0]!.n;
   return { items: rows, total };
 }
@@ -91,8 +94,8 @@ export async function searchCustomers(q: Queryable, f: { q?: string; segment?: s
 /** Direct children (departments / sub-accounts) of a customer, or the whole subtree with `deep`. */
 export async function listChildren(q: Queryable, customerId: string, deep = false, limit = 100) {
   const c = await getCustomer(q, customerId);
-  if (deep) return (await q.query(`SELECT * FROM customers WHERE hierarchy_path <@ $1::ltree AND id <> $2 ORDER BY hierarchy_path LIMIT $3`, [c.hierarchyPath, customerId, limit])).rows;
-  return (await q.query(`SELECT * FROM customers WHERE parent_customer_id = $1 ORDER BY display_name LIMIT $2`, [customerId, limit])).rows;
+  if (deep) return (await q.query(`SELECT * FROM customers WHERE hierarchy_path <@ $1::ltree AND id <> $2 ORDER BY hierarchy_path LIMIT $3`, [c.hierarchyPath, customerId, limit])).rows.map(strip);
+  return (await q.query(`SELECT * FROM customers WHERE parent_customer_id = $1 ORDER BY display_name LIMIT $2`, [customerId, limit])).rows.map(strip);
 }
 
 export async function addToGroup(q: Queryable, groupCustomerId: string, memberCustomerId: string, role: 'OWNER' | 'MEMBER' | 'DEPARTMENT' = 'MEMBER') {
