@@ -10,7 +10,9 @@ Meridian refuses to serve traffic in production unless it is configured safely: 
 | `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD` | yes | The super user. 12+ character password, not a common one. **Rotating either value signs the super user out everywhere.** |
 | `MERIDIAN_ID_PEPPER` | yes | 16+ character secret for hashing ID documents (duplicate detection). Never change it after customers exist or duplicates stop being detected. |
 | `MERIDIAN_PAYMENT_MODE` | no | `manual` (default in production) or `simulated` (development only). |
-| `MERIDIAN_PAYMENT_WEBHOOK_SECRET` | no | Enables the payment webhook (section 4). |
+| `MERIDIAN_PAYMENT_WEBHOOK_SECRET` | no | Enables the generic payment webhook (section 4). |
+| `MERIDIAN_STRIPE_SECRET_KEY`, `_PUBLISHABLE_KEY`, `_WEBHOOK_SECRET` | no | Enable Stripe for the store-front ([STOREFRONT.md](STOREFRONT.md#5-payments)). |
+| `MERIDIAN_DATA_KEY` | no | Secret for encrypting KYC data (ID numbers, document images). Falls back to `MERIDIAN_ID_PEPPER`. **Back it up with the database; losing it makes stored identity data unreadable. Rotating it needs a re-encryption step.** |
 | `MERIDIAN_SEED` | no | `none` (default in production), `starter`, `demo` (development only; blocked in production). |
 | `MERIDIAN_SESSION_IDLE_MINUTES` / `_MAX_HOURS` | no | 30 minutes idle / 12 hours absolute. |
 | `MERIDIAN_LOCK_AFTER_FAILURES` / `_LOCK_MINUTES` | no | Lock an account after 5 failures for 15 minutes. |
@@ -27,8 +29,10 @@ See `.env.example`.
 4. **Receive stock** (Inventory → Goods receipt) for each warehouse and store location. Store ids (for example `STORE-SG-001`) are the location ids.
 5. **Create staff**: pick the roles; store users need a store id, dealers a dealer id. Each gets a one-time password and must change it at first sign-in.
 6. **Create customers** and, for the self-serve portal, a portal login linked to one customer.
-7. Schedule the **bill run** and **dunning** (Billing page, or `POST /api/billing/run` and `/api/billing/dunning` with a service account holding `billing:run`). They are safe to re-run.
-8. Finance exports the **GL journal** (Finance → Export). Each export is a batch, never exported twice.
+7. **Settings** (super user): set the currency and number/date format **before the first order** (the currency is locked once orders, invoices or payments exist), upload the logo and pick a colour theme.
+8. **Online store** (optional): see [STOREFRONT.md](STOREFRONT.md). Create an API key, switch on a payment gateway, deploy `apps/storefront`, and schedule `POST /api/jobs/expire-applications` hourly.
+9. Schedule the **bill run** and **dunning** (Billing page, or `POST /api/billing/run` and `/api/billing/dunning` with a service account holding `billing:run`). They are safe to re-run.
+10. Finance exports the **GL journal** (Finance → Export). Each export is a batch, never exported twice.
 
 ## 3. Day-to-day
 
@@ -41,7 +45,9 @@ See `.env.example`.
 
 ## 4. Payments
 
-Meridian does not hold card data and ships **no payment gateway**. Two supported paths:
+Meridian never holds card data. Three supported paths:
+
+**Online store-front** (Stripe, extensible to other gateways): see [STOREFRONT.md](STOREFRONT.md#5-payments).
 
 **Staff-recorded (default).** A cashier who holds `order:payment` takes payment on your terminal or in cash and records the approval code or receipt number on the order or invoice. The reference is mandatory and is the audit evidence.
 

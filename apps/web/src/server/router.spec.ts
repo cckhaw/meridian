@@ -392,6 +392,14 @@ describe('settings and branding', () => {
     return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), len, Buffer.from('IHDR'), ihdr, Buffer.alloc(16)]);
   };
 
+  it('the housekeeping job needs the billing-run permission', async () => {
+    const su = await root();
+    expect((await call('POST', '/jobs/expire-applications', { cookie: (await staff(['retail-store'], { storeId: 'STORE-SG-001' })).cookie, body: {} })).status).toBe(403);
+    const r = await call('POST', '/jobs/expire-applications', { cookie: su, body: {} });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ expired: expect.any(Number), cancelledOrders: expect.any(Number) });
+  });
+
   it('only the super user reaches settings; administrators and everyone else are refused', async () => {
     const admin = await staff(['admin']);
     for (const [m, p] of [['GET', '/settings'], ['POST', '/settings/regional'], ['POST', '/settings/branding'], ['POST', '/settings/logo'], ['DELETE', '/settings/logo']] as const) {
