@@ -23,6 +23,8 @@ export * from './inventory.js';
 export * from './ledger.js';
 export * from './lifecycle.js';
 export * from './orders.js';
+export * from './order-pricing.js';
+export * from './bundles.js';
 export * from './reports.js';
 export * from './seed.js';
 export * from './shard.js';

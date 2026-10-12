@@ -42,7 +42,7 @@ export async function adjustStock(q: Queryable, locationId: string, sku: string,
   return r.rows[0];
 }
 
-export async function reserve(q: Queryable, orderId: string, locationId: string, sku: string, qty: number) {
+export async function reserve(q: Queryable, orderId: string, locationId: string, sku: string, qty: number, group?: string) {
   const r = await q.query(
     `UPDATE inventory_stock SET reserved = reserved + $3 WHERE location_id = $1 AND sku = $2 AND on_hand - reserved >= $3`,
     [locationId, sku, qty],
@@ -51,20 +51,20 @@ export async function reserve(q: Queryable, orderId: string, locationId: string,
     const have = (await q.query('SELECT on_hand - reserved AS avail FROM inventory_stock WHERE location_id=$1 AND sku=$2', [locationId, sku])).rows[0];
     throw rejected(`insufficient stock for ${sku} at ${locationId} (available ${have?.avail ?? 0}, need ${qty})`);
   }
-  await q.query('INSERT INTO inventory_reservations (order_id, location_id, sku, quantity) VALUES ($1,$2,$3,$4)', [orderId, locationId, sku, qty]);
+  await q.query('INSERT INTO inventory_reservations (order_id, location_id, sku, quantity, fulfil_group) VALUES ($1,$2,$3,$4,$5)', [orderId, locationId, sku, qty, group ?? null]);
 }
 
 /** Goods leave the building: on_hand and reserved both drop. */
-export async function consumeReservations(q: Queryable, orderId: string) {
-  const rs = (await q.query('SELECT * FROM inventory_reservations WHERE order_id=$1 AND consumed_at IS NULL AND released_at IS NULL', [orderId])).rows;
+export async function consumeReservations(q: Queryable, orderId: string, group?: string) {
+  const rs = (await q.query('SELECT * FROM inventory_reservations WHERE order_id=$1 AND consumed_at IS NULL AND released_at IS NULL AND ($2::text IS NULL OR fulfil_group = $2)', [orderId, group ?? null])).rows;
   for (const r of rs) {
     await q.query('UPDATE inventory_stock SET on_hand = on_hand - $3, reserved = reserved - $3 WHERE location_id=$1 AND sku=$2', [r.locationId, r.sku, r.quantity]);
     await q.query('UPDATE inventory_reservations SET consumed_at = now() WHERE id=$1', [r.id]);
   }
 }
 
-export async function releaseReservations(q: Queryable, orderId: string) {
-  const rs = (await q.query('SELECT * FROM inventory_reservations WHERE order_id=$1 AND consumed_at IS NULL AND released_at IS NULL', [orderId])).rows;
+export async function releaseReservations(q: Queryable, orderId: string, group?: string) {
+  const rs = (await q.query('SELECT * FROM inventory_reservations WHERE order_id=$1 AND consumed_at IS NULL AND released_at IS NULL AND ($2::text IS NULL OR fulfil_group = $2)', [orderId, group ?? null])).rows;
   for (const r of rs) {
     await q.query('UPDATE inventory_stock SET reserved = reserved - $3 WHERE location_id=$1 AND sku=$2', [r.locationId, r.sku, r.quantity]);
     await q.query('UPDATE inventory_reservations SET released_at = now() WHERE id=$1', [r.id]);
@@ -75,4 +75,11 @@ export async function stockAt(q: Queryable, locationId: string, sku: string) {
   const r = (await q.query('SELECT on_hand, reserved FROM inventory_stock WHERE location_id=$1 AND sku=$2', [locationId, sku])).rows[0];
   if (!r) throw notFound('stock record', `${sku}@${locationId}`);
   return r;
+}
+
+/** Goods that were handed over come back into stock (a return in good condition). */
+export async function restockConsumed(q: Queryable, orderId: string, group: string) {
+  const rs = (await q.query('SELECT * FROM inventory_reservations WHERE order_id=$1 AND consumed_at IS NOT NULL AND fulfil_group=$2', [orderId, group])).rows;
+  for (const r of rs) await q.query('UPDATE inventory_stock SET on_hand = on_hand + $3 WHERE location_id=$1 AND sku=$2', [r.locationId, r.sku, r.quantity]);
+  return rs.length;
 }

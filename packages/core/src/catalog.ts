@@ -16,7 +16,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
     ...(r.level === 'NETWORK_TYPE' ? { networkType: d.networkType } : {}),
     ...(r.level === 'OFFER'
       ? { kind: r.kind, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
-          characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [] }
+          characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [], variants: d.variants ?? [] }
       : {}),
     ...(r.level === 'LINE_ITEM'
       ? { itemType: d.itemType, description: d.description, quantity: d.quantity, unit: d.unit, unlimited: !!d.unlimited, sku: d.sku }
@@ -28,7 +28,7 @@ const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, desc
 
 const offerData = (o: Partial<OfferNode>) => ({
   description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
-  characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [],
+  characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [],
 });
 
 // ───────────────────────── reads ─────────────────────────
@@ -149,24 +149,37 @@ export async function ownedOfferIds(q: Queryable, customerId: string | null, amo
  * Returns human-readable violations (empty = fine).
  */
 export async function checkDependencies(q: Queryable, customerId: string | null, offerIds: string[]): Promise<string[]> {
-  const g = await loadGraph(q);
-  const inCart = new Set(offerIds);
+  if (!offerIds.length) return [];
+  // Only the offers in the basket and the nodes they point at are read, so checking a basket costs the same in a catalog of ten offers or ten thousand.
+  const rows = (await q.query(`SELECT id, name, path, data->'requires' AS requires, data->'excludes' AS excludes FROM catalog_nodes WHERE id = ANY($1::text[])`, [offerIds])).rows;
+  const tokens = [...new Set(rows.flatMap((r) => (r.requires ?? []) as string[]))];
+  const nodes = new Map<string, Row>((tokens.length ? (await q.query(`SELECT id, name, level, path FROM catalog_nodes WHERE id = ANY($1::text[])`, [tokens])).rows : []).map((r) => [r.id as string, r]));
+  const beneath = (t: Row, o: Row) => o.id === t.id || o.path === t.path || o.path.startsWith(`${t.path}/`);
+  const owned = new Map<string, boolean>();
+  const owns = async (t: Row): Promise<boolean> => {
+    if (!customerId) return false;
+    if (!owned.has(t.id)) {
+      const r = await q.query(
+        `SELECT 1 FROM catalog_nodes c WHERE (c.id = $2 OR c.path LIKE $3) AND c.level = 'OFFER' AND (
+           EXISTS (SELECT 1 FROM services s WHERE s.customer_id = $1 AND s.offer_id = c.id AND s.status IN ('ACTIVE','SUSPENDED','PORTING_OUT'))
+           OR EXISTS (SELECT 1 FROM order_lines ol JOIN orders o ON o.shard_id = ol.shard_id AND o.id = ol.order_id WHERE o.customer_id = $1 AND o.state = 'COMPLETED' AND ol.offer_id = c.id)) LIMIT 1`,
+        [customerId, t.id, `${String(t.path).replace(/[\\%_]/g, (ch) => `\\${ch}`)}/%`]);
+      owned.set(t.id, r.rows.length > 0);
+    }
+    return owned.get(t.id)!;
+  };
   const out: string[] = [];
-  const needed = new Set<string>();
-  for (const id of offerIds) for (const t of g.nodes.get(id)?.requires ?? []) for (const o of expand(g, t)) needed.add(o);
-  const owned = await ownedOfferIds(q, customerId, [...needed]);
-  for (const id of offerIds) {
-    const me = g.nodes.get(id);
-    if (!me) continue;
-    for (const t of me.requires) {
-      const options = expand(g, t);
-      if (options.some((o) => inCart.has(o) || owned.has(o))) continue;
-      const tn = g.nodes.get(t);
+  const inCart = new Set(offerIds);
+  for (const me of rows) {
+    for (const t of (me.requires ?? []) as string[]) {
+      const tn = nodes.get(t);
+      if (tn && (rows.some((o) => beneath(tn, o)) || (await owns(tn)))) continue;
       out.push(`${me.name} requires ${tn?.level === 'OFFER' ? tn.name : `any ${tn?.name ?? t} offer`}. Buy one in the same order or own one already.`);
     }
   }
-  const ex = (await q.query(`SELECT id, name, data->'excludes' AS excludes FROM catalog_nodes WHERE id = ANY($1::text[])`, [offerIds])).rows;
-  for (const r of ex) for (const e of (r.excludes ?? []) as string[]) if (inCart.has(e)) out.push(`${r.name} cannot be combined with ${g.nodes.get(e)?.name ?? e}.`);
+  const excluded = [...new Set(rows.flatMap((r) => (r.excludes ?? []) as string[]).filter((e) => inCart.has(e)))];
+  const names = new Map<string, string>((excluded.length ? (await q.query(`SELECT id, name FROM catalog_nodes WHERE id = ANY($1::text[])`, [excluded])).rows : []).map((r) => [r.id as string, r.name as string]));
+  for (const r of rows) for (const e of (r.excludes ?? []) as string[]) if (inCart.has(e)) out.push(`${r.name} cannot be combined with ${names.get(e) ?? e}.`);
   return out;
 }
 
@@ -216,7 +229,7 @@ export interface NodePatch {
   itemType?: string; quantity?: number | null; unit?: string; unlimited?: boolean; sku?: string;
   name?: string; networkType?: string; markets?: string[];
   kind?: string; description?: string; prices?: PriceComponent[]; contract?: ContractTerms; fulfilment?: OfferNode['fulfilment'];
-  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[];
+  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants'];
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -263,7 +276,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
       ...o, name, markets,
       kind: (patch.kind ?? o.kind) as OfferNode['kind'], description: patch.description ?? o.description, prices: patch.prices ?? o.prices,
       contract: patch.contract ?? o.contract, fulfilment: patch.fulfilment ?? o.fulfilment, partnerCode: patch.partnerCode ?? o.partnerCode,
-      characteristics: patch.characteristics ?? o.characteristics, requires: patch.requires ?? o.requires, excludes: patch.excludes ?? o.excludes, salesChannels: patch.salesChannels ?? o.salesChannels ?? [],
+      characteristics: patch.characteristics ?? o.characteristics, requires: patch.requires ?? o.requires, excludes: patch.excludes ?? o.excludes, salesChannels: patch.salesChannels ?? o.salesChannels ?? [], variants: patch.variants ?? o.variants ?? [],
     } as OfferNode;
     const commercialChange = !same(next.prices, o.prices) || !same(next.contract, o.contract) || next.kind !== o.kind;
     if (commercialChange) {

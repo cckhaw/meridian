@@ -14,6 +14,11 @@ const base = { status: 'ACTIVE' as const, markets: ['SG'], parentId: null };
 type OfferSeed = Pick<OfferNode, 'id' | 'name' | 'kind' | 'prices' | 'fulfilment'> & Partial<Pick<OfferNode, 'contract' | 'partnerCode' | 'requires' | 'excludes' | 'description'>> & { group: string };
 const ful = (o: Partial<OfferNode['fulfilment']> = {}) => ({ requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [], ...o });
 const rec = (amt: number) => ({ type: 'RECURRING' as const, amount: sgd(amt), periodMonths: 1, taxInclusive: true });
+const PHONE_VARIANTS = [
+  { id: 'black-128', colour: 'Black', storage: '128GB', sku: 'PHONE-X1-128' },
+  { id: 'silver-128', colour: 'Silver', storage: '128GB', sku: 'PHONE-X1-128-SLV' },
+  { id: 'black-256', colour: 'Black', storage: '256GB', sku: 'PHONE-X1-256', priceDeltaMinor: 10000 },
+];
 const once = (amt: number) => ({ type: 'ONE_TIME' as const, amount: sgd(amt), taxInclusive: true });
 
 const OFFERS: OfferSeed[] = [
@@ -86,7 +91,8 @@ export async function seedReference(db: Db): Promise<void> {
     for (const o of OFFERS) {
       const gp = groupParent.get(o.group)!;
       await createNode(q, { ...base, id: o.id, level: 'OFFER', code: o.id, name: o.name, path: `${gp}/${o.id}`, parentId: `grp-${o.group}`, kind: o.kind, prices: o.prices,
-        contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode, description: o.description, characteristics: {}, requires: o.requires ?? [], excludes: o.excludes ?? [] } as never);
+        contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode, description: o.description, characteristics: {}, requires: o.requires ?? [], excludes: o.excludes ?? [],
+        variants: o.fulfilment.inventorySkus.includes('PHONE-X1-128') ? PHONE_VARIANTS : [] } as never);
     }
     for (const [offerId, items] of Object.entries(LINE_ITEMS)) {
       for (const [i, it] of items.entries()) {
@@ -96,9 +102,12 @@ export async function seedReference(db: Db): Promise<void> {
     }
     const stock: Array<[string, string, number]> = [
       ['WH-MAIN', 'PHONE-X1-128', 200], ['WH-MAIN', 'WATCH-L1', 100], ['WH-MAIN', 'ONT-ROUTER', 500], ['WH-MAIN', 'TOASTER-T1', 50], ['WH-MAIN', 'FRIDGE-F1', 20],
+      ['WH-MAIN', 'PHONE-X1-128-SLV', 100], ['WH-MAIN', 'PHONE-X1-256', 100], ['STORE-SG-001', 'PHONE-X1-128-SLV', 6], ['STORE-SG-001', 'PHONE-X1-256', 6],
       ['STORE-SG-001', 'PHONE-X1-128', 15], ['STORE-SG-001', 'WATCH-L1', 10], ['STORE-SG-001', 'TOASTER-T1', 5], ['STORE-SG-002', 'PHONE-X1-128', 8],
     ];
     for (const [l, s, n] of stock) await adjustStock(q, l, s, n);
+    await q.query(`INSERT INTO bundle_rules (id, name, data) VALUES ('fibre-plus-phone', 'Fibre + phone plan: 10% off the phone', $1) ON CONFLICT DO NOTHING`,
+      [JSON.stringify({ when: ['kind:FIBER', 'kind:SIM_DEVICE'], target: 'kind:SIM_DEVICE', percentBps: 1000 })]);
   });
 }
 

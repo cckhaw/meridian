@@ -325,6 +325,59 @@ describe('orders, payments and retries', () => {
   });
 });
 
+describe('order wizard API, partial cancellation and returns', () => {
+  it('quotes the full summary, lists eligible add-ons, and cancels part of an order', async () => {
+    const agent = await staff(['telesales']); const c = await customer(agent.cookie);
+    const lines = [{ offerId: 'plan-phone-24', options: { variantId: 'silver-128' }, payment: { mode: 'INSTALLMENT', months: 12, downPaymentMinor: 5000 } }, { offerId: 'fiber-1g' }];
+    const q = await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines } });
+    expect(q.status).toBe(200);
+    expect(q.json).toMatchObject({ dueNowMinor: 5000 + 5000, needs: { delivery: true, installation: true }, discountMinor: 2990 });
+    expect(q.json.lines[0]).toMatchObject({ variant: { colour: 'Silver', storage: '128GB' }, instalmentMinor: 1825, group: 'GOODS' });
+    expect(q.json.lines[0].entitlements.length).toBeGreaterThan(0);
+    expect(q.json.groups.map((g: any) => g.group).sort()).toEqual(['GOODS', 'INSTALL']);
+    expect((await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'DEALER', customerId: c, lines } })).status).toBe(403); // channel permission still applies
+
+    const add = await call('GET', `/orders/addons?customerId=${c}&offers=plan-phone-24&channel=TELESALES`, { cookie: agent.cookie });
+    expect(add.json.items.map((i: any) => i.offer.id)).toContain('device-care');
+    const none = await call('GET', `/orders/addons?customerId=${c}&offers=plan-sim-5g&channel=TELESALES`, { cookie: agent.cookie });
+    expect(none.json.items.map((i: any) => i.offer.id)).not.toContain('device-care');
+    const avail = await call('GET', '/catalog/plan-phone-24/availability', { cookie: agent.cookie });
+    expect(avail.json.items.find((v: any) => v.variantId === 'silver-128').available).toBeGreaterThan(0);
+
+    const root_ = await root();
+    const placed = await call('POST', '/orders', { cookie: root_, body: { channel: 'TELESALES', customerId: c, lines, deliveryAddress: '1 Road', payment: { method: 'CREDIT_CARD' } } });
+    expect(placed.status).toBe(200);
+    expect(placed.json.groups.map((g: any) => g.kind).sort()).toEqual(['GOODS', 'INSTALL']);
+    await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'ship' } });
+    const partial = await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'cancel', reason: 'no fibre please' } });
+    expect(partial.status).toBe(200);
+    expect(partial.json.groups.find((g: any) => g.kind === 'INSTALL').status).toBe('CANCELLED');
+    expect(partial.json.groups.find((g: any) => g.kind === 'GOODS').status).toBe('LOCKED');
+    const refused = await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'cancel', groups: ['GOODS'] } });
+    expect(refused.status).toBe(422);
+    expect(refused.json.error.message).toMatch(/point of no return/);
+    await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'deliver' } });
+    const ret = await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'return', reason: 'screen scratched', deductionMinor: 1000 } });
+    expect(ret.status).toBe(200);
+    expect(ret.json.groups.find((g: any) => g.kind === 'GOODS').status).toBe('RETURNED');
+    expect((await call('POST', `/orders/${placed.json.id}/actions`, { cookie: agent.cookie, body: { type: 'return', reason: 'again please' } })).status).toBe(403); // telesales cannot cancel or return
+  });
+
+  it('manages bundle rules (catalog editors only) and sweeps late installations', async () => {
+    const root_ = await root();
+    const agent = await staff(['telesales']);
+    const body = { id: 'watch-fibre', name: 'Fibre + watch: 5.00 off the watch', when: ['kind:FIBER', 'kind:WEARABLE'], target: 'kind:WEARABLE', amountMinor: 500 };
+    expect((await call('POST', '/bundle-rules', { cookie: agent.cookie, body })).status).toBe(403);
+    expect((await call('POST', '/bundle-rules', { cookie: root_, body: { ...body, percentBps: 100 } })).status).toBe(400); // a percentage or an amount, not both
+    expect((await call('POST', '/bundle-rules', { cookie: root_, body })).status).toBe(200);
+    expect((await call('GET', '/bundle-rules', { cookie: agent.cookie })).json.items.map((r: any) => r.id)).toEqual(expect.arrayContaining(['fibre-plus-phone', 'watch-fibre']));
+    expect((await call('PATCH', '/bundle-rules/watch-fibre', { cookie: root_, body: { ...body, amountMinor: 700 } })).json.amountMinor).toBe(700);
+    expect((await call('DELETE', '/bundle-rules/watch-fibre', { cookie: root_ })).status).toBe(200);
+    expect((await call('POST', '/jobs/sweep-orders', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('POST', '/jobs/sweep-orders', { cookie: root_ })).json).toMatchObject({ atRisk: expect.any(Number), cancelled: expect.any(Number) });
+  });
+});
+
 describe('production safety', () => {
   it('refuses to serve a production deployment that is misconfigured (but still answers the liveness probe)', async () => {
     const keep = { ...process.env };

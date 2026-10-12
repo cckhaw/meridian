@@ -1,45 +1,48 @@
 import { randomUUID } from 'node:crypto';
 import type { OfferNode, OrderChannel, OrderState, PaymentMethod } from '@meridian/types';
-import { COMMISSION_BPS, GL, paymentMode } from './config.js';
+import { ruleSatisfied, listBundleRules } from './bundles.js';
+import { COMMISSION_BPS, GL, orderPolicy, paymentMode } from './config.js';
 import { marketFor } from './settings.js';
-import { getStoreSettings } from './store-settings.js';
 import type { Db, Queryable, Row } from './db.js';
-import { checkDependencies, getOffer, monthlyFee } from './catalog.js';
-import { getCustomer } from './customers.js';
-import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
-import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve } from './inventory.js';
+import { monthlyFee } from './catalog.js';
+import { DomainError, invalid, notFound, rejected } from './errors.js';
+import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve, restockConsumed } from './inventory.js';
 import { postJournal } from './ledger.js';
 import { today } from './dates.js';
+import { createsService, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type GroupKind, type LineInput } from './order-pricing.js';
 import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.js';
 import { customerIdsMatching, parseQuery } from './search.js';
+import { audit } from './audit.js';
 import { taxSplit } from './tax.js';
+import { conflict } from './errors.js';
+
+export type { GroupKind, LineInput, LinePayment } from './order-pricing.js';
 
 export interface OrderInput {
   customerId?: string;
   accountId?: string;
   channel: OrderChannel;
   marketCode?: string;
-  lines: Array<{ offerId: string; quantity?: number; msisdn?: string; serialNumber?: string }>;
-  /** `confirmed`: a cashier with the payment permission states the money was received (terminal approval / receipt in `reference`). */
+  lines: LineInput[];
+  /**
+   * How the money due now is taken. `confirmed`: a cashier with the payment permission states the money was received (terminal approval / receipt in `reference`).
+   * Each line may choose to pay upfront or by instalments (see LineInput.payment); `installmentMonths` with method INSTALLMENT is the older whole-order shortcut.
+   */
   payment: { method: PaymentMethod; installmentMonths?: number; reference?: string; confirmed?: boolean;
     /** Wait in PAYMENT_PENDING for a payment gateway to confirm (online checkout), whatever the payment mode. */
     deferred?: boolean };
   attribution?: { storeId?: string; salespersonId?: string; dealerId?: string };
   deliveryAddress?: string;
+  /** Preferred installation visit, booked as soon as the order is paid. */
+  installationSlot?: string;
   actor?: string;
 }
 
-const RETAIL: OrderChannel[] = ['RETAIL_ASSISTED', 'QUICK_SALE'];
 const GOODS_KINDS = ['PHYSICAL_GOOD', 'WEARABLE', 'SIM_DEVICE'];
-const MAX_BULK = 1_000_000;
 const TERMINAL: OrderState[] = ['COMPLETED', 'CANCELLED', 'FAILED'];
+const OPEN_GROUP = ['PENDING', 'LOCKED'];
+const DAY = 86_400_000;
 
-/** Offers that produce a billable service when the order activates. */
-function createsService(o: OfferNode): boolean {
-  if (o.kind === 'PHYSICAL_GOOD') return false;
-  if (o.kind === 'WEARABLE') return !!monthlyFee(o);
-  return true;
-}
 const serviceType = (o: OfferNode) => (o.kind === 'FIBER' ? 'FIBER' : o.kind === 'IOT_CONNECTIVITY' ? 'IOT' : o.kind === 'VAS' || o.kind === 'NON_TELCO_SUBSCRIPTION' ? 'SUBSCRIPTION' : 'MOBILE');
 
 async function setState(q: Queryable, o: Row, to: OrderState, actor: string, reason?: string) {
@@ -52,6 +55,9 @@ async function setState(q: Queryable, o: Row, to: OrderState, actor: string, rea
   await q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$4,$5,$6)', [o.shardId, o.id, o.state, to, actor, reason ?? null]);
   o.state = to;
 }
+/** A line in the timeline for something that happened to part of the order without changing its overall state. */
+const note = (q: Queryable, o: Row, actor: string, reason: string) =>
+  q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$3,$4,$5)', [o.shardId, o.id, o.state, actor, reason]);
 
 export async function walkInCustomer(q: Queryable, marketCode: string): Promise<string> {
   const ref = `WALKIN-${marketCode}`;
@@ -67,98 +73,90 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
 
 /** The order transaction body, so callers (store checkout) can create a customer and its order atomically. */
 export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row> {
-  {
-    const actor = input.actor ?? input.attribution?.salespersonId ?? 'system';
+  const actor = input.actor ?? input.attribution?.salespersonId ?? 'system';
+  let customerId = input.customerId;
+  if (!customerId) {
     if (!input.lines.length) throw invalid('an order needs at least one line');
-    // ── customer / account ──
-    let customerId = input.customerId;
-    if (!customerId) {
-      if (input.channel !== 'QUICK_SALE') throw invalid('customerId is required (only QUICK_SALE may be anonymous)');
-      customerId = await walkInCustomer(q, input.marketCode ?? 'SG');
-    }
-    const customer = await getCustomer(q, customerId);
-    // The customer's own market decides currency, tax and which offers are sellable; the caller cannot override it.
-    const marketCode = (customer.marketCode as string).trim();
-    const mk = await marketFor(q, marketCode);
-    if (customer.status !== 'ACTIVE') throw rejected(`customer is ${customer.status}`);
-    let accountId = input.accountId ?? null;
-    if (accountId) {
-      const a = (await q.query('SELECT customer_id FROM accounts WHERE id=$1', [accountId])).rows[0];
-      if (!a || a.customerId !== customerId) throw invalid('accountId does not belong to this customer');
-    }
-
-    // ── lines: load offers, validate catalog rules ──
-    const offers = new Map<string, OfferNode>();
-    for (const l of input.lines) {
-      const qty = l.quantity ?? 1;
-      if (!Number.isInteger(qty) || qty < 1 || qty > MAX_BULK) throw invalid(`quantity must be 1-${MAX_BULK}`);
-      if (l.msisdn && qty !== 1) throw invalid('a port-in/chosen number needs quantity 1');
-      if (!offers.has(l.offerId)) {
-        const o = await getOffer(q, l.offerId);
-        if (o.status !== 'ACTIVE') throw rejected(`offer ${o.name} is not active`);
-        if (o.markets.length && !o.markets.includes(marketCode)) throw rejected(`offer ${o.name} is not sold in ${marketCode}`);
-        if (o.prices.some((p) => p.amount.currency !== mk.currency)) throw rejected(`offer ${o.name} is not priced in ${mk.currency}`);
-        offers.set(o.id, o);
-      }
-    }
-    // Prerequisites ("a phone before its care plan") are met by the same order or by what the customer already owns; conflicts are order-local.
-    const violations = await checkDependencies(q, customerId, [...offers.keys()]);
-    if (violations.length) throw rejected(violations.join(' '));
-    for (const o of offers.values()) {
-      if (input.channel === 'QUICK_SALE' && (o.kind !== 'PHYSICAL_GOOD' || o.contract?.termMonths)) throw rejected('quick-sale supports outright goods only');
-      if (o.salesChannels?.length && !o.salesChannels.includes(input.channel)) throw rejected(`${o.name} is not sold through this channel`);
-    }
-    const hasService = [...offers.values()].some(createsService);
-    if (hasService && customer.displayName === 'Walk-in customer') throw rejected('services need a registered customer');
-    if (hasService && (await getStoreSettings(q)).requireKycForServices && customer.kycStatus !== 'VERIFIED') {
-      throw rejected('Identity verification (KYC) must be completed before a service can be sold to this customer.');
-    }
-    if (input.payment.method === 'INSTALLMENT') {
-      const m = input.payment.installmentMonths;
-      if (![3, 6, 12, 24, 36].includes(m ?? 0)) throw invalid('installmentMonths must be 3, 6, 12, 24 or 36');
-      if (!hasService) throw rejected('instalments need a service to bill against');
-    }
-
-    // ── pricing (upfront = ONE_TIME components) ──
-    const priced = input.lines.map((l) => {
-      const o = offers.get(l.offerId)!;
-      const qty = l.quantity ?? 1;
-      const split = o.prices.filter((p) => p.type === 'ONE_TIME').reduce(
-        (a, p) => { const s = taxSplit(p.amount.amountMinor * qty, mk.taxBps, p.taxInclusive); return { net: a.net + s.net, tax: a.tax + s.tax, gross: a.gross + s.gross }; },
-        { net: 0, tax: 0, gross: 0 },
-      );
-      return { l, o, qty, ...split };
-    });
-    const total = priced.reduce((s, p) => s + p.gross, 0);
-    const net = priced.reduce((s, p) => s + p.net, 0);
-
-    // ── persist order ──
-    const orderId = randomUUID();
-    const att = input.attribution ?? {};
-    const eligible = !!(att.salespersonId || att.dealerId) && input.channel in COMMISSION_BPS;
-    await q.query(
-      `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id,
-         commission_eligible, payment_method, installment_months, fulfilment, created_by)
-       VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-      [orderId, customer.shardId, customerId, accountId, input.channel, total, mk.currency, marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null,
-       eligible, input.payment.method, input.payment.installmentMonths ?? null, JSON.stringify({ address: input.deliveryAddress ?? null }), actor],
-    );
-    for (const p of priced) {
-      await q.query(
-        `INSERT INTO order_lines (shard_id, order_id, offer_id, quantity, unit_price_minor, msisdn, serial_number, description, net_minor, tax_minor)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [customer.shardId, orderId, p.o.id, p.qty, Math.round(p.gross / p.qty), p.l.msisdn ?? null, p.l.serialNumber ?? null, p.o.name, p.net, p.tax],
-      );
-    }
-    const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
-    o.state = 'DRAFT';
-    await setState(q, o, 'SUBMITTED', actor);
-    await drive(q, o, { actor, paymentReference: input.payment.reference, paymentConfirmed: !!input.payment.confirmed, deferPayment: !!input.payment.deferred, net });
-    return getOrder(q, orderId);
+    if (input.channel !== 'QUICK_SALE') throw invalid('customerId is required (only QUICK_SALE may be anonymous)');
+    customerId = await walkInCustomer(q, input.marketCode ?? 'SG');
   }
+  // Everything about price, eligibility and payment structure is decided in one place, shared with the quote the order wizard shows.
+  const priced = await priceBasket(q, { ...input, customerId });
+  const customer = priced.customer!;
+  if (input.installationSlot) {
+    const slot = new Date(input.installationSlot);
+    if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now()) throw invalid('the installation date must be in the future');
+  }
+
+  const orderId = randomUUID();
+  const att = input.attribution ?? {};
+  const eligible = !!(att.salespersonId || att.dealerId) && input.channel in COMMISSION_BPS;
+  const months = priced.lines.find((l) => l.payMode === 'INSTALLMENT')?.months ?? null;
+  await q.query(
+    `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id,
+       commission_eligible, payment_method, installment_months, fulfilment, created_by)
+     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+    [orderId, customer.shardId, customerId, input.accountId ?? null, input.channel, priced.dueNow, priced.currency, priced.marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null,
+     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor],
+  );
+  for (const p of priced.lines) {
+    await q.query(
+      `INSERT INTO order_lines (shard_id, order_id, offer_id, quantity, unit_price_minor, msisdn, serial_number, description, net_minor, tax_minor,
+         fulfil_group, options, pay_mode, installment_months, down_payment_minor, paid_now_minor, discount_minor, discount_rules)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+      [customer.shardId, orderId, p.offer.id, p.qty, Math.round(p.gross / p.qty), p.input.msisdn ?? null, p.input.serialNumber ?? null, p.offer.name, p.net, p.tax,
+       p.group, JSON.stringify(p.variant ? { variantId: p.variant.id, colour: p.variant.colour, storage: p.variant.storage, sku: p.variant.sku } : {}),
+       p.payMode, p.months, p.downMinor, p.paidNow, p.discountMinor, p.discountRules],
+    );
+  }
+  const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
+  o.state = 'DRAFT';
+  await setState(q, o, 'SUBMITTED', actor);
+  await drive(q, o, { actor, paymentReference: input.payment.reference, paymentConfirmed: !!input.payment.confirmed, deferPayment: !!input.payment.deferred });
+  return getOrder(q, orderId);
 }
 
-type Ctx = { actor: string; paymentReference?: string; paymentConfirmed?: boolean; deferPayment?: boolean; gatewayRef?: string; net?: number };
+type Ctx = { actor: string; paymentReference?: string; paymentConfirmed?: boolean; deferPayment?: boolean; gatewayRef?: string };
+
+// ───────────────────────── fulfilment groups ─────────────────────────
+async function groupRows(q: Queryable, orderId: string): Promise<Row[]> {
+  return (await q.query(`SELECT * FROM order_groups WHERE order_id=$1 ORDER BY CASE kind WHEN 'INSTALL' THEN 1 WHEN 'GOODS' THEN 2 ELSE 3 END`, [orderId])).rows;
+}
+const findGroup = (gs: Row[], kind: GroupKind) => gs.find((g) => g.kind === kind);
+async function patchGroup(q: Queryable, id: string, set: string, params: unknown[] = []) {
+  await q.query(`UPDATE order_groups SET ${set} WHERE id=$1`, [id, ...params]);
+}
+/** The first moment anything about the order became irreversible; kept for older screens and reports. */
+const markPointOfNoReturn = (q: Queryable, o: Row) => q.query('UPDATE orders SET point_of_no_return_at = COALESCE(point_of_no_return_at, now()) WHERE id=$1', [o.id]);
+
+/** Mirrors the open parts of the order into the older `pending_tasks` list. */
+async function syncTasks(q: Queryable, o: Row) {
+  const gs = await groupRows(q, o.id);
+  const tasks = gs.filter((g) => OPEN_GROUP.includes(g.status) && g.kind !== 'ACTIVATION').map((g) => (g.kind === 'INSTALL' ? 'INSTALL' : 'SHIP'));
+  await q.query('UPDATE orders SET pending_tasks=$2 WHERE id=$1', [o.id, tasks]);
+  o.pendingTasks = tasks;
+}
+
+/**
+ * The order's headline state, derived from its parts: open installation beats shipped beats "in fulfilment"; when every part is finished
+ * the order completes (or is cancelled if nothing was delivered).
+ */
+async function syncOrder(q: Queryable, o: Row, ctx: Ctx) {
+  await syncTasks(q, o);
+  const gs = await groupRows(q, o.id);
+  if (!gs.length || TERMINAL.includes(o.state)) return;
+  const open = gs.filter((g) => OPEN_GROUP.includes(g.status));
+  if (open.length) {
+    const install = open.find((g) => g.kind === 'INSTALL');
+    const goods = open.find((g) => g.kind === 'GOODS');
+    const headline: OrderState = install ? 'AWAITING_INSTALLATION' : goods?.status === 'LOCKED' ? 'SHIPPED' : 'FULFILMENT';
+    if (o.state !== headline) await setState(q, o, headline, ctx.actor);
+    return;
+  }
+  if (gs.every((g) => g.status === 'CANCELLED' || g.status === 'RETURNED')) { await setState(q, o, 'CANCELLED', ctx.actor, 'every part of the order was cancelled'); return; }
+  if (o.state !== 'ACTIVATED') await setState(q, o, 'ACTIVATED', ctx.actor);
+  await complete(q, o);
+}
 
 /** Runs the order forward until it completes, fails, or needs an external event (payment confirmation, shipping, installation). */
 async function drive(q: Queryable, o: Row, ctx: Ctx): Promise<void> {
@@ -173,7 +171,7 @@ async function drive(q: Queryable, o: Row, ctx: Ctx): Promise<void> {
         break;
       }
       case 'VALIDATED': {
-        if (o.totalMinor === 0 || o.paymentMethod === 'INSTALLMENT') { await setState(q, o, 'PAID', ctx.actor, o.totalMinor === 0 ? 'nothing to pay upfront' : 'paid by instalments on future bills'); break; }
+        if (o.totalMinor === 0) { await setState(q, o, 'PAID', ctx.actor, 'nothing to pay upfront'); break; }
         await setState(q, o, 'PAYMENT_PENDING', ctx.actor);
         if (ctx.deferPayment) return; // the payment gateway confirms it later
         // Simulated mode auto-approves everything but QR. Manual mode waits for a person (or the payment webhook) to confirm.
@@ -191,33 +189,70 @@ async function drive(q: Queryable, o: Row, ctx: Ctx): Promise<void> {
           if (e instanceof DomainError) return fail(q, o, ctx, e.message);
           throw e;
         }
-        const lines = await orderLines(q, o.id);
-        const tasks: string[] = [];
-        if (lines.some((l) => l.offer.fulfilment?.requiresInstallation)) tasks.push('INSTALL');
-        const goods = lines.some((l) => l.offer.fulfilment?.requiresShipping);
-        if (goods && RETAIL.includes(o.channel)) {
-          await consumeReservations(q, o.id); // handed over at the counter
-          await q.query('UPDATE orders SET point_of_no_return_at = now() WHERE id=$1', [o.id]);
-          o.pointOfNoReturnAt = new Date().toISOString();
-        } else if (goods) tasks.push('SHIP');
-        await q.query('UPDATE orders SET pending_tasks=$2 WHERE id=$1', [o.id, tasks]);
-        o.pendingTasks = tasks;
+        await openGroups(q, o, ctx);
         await setState(q, o, 'FULFILMENT', ctx.actor);
         break;
       }
-      case 'FULFILMENT': {
-        if (o.pendingTasks.includes('INSTALL')) { await setState(q, o, 'AWAITING_INSTALLATION', ctx.actor); return; }
-        if (o.pendingTasks.includes('SHIP')) return; // waits for ship
-        await activate(q, o, ctx);
-        break;
-      }
-      case 'AWAITING_INSTALLATION': case 'SHIPPED': return;
-      case 'DELIVERED': await activate(q, o, ctx); break;
-      case 'ACTIVATED': await complete(q, o, ctx); break;
+      case 'FULFILMENT': case 'AWAITING_INSTALLATION': case 'SHIPPED': case 'DELIVERED': case 'ACTIVATED':
+        await progress(q, o, ctx);
+        return;
       default: return;
     }
   }
   throw new Error('order did not settle'); // defensive: indicates a state-machine bug
+}
+
+/** Creates one group per kind of work in the order. Goods handed over at a retail counter are finished at once. */
+async function openGroups(q: Queryable, o: Row, ctx: Ctx) {
+  const lines = await orderLines(q, o.id);
+  const policy = orderPolicy();
+  const kinds = [...new Set(lines.map((l) => l.fulfilGroup as GroupKind))];
+  for (const kind of kinds) {
+    const details: Record<string, unknown> = {};
+    let dueAt: Date | null = null;
+    if (kind === 'INSTALL') {
+      dueAt = new Date(Date.now() + policy.installAtRiskDays * DAY);
+      details.autoCancelAt = new Date(Date.now() + policy.installAutoCancelDays * DAY).toISOString();
+    }
+    await q.query('INSERT INTO order_groups (order_id, kind, due_at, details) VALUES ($1,$2,$3,$4)', [o.id, kind, dueAt, JSON.stringify(details)]);
+  }
+  if (kinds.includes('GOODS') && RETAIL_CHANNELS.includes(o.channel)) {
+    await consumeReservations(q, o.id, 'GOODS'); // handed over at the counter
+    await q.query(`UPDATE order_groups SET status='DONE', locked_at=now(), done_at=now() WHERE order_id=$1 AND kind='GOODS'`, [o.id]);
+    await markPointOfNoReturn(q, o);
+    o.pointOfNoReturnAt = new Date().toISOString();
+    await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'GOODS' && createsService(l.offer)));
+  }
+  const slot = o.fulfilment?.slot as string | undefined;
+  if (slot && kinds.includes('INSTALL')) await bookSlot(q, o, new Date(slot));
+  await syncTasks(q, o);
+}
+
+async function bookSlot(q: Queryable, o: Row, slot: Date) {
+  await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [o.id, JSON.stringify({ slot: slot.toISOString() })]);
+  await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [o.id]);
+  await q.query(`INSERT INTO installation_appointments (shard_id, order_id, slot_start, slot_end) VALUES ($1,$2,$3,$4)`, [o.shardId, o.id, slot.toISOString(), new Date(slot.getTime() + 4 * 3_600_000).toISOString()]);
+  await q.query(`UPDATE order_groups SET details = details || $2::jsonb WHERE order_id=$1 AND kind='INSTALL'`, [o.id, JSON.stringify({ slot: slot.toISOString() })]);
+}
+
+/**
+ * Moves what can move: plain services switch on once any device they depend on has been delivered (immediately if there is none),
+ * then the order's headline state follows. Called after every event.
+ */
+async function progress(q: Queryable, o: Row, ctx: Ctx) {
+  const gs = await groupRows(q, o.id);
+  const act = findGroup(gs, 'ACTIVATION');
+  if (act?.status === 'PENDING') {
+    const lines = await orderLines(q, o.id);
+    const goods = findGroup(gs, 'GOODS');
+    const waitsForDevice = goods && OPEN_GROUP.includes(goods.status) && lines.some((l) => l.fulfilGroup === 'GOODS' && l.status === 'ACTIVE' && createsService(l.offer));
+    if (!waitsForDevice) {
+      await consumeReservations(q, o.id, 'ACTIVATION');
+      await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'ACTIVATION' && l.status === 'ACTIVE' && createsService(l.offer)));
+      await patchGroup(q, act.id, `status='DONE', done_at=now()`);
+    }
+  }
+  await syncOrder(q, o, ctx);
 }
 
 async function orderLines(q: Queryable, orderId: string): Promise<Array<Row & { offer: OfferNode }>> {
@@ -228,10 +263,11 @@ async function orderLines(q: Queryable, orderId: string): Promise<Array<Row & { 
 async function reserveStock(q: Queryable, o: Row) {
   const loc = o.storeId ?? MAIN_WAREHOUSE;
   for (const l of await orderLines(q, o.id)) {
-    for (const sku of (l.offer.fulfilment?.inventorySkus ?? []) as string[]) await reserve(q, o.id, loc, sku, l.quantity);
+    const variant = l.options?.sku ? (l.offer.variants ?? []).find((v) => v.id === l.options.variantId) : undefined;
+    for (const sku of skusFor(l.offer, variant)) await reserve(q, o.id, loc, sku, l.quantity, l.fulfilGroup);
     // Line items that carry a SKU (e.g. the phone inside a bundle) reserve their own stock: item quantity x units ordered.
     const items = (await q.query(`SELECT data->>'sku' AS sku, COALESCE((data->>'quantity')::int, 1) AS qty FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM' AND status='ACTIVE' AND data->>'sku' IS NOT NULL ORDER BY sort_order`, [l.offerId])).rows;
-    for (const it of items) await reserve(q, o.id, loc, it.sku as string, l.quantity * (it.qty as number));
+    for (const it of items) await reserve(q, o.id, loc, it.sku as string, l.quantity * (it.qty as number), l.fulfilGroup);
   }
 }
 
@@ -240,6 +276,13 @@ function paymentGateway(method: PaymentMethod, reference?: string) {
   if (paymentMode() === 'manual') return true; // the caller already established that money was received
   return !(reference ?? '').toUpperCase().startsWith('DECLINE'); // simulated PSP
 }
+
+/** Splits an amount paid for a line into the revenue and tax it contains. */
+const shareOf = (paid: number, l: Row) => {
+  const gross = l.netMinor + l.taxMinor;
+  const net = gross > 0 ? Math.round((paid * l.netMinor) / gross) : paid;
+  return { net, tax: paid - net };
+};
 
 async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: string): Promise<boolean> {
   if (!paymentGateway(o.paymentMethod, reference)) return false;
@@ -252,9 +295,10 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
   const revenue = new Map<string, number>();
   let tax = 0;
   for (const l of lines) {
+    const { net, tax: t } = shareOf(l.paidNowMinor, l);
     const acct = GOODS_KINDS.includes(l.offer.kind) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
-    revenue.set(acct, (revenue.get(acct) ?? 0) + l.netMinor);
-    tax += l.taxMinor;
+    revenue.set(acct, (revenue.get(acct) ?? 0) + net);
+    tax += t;
   }
   await postJournal(q, {
     date: today(), sourceType: 'ORDER', sourceId: o.id, currency: o.currency,
@@ -269,39 +313,82 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
 
 async function fail(q: Queryable, o: Row, ctx: Ctx, reason: string) {
   await releaseReservations(q, o.id);
-  await refundIfCaptured(q, o);
+  await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND status='ACTIVE'`, [o.id]);
+  const paid = (await q.query(`SELECT 1 FROM payments WHERE order_id=$1 AND status='CAPTURED'`, [o.id])).rows.length > 0;
+  if (paid) await refund(q, o, await orderLines(q, o.id), { retainMinor: 0, clawbackMinor: 0, label: 'Order failed', all: true });
   await setState(q, o, 'FAILED', ctx.actor, reason);
 }
 
-async function refundIfCaptured(q: Queryable, o: Row) {
-  const p = (await q.query(`SELECT id FROM payments WHERE order_id=$1 AND status='CAPTURED'`, [o.id])).rows[0];
-  if (!p) return;
-  await q.query(`UPDATE payments SET status='REFUNDED' WHERE id=$1`, [p.id]);
-  const orig = (await q.query(`SELECT account_code, debit_minor, credit_minor, description FROM gl_entries WHERE source_type='ORDER' AND source_id=$1`, [o.id])).rows;
+// ───────────────────────── refunds ─────────────────────────
+interface RefundSpec { retainMinor: number; clawbackMinor: number; label: string; all?: boolean }
+/**
+ * Gives money back for some lines: reverses their revenue and tax in the ledger, minus what is kept (a call-out fee, a damage deduction, or a bundle
+ * discount the customer no longer qualifies for, which stays as revenue). Returns the cash actually refunded.
+ */
+async function refund(q: Queryable, o: Row, lines: Row[], spec: RefundSpec): Promise<{ refundMinor: number; retainedMinor: number }> {
+  const pay = (await q.query(`SELECT id, amount_minor, refunded_minor FROM payments WHERE order_id=$1 AND status IN ('CAPTURED','REFUNDED') ORDER BY created_at LIMIT 1`, [o.id])).rows[0];
+  const paid = lines.reduce((s, l) => s + (l.status === 'ACTIVE' || spec.all ? l.paidNowMinor : 0), 0);
+  if (!pay || paid <= 0) return { refundMinor: 0, retainedMinor: 0 };
+  const retained = Math.min(paid, spec.retainMinor + spec.clawbackMinor);
+  const cash = paid - retained;
+  const mk = await marketFor(q, o.marketCode);
+  const rev = new Map<string, number>();
+  let tax = 0;
+  for (const l of lines) {
+    if (!(l.status === 'ACTIVE' || spec.all) || l.paidNowMinor <= 0) continue;
+    const { net, tax: t } = shareOf(l.paidNowMinor, l);
+    const acct = GOODS_KINDS.includes(l.offer?.kind ?? l.kind) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
+    rev.set(acct, (rev.get(acct) ?? 0) + net); tax += t;
+  }
+  const keep = taxSplit(retained, mk.taxBps, true);
   await postJournal(q, {
     date: today(), sourceType: 'REFUND', sourceId: o.id, currency: o.currency,
-    lines: orig.map((e) => ({ account: e.accountCode, debit: e.creditMinor, credit: e.debitMinor, description: `Reversal: ${e.description}` })),
+    lines: [
+      ...[...rev].map(([account, debit]) => ({ account, debit, description: `${spec.label}: revenue reversed` })),
+      { account: GL.TAX_PAYABLE, debit: tax, description: `${spec.label}: ${mk.taxName} reversed` },
+      { account: GL.CASH, credit: paid, description: `${spec.label}: paid ${paid} (refund ${cash})` },
+      { account: GL.CASH, debit: retained, description: `${spec.label}: amount kept` },
+      { account: GL.SERVICE_REVENUE, credit: keep.net, description: `${spec.label}: kept as revenue` },
+      { account: GL.TAX_PAYABLE, credit: keep.tax, description: `${spec.label}: ${mk.taxName} on amount kept` },
+    ],
   });
+  // The payment is settled (REFUNDED) once nothing in the order is still standing on it.
+  const standing = Number((await q.query(`SELECT COALESCE(sum(paid_now_minor),0) AS v FROM order_lines WHERE order_id=$1 AND status='ACTIVE' AND id <> ALL($2::uuid[])`, [o.id, lines.map((l) => l.id)])).rows[0]!.v);
+  await q.query(`UPDATE payments SET refunded_minor = refunded_minor + $2, status = CASE WHEN $3 = 0 THEN 'REFUNDED'::payment_status ELSE status END WHERE id=$1`, [pay.id, cash, standing]);
+  await q.query('UPDATE orders SET refunded_minor = refunded_minor + $2 WHERE id=$1', [o.id, cash]);
+  return { refundMinor: cash, retainedMinor: retained };
 }
 
-async function activate(q: Queryable, o: Row, ctx: Ctx) {
-  const lines = await orderLines(q, o.id);
+/**
+ * A bundle discount is only earned while the bundle holds: if a partner part leaves, the discount on what remains is taken back (from the refund).
+ * Returns the lines that lose their discount and how much that is. A line is clawed back once: its rules are cleared when it is applied.
+ */
+async function clawback(q: Queryable, lines: Row[], leaving: Set<string>): Promise<{ total: number; lineIds: string[] }> {
+  const remaining = lines.filter((l) => l.status === 'ACTIVE' && !leaving.has(l.id));
+  const withDiscount = remaining.filter((l) => l.discountMinor > 0 && (l.discountRules as string[]).length > 0);
+  if (!withDiscount.length) return { total: 0, lineIds: [] };
+  const rules = new Map((await listBundleRules(q)).map((r) => [r.id, r]));
+  const left = remaining.map((l) => ({ offerId: l.offerId as string, kind: l.offer.kind as string }));
+  const lost = withDiscount.filter((l) => (l.discountRules as string[]).some((id) => { const r = rules.get(id); return r && !ruleSatisfied(r, left); }));
+  return { total: lost.reduce((s, l) => s + l.discountMinor, 0), lineIds: lost.map((l) => l.id) };
+}
+
+// ───────────────────────── activation ─────────────────────────
+async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { offer: OfferNode }>) {
+  const lines = serviceLines.filter((l) => l.status === 'ACTIVE');
+  if (!lines.length) return;
   const mk = await marketFor(q, o.marketCode);
   let accountId: string | null = o.accountId;
-  const serviceLines = lines.filter((l) => createsService(l.offer));
-  if (serviceLines.length && !accountId) {
+  if (!accountId) {
     const a = (await q.query(`SELECT id FROM accounts WHERE customer_id=$1 AND status='ACTIVE' ORDER BY created_at LIMIT 1`, [o.customerId])).rows[0];
     if (a) accountId = a.id;
     else accountId = (await (await import('./customers.js')).createAccount(q, o.customerId, {})).id;
     await q.query('UPDATE orders SET account_id=$2 WHERE id=$1', [o.id, accountId]);
+    o.accountId = accountId;
   }
-  let basis = (await q.query('SELECT COALESCE(sum(net_minor),0) AS n FROM order_lines WHERE order_id=$1', [o.id])).rows[0]!.n as number;
-
-  for (const l of serviceLines) {
+  for (const l of lines) {
     const type = serviceType(l.offer);
     const term = l.offer.contract?.termMonths || null;
-    const fee = monthlyFee(l.offer);
-    if (fee) basis += taxSplit(fee.amount.amountMinor, mk.taxBps, fee.taxInclusive).net * l.quantity;
     const cols = `(id, shard_id, account_id, customer_id, type, identifier, offer_id, status, contract_start, contract_term_months, activated_at, order_id`;
     if (l.quantity > 1) {
       if (type !== 'IOT' && type !== 'MOBILE' && type !== 'SUBSCRIPTION') throw invalid(`cannot bulk-activate ${type}`);
@@ -326,32 +413,44 @@ async function activate(q: Queryable, o: Row, ctx: Ctx) {
       `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,'ACTIVE',now(),$8,now(),$9)`,
       [id, o.shardId, accountId, o.customerId, type, identifier, l.offerId, term, o.id],
     );
-    // Instalments: the upfront price is spread over future bills, rounding remainder lands on the first one.
-    if (o.paymentMethod === 'INSTALLMENT' && l.netMinor + l.taxMinor > 0) {
-      const gross = l.netMinor + l.taxMinor, n = o.installmentMonths as number, each = Math.floor(gross / n), rem = gross - each * n;
-      await q.query(`INSERT INTO service_charges (shard_id, service_id, account_id, kind, description, amount_minor, remaining_cycles) VALUES ($1,$2,$3,'INSTALLMENT',$4,$5,$6)`,
+    // Instalments: what was not paid at checkout is spread over future bills; the rounding remainder lands on the first one.
+    if (l.payMode === 'INSTALLMENT') {
+      const financed = l.netMinor + l.taxMinor - l.downPaymentMinor, n = l.installmentMonths as number, each = Math.floor(financed / n), rem = financed - each * n;
+      if (financed > 0) await q.query(`INSERT INTO service_charges (shard_id, service_id, account_id, kind, description, amount_minor, remaining_cycles) VALUES ($1,$2,$3,'INSTALLMENT',$4,$5,$6)`,
         [o.shardId, id, accountId, `${l.offer.name ?? l.description} instalment (${n} mo)`, each, n]);
       if (rem) await q.query(`INSERT INTO service_charges (shard_id, service_id, account_id, kind, description, amount_minor, remaining_cycles) VALUES ($1,$2,$3,'ADJUSTMENT',$4,$5,1)`,
         [o.shardId, id, accountId, 'Instalment rounding', rem]);
     }
   }
   try {
-    await q.query(`INSERT INTO identifier_registry (type, identifier, service_id) SELECT type::text, identifier, id FROM services WHERE order_id=$1`, [o.id]);
+    await q.query(`INSERT INTO identifier_registry (type, identifier, service_id) SELECT type::text, identifier, id FROM services WHERE order_id=$1 AND id NOT IN (SELECT service_id FROM identifier_registry)`, [o.id]);
   } catch (e) {
     if (/duplicate key/.test((e as Error).message)) throw conflict('one of the requested numbers is already in service');
     throw e;
   }
-  ctx.net = basis;
-  await setState(q, o, 'ACTIVATED', ctx.actor);
 }
 
-async function complete(q: Queryable, o: Row, ctx: Ctx) {
-  await setState(q, o, 'COMPLETED', ctx.actor);
+/** Net value the sale is worth to the seller: what is still standing after any cancellations, plus a year-agnostic first month of each plan. */
+async function commissionBasis(q: Queryable, o: Row): Promise<number> {
+  const mk = await marketFor(q, o.marketCode);
+  let basis = 0;
+  for (const l of await orderLines(q, o.id)) {
+    if (l.status !== 'ACTIVE') continue;
+    basis += l.netMinor;
+    const fee = createsService(l.offer) ? monthlyFee(l.offer) : null;
+    if (fee) basis += taxSplit(fee.amount.amountMinor, mk.taxBps, fee.taxInclusive).net * l.quantity;
+  }
+  return basis;
+}
+
+async function complete(q: Queryable, o: Row) {
+  await setState(q, o, 'COMPLETED', 'system');
   const bps = COMMISSION_BPS[o.channel];
-  if (o.commissionEligible && bps && (ctx.net ?? 0) > 0) {
+  const net = await commissionBasis(q, o);
+  if (o.commissionEligible && bps && net > 0) {
     await q.query(
       `INSERT INTO commissions (order_id, store_id, salesperson_id, dealer_id, basis_minor, rate_bps, amount_minor, currency) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [o.id, o.storeId, o.salespersonId, o.dealerId, ctx.net, bps, Math.round(((ctx.net as number) * bps) / 10_000), o.currency],
+      [o.id, o.storeId, o.salespersonId, o.dealerId, net, bps, Math.round((net * bps) / 10_000), o.currency],
     );
   }
 }
@@ -370,105 +469,280 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
     const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
     if (!o) throw notFound('order', orderId);
     const ctx: Ctx = { actor };
-    const need = (...states: OrderState[]) => { if (!states.includes(o.state)) throw rejected(`cannot ${action.type} while order is ${o.state}`); };
-    const done = (t: string) => (o.pendingTasks as string[]).filter((x) => x !== t);
+    if (action.type === 'confirm_payment') {
+      if (o.state !== 'PAYMENT_PENDING') throw rejected(`cannot confirm_payment while order is ${o.state}`);
+      if (paymentMode() === 'manual' && !action.reference?.trim()) throw invalid('a payment reference (terminal approval or receipt number) is required');
+      if (!(await capture(q, o, action.reference, action.gatewayRef))) { await fail(q, o, ctx, 'payment declined'); return getOrder(q, orderId); }
+      await setState(q, o, 'PAID', actor);
+      await drive(q, o, ctx);
+      return getOrder(q, orderId);
+    }
+    if (TERMINAL.includes(o.state) || ['DRAFT', 'SUBMITTED', 'VALIDATED', 'PAYMENT_PENDING'].includes(o.state)) throw rejected(`cannot ${action.type} while order is ${o.state}`);
+    const gs = await groupRows(q, orderId);
+    const lines = await orderLines(q, orderId);
+    const want = (kind: GroupKind, ...states: string[]) => {
+      const g = findGroup(gs, kind);
+      if (!g || !states.includes(g.status)) throw rejected(kind === 'GOODS' ? (action.type === 'ship' ? 'nothing to ship yet' : 'nothing has been shipped') : action.type === 'schedule_installation' && g?.status === 'LOCKED' ? 'technician already dispatched' : `cannot ${action.type}: the ${kind === 'INSTALL' ? 'installation' : 'delivery'} is ${g ? g.status.toLowerCase() : 'not part of this order'}`);
+      return g;
+    };
     switch (action.type) {
-      case 'confirm_payment': {
-        need('PAYMENT_PENDING');
-        if (paymentMode() === 'manual' && !action.reference?.trim()) throw invalid('a payment reference (terminal approval or receipt number) is required');
-        if (!(await capture(q, o, action.reference, action.gatewayRef))) { await fail(q, o, ctx, 'payment declined'); break; }
-        await setState(q, o, 'PAID', actor);
-        await drive(q, o, ctx);
-        break;
-      }
       case 'schedule_installation': {
-        need('AWAITING_INSTALLATION');
+        want('INSTALL', 'PENDING');
         const slot = new Date(action.slot);
         if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now()) throw invalid('slot must be a valid future date-time');
-        if (o.pointOfNoReturnAt) throw rejected('technician already dispatched');
-        await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [orderId, JSON.stringify({ slot: slot.toISOString() })]);
-        await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [orderId]);
-        await q.query(`INSERT INTO installation_appointments (shard_id, order_id, slot_start, slot_end) VALUES ($1,$2,$3,$4)`, [o.shardId, orderId, slot.toISOString(), new Date(slot.getTime() + 4 * 3_600_000).toISOString()]);
+        await bookSlot(q, o, slot);
         break;
       }
       case 'dispatch_technician': {
-        need('AWAITING_INSTALLATION');
+        const g = want('INSTALL', 'PENDING');
         if (!o.fulfilment.slot) throw rejected('schedule an installation slot first');
-        await q.query(`UPDATE orders SET point_of_no_return_at = COALESCE(point_of_no_return_at, now()), fulfilment = fulfilment || '{"dispatched":true}'::jsonb WHERE id=$1`, [orderId]);
+        await consumeReservations(q, orderId, 'INSTALL'); // equipment leaves with the technician
+        await patchGroup(q, g.id, `status='LOCKED', locked_at=now()`);
+        await q.query(`UPDATE orders SET fulfilment = fulfilment || '{"dispatched":true}'::jsonb WHERE id=$1`, [orderId]);
         await q.query(`UPDATE installation_appointments SET status='DISPATCHED' WHERE order_id=$1 AND status='BOOKED'`, [orderId]);
+        await markPointOfNoReturn(q, o);
+        await note(q, o, actor, 'Technician dispatched: the installation can no longer be cancelled');
         break;
       }
       case 'complete_installation': {
-        need('AWAITING_INSTALLATION');
+        const g = want('INSTALL', 'LOCKED');
         if (!o.fulfilment.dispatched) throw rejected('dispatch the technician first');
         await q.query(`UPDATE installation_appointments SET status='DONE' WHERE order_id=$1 AND status='DISPATCHED'`, [orderId]);
-        await q.query('UPDATE orders SET pending_tasks=$2 WHERE id=$1', [orderId, done('INSTALL')]);
-        o.pendingTasks = done('INSTALL');
-        await setState(q, o, 'FULFILMENT', actor);
-        await drive(q, o, ctx);
+        await patchGroup(q, g.id, `status='DONE', done_at=now()`);
+        await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'INSTALL' && createsService(l.offer)));
+        await note(q, o, actor, 'Installation completed');
         break;
       }
       case 'ship': {
-        need('FULFILMENT');
-        if (o.pendingTasks.includes('INSTALL') || !o.pendingTasks.includes('SHIP')) throw rejected('nothing to ship yet');
-        await consumeReservations(q, orderId);
+        const g = want('GOODS', 'PENDING');
+        await consumeReservations(q, orderId, 'GOODS');
         const tracking = action.trackingNumber ?? `TRK-${orderId.slice(0, 8).toUpperCase()}`;
-        await q.query(`UPDATE orders SET point_of_no_return_at = COALESCE(point_of_no_return_at, now()), fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [orderId, JSON.stringify({ trackingNumber: tracking })]);
-        await setState(q, o, 'SHIPPED', actor);
+        await patchGroup(q, g.id, `status='LOCKED', locked_at=now(), details = details || $2::jsonb`, [JSON.stringify({ trackingNumber: tracking })]);
+        await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [orderId, JSON.stringify({ trackingNumber: tracking })]);
+        await markPointOfNoReturn(q, o);
+        await note(q, o, actor, `Goods shipped (${tracking}): the delivery can no longer be cancelled`);
         break;
       }
       case 'deliver': {
-        need('SHIPPED');
-        await q.query('UPDATE orders SET pending_tasks=$2 WHERE id=$1', [orderId, done('SHIP')]);
-        o.pendingTasks = done('SHIP');
-        await setState(q, o, 'DELIVERED', actor);
-        await drive(q, o, ctx);
+        const g = want('GOODS', 'LOCKED');
+        await patchGroup(q, g.id, `status='DONE', done_at=now()`);
+        await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'GOODS' && createsService(l.offer)));
+        await note(q, o, actor, 'Goods delivered');
         break;
       }
     }
+    await progress(q, o, ctx);
     return getOrder(q, orderId);
   });
 }
 
-/** Cancellation is only possible before the point of no return (goods shipped / technician dispatched). */
-export async function cancelOrder(db: Db, orderId: string, reason: string, actor = 'system'): Promise<Row> {
+// ───────────────────────── cancellation, returns and the installation SLA ─────────────────────────
+export interface GroupPolicy {
+  kind: GroupKind; status: string; canCancel: boolean; why?: string; feeMinor: number; refundMinor: number; clawbackMinor: number;
+  returnable: boolean; returnUntil?: string; atRisk?: boolean;
+}
+
+const WHY: Record<GroupKind, Record<string, string>> = {
+  GOODS: { LOCKED: 'The goods have shipped (past the point of no return). Once delivered they can be returned within the cooling-off period.', DONE: 'The goods were delivered: raise a return instead of a cancellation.', RETURNED: 'The goods were returned.', CANCELLED: 'Already cancelled.' },
+  INSTALL: { LOCKED: 'The technician has been dispatched (past the point of no return).', DONE: 'The installation is complete: terminate the service instead.', CANCELLED: 'Already cancelled.', RETURNED: 'Already cancelled.' },
+  ACTIVATION: { DONE: 'The service is already active: terminate it under its contract terms instead.', CANCELLED: 'Already cancelled.', LOCKED: 'The service is being activated.', RETURNED: 'Already cancelled.' },
+};
+
+interface CancelPlan { per: Map<GroupKind, { paid: number; fee: number; claw: number; refund: number }>; clawLineIds: string[] }
+
+/**
+ * Works out what cancelling these parts together would refund: each part's money paid, any call-out fee, and the bundle discount taken back from
+ * what stays behind. Planned jointly so that cancelling a whole bundle never claws a discount back from a part that is leaving anyway.
+ */
+async function planCancel(q: Queryable, o: Row, lines: Array<Row & { offer: OfferNode }>, kinds: GroupKind[], now: Date, waiveFee: boolean): Promise<CancelPlan> {
+  const pol = orderPolicy();
+  const leaving = new Set(lines.filter((l) => kinds.includes(l.fulfilGroup) && l.status === 'ACTIVE').map((l) => l.id));
+  const cl = await clawback(q, lines, leaving);
+  let toTake = cl.total;
+  const per: CancelPlan['per'] = new Map();
+  for (const kind of kinds) {
+    const paid = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE').reduce((s, l) => s + l.paidNowMinor, 0);
+    let fee = 0;
+    if (kind === 'INSTALL' && !waiveFee) {
+      const slot = o.fulfilment?.slot ? new Date(o.fulfilment.slot) : null;
+      if (slot && slot.getTime() - now.getTime() < pol.installLateHours * 3_600_000) fee = Math.min(pol.installLateFeeMinor, paid);
+    }
+    const claw = Math.min(Math.max(0, paid - fee), toTake);
+    toTake -= claw;
+    per.set(kind, { paid, fee, claw, refund: Math.max(0, paid - fee - claw) });
+  }
+  return { per, clawLineIds: cl.lineIds };
+}
+
+async function policyFor(q: Queryable, o: Row, g: Row, lines: Array<Row & { offer: OfferNode }>, now: Date, waiveFee = false): Promise<GroupPolicy> {
+  const pol = orderPolicy();
+  const kind = g.kind as GroupKind;
+  const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
+  const paid = mine.reduce((s, l) => s + l.paidNowMinor, 0);
+  const base: GroupPolicy = { kind, status: g.status, canCancel: false, feeMinor: 0, refundMinor: 0, clawbackMinor: 0, returnable: false };
+  if (g.atRisk) base.atRisk = true;
+  if (g.status === 'DONE' && kind === 'GOODS' && g.doneAt) {
+    const until = new Date(new Date(g.doneAt).getTime() + pol.returnDays * DAY);
+    if (until.getTime() >= now.getTime()) { base.returnable = true; base.returnUntil = until.toISOString(); base.refundMinor = paid; }
+  }
+  if (g.status !== 'PENDING') { base.why = WHY[kind][g.status] ?? 'This part can no longer be cancelled.'; return base; }
+  const plan = (await planCancel(q, o, lines, [kind], now, waiveFee)).per.get(kind)!;
+  return { ...base, canCancel: true, feeMinor: plan.fee, clawbackMinor: plan.claw, refundMinor: plan.refund };
+}
+
+/** What can still be cancelled, what each part would refund, and why the rest cannot. Used by the order screen and by cancellation itself. */
+export async function cancellationPreview(q: Queryable, orderId: string, now = new Date()): Promise<GroupPolicy[]> {
+  const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0];
+  if (!o) throw notFound('order', orderId);
+  const [gs, lines] = await Promise.all([groupRows(q, orderId), orderLines(q, orderId)]);
+  return Promise.all(gs.map((g) => policyFor(q, o, g, lines, now)));
+}
+
+/** What "Cancel order" would do right now: every cancellable part together, with the combined refund. */
+export async function cancelAllPreview(q: Queryable, o: Row, now = new Date()): Promise<{ kinds: GroupKind[]; refundMinor: number; feeMinor: number; clawbackMinor: number }> {
+  const [gs, lines] = await Promise.all([groupRows(q, o.id), orderLines(q, o.id)]);
+  const kinds = (await Promise.all(gs.map((g) => policyFor(q, o, g, lines, now)))).filter((p) => p.canCancel).map((p) => p.kind);
+  if (!kinds.length) return { kinds, refundMinor: 0, feeMinor: 0, clawbackMinor: 0 };
+  const plan = await planCancel(q, o, lines, kinds, now, false);
+  const all = [...plan.per.values()];
+  return { kinds, refundMinor: all.reduce((s, p) => s + p.refund, 0), feeMinor: all.reduce((s, p) => s + p.fee, 0), clawbackMinor: all.reduce((s, p) => s + p.claw, 0) };
+}
+
+
+async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: string, actor: string, waiveFee = false) {
+  const [gs, lines] = [await groupRows(q, o.id), await orderLines(q, o.id)];
+  const plan = await planCancel(q, o, lines, kinds, new Date(), waiveFee);
+  for (const kind of kinds) {
+    const g = findGroup(gs, kind)!;
+    const p = plan.per.get(kind)!;
+    const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
+    await releaseReservations(q, o.id, kind);
+    const r = await refund(q, o, mine, { retainMinor: p.fee, clawbackMinor: p.claw, label: `Cancelled ${kind.toLowerCase()}` });
+    await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND fulfil_group=$2 AND status='ACTIVE'`, [o.id, kind]);
+    if (kind === 'INSTALL') await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [o.id]);
+    await patchGroup(q, g.id, `status='CANCELLED', cancelled_at=now(), refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ cancelReason: reason })]);
+    await note(q, o, actor, `${({ GOODS: 'Delivery', INSTALL: 'Installation', ACTIVATION: 'Service activation' })[kind]} cancelled${r.refundMinor ? `, ${r.refundMinor} refunded` : ''}${r.retainedMinor ? `, ${r.retainedMinor} kept` : ''}: ${reason}`);
+  }
+  if (plan.clawLineIds.length) await q.query(`UPDATE order_lines SET discount_rules='{}' WHERE id = ANY($1::uuid[])`, [plan.clawLineIds]); // the bundle is broken: that discount has been taken back
+}
+
+/**
+ * Cancels the parts of an order that have not passed their point of no return, each refunded on its own (stock goes back, appointments are released).
+ * By default every cancellable part is cancelled and the rest stay; pass `groups` to cancel just some. Orders not yet paid are cancelled whole.
+ */
+export async function cancelOrder(db: Db, orderId: string, reason: string, actor = 'system', opts: { groups?: GroupKind[] } = {}): Promise<Row> {
   return db.tx(async (q) => {
     const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
     if (!o) throw notFound('order', orderId);
     if (TERMINAL.includes(o.state)) throw rejected(`order is already ${o.state}`);
-    if (o.pointOfNoReturnAt) throw rejected('past the point of no return (goods shipped or technician dispatched); raise a return or termination instead');
-    await releaseReservations(q, orderId);
-    await refundIfCaptured(q, o);
-    await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [orderId]);
-    await setState(q, o, 'CANCELLED', actor, reason || 'cancelled');
+    const gs = await groupRows(q, orderId);
+    if (!gs.length) { // not paid yet: nothing is fulfilling
+      await releaseReservations(q, orderId);
+      await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1`, [orderId]);
+      await setState(q, o, 'CANCELLED', actor, reason || 'cancelled');
+      return getOrder(q, orderId);
+    }
+    const lines = await orderLines(q, orderId);
+    const now = new Date();
+    const policies = await Promise.all(gs.map((g) => policyFor(q, o, g, lines, now)));
+    const asked = opts.groups?.length ? opts.groups : null;
+    if (asked) for (const k of asked) { const p = policies.find((x) => x.kind === k); if (!p) throw rejected(`this order has no ${k.toLowerCase()} part`); if (!p.canCancel) throw rejected(p.why ?? 'that part can no longer be cancelled'); }
+    const kinds = (asked ?? policies.filter((p) => p.canCancel).map((p) => p.kind));
+    if (!kinds.length) throw rejected('past the point of no return (goods shipped or technician dispatched); raise a return or termination instead');
+    await cancelGroups(q, o, kinds, reason || 'cancelled', actor);
+    await progress(q, o, { actor }); // what is left may now be able to finish (e.g. a plan no longer waiting for a cancelled device)
     return getOrder(q, orderId);
   });
+}
+
+/** Return of delivered goods inside the cooling-off period: refund (less any damage deduction), stock back, device contract ended without a termination charge. */
+export async function returnGoods(db: Db, orderId: string, o2: { reason: string; deductionMinor?: number; restock?: boolean }, actor = 'system'): Promise<Row> {
+  return db.tx(async (q) => {
+    const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
+    if (!o) throw notFound('order', orderId);
+    const gs = await groupRows(q, orderId);
+    const g = findGroup(gs, 'GOODS');
+    if (!g) throw rejected('this order has no goods to return');
+    const lines = await orderLines(q, orderId);
+    const pol = await policyFor(q, o, g, lines, new Date());
+    if (g.status === 'RETURNED') throw rejected('these goods were already returned');
+    if (!pol.returnable) throw rejected(g.status === 'DONE' ? `the ${orderPolicy().returnDays}-day return period has ended` : g.status === 'CANCELLED' ? 'these goods were cancelled, not delivered' : 'the goods have not been delivered yet: wait for delivery, then return them');
+    const mine = lines.filter((l) => l.fulfilGroup === 'GOODS' && l.status === 'ACTIVE');
+    const paid = mine.reduce((s, l) => s + l.paidNowMinor, 0);
+    const deduction = Math.max(0, Math.min(paid, o2.deductionMinor ?? 0));
+    const claw = await clawback(q, lines, new Set(mine.map((l) => l.id)));
+    const r = await refund(q, o, mine, { retainMinor: deduction, clawbackMinor: Math.min(claw.total, Math.max(0, paid - deduction)), label: 'Goods returned' });
+    if (claw.lineIds.length) await q.query(`UPDATE order_lines SET discount_rules='{}' WHERE id = ANY($1::uuid[])`, [claw.lineIds]);
+    if (o2.restock !== false) await restockConsumed(q, orderId, 'GOODS');
+    // A device bought on a contract goes back with the contract: the line ends, instalments stop, no early-termination charge.
+    const offerIds = mine.filter((l) => createsService(l.offer)).map((l) => l.offerId);
+    if (offerIds.length) {
+      const svc = (await q.query(`UPDATE services SET status='TERMINATED', terminated_at=now(), version=version+1, updated_at=now() WHERE order_id=$1 AND offer_id = ANY($2) AND status <> 'TERMINATED' RETURNING id`, [orderId, offerIds])).rows;
+      for (const s of svc) await q.query('UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1', [s.id]);
+    }
+    await q.query(`UPDATE order_lines SET status='RETURNED' WHERE order_id=$1 AND fulfil_group='GOODS' AND status='ACTIVE'`, [orderId]);
+    await patchGroup(q, g.id, `status='RETURNED', refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ returnReason: o2.reason, returnedAt: new Date().toISOString() })]);
+    await note(q, o, actor, `Goods returned${r.refundMinor ? `, ${r.refundMinor} refunded` : ''}${r.retainedMinor ? `, ${r.retainedMinor} kept` : ''}: ${o2.reason}`);
+    await audit(q, actor, 'order', orderId, 'GOODS_RETURNED', { refundMinor: r.refundMinor, deductionMinor: deduction });
+    return getOrder(q, orderId);
+  });
+}
+
+/**
+ * The installation service level. An installation still open after the "at risk" age is flagged for follow-up; one that has not even been dispatched
+ * by the auto-cancel age is cancelled with a full refund (no call-out fee: the delay is ours). Run daily.
+ */
+export async function sweepOrders(db: Db, now = new Date(), actor = 'system'): Promise<{ atRisk: number; cancelled: number }> {
+  const flagged = (await db.query(`SELECT g.id, g.order_id FROM order_groups g WHERE g.kind='INSTALL' AND g.status IN ('PENDING','LOCKED') AND NOT g.at_risk AND g.due_at < $1`, [now.toISOString()])).rows;
+  for (const g of flagged) await db.tx(async (q) => {
+    await patchGroup(q, g.id, 'at_risk = true');
+    await audit(q, actor, 'order', g.orderId, 'INSTALL_AT_RISK', { dueAt: now.toISOString() });
+  });
+  const late = (await db.query(`SELECT g.order_id FROM order_groups g WHERE g.kind='INSTALL' AND g.status='PENDING' AND (g.details->>'autoCancelAt')::timestamptz < $1`, [now.toISOString()])).rows;
+  let cancelled = 0;
+  for (const g of late) await db.tx(async (q) => {
+    const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [g.orderId])).rows[0];
+    if (!o || TERMINAL.includes(o.state)) return;
+    await cancelGroups(q, o, ['INSTALL'], `installation not completed within ${orderPolicy().installAutoCancelDays} days`, actor, true);
+    await progress(q, o, { actor });
+    cancelled++;
+  });
+  return { atRisk: flagged.length, cancelled };
 }
 
 export async function getOrder(q: Queryable, id: string): Promise<Row> {
   const o = (await q.query(
     `SELECT o.*, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id=$1`, [id])).rows[0];
   if (!o) throw notFound('order', id);
-  const [lines, history, payments, services, appts] = await Promise.all([
+  const [lines, history, payments, services, appts, groups] = await Promise.all([
     q.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id', [id]),
     q.query('SELECT from_state, to_state, actor, reason, occurred_at FROM order_state_history WHERE order_id=$1 ORDER BY id', [id]),
-    q.query('SELECT id, method, status, amount_minor, reference FROM payments WHERE order_id=$1', [id]),
+    q.query('SELECT id, method, status, amount_minor, refunded_minor, reference FROM payments WHERE order_id=$1', [id]),
     q.query('SELECT id, type, identifier, status FROM services WHERE order_id=$1 ORDER BY identifier LIMIT 50', [id]),
     q.query('SELECT slot_start, slot_end, status FROM installation_appointments WHERE order_id=$1 ORDER BY slot_start', [id]),
+    cancellationPreview(q, id),
   ]);
   const svcCount = (await q.query('SELECT count(*) AS n FROM services WHERE order_id=$1', [id])).rows[0]!.n;
-  const next = nextActions(o);
-  return { ...o, lines: lines.rows, history: history.rows, payments: payments.rows, services: services.rows, serviceCount: svcCount, appointments: appts.rows, nextActions: next, cancellable: !TERMINAL.includes(o.state) && !o.pointOfNoReturnAt };
+  const open = !TERMINAL.includes(o.state);
+  const cancellable = open && (groups.length ? groups.some((g) => g.canCancel) : true);
+  const meta = new Map((await groupRows(q, id)).map((g) => [g.kind, g]));
+  return {
+    ...o, lines: lines.rows, history: history.rows, payments: payments.rows, services: services.rows, serviceCount: svcCount, appointments: appts.rows,
+    groups: groups.map((g) => { const m = meta.get(g.kind); const closed = g.status === 'CANCELLED' || g.status === 'RETURNED'; return { ...g, lockedAt: m?.lockedAt ?? null, doneAt: m?.doneAt ?? null, dueAt: m?.dueAt ?? null, refundedMinor: m?.refundedMinor ?? 0, feeMinor: closed ? m?.feeMinor ?? 0 : g.feeMinor, details: m?.details ?? {} }; }),
+    cancelAll: open ? await cancelAllPreview(q, o) : null,
+    nextActions: nextActions(o, [...meta.values()]), cancellable,
+  };
 }
 
-function nextActions(o: Row): string[] {
-  switch (o.state) {
-    case 'PAYMENT_PENDING': return ['confirm_payment'];
-    case 'AWAITING_INSTALLATION': return o.fulfilment.dispatched ? ['complete_installation'] : o.fulfilment.slot ? ['schedule_installation', 'dispatch_technician'] : ['schedule_installation'];
-    case 'FULFILMENT': return o.pendingTasks.includes('SHIP') && !o.pendingTasks.includes('INSTALL') ? ['ship'] : [];
-    case 'SHIPPED': return ['deliver'];
-    default: return [];
-  }
+function nextActions(o: Row, gs: Row[]): string[] {
+  if (o.state === 'PAYMENT_PENDING') return ['confirm_payment'];
+  const out: string[] = [];
+  const install = findGroup(gs, 'INSTALL'), goods = findGroup(gs, 'GOODS');
+  if (install?.status === 'PENDING') out.push('schedule_installation', ...(o.fulfilment?.slot ? ['dispatch_technician'] : []));
+  if (install?.status === 'LOCKED') out.push('complete_installation');
+  if (goods?.status === 'PENDING') out.push('ship');
+  if (goods?.status === 'LOCKED') out.push('deliver');
+  return TERMINAL.includes(o.state) ? [] : out;
 }
 
 export async function listOrders(q: Queryable, f: { customerId?: string; storeId?: string; dealerId?: string; state?: string; channel?: string; q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {

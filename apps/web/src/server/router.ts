@@ -157,11 +157,12 @@ const contractSchema = z.object({
   subsidy: z.object({ deviceRetailPrice: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }), subsidyAmount: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }) }).optional(),
 });
 const fulfilmentSchema = z.object({ requiresShipping: z.boolean(), requiresInstallation: z.boolean(), requiresSimActivation: z.boolean(), inventorySkus: z.array(z.string().max(50)).max(20) });
+const variantSchema = z.object({ id: z.string().max(40), colour: z.string().min(1).max(40), storage: z.string().max(20).optional(), sku: z.string().max(50), priceDeltaMinor: z.number().int().optional() });
 const offerFields = {
   kind: z.enum(['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE', 'VAS', 'NON_TELCO_SUBSCRIPTION', 'PHYSICAL_GOOD', 'FIBER', 'IOT_CONNECTIVITY']),
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
   partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
-  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]),
+  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]),
 };
 const lineItemFields = {
   itemType: z.enum(LINE_ITEM_TYPES), description: z.string().max(300).optional(), quantity: z.number().int().min(1).max(1_000_000).optional(),
@@ -178,7 +179,7 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(),
+  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(),
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
@@ -188,6 +189,12 @@ get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { s
 get('/catalog/browse', 'catalog:read', ({ db, user, query }) => core.browseChildren(db, { parentId: str(query, 'parent') || null, activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/search', 'catalog:read', ({ db, user, query }) => core.searchNodes(db, { q: str(query, 'q') ?? '', level: str(query, 'level'), activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/summary', 'catalog:read', ({ db, user }) => core.catalogSummary(db, { activeOnly: liveOnly(user) }));
+get('/catalog/:id/availability', 'catalog:read', ({ db, user, params, query }) => core.variantAvailability(db, params.id!, user.scope.storeId ?? str(query, 'location') ?? core.MAIN_WAREHOUSE).then((items) => ({ items })));
+const ruleBody = z.object({ id: z.string().max(60), name: z.string().max(120), status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), when: z.array(z.string().max(90)).max(6), target: z.string().max(90), percentBps: z.number().int().optional(), amountMinor: z.number().int().optional() });
+get('/bundle-rules', 'catalog:read', async ({ db, user }) => ({ items: await core.listBundleRules(db, liveOnly(user) ? 'ACTIVE' : undefined) }));
+post('/bundle-rules', 'catalog:write', async ({ db, user, body }) => { const r = await core.saveBundleRule(db, ruleBody.parse(body), true); await core.audit(db, user.username, 'catalog', r.id, 'BUNDLE_RULE_CREATED'); return r; });
+patch('/bundle-rules/:id', 'catalog:write', async ({ db, user, params, body }) => { const r = await core.saveBundleRule(db, { ...ruleBody.parse({ ...(body as object), id: params.id }) }, false); await core.audit(db, user.username, 'catalog', r.id, 'BUNDLE_RULE_UPDATED'); return r; });
+route('DELETE', '/bundle-rules/:id', 'catalog:write', async ({ db, user, params }) => { await core.deleteBundleRule(db, params.id!); await core.audit(db, user.username, 'catalog', params.id!, 'BUNDLE_RULE_DELETED'); return { ok: true }; });
 get('/catalog/:id/detail', 'catalog:read', ({ db, user, params }) => core.nodeDetail(db, params.id!, { activeOnly: liveOnly(user) }));
 get('/catalog/:id', 'catalog:read', async ({ db, user, params }) => {
   const n = await core.getNode(db, params.id!);
@@ -464,13 +471,29 @@ get('/services/:id/etc', 'service:read', async ({ db, user, params }) => {
 });
 
 // ───────────────────────── orders ─────────────────────────
+const lineBody = z.object({
+  offerId: z.string(), quantity: z.number().int().min(1).max(1_000_000).optional(), msisdn: z.string().optional(), serialNumber: z.string().optional(),
+  options: z.object({ variantId: z.string().max(40).optional() }).optional(),
+  payment: z.object({ mode: z.enum(['UPFRONT', 'INSTALLMENT']), months: z.number().int().optional(), downPaymentMinor: z.number().int().min(0).optional() }).optional(),
+});
 const orderBody = z.object({
   customerId: uuid.optional(), accountId: uuid.optional(), channel: z.enum(core.CHANNELS),
-  lines: z.array(z.object({ offerId: z.string(), quantity: z.number().int().min(1).max(1_000_000).optional(), msisdn: z.string().optional(), serialNumber: z.string().optional() })).min(1).max(50),
+  lines: z.array(lineBody).min(1).max(50),
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), confirmed: z.boolean().optional() }),
   storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(),
-  deliveryAddress: z.string().max(500).optional(),
+  deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(),
 });
+// The wizard's review step: the full priced summary, nothing saved. Same channel permission as placing the order.
+post('/orders/quote', null, async ({ db, user, body }) => {
+  const raw = z.object({ channel: z.enum(core.CHANNELS) }).parse(body);
+  need(user, `order:create:${raw.channel}` as Permission);
+  const b = orderBody.partial({ payment: true }).parse(body);
+  return core.quoteOrder(db, { customerId: user.scope.customerId ?? b.customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines, payment: { method: b.payment?.method ?? 'CREDIT_CARD', installmentMonths: b.payment?.installmentMonths } });
+});
+get('/orders/addons', 'order:read', ({ db, user, query }) => core.eligibleAddons(db, {
+  customerId: user.scope.customerId ?? str(query, 'customerId'), offerIds: (str(query, 'offers') ?? '').split(',').filter(Boolean).slice(0, 20), channel: z.enum(core.CHANNELS).parse(str(query, 'channel')),
+  marketCode: user.marketCode ?? 'SG', q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
+}));
 get('/orders', 'order:read', ({ db, user, query }) => core.listOrders(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), storeId: user.scope.storeId, dealerId: user.scope.dealerId,
   state: str(query, 'state'), channel: str(query, 'channel'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
@@ -505,7 +528,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, actor: user.username,
+      attribution: portal ? {} : { storeId, dealerId, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, installationSlot: b.installationSlot, actor: user.username,
     });
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);
     return order;
@@ -519,13 +542,16 @@ const orderAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('confirm_payment'), reference: z.string().max(100).optional() }), z.object({ type: z.literal('schedule_installation'), slot: z.string() }),
   z.object({ type: z.literal('dispatch_technician') }), z.object({ type: z.literal('complete_installation') }),
   z.object({ type: z.literal('ship'), trackingNumber: z.string().max(100).optional() }), z.object({ type: z.literal('deliver') }),
-  z.object({ type: z.literal('cancel'), reason: z.string().max(300).default('cancelled by user') }),
+  z.object({ type: z.literal('cancel'), reason: z.string().max(300).default('cancelled by user'), groups: z.array(z.enum(['ACTIVATION', 'GOODS', 'INSTALL'])).max(3).optional() }),
+  z.object({ type: z.literal('return'), reason: z.string().min(3).max(300), deductionMinor: z.number().int().min(0).optional() }),
 ]);
 post('/orders/:id/actions', null, async ({ db, user, params, body }) => {
   const a = orderAction.parse(body);
-  need(user, a.type === 'cancel' ? 'order:cancel' : a.type === 'confirm_payment' ? 'order:payment' : 'order:fulfil');
+  need(user, a.type === 'cancel' || a.type === 'return' ? 'order:cancel' : a.type === 'confirm_payment' ? 'order:payment' : 'order:fulfil');
   assertOrder(user, await core.getOrder(db, params.id!));
-  return a.type === 'cancel' ? core.cancelOrder(db, params.id!, a.reason, user.username) : core.advanceOrder(db, params.id!, a, user.username);
+  if (a.type === 'cancel') return core.cancelOrder(db, params.id!, a.reason, user.username, { groups: a.groups });
+  if (a.type === 'return') return core.returnGoods(db, params.id!, { reason: a.reason, deductionMinor: a.deductionMinor }, user.username);
+  return core.advanceOrder(db, params.id!, a, user.username);
 });
 
 // ───────────────────────── billing ─────────────────────────
@@ -545,6 +571,7 @@ post('/invoices/:id/credit', 'billing:credit', async ({ db, user, params, body }
 });
 post('/billing/run', 'billing:run', ({ db, user, body }) => { const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
 /** Housekeeping for the store-front: closes stale sign-ups and releases orders whose online payment never arrived. Safe to run often (hourly is plenty). */
+post('/jobs/sweep-orders', 'billing:run', async ({ db, user }) => { const r = await core.sweepOrders(db, new Date(), user.username); await core.audit(db, user.username, 'order', 'sweep', 'SWEEP_ORDERS', { ...r }); return r; });
 post('/jobs/expire-applications', 'billing:run', async ({ db, user }) => { const r = await core.expireApplications(db); await core.audit(db, user.username, 'store', 'expire', 'EXPIRE_APPLICATIONS', { ...r }); return r; });
 post('/billing/dunning', 'billing:run', ({ db, user, body }) => core.runDunning(db, z.object({ asOf: date.optional() }).parse(body ?? {}).asOf).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'DUNNING_RUN', { ...r }); return r; }));
 
