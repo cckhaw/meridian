@@ -1,0 +1,94 @@
+# Roles and permissions
+
+<!-- GENERATED from packages/core/src/rbac.ts by `pnpm --filter @meridian/core docs:roles`. Do not edit by hand; a test fails if it drifts. -->
+
+The API checks **permissions**, never role names. A user holds one or more **roles**; their permissions are the union. The environment-defined **super user** holds every permission.
+
+**Scope** decides *which rows* a role can see: `All records`, or only the user’s own `store`, `dealer` or `customer`. A user with any unscoped role sees everything their permissions allow. A scoped role with a missing binding sees nothing (fails closed).
+
+## Summary
+
+| Role | Scope | Landing page | Credit notes up to | Purpose |
+|---|---|---|---|---|
+| **Administrator** (`admin`) | All records | `/admin/users` | none | Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits. |
+| **Product Configurator** (`product-configurator`) | All records | `/catalog` | none | Designs the product catalog: offers, prices, contracts, ETC rules, fulfilment. |
+| **Billing Operations** (`billing-ops`) | All records | `/billing` | unlimited | Runs bill cycles and dunning, records payments, issues credit notes, handles invoice queries. |
+| **Rating & Charging** (`rating-charging`) | All records | `/catalog` | none | Reviews tariffs and price plans (read-only). Usage rating is not part of this release. |
+| **Customer (self-serve portal)** (`self-serve`) | Own customer | `/account` | none | An end customer. Sees and acts only on their own account: shop, orders, bills, cases. Online payments are confirmed by the payment provider webhook, never by the customer. |
+| **Call Center Agent** (`call-center`) | All records | `/customers` | none | Handles customer queries on the Customer 360: profile, services, orders, bills, cases. Can suspend/resume, change SIM or number, take payments. |
+| **Telesales Agent** (`telesales`) | All records | `/orders/new?channel=TELESALES` | none | Sells by phone: creates customers and telesales orders. |
+| **Retail Store** (`retail-store`) | Own store | `/orders/new?channel=RETAIL_ASSISTED` | none | Sells over the counter at one store: assisted and quick-sale orders, SIM changes, store stock. Sees only that store’s orders and stock. |
+| **Dealer** (`dealer`) | Own dealer | `/orders/new?channel=DEALER` | none | A partner who sells for the operator. Sees only their own orders and commission. |
+| **Customer Service** (`customer-service`) | All records | `/cases` | 200.00 | Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation. |
+| **Finance** (`finance`) | All records | `/finance` | unlimited | Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables. |
+| **Fraud Analyst** (`fraud`) | All records | `/orders` | none | Reviews orders and accounts: can suspend a service and cancel an order before it ships. |
+| **Revenue Assurance** (`revenue-assurance`) | All records | `/finance` | none | Checks that billing, payments and the ledger agree (read-only). |
+
+## Modules each role can open
+
+| Module | Administrator | Product Configurator | Billing Operations | Rating & Charging | Customer (self-serve portal) | Call Center Agent | Telesales Agent | Retail Store | Dealer | Customer Service | Finance | Fraud Analyst | Revenue Assurance |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Overview | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |
+| Customers | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| New order |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| Orders | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |
+| Billing | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |
+| Cases | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
+| Number porting |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |
+| Inventory | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |
+| Finance | ✓ |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
+| Commission | ✓ |  |  |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |
+| Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |
+| Audit log | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ |
+
+## Permission matrix
+
+| Permission | Administrator | Product Configurator | Billing Operations | Rating & Charging | Customer (self-serve portal) | Call Center Agent | Telesales Agent | Retail Store | Dealer | Customer Service | Finance | Fraud Analyst | Revenue Assurance |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `dashboard:read` | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |
+| `customer:search` | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `customer:read` | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `customer:create` |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |  |  |  |
+| `customer:write` |  |  |  |  |  | ✓ |  |  |  | ✓ |  |  |  |
+| `service:read` | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | ✓ |  | ✓ |  | ✓ |  |
+| `service:manage` |  |  |  |  |  | ✓ |  | ✓ |  | ✓ |  |  |  |
+| `service:suspend` |  |  |  |  |  | ✓ |  |  |  | ✓ |  | ✓ |  |
+| `service:terminate` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `service:transfer` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `mnp:manage` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `order:read` | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |
+| `order:payment` |  |  |  |  |  | ✓ | ✓ | ✓ |  |  |  |  |  |
+| `order:fulfil` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `order:cancel` |  |  |  |  | ✓ |  |  | ✓ |  | ✓ |  | ✓ |  |
+| `billing:read` | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |
+| `billing:pay` |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |  |  |  |
+| `billing:credit` |  |  | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |  |
+| `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |
+| `finance:read` | ✓ |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
+| `finance:export` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |
+| `catalog:read` | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |
+| `catalog:write` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |
+| `inventory:read` | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `inventory:write` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `case:read` | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
+| `case:create` |  |  | ✓ |  | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
+| `case:write` |  |  | ✓ |  |  | ✓ |  |  |  | ✓ |  | ✓ |  |
+| `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |
+| `audit:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ |
+| `user:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |
+| `order:create:SELF_SERVE` |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
+| `order:create:RETAIL_ASSISTED` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `order:create:QUICK_SALE` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `order:create:TELESALES` |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
+| `order:create:DEALER` |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `order:create:CALL_CENTER` |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+
+## Separation of duties
+
+- Administrators manage users and the catalog but **cannot take payments or issue credit notes**.
+- Call-center agents can take payments and change SIM/number but **cannot issue credits or terminate**: they escalate to Customer Service.
+- Customer Service can refund up to a limit; Billing Operations and Finance have no limit.
+- Only users holding `order:payment` can state that money was received, and in production they must give the terminal approval or receipt number.
+- Customers in the self-serve portal can never confirm their own payment; that comes from the payment provider webhook.
+- Who sold an order is taken from the signed-in session, never from the request, so commission cannot be forged.

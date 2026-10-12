@@ -153,10 +153,13 @@ export async function reconcile(q: Queryable): Promise<{ ok: boolean; checks: Re
   return { ok: checks.every((c) => c.ok), checks, trialBalance };
 }
 
-export async function commissionReport(q: Queryable) {
+export async function commissionReport(q: Queryable, f: { storeId?: string; dealerId?: string } = {}) {
+  const params: unknown[] = []; const where: string[] = [];
+  if (f.storeId) where.push(`store_id = $${params.push(f.storeId)}`);
+  if (f.dealerId) where.push(`dealer_id = $${params.push(f.dealerId)}`);
   return (await q.query(
     `SELECT COALESCE(store_id,'-') AS store_id, COALESCE(salesperson_id, dealer_id, '-') AS agent, count(*) AS orders, sum(basis_minor) AS basis_minor, sum(amount_minor) AS commission_minor, max(currency) AS currency
-     FROM commissions GROUP BY 1, 2 ORDER BY commission_minor DESC`)).rows;
+     FROM commissions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY 1, 2 ORDER BY commission_minor DESC`, params)).rows;
 }
 
 export async function auditLog(q: Queryable, f: { entity?: string; entityId?: string; limit?: number } = {}) {

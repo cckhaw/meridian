@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { monthlyFee } from './catalog.js';
-import { DUNNING, GL, INVOICE_TERMS_DAYS, market } from './config.js';
+import { DUNNING, GL, INVOICE_TERMS_DAYS, market, paymentMode } from './config.js';
 import type { Db, Queryable, Row } from './db.js';
 import { addDays, addMonths, dayOf, diffDays, fmt, today, toDate, type DateStr } from './dates.js';
 import { invalid, notFound, rejected } from './errors.js';
@@ -169,7 +169,8 @@ export async function payInvoice(db: Db, invoiceId: string, o: { amountMinor?: n
     const amount = o.amountMinor ?? bal;
     if (!Number.isInteger(amount) || amount <= 0) throw invalid('amount must be a positive integer (minor units)');
     if (amount > bal) throw rejected(`payment ${amount} exceeds the outstanding balance ${bal}`);
-    if ((o.reference ?? '').toUpperCase().startsWith('DECLINE')) throw rejected('payment declined by the gateway');
+    if (paymentMode() === 'manual' && !o.reference?.trim()) throw invalid('a payment reference (terminal approval, receipt or bank transfer number) is required');
+    if (paymentMode() === 'simulated' && (o.reference ?? '').toUpperCase().startsWith('DECLINE')) throw rejected('payment declined by the gateway');
     const key = o.idempotencyKey ?? `inv-${invoiceId}-${randomUUID()}`;
     const dup = (await q.query('SELECT id FROM payments WHERE shard_id=$1 AND idempotency_key=$2', [inv.shardId, key])).rows[0];
     if (!dup) {

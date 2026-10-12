@@ -3,9 +3,11 @@ import { Alert, Badge, Empty, LargeTitle, Select, Spinner, TableWrap, Td, Th } f
 import Link from 'next/link';
 import { useState } from 'react';
 import { useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { dt, label, tone } from '@/lib/format';
 
 export default function Cases() {
+  const { can } = useAuth();
   const [status, setStatus] = useState('ACTIVE');
   const [type, setType] = useState('');
   const { data, error, loading } = useApi(`/cases?limit=50&status=${status}&type=${type}`);
@@ -19,7 +21,7 @@ export default function Cases() {
       {error && <Alert>{error}</Alert>}{loading && !data && <Spinner />}
       {data && (data.items.length === 0 ? <Empty>No cases. Create one from a customer’s page.</Empty> : (
         <TableWrap><thead><tr><Th>Case</Th><Th>Customer</Th><Th>Type</Th><Th>Subject</Th><Th>Priority</Th><Th>Status</Th><Th>Opened</Th></tr></thead><tbody>
-          {data.items.map((k: any) => <tr key={k.id}><Td><Link className="font-mono text-accent" href={`/cases/${k.id}`}>{k.number}</Link></Td><Td><Link className="text-accent" href={`/customers/${k.customerId}`}>{k.customerName}</Link></Td><Td>{label(k.type)}</Td><Td>{k.subject}</Td><Td><Badge tone={tone(k.priority)}>{label(k.priority)}</Badge></Td><Td><Badge tone={tone(k.status)}>{label(k.status)}</Badge></Td><Td>{dt(k.createdAt)}</Td></tr>)}
+          {data.items.map((k: any) => <tr key={k.id}><Td><Link className="font-mono text-accent" href={`/cases/${k.id}`}>{k.number}</Link></Td><Td>{can('customer:search') ? <Link className="text-accent" href={`/customers/${k.customerId}`}>{k.customerName}</Link> : k.customerName}</Td><Td>{label(k.type)}</Td><Td>{k.subject}</Td><Td><Badge tone={tone(k.priority)}>{label(k.priority)}</Badge></Td><Td><Badge tone={tone(k.status)}>{label(k.status)}</Badge></Td><Td>{dt(k.createdAt)}</Td></tr>)}
         </tbody></TableWrap>
       ))}
     </>

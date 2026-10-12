@@ -2,9 +2,11 @@
 import { Alert, Badge, Button, Card, Empty, LargeTitle, SectionTitle, Spinner, Stat, TableWrap, Td, Th } from '@meridian/ui';
 import { useState } from 'react';
 import { useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { d, dt, money } from '@/lib/format';
 
 export default function Finance() {
+  const { can } = useAuth();
   const recon = useApi('/gl/reconcile');
   const gl = useApi('/gl?limit=30');
   const batches = useApi('/gl/batches');
@@ -43,12 +45,12 @@ export default function Finance() {
         </>
       )}
 
-      <SectionTitle action={<Button disabled={busy || !gl.data?.unexported.n} onClick={exportNow}>{busy ? 'Exporting…' : 'Export to SAP (CSV)'}</Button>}>Journal export</SectionTitle>
+      <SectionTitle action={can('finance:export') ? <Button disabled={busy || !gl.data?.unexported.n} onClick={exportNow}>{busy ? 'Exporting…' : 'Export to SAP (CSV)'}</Button> : undefined}>Journal export</SectionTitle>
       {gl.data && <p className="mb-3 text-subhead text-label2">{gl.data.unexported.n.toLocaleString()} journal lines waiting to be exported ({money(gl.data.unexported.debit)} debits).</p>}
       {error && <Alert>{error}</Alert>}{msg && <Alert tone="info">{msg}</Alert>}
       {batches.data && batches.data.items.length > 0 && (
         <TableWrap><thead><tr><Th>Batch</Th><Th>Created</Th><Th right>Lines</Th><Th right>Debits = credits</Th><Th /></tr></thead><tbody>
-          {batches.data.items.map((b: any) => <tr key={b.id}><Td className="font-mono">{b.id.slice(0, 8)}</Td><Td>{dt(b.createdAt)}</Td><Td right>{b.entryCount}</Td><Td right>{money(b.debitMinor)}</Td><Td right><a className="text-accent" href={`/api/gl/batches/${b.id}/csv`}>Download</a></Td></tr>)}
+          {batches.data.items.map((b: any) => <tr key={b.id}><Td className="font-mono">{b.id.slice(0, 8)}</Td><Td>{dt(b.createdAt)}</Td><Td right>{b.entryCount}</Td><Td right>{money(b.debitMinor)}</Td><Td right>{can('finance:export') && <a className="text-accent" href={`/api/gl/batches/${b.id}/csv`}>Download</a>}</Td></tr>)}
         </tbody></TableWrap>
       )}
 

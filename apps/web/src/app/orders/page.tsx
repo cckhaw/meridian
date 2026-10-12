@@ -3,11 +3,13 @@ import { Alert, Badge, Button, Empty, LargeTitle, Select, Spinner, TableWrap, Td
 import Link from 'next/link';
 import { useState } from 'react';
 import { useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { dt, label, money, tone } from '@/lib/format';
 
 const STATES = ['', 'PAYMENT_PENDING', 'FULFILMENT', 'AWAITING_INSTALLATION', 'SHIPPED', 'COMPLETED', 'CANCELLED', 'FAILED'];
 
 export default function Orders() {
+  const { can } = useAuth();
   const [state, setState] = useState('');
   const [offset, setOffset] = useState(0);
   const { data, error, loading } = useApi(`/orders?limit=25&offset=${offset}&state=${state}`);
@@ -16,7 +18,7 @@ export default function Orders() {
       <LargeTitle subtitle="Order capture through fulfilment and activation">Orders</LargeTitle>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Select aria-label="State" value={state} onChange={(e) => { setState(e.target.value); setOffset(0); }} className="sm:max-w-xs">{STATES.map((s) => <option key={s} value={s}>{s ? label(s) : 'All states'}</option>)}</Select>
-        <Link href="/orders/new" className="sm:ml-auto"><Button>New order</Button></Link>
+        {can('order:create:SELF_SERVE', 'order:create:RETAIL_ASSISTED', 'order:create:QUICK_SALE', 'order:create:TELESALES', 'order:create:DEALER', 'order:create:CALL_CENTER') && <Link href="/orders/new" className="sm:ml-auto"><Button>New order</Button></Link>}
       </div>
       {error && <Alert>{error}</Alert>}
       {loading && !data && <Spinner />}

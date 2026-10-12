@@ -1,7 +1,9 @@
 'use client';
 import { Alert, Badge, Button, Card, Empty, LargeTitle, Input, SectionTitle, Segmented, Spinner } from '@meridian/ui';
 import { useState } from 'react';
+import Link from 'next/link';
 import { patch, useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { label, money } from '@/lib/format';
 
 const NETS = [{ value: '', label: 'All' }, { value: 'mobile', label: 'Mobile' }, { value: 'fiber', label: 'Fibre' }, { value: 'iot', label: 'IoT' }, { value: 'none', label: 'Other' }];
@@ -17,6 +19,7 @@ function etc(o: any, elapsed: number): number {
 }
 
 export default function Catalog() {
+  const { can } = useAuth();
   const [net, setNet] = useState('');
   const [q, setQ] = useState('');
   const [elapsed, setElapsed] = useState(6);
@@ -31,10 +34,11 @@ export default function Catalog() {
         <label className="flex items-center gap-3 text-subhead text-label2 lg:ml-auto">Months elapsed <span className="w-6 font-semibold text-label">{elapsed}</span>
           <input type="range" min={0} max={36} value={elapsed} onChange={(e) => setElapsed(Number(e.target.value))} className="min-h-tap w-40 accent-[rgb(var(--accent))]" aria-label="Months elapsed for ETC preview" /></label>
       </div>
+      {can('catalog:write') && <div className="mb-4"><Link href="/catalog/manage" className="text-subhead font-medium text-accent">Create or edit offers →</Link></div>}
       {act.error && <Alert>{act.error}</Alert>}
       {error && <Alert>{error}</Alert>}
       {loading && !data && <Spinner />}
-      {data && (data.items.length === 0 ? <Empty>No offers.</Empty> : (
+      {data && (data.items.length === 0 ? <Empty>{can('catalog:write') ? 'The catalog is empty. Use “Create or edit offers” to define your first offers.' : 'No offers are available yet.'}</Empty> : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {data.items.map((o: any) => {
             const rec = o.prices.find((p: any) => p.type === 'RECURRING'), once = o.prices.filter((p: any) => p.type === 'ONE_TIME');
@@ -48,18 +52,18 @@ export default function Catalog() {
                 {o.contract?.termMonths > 0 && (<>
                   <p className="mt-1 text-subhead text-label2">{o.contract.termMonths}-month contract · ETC: {label(o.contract.etc.method)}</p>
                   <p className="mt-2 rounded-control bg-surface2 p-3 text-footnote">Early termination at month {Math.min(elapsed, o.contract.termMonths)}: <strong>{money(etc(o, elapsed))}</strong></p></>)}
-                <div className="mt-auto flex gap-2 pt-4">
+                {can('catalog:write') && <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
+                  <Link href={`/catalog/manage?from=${o.id}`} className="inline-flex min-h-tap items-center rounded-control px-3 text-body font-medium text-accent hover:bg-surface2">New version</Link>
                   {o.status === 'ACTIVE'
                     ? <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => patch(`/catalog/${o.id}`, { status: 'RETIRED' }))}>Retire</Button>
                     : <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => patch(`/catalog/${o.id}`, { status: 'ACTIVE' }))}>Activate</Button>}
-                </div>
+                </div>}
               </Card>
             );
           })}
         </div>
       ))}
-      <SectionTitle>Hierarchy</SectionTitle>
-      <Hierarchy />
+      {can('catalog:write') && <><SectionTitle>Hierarchy</SectionTitle><Hierarchy /></>}
     </>
   );
 }

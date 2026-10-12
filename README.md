@@ -1,39 +1,39 @@
 # Meridian
 
-Telco CRM, order management and billing for large subscriber bases (ASEAN). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+CRM, order management, billing and finance for a telecom operator: customers and hierarchies, product catalog, orders and fulfilment,
+subscription lifecycle, bill runs and invoices, double-entry ledger with SAP export, cases, inventory, role-based access.
 
-## Run it (no infrastructure needed)
+Sign-in is required. Staff and customers see only the modules and records their **role** allows ([docs/ROLES.md](docs/ROLES.md)).
+
+## Run it locally
 
 ```bash
 pnpm install
-pnpm --filter @meridian/web dev     # http://localhost:3000
+pnpm --filter @meridian/web dev      # http://localhost:3000
 ```
 
-With no `DATABASE_URL` it starts an embedded PostgreSQL (PGlite) and seeds demo customers, orders, invoices and a ledger,
-so every screen has data. Data is in-memory unless you set `MERIDIAN_DATA_DIR`.
-
-For a real database, copy `.env.example`, set `DATABASE_URL` (PostgreSQL 14+; migrations run on start) and the app uses it.
+Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.development`, development only). With no `DATABASE_URL` it runs an
+embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test         # 43 tests; add TEST_DATABASE_URL=postgres://.../postgres to run them on real Postgres
+pnpm typecheck && pnpm test          # 77 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
-## What works today
+## Run it in production
 
-| Area | Capability |
-|---|---|
-| Customer 360 | Search, hierarchy (enterprise departments, family groups), accounts, services, orders, invoices, cases, next-best-action |
-| Catalog | Network → category → group → offer; SIM-only, SIM + device (12/24/36 mo), wearables, VAS, OTT subscriptions, physical goods, IoT; ETC quotes |
-| Orders | Self-serve, retail, quick-sale, telesales, dealer, call centre; payment (card, cash, QR, instalments); stock reservation; fibre installation; shipping; point-of-no-return cancellation; commission |
-| Lifecycle | Suspend/resume, SIM and number change, ownership transfer, termination with ETC, MNP port-in (order) and port-out |
-| Billing | Daily and 1st–28th cycles, pro-ration, tax, instalments, partial payments, credit notes and refunds, dunning (reminder, suspend, review), printable invoices |
-| Finance | Balanced double-entry ledger, SAP-style CSV export in batches, reconciliation (ledger vs invoices vs payments), trial balance |
-| Ops | Inventory, cases, audit log, commission report |
+Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD` and `MERIDIAN_ID_PEPPER`, deploy, and follow the
+[day-one runbook](docs/OPERATIONS.md). Meridian refuses to serve traffic if these are missing or weak.
 
-## Not built yet
+## Documentation
 
-Authentication and per-persona permissions (the persona switcher only changes navigation, **do not expose this to the internet as is**),
-a real payment gateway (simulated), usage rating/charging (the Go gateway is a skeleton), Kafka event publishing,
-Temporal-backed orchestration in the app (orders run in-process; the Temporal service remains separate),
-reverse logistics (returns/exchanges), WYSIWYG invoice designer (invoices are print-styled HTML), email/SMS notifications,
-GraphQL, and multi-currency formatting beyond 2-decimal currencies.
+- [Operating Meridian](docs/OPERATIONS.md): environment, runbook, payments, scale, upgrades
+- [Security model](docs/SECURITY.md): what is protected, and what still needs work
+- [Roles and permissions](docs/ROLES.md): generated from the code that enforces them
+- [Architecture](docs/ARCHITECTURE.md)
+
+## Status
+
+Production-oriented, not feature-complete. **Not included in this release:** a payment gateway (staff-recorded payments and a signed webhook
+are provided), usage rating and charging (the Go gateway is a skeleton), MFA/SSO, customer self-registration, returns and exchanges, a
+visual order-workflow designer (the Temporal service exists but is not wired to the app), notifications, GraphQL. See
+[Security](docs/SECURITY.md#not-covered-yet-plan-for-these-before-regulated-go-live) before handling real customer data.

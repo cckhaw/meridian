@@ -39,10 +39,16 @@
 - Catalog for the working app lives in Postgres (JSONB). `services/catalog-service` (Mongo) keeps the same model and now shares the ETC and
   hierarchy rules from `@meridian/core`.
 
-## Known limitations
-No authentication or per-persona permissions; simulated payment gateway; tax is a flat rate per market; currencies assumed 2-decimal;
-cross-shard ownership transfer is rejected (needs the shard migration job); dev partitions cover shards 0-15 only.
+## Identity and access
+`packages/core/src/rbac.ts` is the single source of truth: permissions, 13 roles, data scopes, modules. `auth.ts` handles credentials,
+sessions, lockout and user administration; the super user is read from the environment. The API router (`apps/web/src/server/router.ts`) declares a
+permission per route and enforces authentication, CSRF, the forced password change, permissions and row scope before any handler runs.
+The UI builds navigation from the server's module list for the signed-in user. See [SECURITY.md](SECURITY.md) and [ROLES.md](ROLES.md).
 
-## Not yet built (next slices)
-Reverse logistics (returns/exchanges), WYSIWYG invoice designer, usage rating/charging, Kafka producers, auth/RBAC per persona,
-GraphQL gateway, Redis session layer, persistence of designer workflows, notifications.
+## Payments
+No gateway is bundled. `MERIDIAN_PAYMENT_MODE=manual` (production default) captures nothing automatically: cashiers record a terminal approval or
+receipt reference, and a payment provider confirms online payments through the signed webhook. `simulated` (development) auto-approves cards.
+
+## Known limitations
+No MFA/SSO; flat tax rate per market; currencies assumed 2-decimal; cross-shard ownership transfer is rejected (needs the shard migration job);
+dev partitions cover shards 0-15 only; usage rating/charging, returns and exchanges, invoice designer, notifications and the order-workflow designer UI are not built.

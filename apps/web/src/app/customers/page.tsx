@@ -4,11 +4,13 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { label } from '@/lib/format';
 
 const SEGMENTS = [{ value: '', label: 'All' }, { value: 'CONSUMER', label: 'Consumer' }, { value: 'FAMILY', label: 'Family' }, { value: 'ENTERPRISE', label: 'Enterprise' }, { value: 'IOT_ENTERPRISE', label: 'IoT' }];
 
 export default function Customers() {
+  const { can } = useAuth();
   const [q, setQ] = useState('');
   const [segment, setSegment] = useState('');
   const [offset, setOffset] = useState(0);
@@ -20,7 +22,7 @@ export default function Customers() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <Input type="search" aria-label="Search customers" placeholder="Search…" value={q} onChange={(e) => { setQ(e.target.value); setOffset(0); }} className="sm:max-w-sm" />
         <Segmented label="Segment" value={segment} options={SEGMENTS} onChange={(v) => { setSegment(v); setOffset(0); }} />
-        <Button className="sm:ml-auto" onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : 'New customer'}</Button>
+        {can('customer:create') && <Button className="sm:ml-auto" onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : 'New customer'}</Button>}
       </div>
       {adding && <NewCustomer onDone={() => setAdding(false)} />}
       {error && <Alert>{error}</Alert>}

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { d, label, money, tone } from '@/lib/format';
 
 export default function Page() { return <Suspense><Billing /></Suspense>; }
@@ -11,6 +12,7 @@ export default function Page() { return <Suspense><Billing /></Suspense>; }
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 function Billing() {
+  const { can } = useAuth();
   const customerId = useSearchParams().get('customerId') ?? '';
   const [status, setStatus] = useState('');
   const [offset, setOffset] = useState(0);
@@ -18,7 +20,7 @@ function Billing() {
   return (
     <>
       <LargeTitle subtitle="Multi-cycle billing, invoices, payments and dunning">Billing</LargeTitle>
-      {!customerId && <Runs onDone={reload} />}
+      {!customerId && can('billing:run') && <Runs onDone={reload} />}
       <SectionTitle>Invoices{customerId && <span className="text-subhead font-normal text-label2"> · filtered to one customer</span>}</SectionTitle>
       <div className="mb-3"><Select aria-label="Status" value={status} onChange={(e) => { setStatus(e.target.value); setOffset(0); }} className="sm:max-w-xs">{['', 'ISSUED', 'OVERDUE', 'PAID'].map((s) => <option key={s} value={s}>{s ? label(s) : 'All statuses'}</option>)}</Select></div>
       {error && <Alert>{error}</Alert>}
@@ -27,7 +29,7 @@ function Billing() {
         <>
           <TableWrap><thead><tr><Th>Invoice</Th><Th>Customer</Th><Th>Period</Th><Th>Due</Th><Th>Status</Th><Th right>Total</Th><Th right>Balance</Th></tr></thead><tbody>
             {data.items.map((i: any) => (
-              <tr key={i.id}><Td><Link className="font-medium text-accent" href={`/billing/${i.id}`}>{i.number}</Link></Td><Td>{i.customerName}</Td><Td className="whitespace-nowrap">{d(i.periodStart)} – {d(i.periodEnd)}</Td>
+              <tr key={i.id}><Td><Link className="font-medium text-accent" href={`/billing/${i.id}`}>{i.number}</Link></Td><Td>{can('customer:search') ? i.customerName : '—'}</Td><Td className="whitespace-nowrap">{d(i.periodStart)} – {d(i.periodEnd)}</Td>
                 <Td>{d(i.dueDate)}</Td><Td><Badge tone={tone(i.status)}>{label(i.status)}</Badge></Td><Td right>{money(i.totalMinor, i.currency)}</Td><Td right>{money(i.balanceMinor, i.currency)}</Td></tr>
             ))}
           </tbody></TableWrap>
