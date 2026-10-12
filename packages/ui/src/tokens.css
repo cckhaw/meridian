@@ -36,3 +36,24 @@
 html { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 body { background: rgb(var(--bg-grouped)); color: rgb(var(--label)); }
 @media (prefers-reduced-motion: reduce) { *, ::before, ::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ── Materials: translucent chrome that content scrolls under (Apple's "material" idea), with accessible fallbacks ── */
+.material { background: rgb(var(--bg) / 0.72); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); }
+.material-thick { background: rgb(var(--bg) / 0.94); -webkit-backdrop-filter: blur(32px) saturate(180%); backdrop-filter: blur(32px) saturate(180%); }
+@media (prefers-reduced-transparency: reduce) { .material, .material-thick { background: rgb(var(--bg)); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+@media (prefers-contrast: more) { .material, .material-thick { background: rgb(var(--bg)); -webkit-backdrop-filter: none; backdrop-filter: none; border-color: rgb(var(--label-2)) !important; } }
+
+/* ── Sidebar: can be hidden entirely (preference kept in localStorage; the attribute is set before first paint, so there is no flash) ── */
+.shell-sidebar { transition: transform 340ms cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 0s; }
+.shell-content { transition: padding-left 340ms cubic-bezier(0.32, 0.72, 0, 1); }
+@media (min-width: 1024px) {
+  html[data-sidebar='hidden'] .shell-sidebar { transform: translateX(-100%); visibility: hidden; transition: transform 340ms cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 340ms; }
+  html[data-sidebar='hidden'] .shell-content { padding-left: 0; }
+  html[data-sidebar='hidden'] .shell-main { max-width: 1760px; padding-top: 4rem; }
+}
+
+/* "Show sidebar" button: only exists while the sidebar is hidden on desktop. */
+.shell-reveal { display: none; }
+@media (min-width: 1024px) { html[data-sidebar='hidden'] .shell-reveal { display: flex; } }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.sheet-in { animation: sheet-up 340ms cubic-bezier(0.32, 0.72, 0, 1) both; }
