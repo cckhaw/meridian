@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { LineItemNode, OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
-import { checkDependencies, getOffer, listNodes, monthlyFee } from './catalog.js';
+import { ancestorsFor, checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
 import { MARKETS } from './config.js';
 import { createAccount, createCustomer, getCustomer } from './customers.js';
 import type { Db, Queryable, Row } from './db.js';
@@ -36,32 +36,42 @@ export interface StoreOffer {
   includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
 }
 
-export async function storeCatalog(q: Queryable, channel: StoreChannel): Promise<{ currency: string; offers: StoreOffer[] }> {
-  const mk = await marketFor(q, await storeMarket(q));
-  const nodes = await listNodes(q, { status: 'ACTIVE' });
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  // An offer is live only if every ancestor is active. Walk the parent chain (not the stored path) so older catalogs with unusual paths still work.
-  const chain = (n: { id: string; parentId?: string | null }): string[] | null => {
-    const names: string[] = []; let cur: typeof n | undefined = n;
-    while (cur?.parentId) { const p = byId.get(cur.parentId); if (!p) return null; names.unshift(p.name); cur = p; }
-    return names;
+/**
+ * One page of the sellable catalog for a channel, with prices worked out. Searchable by words and paged, so a catalog of thousands of offers
+ * never travels to the browser at once. An offer is live only if it and every ancestor is active.
+ */
+export async function storeCatalog(q: Queryable, channel: StoreChannel, o: { q?: string; kind?: string; notKind?: string; limit?: number; cursor?: string } = {}): Promise<{ currency: string; offers: StoreOffer[]; nextCursor: string | null }> {
+  const market = await storeMarket(q);
+  const mk = await marketFor(q, market);
+  const page = await pageOffers(q, { status: 'ACTIVE', channel, market, q: o.q, kind: o.kind, notKind: o.notKind, limit: o.limit ?? 24, cursor: o.cursor });
+  const found = page.items as OfferNode[];
+  const ancestors = await ancestorsFor(q, found.map((n) => n.id));
+  const chain = (n: OfferNode): string[] | null => {
+    const up = ancestors.get(n.id) ?? [];
+    return up.length && up.every((a) => a.status === 'ACTIVE') ? up.map((a) => a.name) : null;
   };
-  const live = (n: { id: string; parentId?: string | null }) => chain(n) !== null;
+  const offers = found.filter((n) => chain(n) !== null);
+  const ids = offers.map((n) => n.id);
   const items = new Map<string, StoreOffer['includes']>();
-  for (const n of [...nodes].sort((a, b) => ((a as { sortOrder?: number }).sortOrder ?? 0) - ((b as { sortOrder?: number }).sortOrder ?? 0))) if (n.level === 'LINE_ITEM' && n.parentId) { const li = n as unknown as LineItemNode; items.set(n.parentId, [...(items.get(n.parentId) ?? []), { name: n.name, itemType: li.itemType, quantity: li.quantity, unit: li.unit, unlimited: li.unlimited || undefined, description: li.description }]); }
-  const offers = (await listNodes(q, { status: 'ACTIVE', level: 'OFFER', channel, market: await storeMarket(q) }) as OfferNode[]).filter(live);
+  if (ids.length) for (const r of (await q.query(`SELECT * FROM catalog_nodes WHERE level='LINE_ITEM' AND status='ACTIVE' AND parent_id = ANY($1) ORDER BY sort_order, name, id`, [ids])).rows) {
+    const d = r.data ?? {};
+    items.set(r.parentId, [...(items.get(r.parentId) ?? []), { name: r.name, itemType: d.itemType, quantity: d.quantity, unit: d.unit, unlimited: d.unlimited || undefined, description: d.description }]);
+  }
+  const reqIds = [...new Set(offers.flatMap((n) => n.requires))];
+  const req = new Map<string, { name: string; level: string }>(reqIds.length ? (await q.query('SELECT id, name, level FROM catalog_nodes WHERE id = ANY($1)', [reqIds])).rows.map((r) => [r.id as string, { name: r.name as string, level: r.level as string }]) : []);
   return {
     currency: mk.currency,
-    offers: offers.map((o) => {
+    nextCursor: page.nextCursor,
+    offers: offers.map((n) => {
       const split = (amount: number, inclusive: boolean) => taxSplit(amount, mk.taxBps, inclusive).gross;
-      const up = o.prices.filter((p) => p.type === 'ONE_TIME').reduce((s, p) => s + split(p.amount.amountMinor, p.taxInclusive), 0);
-      const fee = monthlyFee(o);
-      const path = [...(chain(o) ?? []), o.name];
+      const up = n.prices.filter((p) => p.type === 'ONE_TIME').reduce((s, p) => s + split(p.amount.amountMinor, p.taxInclusive), 0);
+      const fee = monthlyFee(n);
+      const path = [...(chain(n) ?? []), n.name];
       return {
-        id: o.id, name: o.name, kind: o.kind, description: o.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
-        monthlyMinor: fee ? split(fee.amount.amountMinor, fee.taxInclusive) : 0, upfrontMinor: up, contractMonths: o.contract?.termMonths ?? 0,
-        requiresShipping: !!o.fulfilment?.requiresShipping, requires: o.requires, excludes: o.excludes, includes: items.get(o.id) ?? [],
-        requiresText: o.requires.map((id) => { const n = byId.get(id); return n ? (n.level === 'OFFER' ? n.name : `any ${n.name}`) : id; }),
+        id: n.id, name: n.name, kind: n.kind, description: n.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
+        monthlyMinor: fee ? split(fee.amount.amountMinor, fee.taxInclusive) : 0, upfrontMinor: up, contractMonths: n.contract?.termMonths ?? 0,
+        requiresShipping: !!n.fulfilment?.requiresShipping, requires: n.requires, excludes: n.excludes, includes: items.get(n.id) ?? [],
+        requiresText: n.requires.map((id) => { const r = req.get(id); return r ? (r.level === 'OFFER' ? r.name : `any ${r.name}`) : id; }),
       };
     }),
   };

@@ -4,6 +4,7 @@ import { hashIdDocument, maskIdDocument } from './customers.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { decryptBytes, decryptText, encryptBytes, encryptText, sha256Hex } from './field-crypto.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { inspectImage } from './settings.js';
 import { ID_TYPES, type StoreSettings } from './store-settings.js';
 
@@ -174,15 +175,19 @@ export async function attestInPerson(q: Queryable, appId: string, staff: { usern
 }
 
 // ───────────────────────── compliance review ─────────────────────────
-export async function listKycCases(q: Queryable, f: { status?: string; limit?: number } = {}): Promise<Row[]> {
+export async function listKycCases(q: Queryable, f: { status?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 50, 100);
+  const { params, p } = sqlBuilder();
   // A case exists as soon as details are typed in; it only reaches the queue once the applicant (or the store) has submitted it.
-  const params: unknown[] = []; const where: string[] = [`(k.status <> 'PENDING' OR a.status = 'KYC_REVIEW')`];
-  if (f.status) where.push(`k.status = $${params.push(f.status)}`);
-  params.push(Math.min(f.limit ?? 50, 200));
-  return (await q.query(
-    `SELECT k.id, k.application_id, k.method, k.status, k.full_name, k.id_type, k.id_number_masked, k.flags, k.created_at, k.decided_by, k.decided_at, a.channel, a.status AS application_status
-     FROM kyc_cases k JOIN applications a ON a.id = k.application_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-     ORDER BY (k.status='PENDING') DESC, k.created_at LIMIT $${params.length}`, params)).rows;
+  const where: string[] = [`(k.status <> 'PENDING' OR a.status = 'KYC_REVIEW')`];
+  if (f.status) where.push(`k.status = ${p(f.status)}`);
+  const cur = decodeCursor(f.cursor, 2); // oldest waiting first
+  if (cur) where.push(`(k.created_at, k.id) > (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT k.id, k.application_id, k.method, k.status, k.full_name, k.id_type, k.id_number_masked, k.flags, k.created_at, k.created_at::text AS cursor_ts, k.decided_by, k.decided_at, a.channel, a.status AS application_status
+     FROM kyc_cases k JOIN applications a ON a.id = k.application_id WHERE ${where.join(' AND ')} ORDER BY k.created_at, k.id LIMIT ${p(limit + 1)}`, params)).rows;
+  const page = toPage(rows as Array<Row & { id: string; cursorTs: string }>, limit, (r) => [r.cursorTs, r.id]);
+  return { items: page.items.map(({ cursorTs: _d, ...r }) => r), nextCursor: page.nextCursor };
 }
 
 /** One case with the full ID number (decrypted for the reviewer) and its documents. Opening it is itself audited. */

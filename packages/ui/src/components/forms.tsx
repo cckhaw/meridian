@@ -145,3 +145,26 @@ export function MenuButton({ label, items, align = 'right' }: { label: string; i
     </div>
   );
 }
+
+
+/** A search field in the platform style: leading magnifier, clear button, `type=search` semantics. Controlled. */
+export function SearchField({ value, onChange, placeholder = 'Search', label, className }: { value: string; onChange: (v: string) => void; placeholder?: string; label: string; className?: string }) {
+  return (
+    <div className={cx('relative', className)}>
+      <svg aria-hidden viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-label2"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
+      <input type="search" role="searchbox" aria-label={label} placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)} autoComplete="off" spellCheck={false}
+        className={cx(control, 'rounded-[12px] bg-label/[.06] pl-10 pr-9 [&::-webkit-search-cancel-button]:hidden')} />
+      {value && <button type="button" aria-label="Clear search" onClick={() => onChange('')} className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-label2 hover:bg-label/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">×</button>}
+    </div>
+  );
+}
+
+/** Footer for a list that arrives in pages: says how many are shown and fetches the next page on demand. */
+export function LoadMore({ shown, hasMore, loading, onMore, noun = 'items' }: { shown: number; hasMore: boolean; loading: boolean; onMore: () => void; noun?: string }) {
+  return (
+    <div className="mt-3 flex flex-col items-center gap-2 py-2 text-footnote text-label2" aria-live="polite">
+      <span>{shown.toLocaleString()} {noun} shown{hasMore ? '' : ' · that’s everything'}</span>
+      {hasMore && <button type="button" onClick={onMore} disabled={loading} className="min-h-tap rounded-control bg-surface2 px-5 text-subhead font-medium text-accent hover:opacity-80 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{loading ? 'Loading…' : `Show more ${noun}`}</button>}
+    </div>
+  );
+}

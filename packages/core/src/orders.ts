@@ -10,6 +10,8 @@ import { conflict, DomainError, invalid, notFound, rejected } from './errors.js'
 import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve } from './inventory.js';
 import { postJournal } from './ledger.js';
 import { today } from './dates.js';
+import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.js';
+import { customerIdsMatching, parseQuery } from './search.js';
 import { taxSplit } from './tax.js';
 
 export interface OrderInput {
@@ -469,20 +471,25 @@ function nextActions(o: Row): string[] {
   }
 }
 
-export async function listOrders(q: Queryable, f: { customerId?: string; storeId?: string; dealerId?: string; state?: string; channel?: string; limit?: number; offset?: number } = {}) {
-  const params: unknown[] = []; const where: string[] = [];
-  const p = (v: unknown) => `$${params.push(v)}`;
+export async function listOrders(q: Queryable, f: { customerId?: string; storeId?: string; dealerId?: string; state?: string; channel?: string; q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
   if (f.customerId) where.push(`o.customer_id = ${p(f.customerId)}`);
   if (f.storeId) where.push(`o.store_id = ${p(f.storeId)}`);
   if (f.dealerId) where.push(`o.dealer_id = ${p(f.dealerId)}`);
   if (f.state) where.push(`o.state = ${p(f.state)}`);
   if (f.channel) where.push(`o.channel = ${p(f.channel)}`);
-  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = (await q.query(`SELECT count(*) AS n FROM orders o ${w}`, params)).rows[0]!.n;
-  const lim = p(Math.min(f.limit ?? 25, 100)); const off = p(f.offset ?? 0);
-  const items = (await q.query(
-    `SELECT o.id, o.state, o.channel, o.total_minor, o.currency, o.created_at, o.store_id, o.salesperson_id, c.display_name AS customer_name, o.customer_id,
+  // Search: an order id, or whoever the customer is (name words, e-mail, phone / mobile number).
+  const pq = await parseQuery(q, f.q);
+  if (pq.kind === 'id') where.push(`(o.id = ${p(pq.id)}::uuid OR o.customer_id = ${p(pq.id)}::uuid)`);
+  else { const ids = customerIdsMatching(pq, p); if (ids) where.push(`o.customer_id IN (${ids})`); }
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(o.created_at, o.id) < (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT o.id, o.state, o.channel, o.total_minor, o.currency, o.created_at, o.created_at::text AS cursor_ts, o.store_id, o.salesperson_id, c.display_name AS customer_name, o.customer_id,
        (SELECT string_agg(ol.description || CASE WHEN ol.quantity > 1 THEN ' x' || ol.quantity ELSE '' END, ', ') FROM order_lines ol WHERE ol.order_id = o.id) AS summary
-     FROM orders o JOIN customers c ON c.id = o.customer_id ${w} ORDER BY o.created_at DESC, o.id LIMIT ${lim} OFFSET ${off}`, params)).rows;
-  return { items, total };
+     FROM orders o JOIN customers c ON c.id = o.customer_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY o.created_at DESC, o.id DESC LIMIT ${p(limit + 1)}`, params)).rows;
+  return tsPage(rows as Array<Row & { id: string; cursorTs: string }>, limit);
 }

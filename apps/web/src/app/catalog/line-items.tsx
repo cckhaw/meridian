@@ -3,11 +3,11 @@ import { Alert, Badge, Button, Field, Input, MenuButton, Modal, Select, Textarea
 import { useState } from 'react';
 import { del, patch, post, useAction } from '@/lib/api';
 import { itemAmount, itemMeta, ITEM_TYPES, STATUS_TEXT } from './catalog-ui';
-import { slug, type TreeNode } from './node-modals';
+import type { CNode as TreeNode } from './catalog-ui';
+import { slug } from './node-modals';
 
 /** "What's included": the line items of one offer, listed like Settings rows with one tidy menu each. */
-export function LineItemsSection({ offer, editable, onChanged }: { offer: TreeNode; editable: boolean; onChanged: () => void }) {
-  const items = offer.children.filter((c) => c.level === 'LINE_ITEM');
+export function LineItemsSection({ offer, items, editable, onChanged }: { offer: TreeNode; items: TreeNode[]; editable: boolean; onChanged: () => void }) {
   const [editing, setEditing] = useState<TreeNode | 'new' | null>(null);
   const act = useAction(onChanged);
   const move = (id: string, direction: 'up' | 'down') => act.run(() => post(`/catalog/${id}/reorder`, { direction }));

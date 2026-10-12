@@ -65,3 +65,55 @@ export function useAction(after?: () => void | Promise<void>) {
   }, [after]);
   return { run, busy, error, ok, clear: () => { setError(null); setOk(null); } };
 }
+
+/** Waits for typing to pause before a search runs, so each keystroke does not hit the server. */
+export function useDebounced<T>(value: T, ms = 250): T {
+  const [v, setV] = useState(value);
+  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
+  return v;
+}
+
+export interface PagedState<T> { items: T[]; loading: boolean; loadingMore: boolean; error: string | null; hasMore: boolean; loadMore: () => void; reload: () => Promise<void>; extra: Record<string, any> | null }
+
+/**
+ * A list that arrives a page at a time. `path` includes any search/filter query string (but not the cursor); changing it starts again from page 1.
+ * Pages are appended ("load more"), so the browser never holds more than the user has scrolled through, and the server never counts the table.
+ */
+export function usePaged<T = any>(path: string | null): PagedState<T> {
+  const [items, setItems] = useState<T[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [extra, setExtra] = useState<Record<string, any> | null>(null);
+  const [loading, setLoading] = useState(path !== null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const seq = useRef(0);
+  const join = (base: string, c: string) => `${base}${base.includes('?') ? '&' : '?'}cursor=${encodeURIComponent(c)}`;
+
+  const first = useCallback(async () => {
+    if (path === null) return;
+    const n = ++seq.current;
+    setLoading(true);
+    try {
+      const d = await api<{ items: T[]; nextCursor: string | null }>(path);
+      if (n !== seq.current) return;
+      const { items: it, nextCursor, ...rest } = d;
+      setItems(it); setCursor(nextCursor); setExtra(Object.keys(rest).length ? rest : null); setError(null);
+    } catch (e) { if (n === seq.current) setError((e as Error).message); }
+    finally { if (n === seq.current) setLoading(false); }
+  }, [path]);
+  useEffect(() => { setItems([]); setCursor(null); void first(); }, [first]);
+
+  const loadMore = useCallback(async () => {
+    if (!cursor || path === null || loadingMore) return;
+    const n = seq.current;
+    setLoadingMore(true);
+    try {
+      const d = await api<{ items: T[]; nextCursor: string | null }>(join(path, cursor));
+      if (n !== seq.current) return;
+      setItems((cur) => [...cur, ...d.items]); setCursor(d.nextCursor);
+    } catch (e) { if (n === seq.current) setError((e as Error).message); }
+    finally { setLoadingMore(false); }
+  }, [cursor, path, loadingMore]);
+
+  return { items, loading, loadingMore, error, hasMore: !!cursor, loadMore: () => void loadMore(), reload: first, extra };
+}

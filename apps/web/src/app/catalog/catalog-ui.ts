@@ -1,17 +1,17 @@
-import type { TreeNode } from './node-modals';
+
+/** A catalog node as the browse/detail APIs return it. Offer and line-item fields are optional on the other levels. */
+export interface CNode {
+  id: string; name: string; level: 'NETWORK_TYPE' | 'CATEGORY' | 'GROUP' | 'OFFER' | 'LINE_ITEM'; status: string; path: string; parentId?: string | null;
+  networkType?: string; kind?: string; description?: string; prices?: any[]; contract?: any; fulfilment?: any; requires?: string[]; excludes?: string[]; salesChannels?: string[]; markets?: string[];
+  itemType?: string; quantity?: number; unit?: string; unlimited?: boolean; sku?: string; sortOrder?: number;
+  offerCount: number; activeOfferCount: number; lineItemCount: number; trail?: Array<{ id: string; name: string; level: string }>;
+  [k: string]: any;
+}
+export type TreeNode = CNode;
 
 export const LEVEL_NOUN: Record<string, string> = { NETWORK_TYPE: 'network type', CATEGORY: 'category', GROUP: 'group', OFFER: 'offer', LINE_ITEM: 'line item' };
 export const LEVEL_PLURAL: Record<string, string> = { NETWORK_TYPE: 'Network types', CATEGORY: 'Categories', GROUP: 'Groups', OFFER: 'Offers', LINE_ITEM: 'Line items' };
-export const CHILD_LEVEL: Record<string, TreeNode['level'] | undefined> = { NETWORK_TYPE: 'CATEGORY', CATEGORY: 'GROUP', GROUP: 'OFFER', OFFER: 'LINE_ITEM' };
-
-export const flatten = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((n) => [n, ...flatten(n.children)]);
-export const ancestorsOf = (id: string, byId: Map<string, TreeNode>): TreeNode[] => {
-  const out: TreeNode[] = []; let cur = byId.get(id);
-  while (cur?.parentId) { const p = byId.get(cur.parentId); if (!p) break; out.unshift(p); cur = p; }
-  return out;
-};
-/** The outline shows the structure down to offers; line items are shown inside their offer. */
-export const structureChildren = (n: TreeNode) => n.children.filter((c) => c.level !== 'LINE_ITEM');
+export const CHILD_LEVEL: Record<string, CNode['level'] | undefined> = { NETWORK_TYPE: 'CATEGORY', CATEGORY: 'GROUP', GROUP: 'OFFER', OFFER: 'LINE_ITEM' };
 
 export const ITEM_TYPES: Array<{ value: string; label: string; glyph: string; unit?: string }> = [
   { value: 'DATA', label: 'Data allowance', glyph: '◔', unit: 'GB' },

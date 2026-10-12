@@ -1,6 +1,8 @@
 import type { Db, Queryable, Row } from './db.js';
 import { audit } from './audit.js';
 import { invalid, notFound } from './errors.js';
+import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.js';
+import { customerIdsMatching, likePrefix, parseQuery } from './search.js';
 
 export const CASE_TYPES = ['FIBER_ASSURANCE', 'BILLING_REFUND', 'MNP_PORT_OUT', 'GENERAL'] as const;
 export const CASE_STATUSES = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] as const;
@@ -28,17 +30,23 @@ export async function updateCase(q: Queryable, id: string, p: { status?: string;
   return (await q.query('SELECT * FROM cases WHERE id=$1', [id])).rows[0]!;
 }
 
-export async function listCases(q: Queryable, f: { customerId?: string; status?: string; type?: string; limit?: number; offset?: number } = {}) {
-  const params: unknown[] = []; const where: string[] = [];
-  const p = (v: unknown) => `$${params.push(v)}`;
+export async function listCases(q: Queryable, f: { customerId?: string; status?: string; type?: string; q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
   if (f.customerId) where.push(`k.customer_id = ${p(f.customerId)}`);
   if (f.status === 'ACTIVE') where.push(`k.status IN ('OPEN','IN_PROGRESS')`); else if (f.status) where.push(`k.status = ${p(f.status)}`);
   if (f.type) where.push(`k.type = ${p(f.type)}`);
-  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = (await q.query(`SELECT count(*) AS n FROM cases k ${w}`, params)).rows[0]!.n;
-  const lim = p(Math.min(f.limit ?? 25, 100)); const off = p(f.offset ?? 0);
-  const items = (await q.query(`SELECT k.*, c.display_name AS customer_name FROM cases k JOIN customers c ON c.id = k.customer_id ${w} ORDER BY k.created_at DESC LIMIT ${lim} OFFSET ${off}`, params)).rows;
-  return { items, total };
+  // Search: a case number prefix, otherwise whoever the customer is.
+  const text = (f.q ?? '').trim();
+  if (/^[a-z]{1,6}-\d/i.test(text) || /^case/i.test(text)) where.push(`k.number LIKE ${p(likePrefix(text.toUpperCase()))}`);
+  else { const ids = customerIdsMatching(await parseQuery(q, text), p); if (ids) where.push(`k.customer_id IN (${ids})`); }
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(k.created_at, k.id) < (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(
+    `SELECT k.*, k.created_at::text AS cursor_ts, c.display_name AS customer_name FROM cases k JOIN customers c ON c.id = k.customer_id
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY k.created_at DESC, k.id DESC LIMIT ${p(limit + 1)}`, params)).rows;
+  return tsPage(rows as Array<Row & { id: string; cursorTs: string }>, limit);
 }
 
 export const getCase = async (q: Queryable, id: string): Promise<Row> => {

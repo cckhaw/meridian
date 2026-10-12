@@ -16,7 +16,9 @@ Every level can be added, renamed, moved, reordered, retired and (when empty and
 
 ## Using the catalog page
 
-An outline on the left (structure down to offers, with search), the selected item on the right. Choosing a network type, category or group lists what it contains; choosing an offer shows what’s included, pricing and rules. The selection is in the address (`/catalog?node=…`), so items can be linked to and Back works. On a phone it is one screen at a time with a Back button. Actions live behind a single **⋯** menu per item; the pencil (**Edit offer**) opens the full offer form.
+The catalog page works like Files: the folder you are in on the left (one level at a time, a page of 50 with **Show more**), the thing you picked on the right. Tap a network type, category or group to go inside; the path above the list (**Catalog › Mobile › Postpaid**) is the way back out. Choose an offer to see it on the right in sections: **Included** (its line items), **Pricing**, **Rules** (dependencies, channels, markets, fulfilment) and **Sales** once it has subscribers.
+
+Search is on the server and covers the whole catalog by words in the name or code (`100gb fam` finds *Family 100GB*); each result shows where it lives, and opening it takes you there. Nothing loads the whole tree, so the page stays quick with tens of thousands of offers (see [Working with millions of records](SCALE.md)). The selection is in the address (`/catalog?node=…`), so items can be linked to and Back works. On a phone it is one screen at a time with a Back button. Actions live behind a single **⋯** menu per item; **Edit offer** opens the full offer form, whose pickers (group, prerequisites, exclusions) are searches rather than long drop-downs.
 
 ## Offer line items
 

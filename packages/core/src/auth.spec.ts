@@ -183,7 +183,7 @@ describe('database users', () => {
     const { user } = await createUser(db, 'r', { username: 'portal.cust', displayName: 'Portal', roles: ['self-serve'], customerId: customer.id });
     expect(user.customerId).toBe(customer.id);
     await expect(createUser(db, 'r', { username: 'portal.two', displayName: 'Portal 2', roles: ['self-serve'], customerId: customer.id })).rejects.toThrow(/already has a portal login/);
-    expect((await listUsers(db)).some((u: { username: string }) => u.username === 'portal.cust')).toBe(true);
+    expect((await listUsers(db)).items.some((u: { username: string }) => u.username === 'portal.cust')).toBe(true);
   });
 });
 

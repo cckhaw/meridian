@@ -1,16 +1,20 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, LargeTitle, SectionTitle, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Field, Input, LargeTitle, LoadMore, SearchField, SectionTitle, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { api, post, useAction, useApi } from '@/lib/api';
+import { api, post, useAction, useDebounced, usePaged } from '@/lib/api';
 import { label, money } from '@/lib/format';
 
 interface Offer { id: string; name: string; kind: string; group: string; monthlyMinor: number; upfrontMinor: number; contractMonths: number; requiresText: string[] }
 
 export default function NewAssisted() {
   const router = useRouter();
-  const cat = useApi('/assisted/catalog');
+  const [offerQ, setOfferQ] = useState('');
+  const offerTerm = useDebounced(offerQ.trim());
+  const cat = usePaged<Offer>(`/assisted/catalog?limit=24&q=${encodeURIComponent(offerTerm)}`);
+  const [names, setNames] = useState<Record<string, string>>({});
+  useEffect(() => { setNames((n) => ({ ...n, ...Object.fromEntries(cat.items.map((o) => [o.id, o.name])) })); }, [cat.items]);
   const [basket, setBasket] = useState<Record<string, number>>({});
   const [q, setQ] = useState('');
   const [found, setFound] = useState<any[]>([]);
@@ -32,7 +36,7 @@ export default function NewAssisted() {
     return () => { live = false; };
   }, [lines, customer]);
 
-  const offers: Offer[] = cat.data?.offers ?? [];
+  const offers: Offer[] = cat.items;
   const groups = useMemo(() => { const m = new Map<string, Offer[]>(); for (const o of offers) m.set(o.group, [...(m.get(o.group) ?? []), o]); return [...m]; }, [offers]);
   const start = async () => {
     const r = await act.run(() => post('/assisted/applications', { lines, customerId: customer?.id }));
@@ -56,8 +60,10 @@ export default function NewAssisted() {
         )}
       </Card>
 
-      <SectionTitle>What are they buying?</SectionTitle>
-      {cat.loading && !cat.data && <Spinner />}
+      <SectionTitle action={<SearchField label="Search offers" placeholder="Search offers" value={offerQ} onChange={setOfferQ} className="!w-56" />}>What are they buying?</SectionTitle>
+      {Object.keys(basket).length > 0 && <p className="mb-3 text-subhead text-label2">Selected: {Object.keys(basket).map((id) => names[id] ?? id).join(' + ')}</p>}
+      {cat.loading && cat.items.length === 0 && <Spinner />}
+      {!cat.loading && cat.items.length === 0 && !cat.error && <p className="rounded-card bg-surface px-4 py-8 text-center text-subhead text-label2 shadow-card">{offerTerm ? 'No offers match.' : 'No offers are available for this channel.'}</p>}
       {cat.error && <Alert>{cat.error}</Alert>}
       <div className="space-y-4">
         {groups.map(([g, list]) => (
@@ -77,6 +83,7 @@ export default function NewAssisted() {
           </fieldset>
         ))}
       </div>
+      {cat.items.length > 0 && <LoadMore shown={cat.items.length} hasMore={cat.hasMore} loading={cat.loadingMore} onMore={cat.loadMore} noun="offers" />}
 
       {quote && (
         <Card className="mt-5">

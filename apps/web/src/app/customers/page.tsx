@@ -1,56 +1,60 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, Segmented, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, SearchField, Segmented, Select, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { post, useAction, useApi } from '@/lib/api';
+import { post, useAction, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { label } from '@/lib/format';
 
 const SEGMENTS = [{ value: '', label: 'All' }, { value: 'CONSUMER', label: 'Consumer' }, { value: 'FAMILY', label: 'Family' }, { value: 'ENTERPRISE', label: 'Enterprise' }, { value: 'IOT_ENTERPRISE', label: 'IoT' }];
 
+const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join('') || '?';
+
 export default function Customers() {
   const { can } = useAuth();
   const [q, setQ] = useState('');
   const [segment, setSegment] = useState('');
-  const [offset, setOffset] = useState(0);
   const [adding, setAdding] = useState(false);
-  const { data, error, loading } = useApi(`/customers?limit=25&offset=${offset}&q=${encodeURIComponent(q)}&segment=${segment}`);
+  const term = useDebounced(q.trim());
+  // Always a bounded page: the newest customers, or the best matches for what was typed. Never the whole table.
+  const list = usePaged(`/customers?limit=25&q=${encodeURIComponent(term)}&segment=${segment}`);
   return (
     <>
-      <LargeTitle subtitle="Search by name, phone, email or mobile number">Customers</LargeTitle>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Input type="search" aria-label="Search customers" placeholder="Search…" value={q} onChange={(e) => { setQ(e.target.value); setOffset(0); }} className="sm:max-w-sm" />
-        <Segmented label="Segment" value={segment} options={SEGMENTS} onChange={(v) => { setSegment(v); setOffset(0); }} />
-        {can('customer:create') && <Button className="sm:ml-auto" onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : 'New customer'}</Button>}
+      <LargeTitle subtitle="Find a customer by name, mobile number, e-mail or ID. Results appear as you type.">Customers</LargeTitle>
+      <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center">
+        <SearchField label="Search customers" placeholder="Name, +65 mobile number, e-mail…" value={q} onChange={setQ} className="md:max-w-md md:flex-1" />
+        <Segmented label="Segment" value={segment} options={SEGMENTS} onChange={setSegment} />
+        {can('customer:create') && <Button className="md:ml-auto" onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : 'New customer'}</Button>}
       </div>
       {adding && <NewCustomer onDone={() => setAdding(false)} />}
-      {error && <Alert>{error}</Alert>}
-      {loading && !data && <Spinner />}
-      {data && (data.items.length === 0 ? <Empty>No customers match.</Empty> : (
+      {list.error && <Alert>{list.error}</Alert>}
+      {list.loading && list.items.length === 0 && <Spinner />}
+      {!list.loading && list.items.length === 0 && !list.error && <Empty>{term ? `No customers match “${term}”.` : 'No customers yet.'}</Empty>}
+      {list.items.length > 0 && (
         <>
-          <TableWrap>
-            <thead><tr><Th>Name</Th><Th>Segment</Th><Th>Contact</Th><Th right>Services</Th><Th right>Sub-accounts</Th></tr></thead>
-            <tbody>
-              {data.items.map((c: any) => (
-                <tr key={c.id}>
-                  <Td><Link className="font-medium text-accent" href={`/customers/${c.id}`}>{c.displayName}</Link></Td>
-                  <Td><Badge>{label(c.segment)}</Badge></Td>
-                  <Td className="text-label2">{c.email ?? c.phone ?? '–'}</Td>
-                  <Td right>{c.serviceCount.toLocaleString()}</Td><Td right>{c.childCount || '–'}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </TableWrap>
-          <div className="mt-4 flex items-center justify-between text-subhead text-label2">
-            <span>{offset + 1}–{Math.min(offset + 25, data.total)} of {data.total.toLocaleString()}</span>
-            <span className="flex gap-2">
-              <Button variant="secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous</Button>
-              <Button variant="secondary" disabled={offset + 25 >= data.total} onClick={() => setOffset(offset + 25)}>Next</Button>
-            </span>
-          </div>
+          <h2 className="mb-2 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">{term ? 'Best matches' : 'Recently added'}</h2>
+          <ul className="divide-y divide-separator overflow-hidden rounded-card bg-surface shadow-card">
+            {list.items.map((c: any) => (
+              <li key={c.id}>
+                <Link href={`/customers/${c.id}`} className="flex min-h-[64px] items-center gap-3 px-4 py-2.5 hover:bg-surface2 focus-visible:bg-surface2 focus-visible:outline-none">
+                  <span aria-hidden className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-subhead font-semibold ${c.segment === 'ENTERPRISE' || c.segment === 'IOT_ENTERPRISE' ? 'bg-accent text-accent-fg' : 'bg-accent/15 text-accent'}`}>{initials(c.displayName)}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{c.displayName}</span>
+                    <span className="block truncate text-footnote text-label2">{label(c.segment)} · {c.phone ?? c.email ?? 'no contact on file'}{c.kycStatus === 'VERIFIED' ? ' · ID verified' : ''}</span>
+                  </span>
+                  <span className="hidden shrink-0 text-right text-footnote text-label2 sm:block">
+                    <span className="block">{Number(c.serviceCount).toLocaleString()} service{Number(c.serviceCount) === 1 ? '' : 's'}</span>
+                    {Number(c.childCount) > 0 && <span className="block">{Number(c.childCount).toLocaleString()} sub-account{Number(c.childCount) === 1 ? '' : 's'}</span>}
+                  </span>
+                  <span aria-hidden className="text-label2">›</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="customers" />
         </>
-      ))}
+      )}
     </>
   );
 }

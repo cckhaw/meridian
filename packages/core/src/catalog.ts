@@ -3,6 +3,7 @@ import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { quoteEtc } from './etc.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { validateLineItem, validateOffer, validateParent } from './hierarchy.js';
 
 export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
@@ -361,4 +362,144 @@ export async function etcQuoteForOffer(q: Queryable, offerId: string, contractSt
   const o = await getOffer(q, offerId);
   if (!o.contract) throw invalid('offer has no contract');
   return quoteEtc({ offerId, contract: o.contract as ContractTerms, contractStart, terminationDate, monthlyRecurring: monthlyFee(o)?.amount });
+}
+
+
+// ───────────────────────── lazy reads for the catalog browser ─────────────────────────
+// The browser never loads the tree. It asks for one level at a time (browse), searches by words (search), and opens one node (detail).
+// Each is bounded and uses an index: children by (parent_id, sort_order, name), search by the full-text index, counts by parent_id.
+
+export type BrowseNode = CatalogNode & { sortOrder: number; offerCount: number; activeOfferCount: number; lineItemCount: number };
+export interface TrailStep { id: string; name: string; level: CatalogNodeLevel }
+
+/** Offers beneath each node, counted level by level through `parent_id` (index-only), so a page of 50 categories costs one query. */
+async function decorate(q: Queryable, nodes: Array<CatalogNode & { sortOrder: number }>): Promise<BrowseNode[]> {
+  const counts = new Map<string, { n: number; a: number }>();
+  const items = new Map<string, number>();
+  const byLevel = (l: string) => nodes.filter((n) => n.level === l).map((n) => n.id);
+  const add = (rows: Row[]) => { for (const r of rows) counts.set(r.k, { n: Number(r.n), a: Number(r.a) }); };
+  const groups = byLevel('GROUP'), cats = byLevel('CATEGORY'), nets = byLevel('NETWORK_TYPE'), offers = byLevel('OFFER');
+  if (groups.length) add((await q.query(`SELECT o.parent_id AS k, count(*) AS n, count(*) FILTER (WHERE o.status='ACTIVE') AS a FROM catalog_nodes o WHERE o.level='OFFER' AND o.parent_id = ANY($1) GROUP BY o.parent_id`, [groups])).rows);
+  if (cats.length) add((await q.query(`SELECT g.parent_id AS k, count(*) AS n, count(*) FILTER (WHERE o.status='ACTIVE') AS a FROM catalog_nodes g JOIN catalog_nodes o ON o.parent_id = g.id AND o.level='OFFER' WHERE g.parent_id = ANY($1) GROUP BY g.parent_id`, [cats])).rows);
+  if (nets.length) add((await q.query(`SELECT c.parent_id AS k, count(*) AS n, count(*) FILTER (WHERE o.status='ACTIVE') AS a FROM catalog_nodes c JOIN catalog_nodes g ON g.parent_id = c.id JOIN catalog_nodes o ON o.parent_id = g.id AND o.level='OFFER' WHERE c.parent_id = ANY($1) GROUP BY c.parent_id`, [nets])).rows);
+  if (offers.length) for (const r of (await q.query(`SELECT parent_id AS k, count(*) AS n FROM catalog_nodes WHERE level='LINE_ITEM' AND parent_id = ANY($1) GROUP BY parent_id`, [offers])).rows) items.set(r.k, Number(r.n));
+  return nodes.map((n) => ({ ...n, offerCount: counts.get(n.id)?.n ?? 0, activeOfferCount: counts.get(n.id)?.a ?? 0, lineItemCount: items.get(n.id) ?? 0 }));
+}
+
+/** One level of the catalog (null parent = the network types), a page at a time. Line items are not structure; they come with their offer. */
+export async function browseChildren(q: Queryable, f: { parentId?: string | null; activeOnly?: boolean; limit?: number; cursor?: string } = {}): Promise<Page<BrowseNode>> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where = [f.parentId ? `parent_id = ${p(f.parentId)}` : 'parent_id IS NULL', `level <> 'LINE_ITEM'`];
+  if (f.activeOnly) where.push(`status = 'ACTIVE'`);
+  const cur = decodeCursor(f.cursor, 3);
+  if (cur) where.push(`(sort_order, name, id) > (${p(cur[0])}::int, ${p(cur[1])}::text, ${p(cur[2])}::text)`);
+  const rows = (await q.query(`SELECT * FROM catalog_nodes WHERE ${where.join(' AND ')} ORDER BY sort_order, name, id LIMIT ${p(limit + 1)}`, params)).rows.map(toNode);
+  const page = toPage(rows, limit, (n) => [n.sortOrder, n.name, n.id]);
+  return { items: await decorate(q, page.items), nextCursor: page.nextCursor };
+}
+
+export interface Ancestor extends TrailStep { status: string }
+/** Ancestors of each node, root first, found by following `parent_id` (so catalogs whose stored paths are stale still resolve), in one query. */
+export async function ancestorsFor(q: Queryable, ids: string[]): Promise<Map<string, Ancestor[]>> {
+  const out = new Map<string, Ancestor[]>(ids.map((i) => [i, []]));
+  if (!ids.length) return out;
+  const rows = (await q.query(
+    `WITH RECURSIVE up AS (
+       SELECT id AS leaf, parent_id AS pid, 1 AS depth FROM catalog_nodes WHERE id = ANY($1) AND parent_id IS NOT NULL
+       UNION ALL
+       SELECT up.leaf, p.parent_id, up.depth + 1 FROM up JOIN catalog_nodes p ON p.id = up.pid WHERE p.parent_id IS NOT NULL AND up.depth < 8
+     ) SELECT up.leaf, n.id, n.name, n.level, n.status, up.depth FROM up JOIN catalog_nodes n ON n.id = up.pid ORDER BY up.leaf, up.depth DESC`, [ids])).rows;
+  for (const r of rows) out.get(r.leaf)!.push({ id: r.id, name: r.name, level: r.level, status: r.status });
+  return out;
+}
+
+async function trailsFor(q: Queryable, nodes: Array<{ id: string }>): Promise<Map<string, TrailStep[]>> {
+  const a = await ancestorsFor(q, nodes.map((n) => n.id));
+  return new Map([...a].map(([k, v]) => [k, v.map(({ status: _s, ...t }) => t)]));
+}
+
+/** Word search over names and codes ("100gb fam" finds "Family 100GB"), returning where each result lives. Never `%term%`. */
+export async function searchNodes(q: Queryable, f: { q: string; level?: string; activeOnly?: boolean; limit?: number; cursor?: string }): Promise<Page<BrowseNode & { trail: TrailStep[] }>> {
+  const limit = pageSize(f.limit, 30, 100);
+  const words = f.q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 5);
+  const levels = (f.level ?? '').split(',').filter(Boolean); // e.g. "GROUP,CATEGORY"
+  if (!words.length && !levels.length) return { items: [], nextCursor: null };
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
+  if (words.length) where.push(`(to_tsvector('simple', name || ' ' || code) @@ to_tsquery('simple', ${p(words.map((w) => `${w}:*`).join(' & '))}) OR id = ${p(f.q.trim().toLowerCase())})`);
+  if (levels.length) where.push(`level = ANY(${p(levels)})`); // with no words this lists that level in path order, for pickers
+  // Sales-only users never see anything that sits under a node which is not live.
+  if (f.activeOnly) where.push(`status = 'ACTIVE' AND NOT EXISTS (
+    WITH RECURSIVE up(id, parent_id, status) AS (
+      SELECT a.id, a.parent_id, a.status FROM catalog_nodes a WHERE a.id = catalog_nodes.parent_id
+      UNION ALL SELECT a.id, a.parent_id, a.status FROM catalog_nodes a JOIN up ON a.id = up.parent_id)
+    SELECT 1 FROM up WHERE status <> 'ACTIVE')`);
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(path, id) > (${p(cur[0])}::text, ${p(cur[1])}::text)`);
+  const rows = (await q.query(`SELECT * FROM catalog_nodes WHERE ${where.join(' AND ')} ORDER BY path, id LIMIT ${p(limit + 1)}`, params)).rows.map(toNode);
+  const page = toPage(rows, limit, (n) => [n.path, n.id]);
+  const [dec, trails] = await Promise.all([decorate(q, page.items), trailsFor(q, page.items)]);
+  return { items: dec.map((n) => ({ ...n, trail: trails.get(n.id) ?? [] })), nextCursor: page.nextCursor };
+}
+
+/** The same search for sellable offers, as full nodes (price, contract, rules) — what a sales screen needs to list and add them. */
+export async function pageOffers(q: Queryable, f: { q?: string; status?: string; market?: string; channel?: string; kind?: string; notKind?: string; limit?: number; cursor?: string }): Promise<Page<CatalogNode>> {
+  const limit = pageSize(f.limit, 24, 100);
+  const { params, p } = sqlBuilder();
+  const where = [`level = 'OFFER'`];
+  if (f.status) where.push(`status = ${p(f.status)}`);
+  if (f.kind) where.push(`kind = ANY(${p(f.kind.split(',').filter(Boolean))})`); // comma-separated kinds
+  if (f.notKind) where.push(`kind <> ALL(${p(f.notKind.split(',').filter(Boolean))})`);
+  if (f.market) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
+  if (f.channel) where.push(`(jsonb_array_length(COALESCE(data->'salesChannels','[]'::jsonb)) = 0 OR data->'salesChannels' ? ${p(f.channel)})`);
+  const words = (f.q ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 5);
+  if (words.length) where.push(`to_tsvector('simple', name || ' ' || code) @@ to_tsquery('simple', ${p(words.map((w) => `${w}:*`).join(' & '))})`);
+  const cur = decodeCursor(f.cursor, 3);
+  if (cur) where.push(`(sort_order, name, id) > (${p(cur[0])}::int, ${p(cur[1])}::text, ${p(cur[2])}::text)`);
+  const rows = (await q.query(`SELECT * FROM catalog_nodes WHERE ${where.join(' AND ')} ORDER BY sort_order, name, id LIMIT ${p(limit + 1)}`, params)).rows.map(toNode);
+  return toPage(rows, limit, (n) => [n.sortOrder, n.name, n.id]);
+}
+
+export interface NodeDetail {
+  node: BrowseNode;
+  trail: TrailStep[];
+  lineItems: CatalogNode[];
+  requires: Array<{ id: string; name: string; level: CatalogNodeLevel } | { id: string; missing: true }>;
+  excludes: Array<{ id: string; name: string; level: CatalogNodeLevel } | { id: string; missing: true }>;
+  /** Offers only. Counted up to 100,000 so opening a best-seller never scans millions of rows; `capped` says the real number is higher. */
+  usage?: { services: number; orders: number; capped: boolean };
+}
+
+const CAP = 100_000;
+export async function nodeDetail(q: Queryable, id: string, opts: { activeOnly?: boolean } = {}): Promise<NodeDetail> {
+  const raw = (await q.query('SELECT * FROM catalog_nodes WHERE id=$1', [id])).rows[0];
+  if (!raw) throw notFound('catalog node', id);
+  const base = toNode(raw);
+  const [node] = await decorate(q, [base]);
+  const chain = (await ancestorsFor(q, [id])).get(id) ?? [];
+  const trail: TrailStep[] = chain.map(({ status: _s, ...t }) => t);
+  if (opts.activeOnly && (base.status !== 'ACTIVE' || chain.some((a) => a.status !== 'ACTIVE'))) throw notFound('catalog node', id);
+  const out: NodeDetail = { node: node!, trail, lineItems: [], requires: [], excludes: [] };
+  if (base.level === 'OFFER') {
+    out.lineItems = (await q.query(`SELECT * FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM'${opts.activeOnly ? ` AND status='ACTIVE'` : ''} ORDER BY sort_order, name, id LIMIT 200`, [id])).rows.map(toNode);
+    const o = base as OfferNode;
+    const refIds = [...new Set([...o.requires, ...o.excludes])];
+    const known = new Map<string, TrailStep>((refIds.length ? (await q.query('SELECT id, name, level FROM catalog_nodes WHERE id = ANY($1)', [refIds])).rows : []).map((r) => [r.id as string, { id: r.id, name: r.name, level: r.level }]));
+    const ref = (rid: string) => known.get(rid) ?? { id: rid, missing: true as const };
+    out.requires = o.requires.map(ref); out.excludes = o.excludes.map(ref);
+    const cnt = async (t: string) => Number((await q.query(`SELECT count(*) AS n FROM (SELECT 1 FROM ${t} WHERE offer_id=$1 LIMIT ${CAP + 1}) x`, [id])).rows[0]!.n);
+    const [services, orders] = await Promise.all([cnt('services'), cnt('order_lines')]);
+    out.usage = { services: Math.min(services, CAP), orders: Math.min(orders, CAP), capped: services > CAP || orders > CAP };
+  }
+  return out;
+}
+
+/** Totals for the catalog overview, in one grouped pass over the (small) level index. */
+export async function catalogSummary(q: Queryable, opts: { activeOnly?: boolean } = {}): Promise<{ levels: Record<string, number>; offersLive: number; offers: number }> {
+  const rows = (await q.query(`SELECT level, count(*) AS n, count(*) FILTER (WHERE status='ACTIVE') AS a FROM catalog_nodes ${opts.activeOnly ? `WHERE status='ACTIVE'` : ''} GROUP BY level`)).rows;
+  const levels: Record<string, number> = {};
+  for (const r of rows) levels[r.level] = Number(r.n);
+  const offer = rows.find((r) => r.level === 'OFFER');
+  return { levels, offers: Number(offer?.n ?? 0), offersLive: Number(offer?.a ?? 0) };
 }

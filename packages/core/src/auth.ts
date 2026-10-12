@@ -3,6 +3,8 @@ import { audit } from './audit.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
+import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
+import { likePrefix } from './search.js';
 import { creditLimitOf, homeOf, isRoleId, ROLES, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type Permission, type RoleId, type Scope } from './rbac.js';
 
 // ───────────────────────── configuration ─────────────────────────
@@ -251,8 +253,17 @@ export async function createUser(db: Db, actor: string, i: NewUser): Promise<{ u
   }
 }
 
-export async function listUsers(q: Queryable) {
-  return (await q.query(`SELECT * FROM users WHERE NOT is_superuser ORDER BY lower(username)`)).rows.map(adminView);
+export async function listUsers(q: Queryable, f: { q?: string; limit?: number; cursor?: string } = {}): Promise<Page<ReturnType<typeof adminView>>> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where = ['NOT is_superuser'];
+  const text = (f.q ?? '').trim().toLowerCase();
+  if (text) where.push(`(lower(username) LIKE ${p(likePrefix(text))} OR lower(display_name) LIKE ${p(likePrefix(text))})`);
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(lower(username), id) > (${p(cur[0])}::text, ${p(cur[1])}::uuid)`);
+  const rows = (await q.query(`SELECT *, lower(username) AS cursor_u FROM users WHERE ${where.join(' AND ')} ORDER BY lower(username), id LIMIT ${p(limit + 1)}`, params)).rows;
+  const page = toPage(rows, limit, (r) => [r.cursorU as string, r.id as string]);
+  return { items: page.items.map((r) => adminView(r)), nextCursor: page.nextCursor };
 }
 
 export async function updateUser(db: Db, actor: string, id: string, p: { displayName?: string; email?: string; roles?: string[]; status?: 'ACTIVE' | 'DISABLED'; storeId?: string | null; dealerId?: string | null }) {
