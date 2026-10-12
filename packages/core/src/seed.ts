@@ -47,6 +47,26 @@ const TREE = [
     { id: 'entertainment', name: 'Entertainment', groups: ['video'] }, { id: 'goods', name: 'Physical goods', groups: ['electronics', 'appliances'] }] },
 ] as const;
 
+type ItemSeed = { name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string };
+const PLAN: ItemSeed[] = [
+  { name: '5G SIM card', itemType: 'SIM', quantity: 1, unit: 'SIM' },
+  { name: '5G data', itemType: 'DATA', quantity: 100, unit: 'GB', description: 'Full speed, then 1 Mbps' },
+  { name: 'Local calls', itemType: 'VOICE', unlimited: true },
+  { name: 'Local SMS', itemType: 'SMS', unlimited: true },
+];
+/** What each starter offer includes. Descriptive only (no SKUs), so stock behaviour stays with the offers' own fulfilment lists. */
+const LINE_ITEMS: Record<string, ItemSeed[]> = {
+  'plan-sim-5g': PLAN,
+  'plan-phone-12': [...PLAN, { name: 'Phone X1 128GB', itemType: 'DEVICE', quantity: 1, unit: 'unit' }],
+  'plan-phone-24': [...PLAN, { name: 'Phone X1 128GB', itemType: 'DEVICE', quantity: 1, unit: 'unit' }],
+  'plan-phone-36': [...PLAN, { name: 'Phone X1 128GB', itemType: 'DEVICE', quantity: 1, unit: 'unit' }],
+  'watch-lte': [{ name: 'Smart Watch LTE', itemType: 'DEVICE', quantity: 1, unit: 'unit' }, { name: 'Shared mobile number', itemType: 'SERVICE' }],
+  'fiber-1g': [{ name: 'Home Fibre 1 Gbps line', itemType: 'SERVICE' }, { name: 'ONT + Wi-Fi router', itemType: 'DEVICE', quantity: 1, unit: 'unit' }, { name: 'Professional installation', itemType: 'SERVICE' }],
+  'device-care': [{ name: 'Accidental damage cover', itemType: 'SERVICE', description: 'Repair or replacement of the covered device' }],
+  'vas-roaming': [{ name: 'Roaming data in Asia', itemType: 'DATA', quantity: 5, unit: 'GB' }],
+  'netflix-premium': [{ name: 'Netflix Premium', itemType: 'CONTENT', description: '4 screens, Ultra HD' }],
+};
+
 /** Catalog + stock. Idempotent: does nothing if the catalog already has nodes. */
 export async function seedReference(db: Db): Promise<void> {
   if ((await db.query('SELECT 1 FROM catalog_nodes LIMIT 1')).rows.length) return;
@@ -67,6 +87,12 @@ export async function seedReference(db: Db): Promise<void> {
       const gp = groupParent.get(o.group)!;
       await createNode(q, { ...base, id: o.id, level: 'OFFER', code: o.id, name: o.name, path: `${gp}/${o.id}`, parentId: `grp-${o.group}`, kind: o.kind, prices: o.prices,
         contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode, description: o.description, characteristics: {}, requires: o.requires ?? [], excludes: o.excludes ?? [] } as never);
+    }
+    for (const [offerId, items] of Object.entries(LINE_ITEMS)) {
+      for (const [i, it] of items.entries()) {
+        await createNode(q, { ...base, id: `${offerId}-i${i + 1}`, level: 'LINE_ITEM', code: `${offerId}-i${i + 1}`, name: it.name, path: '', parentId: offerId, itemType: it.itemType, description: it.description,
+          quantity: it.quantity, unit: it.unit, unlimited: it.unlimited, markets: [] } as never);
+      }
     }
     const stock: Array<[string, string, number]> = [
       ['WH-MAIN', 'PHONE-X1-128', 200], ['WH-MAIN', 'WATCH-L1', 100], ['WH-MAIN', 'ONT-ROUTER', 500], ['WH-MAIN', 'TOASTER-T1', 50], ['WH-MAIN', 'FRIDGE-F1', 20],

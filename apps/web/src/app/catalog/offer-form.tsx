@@ -2,7 +2,7 @@
 import { Alert, Button, Card, Field, Input, Select, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { label, step, toInput, toMinor } from '@/lib/format';
@@ -64,6 +64,7 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
     return { ...blank(defaultMarket), parentId: parentId ?? '' };
   });
   const { run, busy, error } = useAction();
+  const createdId = useRef('');
   const all = useMemo(() => flatten(roots), [roots]);
   const groups = all.filter((n) => n.level === 'GROUP');
   const set = (k: keyof FormState) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
@@ -95,11 +96,13 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
         if (f.parentId && f.parentId !== source.parentId) await post(`/catalog/${offerId}/move`, { parentId: f.parentId });
       } else {
         const node = await post('/catalog', { level: 'OFFER', id: f.id || slug(f.name), parentId: f.parentId, markets: [f.market], kind: f.kind, prices, contract, characteristics: {}, ...common, status: 'DRAFT' });
+        createdId.current = node.id;
+        if (fromId) await post(`/catalog/${node.id}/line-items/copy-from`, { fromId }); // a new version keeps what the old one included
         if (f.status === 'ACTIVE') await patch(`/catalog/${node.id}`, { status: 'ACTIVE' });
       }
       return true;
     });
-    if (ok) router.push('/catalog');
+    if (ok) router.push(`/catalog?node=${encodeURIComponent(editing ? offerId! : createdId.current || f.parentId)}`);
   };
 
   const chosen = new Set([...f.requires, ...f.excludes, offerId ?? '']);
@@ -172,7 +175,7 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
           {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
           <div className="flex gap-2 sm:col-span-2">
             <Button type="submit" disabled={busy || !f.parentId || !f.name.trim()}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create offer'}</Button>
-            <Link href="/catalog" className="inline-flex min-h-tap items-center rounded-control px-5 text-body font-medium text-accent hover:bg-surface2">Cancel</Link>
+            <Link href={offerId ? `/catalog?node=${offerId}` : f.parentId ? `/catalog?node=${f.parentId}` : '/catalog'} className="inline-flex min-h-tap items-center rounded-control px-5 text-body font-medium text-accent hover:bg-surface2">Cancel</Link>
           </div>
         </form>
       </Card>

@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 interface Offer {
   id: string; name: string; kind: string; description?: string; group: string; monthlyMinor: number; upfrontMinor: number; contractMonths: number;
   requiresShipping: boolean; requiresText: string[]; excludes: string[];
+  includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
 }
 interface Quote { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number }>; upfrontMinor: number; monthlyMinor: number; violations: string[]; requiresShipping: boolean; taxName: string }
 
@@ -15,6 +16,9 @@ const TABS = [
   { value: 'all', label: 'All' }, { value: 'sim', label: 'SIM only' }, { value: 'device', label: 'SIM + device' }, { value: 'more', label: 'Add-ons & more' },
 ] as const;
 type Tab = (typeof TABS)[number]['value'];
+/** "100 GB" / "Unlimited" for allowances; "2 ×" for several units; nothing for a single device or SIM. */
+const amountOf = (i: Offer['includes'][number]) =>
+  i.unlimited ? 'Unlimited' : !i.quantity ? '' : ['unit', 'SIM'].includes(i.unit ?? '') ? (i.quantity > 1 ? `${i.quantity} ×` : '') : `${i.quantity.toLocaleString()}${i.unit ? ` ${i.unit}` : ''}`;
 const tabOf = (o: Offer): Tab => (o.kind === 'SIM_ONLY' ? 'sim' : o.kind === 'SIM_DEVICE' ? 'device' : 'more');
 const KIND_LABEL: Record<string, string> = { SIM_ONLY: 'SIM only', SIM_DEVICE: 'SIM + device', WEARABLE: 'Wearable', FIBER: 'Home fibre', VAS: 'Add-on', NON_TELCO_SUBSCRIPTION: 'Subscription', PHYSICAL_GOOD: 'Device', IOT_CONNECTIVITY: 'IoT' };
 
@@ -77,6 +81,14 @@ export default function Home() {
                 <Badge>{KIND_LABEL[o.kind] ?? o.kind}</Badge>
               </div>
               {o.description && <p className="mt-1 text-subhead text-label2">{o.description}</p>}
+              {o.includes?.length > 0 && (
+                <ul aria-label={`What ${o.name} includes`} className="mt-3 space-y-1 text-subhead">
+                  {o.includes.map((i, n) => (
+                    <li key={n} className="flex gap-2"><span aria-hidden className="text-success">✓</span>
+                      <span>{amountOf(i)} {i.name}</span></li>
+                  ))}
+                </ul>
+              )}
               <p className="mt-3 text-title2 font-bold tabular-nums">{o.monthlyMinor ? money(o.monthlyMinor) : money(o.upfrontMinor)}<span className="text-subhead font-normal text-label2">{o.monthlyMinor ? ' /month' : ' once'}</span></p>
               <p className="text-footnote text-label2">
                 {o.monthlyMinor && o.upfrontMinor ? `${money(o.upfrontMinor)} upfront · ` : ''}{o.contractMonths ? `${o.contractMonths}-month contract` : o.monthlyMinor ? 'No contract' : ''}

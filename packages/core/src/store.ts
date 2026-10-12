@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import type { OfferNode } from '@meridian/types';
+import type { LineItemNode, OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { checkDependencies, getOffer, listNodes, monthlyFee } from './catalog.js';
 import { MARKETS } from './config.js';
@@ -32,6 +32,8 @@ async function storeMarket(q: Queryable, customerId?: string | null): Promise<st
 export interface StoreOffer {
   id: string; name: string; kind: string; description?: string; group: string; path: string[];
   monthlyMinor: number; upfrontMinor: number; contractMonths: number; requiresShipping: boolean; requires: string[]; requiresText: string[]; excludes: string[];
+  /** What the offer includes (its active line items), in the operator's order. */
+  includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
 }
 
 export async function storeCatalog(q: Queryable, channel: StoreChannel): Promise<{ currency: string; offers: StoreOffer[] }> {
@@ -45,6 +47,8 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel): Promise
     return names;
   };
   const live = (n: { id: string; parentId?: string | null }) => chain(n) !== null;
+  const items = new Map<string, StoreOffer['includes']>();
+  for (const n of [...nodes].sort((a, b) => ((a as { sortOrder?: number }).sortOrder ?? 0) - ((b as { sortOrder?: number }).sortOrder ?? 0))) if (n.level === 'LINE_ITEM' && n.parentId) { const li = n as unknown as LineItemNode; items.set(n.parentId, [...(items.get(n.parentId) ?? []), { name: n.name, itemType: li.itemType, quantity: li.quantity, unit: li.unit, unlimited: li.unlimited || undefined, description: li.description }]); }
   const offers = (await listNodes(q, { status: 'ACTIVE', level: 'OFFER', channel, market: await storeMarket(q) }) as OfferNode[]).filter(live);
   return {
     currency: mk.currency,
@@ -56,7 +60,7 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel): Promise
       return {
         id: o.id, name: o.name, kind: o.kind, description: o.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
         monthlyMinor: fee ? split(fee.amount.amountMinor, fee.taxInclusive) : 0, upfrontMinor: up, contractMonths: o.contract?.termMonths ?? 0,
-        requiresShipping: !!o.fulfilment?.requiresShipping, requires: o.requires, excludes: o.excludes,
+        requiresShipping: !!o.fulfilment?.requiresShipping, requires: o.requires, excludes: o.excludes, includes: items.get(o.id) ?? [],
         requiresText: o.requires.map((id) => { const n = byId.get(id); return n ? (n.level === 'OFFER' ? n.name : `any ${n.name}`) : id; }),
       };
     }),

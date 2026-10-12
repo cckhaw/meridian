@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as core from '@meridian/core';
 import { DomainError, forbidden, getDb, type Db, type Permission, type SessionUser } from '@meridian/core';
-import { formatMoney, THEMES } from '@meridian/types';
+import { formatMoney, LINE_ITEM_TYPES, THEMES } from '@meridian/types';
 import { z, ZodError } from 'zod';
 import { assertCustomer, assertOrder } from './access';
 import { clearCookie, clientIp, readToken, sameOrigin, sessionCookie } from './session';
@@ -163,13 +163,19 @@ const offerFields = {
   partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
   requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]),
 };
+const lineItemFields = {
+  itemType: z.enum(LINE_ITEM_TYPES), description: z.string().max(300).optional(), quantity: z.number().int().min(1).max(1_000_000).optional(),
+  unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
+};
 const nodeInput = z.discriminatedUnion('level', [
+  z.object({ level: z.literal('LINE_ITEM'), id: z.string().max(70), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional(), ...lineItemFields }),
   z.object({ level: z.literal('NETWORK_TYPE'), id: z.string().max(60), name: z.string().min(1).max(100), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
   z.object({ level: z.literal('CATEGORY'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
   z.object({ level: z.literal('GROUP'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
   z.object({ level: z.literal('OFFER'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional(), markets: z.array(z.string().length(2)).default([]), ...offerFields }),
 ]);
 const nodePatch = z.object({
+  itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
   partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(),
@@ -198,6 +204,7 @@ patch('/catalog/:id', 'catalog:write', async ({ db, user, params, body }) => {
 post('/catalog/:id/move', 'catalog:write', ({ db, user, params, body }) => core.moveNode(db, params.id!, z.object({ parentId: z.string().nullable() }).parse(body).parentId, user.username));
 post('/catalog/:id/reorder', 'catalog:write', async ({ db, user, params, body }) => { await core.reorderNode(db, params.id!, z.object({ direction: z.enum(['up', 'down']) }).parse(body).direction, user.username); return { ok: true }; });
 route('DELETE', '/catalog/:id', 'catalog:write', async ({ db, user, params }) => { await core.deleteNode(db, params.id!, user.username); return { ok: true }; });
+post('/catalog/:id/line-items/copy-from', 'catalog:write', async ({ db, user, params, body }) => ({ copied: await core.copyLineItems(db, z.object({ fromId: z.string().max(80) }).parse(body).fromId, params.id!, user.username) }));
 get('/catalog/:id/etc', 'catalog:read', ({ db, params, query }) =>
   core.etcQuoteForOffer(db, params.id!, new Date(query.get('contractStart') ?? Date.now()), new Date(query.get('terminationDate') ?? Date.now())));
 

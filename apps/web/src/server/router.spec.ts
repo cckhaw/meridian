@@ -592,3 +592,31 @@ describe('store-front API, KYC review and assisted sales', () => {
     expect((await call('GET', '/auth/me', { cookie: a.cookie })).json.user.modules.map((m: any) => m.id)).toContain('assisted');
   });
 });
+
+describe('offer line items API', () => {
+  it('creates, edits, copies and removes line items; the tree nests them under their offer', async () => {
+    const c = await root();
+    const made = await call('POST', '/catalog', { cookie: c, body: { level: 'LINE_ITEM', id: 'plan-sim-5g-bonus', name: 'Bonus data', parentId: 'plan-sim-5g', itemType: 'DATA', quantity: 20, unit: 'GB' } });
+    expect(made.status).toBe(200);
+    expect(made.json).toMatchObject({ level: 'LINE_ITEM', itemType: 'DATA', quantity: 20 });
+    expect((await call('POST', '/catalog', { cookie: c, body: { level: 'LINE_ITEM', id: 'x1', name: 'Bad', parentId: 'grp-sim-only', itemType: 'DATA' } })).status).toBe(400);
+    expect((await call('POST', '/catalog', { cookie: c, body: { level: 'LINE_ITEM', id: 'x2', name: 'Bad', parentId: 'plan-sim-5g', itemType: 'TELEPORT' } })).status).toBe(400);
+    const patched = await call('PATCH', '/catalog/plan-sim-5g-bonus', { cookie: c, body: { unlimited: true, name: 'Unlimited bonus' } });
+    expect(patched.json).toMatchObject({ unlimited: true, name: 'Unlimited bonus' });
+    const tree = (await call('GET', '/catalog/tree', { cookie: c })).json.items;
+    const find = (ns: any[], id: string): any => { for (const n of ns) { if (n.id === id) return n; const r = find(n.children, id); if (r) return r; } };
+    expect(find(tree, 'plan-sim-5g').children.map((x: any) => x.id)).toContain('plan-sim-5g-bonus');
+
+    const agent = await staff(['call-center']);
+    expect((await call('PATCH', '/catalog/plan-sim-5g-bonus', { cookie: agent.cookie, body: { name: 'x' } })).status).toBe(403);
+    // a role that can only read the catalog never sees draft/retired line items
+    await call('PATCH', '/catalog/plan-sim-5g-bonus', { cookie: c, body: { status: 'RETIRED' } });
+    const seen = (await call('GET', '/catalog/tree', { cookie: agent.cookie })).json.items;
+    expect(find(seen, 'plan-sim-5g')?.children.map((x: any) => x.id) ?? []).not.toContain('plan-sim-5g-bonus');
+
+    await call('POST', '/catalog', { cookie: c, body: { level: 'OFFER', id: 'copy-target', name: 'Copy', parentId: 'grp-vas', markets: ['SG'], kind: 'VAS', prices: [{ type: 'RECURRING', amount: { amountMinor: 100, currency: 'SGD' }, periodMonths: 1, taxInclusive: true }], fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [] } } });
+    const copied = await call('POST', '/catalog/copy-target/line-items/copy-from', { cookie: c, body: { fromId: 'plan-sim-5g' } });
+    expect(copied.json.copied).toBeGreaterThan(0);
+    expect((await call('DELETE', '/catalog/plan-sim-5g-bonus', { cookie: c })).status).toBe(200);
+  });
+});

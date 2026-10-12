@@ -227,6 +227,9 @@ async function reserveStock(q: Queryable, o: Row) {
   const loc = o.storeId ?? MAIN_WAREHOUSE;
   for (const l of await orderLines(q, o.id)) {
     for (const sku of (l.offer.fulfilment?.inventorySkus ?? []) as string[]) await reserve(q, o.id, loc, sku, l.quantity);
+    // Line items that carry a SKU (e.g. the phone inside a bundle) reserve their own stock: item quantity x units ordered.
+    const items = (await q.query(`SELECT data->>'sku' AS sku, COALESCE((data->>'quantity')::int, 1) AS qty FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM' AND status='ACTIVE' AND data->>'sku' IS NOT NULL ORDER BY sort_order`, [l.offerId])).rows;
+    for (const it of items) await reserve(q, o.id, loc, it.sku as string, l.quantity * (it.qty as number));
   }
 }
 
