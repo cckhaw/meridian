@@ -7,7 +7,8 @@
   "types": "src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "migrate": "tsx src/migrate.ts"
+    "migrate": "tsx src/migrate.ts",
+    "embed": "node scripts-embed.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.36.4",

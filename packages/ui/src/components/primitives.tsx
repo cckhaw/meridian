@@ -36,10 +36,10 @@ export function Badge({ tone = 'neutral', children }: { tone?: 'neutral' | 'succ
 /** iOS-style segmented control (radiogroup semantics). */
 export function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; label: string }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-control bg-surface2 p-0.5">
+    <div role="radiogroup" aria-label={label} className="inline-flex max-w-full overflow-x-auto rounded-control bg-surface2 p-0.5">
       {options.map((o) => (
         <button key={o.value} role="radio" aria-checked={o.value === value} onClick={() => onChange(o.value)}
-          className={cx('min-h-[36px] rounded-[10px] px-4 text-subhead font-medium transition', focus, o.value === value ? 'bg-surface text-label shadow-card' : 'text-label2')}>
+          className={cx('min-h-[36px] shrink-0 whitespace-nowrap rounded-[10px] px-4 text-subhead font-medium transition', focus, o.value === value ? 'bg-surface text-label shadow-card' : 'text-label2')}>
           {o.label}
         </button>
       ))}

@@ -4,6 +4,7 @@
 | Path | Purpose |
 |---|---|
 | `packages/types` | Shared domain interfaces (catalog, customer, order, personas) |
+| `packages/core` | The working BSS: customers, catalog, orders, lifecycle, billing, ledger, cases, inventory, reports, seed. Runs on `pg` or embedded PGlite |
 | `packages/db` | Postgres migrations (partitioned, shard-aware) + Drizzle query schema |
 | `packages/ui` | Apple-HIG design system: tokens, Tailwind preset, responsive `AppShell`, theme |
 | `services/catalog-service` | NestJS + MongoDB, TMF620 product catalog, ETC calculator |
@@ -23,6 +24,25 @@
 - **Design system**: CSS-variable tokens (light default, `.dark` class), 44px minimum hit targets, safe-area insets, reduced-motion support.
   Breakpoints: phone <768 (bottom tab bar), tablet 768–1023 (drawer), desktop ≥1024 (sidebar).
 
+## How the working system fits together
+- `apps/web` route handlers (`src/server/router.ts`) validate input with zod and call `@meridian/core`; pages are client components over that API.
+- `@meridian/core` talks to one `Db` interface (`db.ts`): `pg` when `DATABASE_URL` is set, otherwise embedded Postgres (PGlite). Migrations in
+  `packages/db/migrations` are embedded into `migrations.generated.ts` (`pnpm --filter @meridian/db embed`) so bundles carry no loose SQL files.
+- Orders run as an in-process state machine inside one DB transaction (`orders.ts`): a decline or stock-out ends in FAILED with compensation
+  (refund, release) committed, never a half-written order. The Temporal workflow in `services/order-service` models the same states for a
+  deployment that wants durable timers and human-in-the-loop steps; it is not wired to the web app.
+- **Global identifiers**: `services` is sharded, so its unique index only holds per shard. MSISDNs and circuit ids are claimed in `identifier_registry`
+  in the same transaction. (A test caught this: two customers on different shards could otherwise hold the same number.)
+- **Ledger**: every business event posts one balanced journal (`ledger.ts`). `reconcile()` checks ledger vs invoices (AR) and vs payments (cash).
+  Revenue is recognised on payment for upfront items and on invoice for recurring/instalment items.
+- **Billing** is in arrears with a unique index on (account, period) so re-runs are no-ops; each account bills in its own transaction.
+- Catalog for the working app lives in Postgres (JSONB). `services/catalog-service` (Mongo) keeps the same model and now shares the ETC and
+  hierarchy rules from `@meridian/core`.
+
+## Known limitations
+No authentication or per-persona permissions; simulated payment gateway; tax is a flat rate per market; currencies assumed 2-decimal;
+cross-shard ownership transfer is rejected (needs the shard migration job); dev partitions cover shards 0-15 only.
+
 ## Not yet built (next slices)
-Customer 360 & cases, MNP, billing engine & invoice designer, SAP GL export, retail/quick-sale UI, reverse logistics,
-Kafka producers (activities are stubbed), auth/RBAC per persona, GraphQL gateway, Redis session layer, persistence of workflow definitions.
+Reverse logistics (returns/exchanges), WYSIWYG invoice designer, usage rating/charging, Kafka producers, auth/RBAC per persona,
+GraphQL gateway, Redis session layer, persistence of designer workflows, notifications.
