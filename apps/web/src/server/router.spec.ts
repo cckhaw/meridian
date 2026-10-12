@@ -444,3 +444,143 @@ describe('settings and branding', () => {
     expect(JSON.stringify(audit)).toContain('regional');
   });
 });
+
+describe('store-front API, KYC review and assisted sales', () => {
+  const png = () => {
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(64, 0); ihdr.writeUInt32BE(64, 4); ihdr[8] = 8; ihdr[9] = 6;
+    const len = Buffer.alloc(4); len.writeUInt32BE(13);
+    return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), len, Buffer.from('IHDR'), ihdr, Buffer.alloc(40)]).toString('base64');
+  };
+  const person = (id: string) => ({ fullName: 'Sam Lee', dateOfBirth: '1991-02-03', idType: 'NATIONAL_ID', idNumber: id, idExpiry: '2099-01-01', email: 'sam@example.com', phone: '+6598765432' });
+  const bearer = (key: string, token?: string) => ({ authorization: `Bearer ${key}`, ...(token ? { 'x-application-token': token } : {}) });
+  let key = '';
+
+  it('API keys are minted only by the super user and gate every store route', async () => {
+    const su = await root();
+    const admin = await staff(['admin']);
+    expect((await call('POST', '/settings/api-clients', { cookie: admin.cookie, body: { name: 'x' } })).status).toBe(403);
+    expect((await call('GET', '/store/catalog', { origin: null })).status).toBe(401);
+    expect((await call('GET', '/store/catalog', { origin: null, headers: bearer('mk_test_aaaaaaaaaa_' + 'x'.repeat(40)) })).status).toBe(401);
+    const made = await call('POST', '/settings/api-clients', { cookie: su, body: { name: 'External shop' } });
+    expect(made.status).toBe(201);
+    key = made.json.key;
+    expect(JSON.stringify((await call('GET', '/settings/store', { cookie: su })).json)).not.toContain(key.split('_').pop()!);
+    // browser-style cross-origin calls are not how this API is used, but a key works without an Origin header and a session cookie does not
+    const cat = await call('GET', '/store/catalog', { origin: null, headers: bearer(key) });
+    expect(cat.status).toBe(200);
+    expect(cat.json.offers.some((o: any) => o.id === 'plan-sim-5g')).toBe(true);
+    expect((await call('GET', '/store/catalog', { cookie: su, origin: null })).status).toBe(401); // a staff session is not an API key
+    const cfg = (await call('GET', '/store/config', { origin: null, headers: bearer(key) })).json;
+    expect(cfg.brand.name).toBeTruthy();
+    expect(JSON.stringify(cfg)).not.toMatch(/sk_|whsec_/);
+  });
+
+  it('a shopper signs up, passes KYC review and pays; prices come only from the server', async () => {
+    const su = await root();
+    const officer = await staff(['compliance']);
+    const created = await call('POST', '/store/applications', { origin: null, headers: bearer(key), body: { lines: [{ offerId: 'plan-sim-5g' }] } });
+    expect(created.status).toBe(201);
+    const { id, token } = created.json;
+    const H = bearer(key, token);
+    // the application is private to its key AND token
+    expect((await call('GET', `/store/applications/${id}`, { origin: null, headers: bearer(key) })).status).toBe(404);
+    expect((await call('GET', `/store/applications/${id}`, { origin: null, headers: bearer(key, 'nope') })).status).toBe(404);
+    // a client-supplied price is ignored (and unknown fields do not fail)
+    const patched = await call('PATCH', `/store/applications/${id}`, { origin: null, headers: H, body: { personal: person('S7654321Z'), address: { line1: '1 Main St', city: 'Singapore', postcode: '018989', country: 'SG' }, consent: { acceptedTerms: true, privacyAccepted: true, marketingOptIn: false } } });
+    expect(patched.status).toBe(200);
+    expect(patched.json.quote.upfrontMinor).toBe(1000);
+    expect(JSON.stringify(patched.json)).not.toContain('S7654321Z');
+    expect((await call('POST', `/store/applications/${id}/documents`, { origin: null, headers: H, body: { kind: 'ID_FRONT', dataBase64: Buffer.from('<svg/>').toString('base64') } })).status).toBe(400);
+    for (const kind of ['ID_FRONT', 'ID_BACK', 'SELFIE']) expect((await call('POST', `/store/applications/${id}/documents`, { origin: null, headers: H, body: { kind, dataBase64: png() } })).status, kind).toBe(200);
+    const submitted = await call('POST', `/store/applications/${id}/kyc`, { origin: null, headers: H });
+    expect(submitted.json.status).toBe('KYC_REVIEW');
+    expect((await call('POST', `/store/applications/${id}/checkout`, { origin: null, headers: H })).status).toBe(422); // not before approval
+
+    // review queue: only compliance (and the super user); sales roles cannot
+    const retail = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    expect((await call('GET', '/kyc/cases', { cookie: retail.cookie })).status).toBe(403);
+    const queue = await call('GET', '/kyc/cases?status=PENDING', { cookie: officer.cookie });
+    const kase = queue.json.items.find((c: any) => c.applicationId === id);
+    expect(kase).toBeTruthy();
+    const detail = await call('GET', `/kyc/cases/${kase.id}`, { cookie: officer.cookie });
+    expect(detail.json.idNumber).toBe('S7654321Z');
+    const img = await call('GET', `/kyc/documents/${detail.json.documents[0].id}`, { cookie: officer.cookie });
+    expect(img.headers.get('content-type')).toBe('image/png');
+    expect(img.headers.get('content-security-policy')).toContain('sandbox');
+    expect((await call('GET', `/kyc/documents/${detail.json.documents[0].id}`, { cookie: retail.cookie })).status).toBe(403);
+    expect((await call('POST', `/kyc/cases/${kase.id}/decision`, { cookie: officer.cookie, body: { decision: 'APPROVE' } })).status).toBe(200);
+    expect((await call('POST', `/kyc/cases/${kase.id}/decision`, { cookie: su, body: { decision: 'REJECT', reason: 'late' } })).status).toBe(409);
+
+    const co = await call('POST', `/store/applications/${id}/checkout`, { origin: null, headers: H, body: {} });
+    expect(co.status).toBe(200);
+    expect(co.json.payment).toMatchObject({ gateway: 'test', amountMinor: 1000, currency: expect.any(String) });
+    expect(co.json.application.order.state).toBe('PAYMENT_PENDING');
+    const paid = await call('POST', `/store/applications/${id}/payment/test`, { origin: null, headers: H, body: { outcome: 'succeed' } });
+    expect(paid.json.order.state).toBe('COMPLETED');
+    expect(paid.json.order.numbers[0]).toMatch(/^\+\d+/);
+  });
+
+  it('a signed Stripe webhook confirms payment; a forged one does not', async () => {
+    const core = await import('@meridian/core');
+    const env = { MERIDIAN_STRIPE_SECRET_KEY: 'sk_test_x', MERIDIAN_STRIPE_WEBHOOK_SECRET: 'whsec_routersecret', MERIDIAN_STRIPE_PUBLISHABLE_KEY: 'pk_test_x' };
+    Object.assign(process.env, env);
+    const su = await root();
+    const s = (await call('GET', '/settings/store', { cookie: su })).json.store;
+    expect((await call('POST', '/settings/store', { cookie: su, body: { ...s, gateways: { enabled: ['stripe'], default: 'stripe' } } })).status).toBe(200);
+    core.setGatewayFetch(async () => ({ ok: true, status: 200, json: async () => ({ id: 'pi_router_1', client_secret: 'pi_router_1_secret' }) }));
+    try {
+      const created = (await call('POST', '/store/applications', { origin: null, headers: bearer(key), body: { lines: [{ offerId: 'plan-sim-5g' }] } })).json;
+      const H = bearer(key, created.token);
+      await call('PATCH', `/store/applications/${created.id}`, { origin: null, headers: H, body: { personal: person('S1112223Q'), consent: { acceptedTerms: true, privacyAccepted: true, marketingOptIn: false } } });
+      for (const kind of ['ID_FRONT', 'ID_BACK', 'SELFIE']) await call('POST', `/store/applications/${created.id}/documents`, { origin: null, headers: H, body: { kind, dataBase64: png() } });
+      await call('POST', `/store/applications/${created.id}/kyc`, { origin: null, headers: H });
+      const kase = (await call('GET', '/kyc/cases?status=PENDING', { cookie: su })).json.items.find((c: any) => c.applicationId === created.id);
+      await call('POST', `/kyc/cases/${kase.id}/decision`, { cookie: su, body: { decision: 'APPROVE' } });
+      const co = await call('POST', `/store/applications/${created.id}/checkout`, { origin: null, headers: H, body: {} });
+      expect(co.json.payment).toMatchObject({ gateway: 'stripe', clientSecret: 'pi_router_1_secret', publicConfig: { publishableKey: 'pk_test_x' } });
+      expect((await call('POST', `/store/applications/${created.id}/payment/test`, { origin: null, headers: H, body: { outcome: 'succeed' } })).status).toBe(422); // the active intent is Stripe, so there is no test payment to confirm
+
+      const raw = JSON.stringify({ id: 'evt_router_1', type: 'payment_intent.succeeded', data: { object: { id: 'pi_router_1', amount: 1000, amount_received: 1000, currency: 'sgd' } } });
+      const forged = await call('POST', '/webhooks/gateway/stripe', { origin: null, raw, headers: { 'stripe-signature': core.stripeSignature(raw, 'whsec_wrong') } });
+      expect(forged.status).toBe(401);
+      expect((await call('POST', '/webhooks/gateway/stripe', { origin: null, raw })).status).toBe(401);
+      const ok = await call('POST', '/webhooks/gateway/stripe', { origin: null, raw, headers: { 'stripe-signature': core.stripeSignature(raw, 'whsec_routersecret') } });
+      expect(ok.status).toBe(200);
+      expect((await call('GET', `/store/applications/${created.id}`, { origin: null, headers: H })).json.order.state).toBe('COMPLETED');
+      const replay = await call('POST', '/webhooks/gateway/stripe', { origin: null, raw, headers: { 'stripe-signature': core.stripeSignature(raw, 'whsec_routersecret') } });
+      expect(replay.json.handled).toBe(false);
+      expect((await call('POST', '/webhooks/gateway/test', { origin: null, raw })).status).toBe(404);
+    } finally {
+      core.setGatewayFetch(null);
+      for (const k of Object.keys(env)) delete process.env[k];
+      await call('POST', '/settings/store', { cookie: su, body: { ...s } });
+    }
+  });
+
+  it('a shop assistant completes the sale with the customer present, within their own store', async () => {
+    const a = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    const other = await staff(['retail-store'], { storeId: 'STORE-SG-002' });
+    const created = await call('POST', '/assisted/applications', { cookie: a.cookie, body: { lines: [{ offerId: 'plan-sim-5g' }] } });
+    expect(created.status).toBe(201);
+    const id = created.json.id;
+    expect((await call('GET', `/assisted/applications/${id}`, { cookie: other.cookie })).status).toBe(404);
+    await call('PATCH', `/assisted/applications/${id}`, { cookie: a.cookie, body: { personal: person('S4445556H'), consent: { acceptedTerms: true, privacyAccepted: true, marketingOptIn: false } } });
+    expect((await call('POST', `/assisted/applications/${id}/kyc`, { cookie: a.cookie, body: { idSighted: true, faceMatches: false } })).status).toBe(422);
+    expect((await call('POST', `/assisted/applications/${id}/kyc`, { cookie: a.cookie, body: { idSighted: true, faceMatches: true } })).json.status).toBe('KYC_APPROVED');
+    // without the customer's authority the order cannot be placed
+    const noAuth = await call('POST', `/assisted/applications/${id}/checkout`, { cookie: a.cookie, body: { payment: { method: 'CASH', confirmed: true, reference: 'R-1' } } });
+    expect(noAuth.status).toBe(422);
+    expect(noAuth.json.error.message).toMatch(/authorise/);
+    expect((await call('PATCH', `/assisted/applications/${id}`, { cookie: a.cookie, body: { personal: person('S0000000A') } })).status).toBe(422); // identity is frozen once KYC is approved
+    await call('PATCH', `/assisted/applications/${id}`, { cookie: a.cookie, body: { consent: { acceptedTerms: true, privacyAccepted: true, marketingOptIn: false, authorisedAssistant: true } } }); // the customer authorises, last
+    const done = await call('POST', `/assisted/applications/${id}/checkout`, { cookie: a.cookie, body: { payment: { method: 'CASH', confirmed: true, reference: 'R-1' } } });
+    expect(done.status).toBe(200);
+    expect(done.json.order.state).toBe('COMPLETED');
+    const order = (await call('GET', `/orders/${done.json.order.id}`, { cookie: a.cookie })).json;
+    expect(order).toMatchObject({ channel: 'RETAIL_ASSISTED', storeId: 'STORE-SG-001', salespersonId: a.username });
+    // compliance officers and other roles cannot run assisted sales
+    const officer = await staff(['compliance']);
+    expect((await call('POST', '/assisted/applications', { cookie: officer.cookie, body: { lines: [{ offerId: 'plan-sim-5g' }] } })).status).toBe(403);
+    expect((await call('GET', '/auth/me', { cookie: a.cookie })).json.user.modules.map((m: any) => m.id)).toContain('assisted');
+  });
+});

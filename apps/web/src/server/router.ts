@@ -7,7 +7,7 @@ import { assertCustomer, assertOrder } from './access';
 import { clearCookie, clientIp, readToken, sameOrigin, sessionCookie } from './session';
 
 export type Ctx = { db: Db; user: SessionUser; params: Record<string, string>; query: URLSearchParams; body: unknown; req: Request };
-type PublicCtx = Omit<Ctx, 'user'> & { user: SessionUser | null; raw: string };
+type PublicCtx = Omit<Ctx, 'user'> & { user: SessionUser | null; raw: string; client?: core.ApiClient };
 type Handler = (c: Ctx) => Promise<unknown | Response> | unknown;
 
 interface Route {
@@ -19,6 +19,10 @@ interface Route {
   allowMustChange?: boolean;
   /** Skip the Origin check (machine-to-machine webhooks authenticate by signature instead). */
   noCsrf?: boolean;
+  /** Authenticated by an API key (`Authorization: Bearer mk_…`), for the externally hosted store-front, instead of a browser session. */
+  client?: boolean;
+  /** Larger request bodies (document uploads). */
+  maxBody?: number;
   handler: Handler | ((c: PublicCtx) => Promise<unknown | Response> | unknown);
 }
 const routes: Route[] = [];
@@ -233,6 +237,132 @@ post('/settings/logo', 'settings:manage', async ({ db, user, body }) => {
   return brandingView(await core.setLogo(db, user.username, Buffer.from(b.dataBase64, 'base64')));
 });
 route('DELETE', '/settings/logo', 'settings:manage', async ({ db, user }) => brandingView(await core.removeLogo(db, user.username)));
+
+
+// ───────────────────────── store-front API (API-key clients) ─────────────────────────
+/**
+ * The external store-front's contract. Authenticated by `Authorization: Bearer mk_…` (server-to-server; the key must never reach a browser).
+ * A shopper's application is additionally protected by its own token (`x-application-token`), returned once when it is created.
+ */
+const clientRoute = (method: string, path: string, h: (c: PublicCtx & { client: core.ApiClient }) => unknown, extra: Partial<Route> = {}) =>
+  route(method, path, null, h as unknown as Handler, { client: true, ...extra });
+const selfAccess = (c: { client: core.ApiClient; req: Request }): core.AppAccess => ({ channel: 'SELF_SERVE', clientId: c.client.id, token: c.req.headers.get('x-application-token') ?? undefined });
+const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional() })).min(1).max(10) });
+const personalSchema = z.object({
+  fullName: z.string().max(100), dateOfBirth: z.string().max(10), nationality: z.string().max(60).optional(), idType: z.enum(core.ID_TYPES), idNumber: z.string().max(30),
+  idExpiry: blank(z.string().max(10)), email: z.string().max(120), phone: z.string().max(25),
+}).partial();
+const addressSchema = z.object({ line1: z.string().max(120), line2: z.string().max(120).optional(), city: z.string().max(80), state: z.string().max(80).optional(), postcode: z.string().max(20), country: z.string().length(2) });
+const consentSchema = z.object({ acceptedTerms: z.boolean(), privacyAccepted: z.boolean(), marketingOptIn: z.boolean(), authorisedAssistant: z.boolean().optional() }).partial();
+const appPatch = z.object({ lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
+const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(3_700_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') });
+const DOC_BODY = 3_800_000;
+
+clientRoute('GET', '/store/config', async ({ db }) => core.storeConfig(db));
+clientRoute('GET', '/store/catalog', async ({ db }) => core.storeCatalog(db, 'SELF_SERVE'));
+clientRoute('POST', '/store/quote', async ({ db, body }) => core.quoteBasket(db, { ...cartSchema.parse(body), channel: 'SELF_SERVE' }));
+clientRoute('POST', '/store/applications', async ({ db, body, req, client }) => {
+  const b = cartSchema.parse(body);
+  const ip = (req.headers.get('x-shopper-ip') ?? '').slice(0, 45) || null; // the store-front reports the shopper's address; used only to throttle abuse
+  const r = await core.createApplication(db, { channel: 'SELF_SERVE', clientId: client.id, lines: b.lines, ip });
+  return Response.json({ id: r.application.id, token: r.token, expiresAt: r.application.expiresAt }, { status: 201 });
+});
+clientRoute('GET', '/store/applications/:id', async (c) => core.applicationView(c.db, c.params.id!, selfAccess(c)));
+clientRoute('PATCH', '/store/applications/:id', async (c) => { await core.updateApplication(c.db, c.params.id!, selfAccess(c), appPatch.parse(c.body)); return core.applicationView(c.db, c.params.id!, selfAccess(c)); });
+clientRoute('POST', '/store/applications/:id/documents', async (c) => {
+  const b = docUpload.parse(c.body);
+  return core.uploadDocument(c.db, c.params.id!, selfAccess(c), b.kind, Buffer.from(b.dataBase64, 'base64'));
+}, { maxBody: DOC_BODY });
+clientRoute('POST', '/store/applications/:id/kyc', async (c) => { await core.submitKyc(c.db, c.params.id!, selfAccess(c)); return core.applicationView(c.db, c.params.id!, selfAccess(c)); });
+const payOpts = z.object({ gateway: z.string().max(20).optional(), returnUrl: z.string().max(500).optional() });
+clientRoute('POST', '/store/applications/:id/checkout', async (c) => {
+  const r = await core.checkout(c.db, c.params.id!, selfAccess(c), payOpts.parse(c.body ?? {}));
+  return { application: await core.applicationView(c.db, c.params.id!, selfAccess(c)), payment: r.payment };
+});
+clientRoute('POST', '/store/applications/:id/payment', async (c) => ({ payment: await core.startPayment(c.db, c.params.id!, selfAccess(c), payOpts.parse(c.body ?? {})) }));
+clientRoute('POST', '/store/applications/:id/payment/test', async (c) => {
+  await core.testGatewayOutcome(c.db, c.params.id!, selfAccess(c), z.object({ outcome: z.enum(['succeed', 'decline']) }).parse(c.body).outcome);
+  return core.applicationView(c.db, c.params.id!, selfAccess(c));
+});
+clientRoute('POST', '/store/applications/:id/cancel', async (c) => { await core.cancelApplication(c.db, c.params.id!, selfAccess(c)); return { ok: true }; });
+
+/** Payment provider webhooks (one URL per gateway: /api/webhooks/gateway/stripe). Authenticated by the provider's signature over the raw body. */
+open('POST', '/webhooks/gateway/:gateway', async ({ db, raw, req, params }) => {
+  const gw = core.gatewayById(params.gateway!);
+  const ev = gw.verifyWebhook(raw, (n) => req.headers.get(n));
+  if (!ev) return { ok: true, ignored: true };
+  return { ok: true, ...(await core.applyGatewayEvent(db, gw.id, ev)) };
+}, { noCsrf: true });
+
+// ───────────────────────── assisted sales (shop assistant, with the customer present) ─────────────────────────
+const staffAccess = (u: SessionUser): core.AppAccess => ({ channel: 'RETAIL_ASSISTED', staff: { username: u.username, storeId: u.scope.storeId ?? null, canSeeAll: !!u.scope.unrestricted } });
+get('/assisted/config', 'store:assist', ({ db }) => core.storeConfig(db));
+get('/assisted/catalog', 'store:assist', ({ db }) => core.storeCatalog(db, 'RETAIL_ASSISTED'));
+post('/assisted/quote', 'store:assist', ({ db, body }) => core.quoteBasket(db, { ...cartSchema.extend({ customerId: uuid.optional() }).parse(body), channel: 'RETAIL_ASSISTED' }));
+get('/assisted/applications', 'store:assist', async ({ db, user }) => {
+  const a = staffAccess(user).staff!;
+  const rows = (await db.query(
+    `SELECT id, status, created_by, store_id, created_at, customer_id, order_id, personal->>'fullName' AS customer_name, lines FROM applications
+     WHERE channel='RETAIL_ASSISTED' ${a.canSeeAll ? '' : 'AND (store_id = $1 OR created_by = $2)'} ORDER BY created_at DESC LIMIT 50`, a.canSeeAll ? [] : [a.storeId, a.username])).rows;
+  return { items: rows };
+});
+post('/assisted/applications', 'store:assist', async ({ db, user, body }) => {
+  const b = cartSchema.extend({ customerId: uuid.optional() }).parse(body);
+  if (b.customerId) { const c = await core.getCustomer(db, b.customerId); void c; }
+  const r = await core.createApplication(db, { channel: 'RETAIL_ASSISTED', lines: b.lines, customerId: b.customerId, staff: { username: user.username, storeId: user.scope.storeId ?? null } });
+  return Response.json({ id: r.application.id }, { status: 201 });
+});
+get('/assisted/applications/:id', 'store:assist', ({ db, user, params }) => core.applicationView(db, params.id!, staffAccess(user)));
+patch('/assisted/applications/:id', 'store:assist', async ({ db, user, params, body }) => { await core.updateApplication(db, params.id!, staffAccess(user), appPatch.parse(body)); return core.applicationView(db, params.id!, staffAccess(user)); });
+route('POST', '/assisted/applications/:id/documents', 'store:assist', async ({ db, user, params, body }) => {
+  const b = docUpload.parse(body);
+  return core.uploadDocument(db, params.id!, staffAccess(user), b.kind, Buffer.from(b.dataBase64, 'base64'));
+}, { maxBody: DOC_BODY });
+post('/assisted/applications/:id/kyc', ['kyc:attest'], async ({ db, user, params, body }) => {
+  const b = z.object({ idSighted: z.boolean(), faceMatches: z.boolean(), notes: z.string().max(300).optional() }).parse(body);
+  await core.submitKyc(db, params.id!, staffAccess(user), b);
+  return core.applicationView(db, params.id!, staffAccess(user));
+});
+post('/assisted/applications/:id/checkout', 'order:create:RETAIL_ASSISTED', async ({ db, user, params, body }) => {
+  const b = z.object({ payment: z.object({ method: z.enum(['CASH', 'CREDIT_CARD', 'QR', 'INSTALLMENT']), reference: z.string().max(100).optional(), confirmed: z.boolean().optional(), installmentMonths: z.number().int().optional() }).optional() }).parse(body);
+  need(user, 'store:assist');
+  const p = b.payment;
+  const confirmed = !!p?.confirmed && user.permissions.has('order:payment');
+  if (confirmed && core.paymentMode() === 'manual' && !p?.reference?.trim()) throw new DomainError('INVALID', 'enter the terminal approval or receipt number to confirm payment');
+  const r = await core.checkout(db, params.id!, staffAccess(user), { assistedPayment: p ? { method: p.method, reference: p.reference, installmentMonths: p.installmentMonths, confirmed, deferred: !confirmed } : undefined });
+  return { application: await core.applicationView(db, params.id!, staffAccess(user)), order: { id: r.order.id, state: r.order.state, totalMinor: r.order.totalMinor, currency: r.order.currency } };
+});
+post('/assisted/applications/:id/cancel', 'store:assist', async ({ db, user, params }) => { await core.cancelApplication(db, params.id!, staffAccess(user)); return { ok: true }; });
+
+// ───────────────────────── KYC review (compliance) ─────────────────────────
+get('/kyc/cases', 'kyc:review', async ({ db, query }) => ({ items: await core.listKycCases(db, { status: str(query, 'status') }) }));
+get('/kyc/cases/:id', 'kyc:review', ({ db, user, params }) => core.getKycCase(db, params.id!, user.username));
+get('/kyc/documents/:id', 'kyc:review', async ({ db, user, params }) => {
+  const d = await core.getKycDocument(db, params.id!, user.username);
+  return new Response(new Uint8Array(d.bytes), { headers: { 'content-type': d.contentType, 'content-disposition': 'inline', 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'no-store' } });
+});
+post('/kyc/cases/:id/decision', 'kyc:review', async ({ db, user, params, body }) => {
+  const b = z.object({ decision: z.enum(['APPROVE', 'REJECT', 'RETURN']), reason: z.string().max(300).optional() }).parse(body);
+  return core.decideKycCase(db, params.id!, user.username, b, await core.getStoreSettings(db));
+});
+
+// ───────────────────────── store settings and API keys (super user) ─────────────────────────
+const storeSettingsSchema = z.object({
+  kycMode: z.enum(['manual', 'auto']), minAge: z.number().int(), requireKycForServices: z.boolean(), termsUrl: z.string().max(300), privacyUrl: z.string().max(300), termsVersion: z.string().max(20),
+  applicationTtlHours: z.number().int(), gateways: z.object({ enabled: z.array(z.string().max(20)).max(10), default: z.string().max(20).nullable() }),
+});
+get('/settings/store', 'settings:manage', async ({ db }) => ({
+  store: await core.getStoreSettings(db),
+  gateways: Object.values(core.GATEWAYS).map((g) => ({ id: g.id, label: g.label, configured: g.configured() })),
+  clients: await core.listApiClients(db),
+  webhookPath: '/api/webhooks/gateway/stripe',
+}));
+post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body)));
+post('/settings/api-clients', 'settings:manage', async ({ db, user, body }) => {
+  const r = await core.createApiClient(db, user.username, z.object({ name: z.string().min(1).max(60) }).parse(body));
+  return Response.json({ client: r.client, key: r.key }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
+});
+route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, user, params }) => { await core.revokeApiClient(db, user.username, params.id!); return { ok: true }; });
 
 // ───────────────────────── customers ─────────────────────────
 const newCustomer = z.object({
@@ -460,19 +590,25 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
       if (issues.length) { console.error('[config] refusing to serve:', issues.join('; ')); return done(fail(503, 'MISCONFIGURED', 'The system is not configured. Contact your administrator.')); }
     }
     const mutating = req.method !== 'GET' && req.method !== 'HEAD';
-    if (mutating && !rt.noCsrf && !sameOrigin(req)) return done(fail(403, 'FORBIDDEN', 'Cross-site request blocked.'));
+    if (mutating && !rt.noCsrf && !rt.client && !sameOrigin(req)) return done(fail(403, 'FORBIDDEN', 'Cross-site request blocked.'));
 
     let raw = '';
     let body: unknown;
     if (mutating) {
       raw = await req.text();
-      if (raw.length > MAX_BODY) return done(fail(413, 'TOO_LARGE', 'request body too large'));
+      if (raw.length > (rt.maxBody ?? MAX_BODY)) return done(fail(413, 'TOO_LARGE', 'request body too large'));
       if (raw) { try { body = JSON.parse(raw); } catch { return done(fail(400, 'INVALID', 'request body is not valid JSON')); } }
     }
     // Liveness must not depend on the database.
     const db = p === '/health' ? (undefined as unknown as Db) : await getDb();
     const base = { db, params, query: url.searchParams, body, req };
 
+    if (rt.client) {
+      const client = await core.authenticateApiKey(db, req.headers.get('authorization'));
+      userName = `client:${client.name}`;
+      const out = await (rt.handler as (c: PublicCtx) => unknown)({ ...base, user: null, raw, client });
+      return done(out instanceof Response ? out : Response.json(out ?? { ok: true }));
+    }
     if (rt.public) {
       const out = await (rt.handler as (c: PublicCtx) => unknown)({ ...base, user: null, raw });
       return done(out instanceof Response ? out : Response.json(out ?? { ok: true }));

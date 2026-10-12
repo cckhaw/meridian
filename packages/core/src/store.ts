@@ -137,7 +137,9 @@ export interface AppPatch { lines?: CartLine[]; personal?: Partial<Personal>; ad
 
 export async function updateApplication(q: Queryable, id: string, access: AppAccess, p: AppPatch): Promise<Row> {
   const a = await load(q, id, access);
-  if (a.status !== 'DRAFT') throw rejected('This application can no longer be edited.');
+  // Identity and basket are frozen once KYC is decided; the delivery address and the consent (signed last, at the counter) stay open until checkout.
+  const open = a.status === 'DRAFT' || (a.status === 'KYC_APPROVED' && !p.lines && !p.personal);
+  if (!open) throw rejected('This application can no longer be edited.');
   if (new Date(a.expiresAt) < new Date()) throw rejected('This application has expired. Please start again.');
   const sets: string[] = []; const vals: unknown[] = [id];
   const add = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
