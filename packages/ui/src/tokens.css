@@ -1,0 +1,38 @@
+/* Apple HIG-inspired tokens. Light is the default; dark applies via .dark on <html>. */
+:root {
+  --bg: 255 255 255;
+  --bg-grouped: 242 242 247;          /* systemGroupedBackground */
+  --surface: 255 255 255;
+  --surface-2: 250 250 252;
+  --label: 29 29 31;
+  --label-2: 110 110 115;
+  --separator: 0 0 0 / 0.12;
+  --accent: 0 113 227;                /* systemBlue */
+  --accent-label: 255 255 255;
+  --success: 52 199 89;
+  --warning: 255 149 0;
+  --danger: 255 59 48;
+  --radius-card: 18px;
+  --radius-control: 12px;
+  --tap: 44px;                        /* HIG minimum hit target */
+  --sat: env(safe-area-inset-top);
+  --sab: env(safe-area-inset-bottom);
+  color-scheme: light;
+}
+.dark {
+  --bg: 0 0 0;
+  --bg-grouped: 0 0 0;
+  --surface: 28 28 30;                /* secondarySystemBackground */
+  --surface-2: 44 44 46;
+  --label: 245 245 247;
+  --label-2: 152 152 157;
+  --separator: 255 255 255 / 0.16;
+  --accent: 10 132 255;
+  --success: 48 209 88;
+  --warning: 255 159 10;
+  --danger: 255 69 58;
+  color-scheme: dark;
+}
+html { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+body { background: rgb(var(--bg-grouped)); color: rgb(var(--label)); }
+@media (prefers-reduced-motion: reduce) { *, ::before, ::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
