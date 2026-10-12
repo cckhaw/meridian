@@ -1,7 +1,12 @@
+import { superuserProblem } from './auth.js';
+import { configIssues } from './config.js';
 import { openDb, type Db } from './db.js';
 import { seedDemo, seedReference } from './seed.js';
 
 export * from './audit.js';
+export * from './auth.js';
+export * from './passwords.js';
+export * from './rbac.js';
 export * from './billing.js';
 export * from './cases.js';
 export * from './catalog.js';
@@ -24,16 +29,24 @@ export * from './tax.js';
 const g = globalThis as unknown as { __meridianDb?: Promise<Db> };
 
 /**
- * Process-wide database handle (survives Next.js dev reloads). Seeding: MERIDIAN_SEED = none | reference | demo.
- * Default: `demo` on the embedded database, `reference` (catalog + stock only) on a real DATABASE_URL.
+ * Process-wide database handle (survives Next.js dev reloads).
+ * Seeding, MERIDIAN_SEED = none | starter | demo (`reference` is an alias of `starter`):
+ *   none    empty database: the operator defines their own catalog (default in production)
+ *   starter a sample catalog and stock to edit, no customers
+ *   demo    starter + fake customers, orders and invoices (development only)
+ * Default: `demo` on the embedded dev database, `none` everywhere else.
  */
 export function getDb(): Promise<Db> {
   g.__meridianDb ??= (async () => {
+    const issues = configIssues(process.env, superuserProblem());
+    if (issues.length) throw new Error(`Refusing to start: ${issues.join('; ')}`);
     const db = await openDb();
-    const mode = process.env.MERIDIAN_SEED ?? (db.kind === 'pglite' ? 'demo' : 'reference');
-    if (mode !== 'none') await seedReference(db);
+    const raw = process.env.MERIDIAN_SEED ?? (db.kind === 'pglite' && process.env.NODE_ENV !== 'production' ? 'demo' : 'none');
+    const mode = raw === 'reference' ? 'starter' : raw;
+    if (mode === 'starter' || mode === 'demo') await seedReference(db);
     if (mode === 'demo') await seedDemo(db);
     return db;
   })();
+  g.__meridianDb.catch(() => { g.__meridianDb = undefined; }); // a failed start must be retried, not cached
   return g.__meridianDb;
 }

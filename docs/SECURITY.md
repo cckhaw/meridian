@@ -1,0 +1,36 @@
+# Security model
+
+## Authentication
+- **Login** with username and password. Passwords are hashed with scrypt (N=32768, per-user salt). Minimum 12 characters, a common-password blocklist, and no username in the password.
+- **Super user** credentials live only in environment variables. The super user has no password in the database, cannot be edited through the API, and changing either variable invalidates its sessions.
+- **Sessions** are opaque random tokens in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefixed and `Secure` in production). Only a SHA-256 of the token is stored. Idle timeout 30 minutes, absolute 12 hours. They are revoked on sign-out, password change or reset, role/scope change, and disabling.
+- **Brute force**: lockout after 5 failures per account, plus throttling per client address and per username (including non-existent ones). Failed and successful sign-ins are audited. Unknown and wrong-password cases return the same message and take the same time.
+- New and reset users get a one-time password and must change it at first sign-in.
+
+## Authorisation
+- Every API route declares the permission it needs; the dispatcher enforces it before the handler runs, and denied attempts are audited. See [ROLES.md](ROLES.md) (generated from code and checked by a test).
+- **Row scope**: customer-portal users reach only their own customer; store users only their store’s orders and stock; dealers only their dealer’s orders and commission. A miss returns `404` so identifiers cannot be probed. Client-supplied filters cannot widen scope.
+- **Identity of the seller** (store, dealer, salesperson) comes from the session, never the request body.
+- The UI hides what a role cannot use, but that is presentation only: the API is the control.
+
+- **Administrators are privileged.** They can create staff and issue one-time passwords, so an administrator could in principle sign in as someone they created or reset. To limit this: nobody can edit their own account through user administration, only the super user can grant or remove the Administrator role, administrators cannot move money themselves, and every user change is audited. Treat administrator accounts like production root, require MFA when you add it, and review the audit log.
+
+## Request hardening
+- State-changing requests must carry a matching `Origin` (CSRF). The payment webhook is exempt and uses an HMAC signature instead.
+- Request bodies are capped at 1 MB and validated with schemas. Errors never include stack traces or SQL.
+- Headers: CSP (self-only; `unsafe-inline` for the framework’s inline scripts and styles), `X-Frame-Options: DENY`, HSTS, `nosniff`, `Referrer-Policy`, `Permissions-Policy`.
+- Order placement accepts an `Idempotency-Key` so retries cannot double-order.
+- Fail closed: a production deployment with missing or weak secrets serves nothing.
+
+## Data protection
+- ID documents are never stored; only a masked form and a keyed hash for duplicate detection.
+- Money is integer minor units. Every financial event posts a balanced journal; reconciliation checks it.
+- Encryption at rest and in transit is the database and hosting platform’s job (TLS to the database is required in production).
+
+## Not covered yet (plan for these before regulated go-live)
+- **Multi-factor authentication and single sign-on** (SAML/OIDC). Strongly recommended for staff before handling real customer data.
+- **Self-service password reset and portal sign-up** (needs email/SMS delivery and identity verification).
+- **Per-request CSP nonces** (removing `unsafe-inline`), WAF and DDoS protection, and distributed rate limiting at the edge.
+- **Column-level encryption** for contact details, retention and erasure workflows, and consent records (GDPR/PDPA).
+- An independent **penetration test** and a review against your regulator’s requirements (for example MAS TRM, PDPA, local telecom licensing rules).
+- Approval workflows (maker-checker) beyond the per-role credit limit.

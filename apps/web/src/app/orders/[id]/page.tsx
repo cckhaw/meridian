@@ -3,12 +3,16 @@ import { Alert, Badge, Button, Card, Field, Input, LargeTitle, SectionTitle, Spi
 import Link from 'next/link';
 import { use, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { d, dt, label, money, tone } from '@/lib/format';
 
 const ACTION_LABEL: Record<string, string> = { confirm_payment: 'Confirm payment received', schedule_installation: 'Schedule installation', dispatch_technician: 'Dispatch technician', complete_installation: 'Mark installation complete', ship: 'Ship goods', deliver: 'Mark delivered' };
 
 export default function OrderDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { can } = useAuth();
+  const meta = useApi('/meta');
+  const [ref, setRef] = useState('');
   const { data: o, error, loading, reload } = useApi(`/orders/${id}`);
   const { run, busy, error: aerr } = useAction(reload);
   const [slot, setSlot] = useState('');
@@ -21,7 +25,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
   return (
     <>
       <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge tone={tone(o.state)}>{label(o.state)}</Badge><Badge>{label(o.channel)}</Badge><span>{dt(o.createdAt)}</span></span>}>Order {o.id.slice(0, 8)}</LargeTitle>
-      <p className="mb-4 text-body">Customer <Link className="text-accent" href={`/customers/${o.customerId}`}>{o.customerName}</Link>{o.storeId && <> · store {o.storeId}</>}{o.salespersonId && <> · agent {o.salespersonId}</>}{o.dealerId && <> · dealer {o.dealerId}</>}</p>
+      <p className="mb-4 text-body">Customer {can('customer:search') ? <Link className="text-accent" href={`/customers/${o.customerId}`}>{o.customerName}</Link> : o.customerName}{o.storeId && <> · store {o.storeId}</>}{o.salespersonId && <> · agent {o.salespersonId}</>}{o.dealerId && <> · dealer {o.dealerId}</>}</p>
       {o.failureReason && <Alert>{label(o.state)}: {o.failureReason}</Alert>}
       {aerr && <div className="mt-3"><Alert>{aerr}</Alert></div>}
 
@@ -46,19 +50,24 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
         </div>
 
         <aside className="space-y-4">
-          {!terminal && (
+          {!terminal && (o.nextActions.length > 0) && (
             <Card className="space-y-3">
               <h2 className="text-title3 font-semibold">Next step</h2>
               {o.nextActions.length === 0 && <p className="text-subhead text-label2">Waiting on an earlier step to finish.</p>}
+              {o.nextActions.includes('confirm_payment') && can('order:payment') && meta.data?.paymentMode === 'manual' && (
+                <Field label="Payment reference" hint="Terminal approval, receipt or transfer number"><Input value={ref} onChange={(e) => setRef(e.target.value)} /></Field>
+              )}
+              {o.nextActions.includes('confirm_payment') && !can('order:payment') && <Alert tone="info">Waiting for your payment to be confirmed. This order is released automatically once it is.</Alert>}
               {o.nextActions.includes('schedule_installation') && (
                 <Field label="Installation slot"><Input type="datetime-local" value={slot} onChange={(e) => setSlot(e.target.value)} /></Field>
               )}
-              {o.nextActions.map((a: string) => (
-                <Button key={a} className="w-full" disabled={busy || (a === 'schedule_installation' && !slot)} onClick={() => act(a, a === 'schedule_installation' ? { slot: new Date(slot).toISOString() } : {})}>{ACTION_LABEL[a] ?? label(a)}</Button>
+              {o.nextActions.filter((a: string) => can(a === 'confirm_payment' ? 'order:payment' : 'order:fulfil')).map((a: string) => (
+                <Button key={a} className="w-full" disabled={busy || (a === 'schedule_installation' && !slot) || (a === 'confirm_payment' && meta.data?.paymentMode === 'manual' && !ref.trim())}
+                  onClick={() => act(a, a === 'schedule_installation' ? { slot: new Date(slot).toISOString() } : a === 'confirm_payment' ? { reference: ref || undefined } : {})}>{ACTION_LABEL[a] ?? label(a)}</Button>
               ))}
             </Card>
           )}
-          {!terminal && (
+          {!terminal && can('order:cancel') && (
             <Card className="space-y-3">
               <h2 className="text-title3 font-semibold">Cancel</h2>
               {o.cancellable ? (<>

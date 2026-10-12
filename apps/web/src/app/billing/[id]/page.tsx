@@ -3,10 +3,14 @@ import { Alert, Badge, Button, Card, Field, Input, Select, Spinner, TableWrap, T
 import Link from 'next/link';
 import { use, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { d, dt, label, money, toMinor, tone } from '@/lib/format';
 
 export default function InvoicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { can, me } = useAuth();
+  const meta = useApi('/meta');
+  const [ref, setRef] = useState('');
   const { data: i, error, loading, reload } = useApi(`/invoices/${id}`);
   const [amt, setAmt] = useState('');
   const [method, setMethod] = useState('CREDIT_CARD');
@@ -25,7 +29,7 @@ export default function InvoicePage({ params }: { params: Promise<{ id: string }
           <div className="text-right"><p className="text-title3 font-semibold">{i.number}</p><Badge tone={tone(i.status)}>{label(i.status)}</Badge></div>
         </header>
         <dl className="grid gap-4 py-5 text-subhead sm:grid-cols-3">
-          <div><dt className="text-label2">Billed to</dt><dd><Link className="font-medium text-accent" href={`/customers/${i.customerId}`}>{i.customerName}</Link><div className="text-label2">{i.accountName}</div></dd></div>
+          <div><dt className="text-label2">Billed to</dt><dd>{can('customer:search') ? <Link className="font-medium text-accent" href={`/customers/${i.customerId}`}>{i.customerName}</Link> : <span className="font-medium">{i.customerName}</span>}<div className="text-label2">{i.accountName}</div></dd></div>
           <div><dt className="text-label2">Period</dt><dd>{d(i.periodStart)} – {d(i.periodEnd)}</dd></div>
           <div><dt className="text-label2">Issued / due</dt><dd>{d(i.issueDate)} / <span className={i.status === 'OVERDUE' ? 'font-medium text-danger' : ''}>{d(i.dueDate)}</span></dd></div>
         </dl>
@@ -46,19 +50,20 @@ export default function InvoicePage({ params }: { params: Promise<{ id: string }
 
       <aside className="space-y-4 print:hidden">
         {payA.ok && <Alert tone="success">{payA.ok}. Balance is now {money(i.balanceMinor, i.currency)}.</Alert>}
-        {open && (
+        {open && can('billing:pay') && (
           <Card className="space-y-3">
             <h2 className="text-title3 font-semibold">Record payment</h2>
             <Field label="Amount" hint={`Outstanding ${money(i.balanceMinor, i.currency)}; leave blank to pay in full`}><Input type="number" step="0.01" min="0" value={amt} onChange={(e) => setAmt(e.target.value)} /></Field>
             <Field label="Method"><Select value={method} onChange={(e) => setMethod(e.target.value)}><option value="CREDIT_CARD">Credit card</option><option value="CASH">Cash</option><option value="QR">QR</option></Select></Field>
+            <Field label={method === 'CASH' ? 'Receipt number' : method === 'QR' ? 'QR transaction reference' : 'Terminal approval code'} hint={meta.data?.paymentMode === 'manual' ? 'Required: the evidence the money was received.' : undefined}><Input value={ref} onChange={(e) => setRef(e.target.value)} /></Field>
             {payA.error && <Alert>{payA.error}</Alert>}
-            <Button className="w-full" disabled={payA.busy} onClick={() => payA.run(() => post(`/invoices/${id}/pay`, { amountMinor: amt ? toMinor(amt) : undefined, method }), 'Payment recorded')}>Record payment</Button>
+            <Button className="w-full" disabled={payA.busy} onClick={() => payA.run(() => post(`/invoices/${id}/pay`, { amountMinor: amt ? toMinor(amt) : undefined, method, reference: ref || undefined }), 'Payment recorded')}>Record payment</Button>
           </Card>
         )}
-        {i.status !== 'VOID' && (
+        {i.status !== 'VOID' && can('billing:credit') && (
           <Card className="space-y-3">
             <h2 className="text-title3 font-semibold">Credit note</h2>
-            <Field label="Amount" hint="Reduces what is owed; refunds the excess if already paid"><Input type="number" step="0.01" min="0" value={cAmt} onChange={(e) => setCAmt(e.target.value)} /></Field>
+            <Field label="Amount" hint={`Reduces what is owed; refunds the excess if already paid. ${me?.creditLimitMinor === null ? 'No limit on your role.' : `Your limit is ${money(me?.creditLimitMinor ?? 0, i.currency)} per credit note.`}`}><Input type="number" step="0.01" min="0" value={cAmt} onChange={(e) => setCAmt(e.target.value)} /></Field>
             <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
             {credA.error && <Alert>{credA.error}</Alert>}{credA.ok && <Alert tone="success">{credA.ok}</Alert>}
             <Button variant="secondary" className="w-full" disabled={credA.busy || !cAmt || !reason} onClick={() => credA.run(() => post(`/invoices/${id}/credit`, { amountMinor: toMinor(cAmt), reason }), 'Credit note issued')}>Issue credit note</Button>

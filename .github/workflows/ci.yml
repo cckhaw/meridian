@@ -1,0 +1,36 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # The core suite runs on embedded Postgres and again on a real server (partitions, ltree, pooled-style locking).
+      - run: pnpm test
+      - run: pnpm --filter @meridian/core test
+        env: { TEST_DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/postgres' }
+      - name: Generated files are up to date
+        run: |
+          pnpm --filter @meridian/db embed
+          pnpm --filter @meridian/core docs:roles
+          git diff --exit-code
+      - run: pnpm --filter @meridian/web build
+        env:
+          MERIDIAN_SUPERUSER_USERNAME: ci-admin
+          MERIDIAN_SUPERUSER_PASSWORD: ci-only-Passphrase-123

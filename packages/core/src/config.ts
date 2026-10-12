@@ -40,3 +40,24 @@ export const DUNNING = { overdueAfterDays: 0, suspendAfterDays: 15, reviewAfterD
 /** Commission paid on net order value, by channel (basis points). */
 export const COMMISSION_BPS: Record<string, number> = { RETAIL_ASSISTED: 300, DEALER: 500, TELESALES: 400 };
 export const LOGICAL_SHARDS = Number(process.env.MERIDIAN_LOGICAL_SHARDS ?? 16); // dev DB creates 16 of 1024 partitions
+
+/** Misconfigurations that must stop a production deployment from serving traffic. Empty = fine. */
+export function configIssues(env: NodeJS.ProcessEnv = process.env, superuserProblem?: string | null): string[] {
+  const issues: string[] = [];
+  if (env.NODE_ENV !== 'production') return issues;
+  if (!env.DATABASE_URL && env.MERIDIAN_ALLOW_EMBEDDED_DB !== 'true') issues.push('DATABASE_URL is not set (the embedded demo database is not allowed in production)');
+  if ((env.MERIDIAN_ID_PEPPER ?? '').length < 16) issues.push('MERIDIAN_ID_PEPPER must be set to a secret of at least 16 characters');
+  if (superuserProblem) issues.push(superuserProblem);
+  if (env.MERIDIAN_SEED === 'demo' && env.MERIDIAN_ALLOW_DEMO_DATA !== 'true') issues.push('MERIDIAN_SEED=demo loads fake customers; it is not allowed in production');
+  return issues;
+}
+
+/**
+ * How payments are accepted.
+ *  simulated  a built-in fake gateway auto-approves cards (development only; a reference starting DECLINE fails)
+ *  manual     nothing is captured automatically: staff record a payment with the terminal approval / receipt reference, and a payment
+ *             provider confirms online payments through the signed webhook. This is the default in production.
+ */
+export type PaymentMode = 'simulated' | 'manual';
+export const paymentMode = (env: NodeJS.ProcessEnv = process.env): PaymentMode =>
+  env.MERIDIAN_PAYMENT_MODE === 'simulated' || env.MERIDIAN_PAYMENT_MODE === 'manual' ? env.MERIDIAN_PAYMENT_MODE : env.NODE_ENV === 'production' ? 'manual' : 'simulated';

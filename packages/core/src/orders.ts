@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { OfferNode, OrderChannel, OrderState, PaymentMethod } from '@meridian/types';
-import { COMMISSION_BPS, GL, market } from './config.js';
+import { COMMISSION_BPS, GL, market, paymentMode } from './config.js';
 import type { Db, Queryable, Row } from './db.js';
 import { getOffer, monthlyFee } from './catalog.js';
 import { getCustomer } from './customers.js';
@@ -16,7 +16,8 @@ export interface OrderInput {
   channel: OrderChannel;
   marketCode?: string;
   lines: Array<{ offerId: string; quantity?: number; msisdn?: string; serialNumber?: string }>;
-  payment: { method: PaymentMethod; installmentMonths?: number; reference?: string };
+  /** `confirmed`: a cashier with the payment permission states the money was received (terminal approval / receipt in `reference`). */
+  payment: { method: PaymentMethod; installmentMonths?: number; reference?: string; confirmed?: boolean };
   attribution?: { storeId?: string; salespersonId?: string; dealerId?: string };
   deliveryAddress?: string;
   actor?: string;
@@ -58,16 +59,16 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
   return db.tx(async (q) => {
     const actor = input.actor ?? input.attribution?.salespersonId ?? 'system';
     if (!input.lines.length) throw invalid('an order needs at least one line');
-    const marketCode = input.marketCode ?? 'SG';
-    const mk = market(marketCode);
-
     // ── customer / account ──
     let customerId = input.customerId;
     if (!customerId) {
       if (input.channel !== 'QUICK_SALE') throw invalid('customerId is required (only QUICK_SALE may be anonymous)');
-      customerId = await walkInCustomer(q, marketCode);
+      customerId = await walkInCustomer(q, input.marketCode ?? 'SG');
     }
     const customer = await getCustomer(q, customerId);
+    // The customer's own market decides currency, tax and which offers are sellable; the caller cannot override it.
+    const marketCode = (customer.marketCode as string).trim();
+    const mk = market(marketCode);
     if (customer.status !== 'ACTIVE') throw rejected(`customer is ${customer.status}`);
     let accountId = input.accountId ?? null;
     if (accountId) {
@@ -85,6 +86,7 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
         const o = await getOffer(q, l.offerId);
         if (o.status !== 'ACTIVE') throw rejected(`offer ${o.name} is not active`);
         if (o.markets.length && !o.markets.includes(marketCode)) throw rejected(`offer ${o.name} is not sold in ${marketCode}`);
+        if (o.prices.some((p) => p.amount.currency !== mk.currency)) throw rejected(`offer ${o.name} is not priced in ${mk.currency}`);
         offers.set(o.id, o);
       }
     }
@@ -123,10 +125,10 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
     const eligible = !!(att.salespersonId || att.dealerId) && input.channel in COMMISSION_BPS;
     await q.query(
       `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id,
-         commission_eligible, payment_method, installment_months, fulfilment)
-       VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+         commission_eligible, payment_method, installment_months, fulfilment, created_by)
+       VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [orderId, customer.shardId, customerId, accountId, input.channel, total, mk.currency, marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null,
-       eligible, input.payment.method, input.payment.installmentMonths ?? null, JSON.stringify({ address: input.deliveryAddress ?? null })],
+       eligible, input.payment.method, input.payment.installmentMonths ?? null, JSON.stringify({ address: input.deliveryAddress ?? null }), actor],
     );
     for (const p of priced) {
       await q.query(
@@ -138,12 +140,12 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
     const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
     o.state = 'DRAFT';
     await setState(q, o, 'SUBMITTED', actor);
-    await drive(q, o, { actor, paymentReference: input.payment.reference, net });
+    await drive(q, o, { actor, paymentReference: input.payment.reference, paymentConfirmed: !!input.payment.confirmed, net });
     return getOrder(q, orderId);
   });
 }
 
-type Ctx = { actor: string; paymentReference?: string; net?: number };
+type Ctx = { actor: string; paymentReference?: string; paymentConfirmed?: boolean; net?: number };
 
 /** Runs the order forward until it completes, fails, or needs an external event (payment confirmation, shipping, installation). */
 async function drive(q: Queryable, o: Row, ctx: Ctx): Promise<void> {
@@ -160,7 +162,8 @@ async function drive(q: Queryable, o: Row, ctx: Ctx): Promise<void> {
       case 'VALIDATED': {
         if (o.totalMinor === 0 || o.paymentMethod === 'INSTALLMENT') { await setState(q, o, 'PAID', ctx.actor, o.totalMinor === 0 ? 'nothing to pay upfront' : 'paid by instalments on future bills'); break; }
         await setState(q, o, 'PAYMENT_PENDING', ctx.actor);
-        if (o.paymentMethod === 'QR') return; // waits for confirm_payment
+        // Simulated mode auto-approves everything but QR. Manual mode waits for a person (or the payment webhook) to confirm.
+        if (paymentMode() === 'simulated' ? o.paymentMethod === 'QR' : !ctx.paymentConfirmed) return;
         const ok = await capture(q, o, ctx.paymentReference);
         if (!ok) return fail(q, o, ctx, 'payment declined');
         await setState(q, o, 'PAID', ctx.actor);
@@ -216,8 +219,9 @@ async function reserveStock(q: Queryable, o: Row) {
 }
 
 function paymentGateway(method: PaymentMethod, reference?: string) {
-  // Simulated PSP. A real adapter (Adyen/2C2P/PayNow/DuitNow) plugs in here; references starting DECLINE fail.
-  return !(reference ?? '').toUpperCase().startsWith('DECLINE') && method !== 'ETC_CHARGE';
+  if (method === 'ETC_CHARGE') return false;
+  if (paymentMode() === 'manual') return true; // the caller already established that money was received
+  return !(reference ?? '').toUpperCase().startsWith('DECLINE'); // simulated PSP
 }
 
 async function capture(q: Queryable, o: Row, reference?: string): Promise<boolean> {
@@ -354,6 +358,7 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
     switch (action.type) {
       case 'confirm_payment': {
         need('PAYMENT_PENDING');
+        if (paymentMode() === 'manual' && !action.reference?.trim()) throw invalid('a payment reference (terminal approval or receipt number) is required');
         if (!(await capture(q, o, action.reference))) { await fail(q, o, ctx, 'payment declined'); break; }
         await setState(q, o, 'PAID', actor);
         await drive(q, o, ctx);
@@ -449,10 +454,12 @@ function nextActions(o: Row): string[] {
   }
 }
 
-export async function listOrders(q: Queryable, f: { customerId?: string; state?: string; channel?: string; limit?: number; offset?: number } = {}) {
+export async function listOrders(q: Queryable, f: { customerId?: string; storeId?: string; dealerId?: string; state?: string; channel?: string; limit?: number; offset?: number } = {}) {
   const params: unknown[] = []; const where: string[] = [];
   const p = (v: unknown) => `$${params.push(v)}`;
   if (f.customerId) where.push(`o.customer_id = ${p(f.customerId)}`);
+  if (f.storeId) where.push(`o.store_id = ${p(f.storeId)}`);
+  if (f.dealerId) where.push(`o.dealer_id = ${p(f.dealerId)}`);
   if (f.state) where.push(`o.state = ${p(f.state)}`);
   if (f.channel) where.push(`o.channel = ${p(f.channel)}`);
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';

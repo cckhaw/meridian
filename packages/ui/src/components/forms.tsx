@@ -1,15 +1,23 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react';
+import { cloneElement, isValidElement, useId, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 
 const cx = (...p: Array<string | false | undefined>) => p.filter(Boolean).join(' ');
 const control = 'min-h-tap w-full rounded-control border border-separator bg-surface px-3 text-body text-label placeholder:text-label2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50';
 
+/**
+ * Label + control + hint/error. The label is a real <label for>, and hint/error text is linked with aria-describedby,
+ * so a field's accessible name is just its label (not "label hint hint hint").
+ */
 export function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: ReactNode }) {
+  const id = useId();
+  const note = error ?? hint;
+  const noteId = note ? `${id}-note` : undefined;
+  const control = isValidElement(children) && typeof children.type !== 'string';
   return (
-    <label className="block">
-      <span className="mb-1 block text-subhead font-medium text-label">{label}</span>
-      {children}
-      {error ? <span role="alert" className="mt-1 block text-footnote text-danger">{error}</span> : hint ? <span className="mt-1 block text-footnote text-label2">{hint}</span> : null}
-    </label>
+    <div>
+      <label htmlFor={control ? id : undefined} className="mb-1 block text-subhead font-medium text-label">{label}</label>
+      {control ? cloneElement(children as ReactElement<Record<string, unknown>>, { id, 'aria-describedby': noteId, 'aria-invalid': error ? true : undefined }) : children}
+      {note && <span id={noteId} role={error ? 'alert' : undefined} className={cx('mt-1 block text-footnote', error ? 'text-danger' : 'text-label2')}>{note}</span>}
+    </div>
   );
 }
 export const Input = ({ className, ...p }: InputHTMLAttributes<HTMLInputElement>) => <input {...p} className={cx(control, className)} />;
