@@ -38,7 +38,13 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel): Promise
   const mk = await marketFor(q, await storeMarket(q));
   const nodes = await listNodes(q, { status: 'ACTIVE' });
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const live = (n: { path: string }) => n.path.split('/').every((id) => byId.get(id)?.status === 'ACTIVE'); // retired/draft ancestors hide everything beneath
+  // An offer is live only if every ancestor is active. Walk the parent chain (not the stored path) so older catalogs with unusual paths still work.
+  const chain = (n: { id: string; parentId?: string | null }): string[] | null => {
+    const names: string[] = []; let cur: typeof n | undefined = n;
+    while (cur?.parentId) { const p = byId.get(cur.parentId); if (!p) return null; names.unshift(p.name); cur = p; }
+    return names;
+  };
+  const live = (n: { id: string; parentId?: string | null }) => chain(n) !== null;
   const offers = (await listNodes(q, { status: 'ACTIVE', level: 'OFFER', channel, market: await storeMarket(q) }) as OfferNode[]).filter(live);
   return {
     currency: mk.currency,
@@ -46,7 +52,7 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel): Promise
       const split = (amount: number, inclusive: boolean) => taxSplit(amount, mk.taxBps, inclusive).gross;
       const up = o.prices.filter((p) => p.type === 'ONE_TIME').reduce((s, p) => s + split(p.amount.amountMinor, p.taxInclusive), 0);
       const fee = monthlyFee(o);
-      const path = o.path.split('/').map((id) => byId.get(id)?.name ?? id);
+      const path = [...(chain(o) ?? []), o.name];
       return {
         id: o.id, name: o.name, kind: o.kind, description: o.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
         monthlyMinor: fee ? split(fee.amount.amountMinor, fee.taxInclusive) : 0, upfrontMinor: up, contractMonths: o.contract?.termMonths ?? 0,

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { authenticateApiKey, createApiClient, listApiClients, revokeApiClient } from './apikeys.js';
@@ -63,6 +64,18 @@ describe('field encryption', () => {
     const blob = encryptBytes(Buffer.from('secret'));
     blob[blob.length - 1]! ^= 1;
     expect(() => decryptText(blob.toString('base64'))).toThrow();
+  });
+});
+
+describe('catalogs seeded by earlier releases (paths built from codes)', () => {
+  it('still list in the store-front, and migration 0006 repairs the paths', async () => {
+    const before = (await db.query(`SELECT path FROM catalog_nodes WHERE id='plan-phone-12'`)).rows[0]!.path as string;
+    await db.query(`UPDATE catalog_nodes SET path = replace(path, 'grp-device', 'device') WHERE path LIKE '%/grp-device' OR path LIKE '%/grp-device/%'`);
+    expect((await db.query(`SELECT path FROM catalog_nodes WHERE id='plan-phone-12'`)).rows[0]!.path).not.toBe(before);
+    expect((await storeCatalog(db, 'SELF_SERVE')).offers.map((o) => o.id)).toContain('plan-phone-12');
+    const sql = readFileSync(new URL('../../db/migrations/0006_repair_catalog_paths.sql', import.meta.url), 'utf8');
+    await db.query(sql);
+    expect((await db.query(`SELECT path FROM catalog_nodes WHERE id='plan-phone-12'`)).rows[0]!.path).toBe(before);
   });
 });
 
