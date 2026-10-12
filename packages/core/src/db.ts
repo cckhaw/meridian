@@ -66,14 +66,19 @@ async function openPostgres(url: string): Promise<Db> {
     },
   });
   const base = wrap(pool);
-  // Serialise migrations across instances with an advisory lock.
-  const lock = await pool.connect();
+  // Serialise migrations across instances. The lock is transaction-scoped (pg_advisory_xact_lock) so it also works behind a
+  // transaction-mode pooler such as PgBouncer/Neon's pooled endpoint, where a session-level lock could leak or never release.
+  const c = await pool.connect();
   try {
-    await lock.query('SELECT pg_advisory_lock(727001)');
-    await migrate(wrap(lock), (sql) => lock.query(sql));
+    await c.query('BEGIN');
+    await c.query('SELECT pg_advisory_xact_lock(727001)');
+    await migrate(wrap(c), (sql) => c.query(sql));
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
   } finally {
-    await lock.query('SELECT pg_advisory_unlock(727001)').catch(() => {});
-    lock.release();
+    c.release();
   }
   return {
     kind: 'postgres',
