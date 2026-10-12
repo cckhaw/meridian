@@ -17,12 +17,13 @@ interface FormState {
   parentId: string; id: string; name: string; kind: string; description: string; market: string; recurring: string; upfront: string; taxInclusive: boolean;
   term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; shipping: boolean; install: boolean; sim: boolean; skus: string; partner: string;
   requires: string[]; excludes: string[]; channels: string[]; status: string;
+  variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
 }
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: 'SIM_ONLY', description: '', market, recurring: '', upfront: '', taxInclusive: true,
   term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', shipping: false, install: false, sim: false, skus: '', partner: '',
-  requires: [], excludes: [], channels: [], status: 'DRAFT',
+  requires: [], excludes: [], channels: [], status: 'DRAFT', variants: [],
 });
 
 function fromOffer(o: any, market: string): FormState {
@@ -34,6 +35,7 @@ function fromOffer(o: any, market: string): FormState {
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
     shipping: !!o.fulfilment?.requiresShipping, install: !!o.fulfilment?.requiresInstallation, sim: !!o.fulfilment?.requiresSimActivation, skus: (o.fulfilment?.inventorySkus ?? []).join(', '),
     partner: o.partnerCode ?? '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
+    variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
   };
 }
 
@@ -93,7 +95,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
     ...(f.etcMethod === 'SUBSIDY_AMORTISED' ? { subsidy: { subsidyAmount: money(f.subsidy || '0'), deviceRetailPrice: money(f.retail || '0') } } : {}),
   };
   const fulfilment = { requiresShipping: f.shipping, requiresInstallation: f.install, requiresSimActivation: f.sim, inventorySkus: csv(f.skus) };
-  const common = { name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: f.partner || undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels };
+  const common = { name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: f.partner || undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
+    variants: f.shipping ? f.variants.filter((v) => v.colour.trim() && v.sku.trim()).map((v) => ({ id: slug(`${v.colour}-${v.storage}`) || slug(v.sku), colour: v.colour.trim(), storage: v.storage.trim() || undefined, sku: v.sku.trim(), priceDeltaMinor: v.delta ? toMinor(v.delta) : undefined })) : [] };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,7 +163,28 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
               {([['shipping', 'Ships to the customer'], ['install', 'Needs an installation visit'], ['sim', 'Needs SIM activation']] as const).map(([k, t]) => <label key={k} className="flex min-h-tap items-center gap-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f[k]} onChange={tick(k)} />{t}</label>)}
             </div>
           </fieldset>
-          <Field label="Stock SKUs" hint="Comma-separated; one unit of each is reserved per item sold"><Input value={f.skus} onChange={set('skus')} /></Field>
+          <Field label="Stock SKUs" hint="Comma-separated; one unit of each is reserved per item sold. A SKU that is also a colour or storage option below is replaced by the one chosen."><Input value={f.skus} onChange={set('skus')} /></Field>
+          {f.shipping && (
+            <fieldset className="sm:col-span-2">
+              <legend className="mb-1 text-subhead font-medium">Colours and storage</legend>
+              <p className="mb-2 text-footnote text-label2">What the customer picks when buying the device. Each option has its own stock SKU and may cost more or less than the base price.</p>
+              <div className="space-y-2">
+                {f.variants.map((v, i) => {
+                  const upd = (patch: Partial<FormState['variants'][number]>) => setF({ ...f, variants: f.variants.map((x, k) => (k === i ? { ...x, ...patch } : x)) });
+                  return (
+                    <div key={i} className="grid grid-cols-2 gap-2 rounded-control bg-surface2 p-2 sm:grid-cols-[1fr_110px_1fr_110px_auto] sm:items-center">
+                      <Input aria-label="Colour" placeholder="Colour" value={v.colour} onChange={(e) => upd({ colour: e.target.value })} />
+                      <Input aria-label="Storage" placeholder="Storage" value={v.storage} onChange={(e) => upd({ storage: e.target.value })} />
+                      <Input aria-label="Stock SKU" placeholder="Stock SKU" value={v.sku} onChange={(e) => upd({ sku: e.target.value })} />
+                      <Input aria-label="Price difference" type="number" step={step()} placeholder="± price" value={v.delta} onChange={(e) => upd({ delta: e.target.value })} />
+                      <button type="button" aria-label="Remove option" className="min-h-[36px] text-danger" onClick={() => setF({ ...f, variants: f.variants.filter((_, k) => k !== i) })}>Remove</button>
+                    </div>
+                  );
+                })}
+              </div>
+              <Button type="button" variant="secondary" className="mt-2 !min-h-[36px] !px-3 !text-subhead" onClick={() => setF({ ...f, variants: [...f.variants, { colour: '', storage: '', sku: '', delta: '' }] })}>＋ Add colour or storage option</Button>
+            </fieldset>
+          )}
           {f.kind === 'NON_TELCO_SUBSCRIPTION' && <Field label="Partner code" hint="e.g. netflix"><Input required value={f.partner} onChange={set('partner')} /></Field>}
 
           <fieldset className="sm:col-span-2">

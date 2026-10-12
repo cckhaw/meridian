@@ -204,7 +204,17 @@ describe('payment structure, variants and bundles', () => {
     await expect(fin(12, 29900)).rejects.toThrow(/down payment/);
     await expect(fin(5)).rejects.toThrow(/instalment months/);
     await expect(fin(12, 0, 'good-phone-outright')).rejects.toThrow(/no service to bill/);
-    await expect(priceBasket(db, { ...base, lines: [{ offerId: 'plan-phone-24', quantity: 2, payment: { mode: 'INSTALLMENT', months: 12 } }] })).rejects.toThrow(/one device at a time/);
+  });
+
+  it('finances several units at once: each carries its share, and the shares add up exactly', async () => {
+    const { customer } = await newCustomer(db);
+    const o = await placeOrder(db, { customerId: customer.id, channel: 'SELF_SERVE', payment: { method: 'INSTALLMENT', installmentMonths: 12 }, lines: [{ offerId: 'plan-phone-12', quantity: 3 }] });
+    expect(o.totalMinor).toBe(0);
+    await advanceOrder(db, o.id, { type: 'ship' });
+    const done = await advanceOrder(db, o.id, { type: 'deliver' });
+    expect(done.serviceCount).toBe(3);
+    const charges = (await db.query(`SELECT c.amount_minor, c.remaining_cycles FROM service_charges c JOIN services s ON s.id = c.service_id WHERE s.order_id=$1`, [o.id])).rows;
+    expect(charges.reduce((s, c) => s + c.amountMinor * c.remainingCycles, 0)).toBe(o.lines[0].netMinor + o.lines[0].taxMinor);
   });
 
   it('prices and reserves the chosen colour and storage', async () => {

@@ -80,7 +80,12 @@ export async function searchCustomers(q: Queryable, f: { q?: string; segment?: s
   const where: string[] = [];
   if (f.segment) where.push(`c.segment = ${p(f.segment)}`);
   const ids = customerIdsMatching(await parseQuery(q, f.q), p);
-  if (ids) where.push(`c.id IN (${ids})`);
+  // An ID document number (NRIC, passport, UEN) finds its owner exactly, through the keyed hash: the number itself is never stored.
+  const text = (f.q ?? '').trim();
+  const doc = /^[A-Za-z0-9][A-Za-z0-9-]{4,19}$/.test(text) && /\d/.test(text) ? `c.id_document_hash = ${p(hashIdDocument(text))}` : null;
+  if (ids && doc) where.push(`(c.id IN (${ids}) OR ${doc})`);
+  else if (ids) where.push(`c.id IN (${ids})`);
+  else if (doc) where.push(doc);
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(c.created_at, c.id) < (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
   const rows = (await q.query(

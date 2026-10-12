@@ -56,6 +56,8 @@ async function setState(q: Queryable, o: Row, to: OrderState, actor: string, rea
   o.state = to;
 }
 /** A line in the timeline for something that happened to part of the order without changing its overall state. */
+/** Amounts in timeline notes, written the way people read them (currency exponent respected). */
+const fmt = (minor: number, currency: string) => { const f = new Intl.NumberFormat('en', { style: 'currency', currency }); return f.format(minor / 10 ** (f.resolvedOptions().maximumFractionDigits ?? 2)); };
 const note = (q: Queryable, o: Row, actor: string, reason: string) =>
   q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$3,$4,$5)', [o.shardId, o.id, o.state, actor, reason]);
 
@@ -398,6 +400,15 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
         `INSERT INTO services ${cols}) SELECT gen_random_uuid(), $1, $2, $3, $4, $5 || lpad(nextval('${seq}')::text, 10, '0'), $6, 'ACTIVE', now(), $7, now(), $8 FROM generate_series(1, $9::int)`,
         [o.shardId, accountId, o.customerId, type, prefix, l.offerId, term, o.id, l.quantity],
       );
+      if (l.payMode === 'INSTALLMENT') { // every unit carries its own share of the financed amount
+        const financed = l.netMinor + l.taxMinor - l.downPaymentMinor, n = l.installmentMonths as number, unit = Math.floor(financed / l.quantity), each = Math.floor(unit / n);
+        const rem = financed - each * n * l.quantity;
+        await q.query(`INSERT INTO service_charges (shard_id, service_id, account_id, kind, description, amount_minor, remaining_cycles)
+                       SELECT $1, s.id, $2, 'INSTALLMENT', $3, $4, $5 FROM services s WHERE s.order_id=$6 AND s.offer_id=$7 AND NOT EXISTS (SELECT 1 FROM service_charges c WHERE c.service_id = s.id)`,
+          [o.shardId, accountId, `${l.offer.name ?? l.description} instalment (${n} mo)`, each, n, o.id, l.offerId]);
+        if (rem) await q.query(`INSERT INTO service_charges (shard_id, service_id, account_id, kind, description, amount_minor, remaining_cycles)
+                                SELECT $1, s.id, $2, 'ADJUSTMENT', 'Instalment rounding', $3, 1 FROM services s WHERE s.order_id=$4 AND s.offer_id=$5 ORDER BY s.id LIMIT 1`, [o.shardId, accountId, rem, o.id, l.offerId]);
+      }
       continue;
     }
     let identifier: string;
@@ -621,7 +632,7 @@ async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: st
     await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND fulfil_group=$2 AND status='ACTIVE'`, [o.id, kind]);
     if (kind === 'INSTALL') await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [o.id]);
     await patchGroup(q, g.id, `status='CANCELLED', cancelled_at=now(), refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ cancelReason: reason })]);
-    await note(q, o, actor, `${({ GOODS: 'Delivery', INSTALL: 'Installation', ACTIVATION: 'Service activation' })[kind]} cancelled${r.refundMinor ? `, ${r.refundMinor} refunded` : ''}${r.retainedMinor ? `, ${r.retainedMinor} kept` : ''}: ${reason}`);
+    await note(q, o, actor, `${({ GOODS: 'Delivery', INSTALL: 'Installation', ACTIVATION: 'Service activation' })[kind]} cancelled${r.refundMinor ? `, ${fmt(r.refundMinor, o.currency)} refunded` : ''}${r.retainedMinor ? `, ${fmt(r.retainedMinor, o.currency)} kept` : ''}: ${reason}`);
   }
   if (plan.clawLineIds.length) await q.query(`UPDATE order_lines SET discount_rules='{}' WHERE id = ANY($1::uuid[])`, [plan.clawLineIds]); // the bundle is broken: that discount has been taken back
 }
@@ -682,7 +693,7 @@ export async function returnGoods(db: Db, orderId: string, o2: { reason: string;
     }
     await q.query(`UPDATE order_lines SET status='RETURNED' WHERE order_id=$1 AND fulfil_group='GOODS' AND status='ACTIVE'`, [orderId]);
     await patchGroup(q, g.id, `status='RETURNED', refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ returnReason: o2.reason, returnedAt: new Date().toISOString() })]);
-    await note(q, o, actor, `Goods returned${r.refundMinor ? `, ${r.refundMinor} refunded` : ''}${r.retainedMinor ? `, ${r.retainedMinor} kept` : ''}: ${o2.reason}`);
+    await note(q, o, actor, `Goods returned${r.refundMinor ? `, ${fmt(r.refundMinor, o.currency)} refunded` : ''}${r.retainedMinor ? `, ${fmt(r.retainedMinor, o.currency)} kept` : ''}: ${o2.reason}`);
     await audit(q, actor, 'order', orderId, 'GOODS_RETURNED', { refundMinor: r.refundMinor, deductionMinor: deduction });
     return getOrder(q, orderId);
   });

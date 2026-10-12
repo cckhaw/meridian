@@ -42,6 +42,16 @@ Goods that have been **delivered** can be returned within **14 days**. The refun
 
 An installation still open after **14 days** is flagged *at risk* for follow-up. One that has not been dispatched after **21 days** is cancelled automatically with a **full refund** (no call-out fee: the delay is ours). A dispatched installation is never auto-cancelled. Run `POST /api/jobs/sweep-orders` daily (it needs the billing-run permission).
 
+## The new-order wizard
+
+CRM → New order walks through one decision per screen, with the running total always visible (a pill and sheet on a phone):
+
+1. **Plan or product**, 2. **Device** (colour and storage with live stock, or add a device), 3. **Add-ons** (only ones this customer can buy, plus bundle savings and a hint when one more item completes a bundle), 4. **How to pay** (each line in full or by instalments with a down payment), 5. **Customer** (look up by ID number, mobile, e-mail or name, or create one), 6. **Delivery and installation** (address, preferred visit, and when each part can still be cancelled), 7. **Review** (entitlements, colour and storage, price, bundle discount, down payment and instalments, contract and early-termination terms, monthly total, cancellation terms; the customer must be confirmed as informed), 8. **Payment**, then submit.
+
+Steps that do not apply are skipped (no device step for a quick sale, no payment-structure step when nothing can be financed, no delivery step for a counter sale without installation). Opening it from a customer's page starts with that customer chosen. Every number comes from the server's quote, so the review shows exactly what will be charged.
+
+Device colours and storage are edited on the offer (Catalog → Edit offer → Colours and storage). Bundle discounts are managed at Catalog → Bundle discounts.
+
 ## Policy settings
 
 | Environment variable | Default |

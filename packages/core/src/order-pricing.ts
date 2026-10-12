@@ -169,7 +169,6 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
   for (const l of lines) {
     if (l.payMode === 'INSTALLMENT') {
       if (!createsService(l.offer)) throw rejected(`${l.offer.name} cannot be paid by instalments: there is no service to bill them to`);
-      if (l.qty !== 1) throw rejected('instalments are for one device at a time');
       if (!INSTALMENT_MONTHS.includes(l.months ?? 0)) throw invalid(`instalment months must be ${INSTALMENT_MONTHS.join(', ')}`);
       if (!legacy && l.offer.contract?.termMonths && (l.months as number) > l.offer.contract.termMonths) throw rejected(`${l.offer.name}: instalments (${l.months} months) cannot run longer than the ${l.offer.contract.termMonths}-month contract`);
       if (l.gross <= 0) throw rejected(`${l.offer.name} has nothing upfront to spread over instalments`);

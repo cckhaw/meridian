@@ -59,3 +59,6 @@ INSERT INTO order_groups (order_id, kind, status, locked_at)
 INSERT INTO order_groups (order_id, kind, status, locked_at, due_at)
   SELECT o.id, 'INSTALL', CASE WHEN (o.fulfilment->>'dispatched')::boolean THEN 'LOCKED' ELSE 'PENDING' END, o.point_of_no_return_at, o.created_at + interval '14 days'
     FROM orders o WHERE 'INSTALL' = ANY(o.pending_tasks) AND o.state NOT IN ('COMPLETED','CANCELLED','FAILED');
+
+-- Looking a customer up by ID document number (exact, through the keyed hash).
+CREATE INDEX IF NOT EXISTS customers_idhash_idx ON customers (id_document_hash) WHERE id_document_hash IS NOT NULL;
