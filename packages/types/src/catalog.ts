@@ -77,6 +77,15 @@ export interface FulfilmentSpec {
   inventorySkus: string[];
 }
 
+/** A way to buy a device offer: its colour and storage, the stock SKU that backs it, and what it adds to (or takes off) the upfront price. */
+export interface DeviceVariant {
+  id: string;
+  colour: string;
+  storage?: string;
+  sku: string;
+  priceDeltaMinor?: number;
+}
+
 export interface OfferNode extends CatalogNodeBase {
   level: 'OFFER';
   kind: OfferKind;
@@ -97,6 +106,8 @@ export interface OfferNode extends CatalogNodeBase {
   excludes: string[];
   /** Channels this offer is sold through. Empty/absent = all channels. */
   salesChannels?: string[];
+  /** Device colour/storage choices. When present the customer picks one; its SKU is reserved instead of the offer's own device SKUs. */
+  variants?: DeviceVariant[];
 }
 
 /**

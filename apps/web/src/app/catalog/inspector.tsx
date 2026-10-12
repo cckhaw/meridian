@@ -55,6 +55,7 @@ export function Welcome({ summary, editable, onAdd }: { summary: { levels: Recor
         <Stat k="Network types" v={big(l.NETWORK_TYPE ?? 0)} /><Stat k="Categories" v={big(l.CATEGORY ?? 0)} /><Stat k="Groups" v={big(l.GROUP ?? 0)} />
         <Stat k="Offers live" v={big(summary?.offersLive ?? 0)} sub={`of ${big(summary?.offers ?? 0)}`} /><Stat k="Line items" v={big(l.LINE_ITEM ?? 0)} />
       </ul>
+      {editable && <p><Link href="/catalog/bundles" className="text-subhead text-accent">Bundle discounts →</Link></p>}
       {editable && summary && summary.offers === 0 && <p className="text-subhead text-label2">The catalog is empty. Start with a network type (Mobile, Fibre, IoT…), then add categories, groups and offers beneath it. <button className="text-accent underline" onClick={onAdd}>New network type</button></p>}
     </div>
   );

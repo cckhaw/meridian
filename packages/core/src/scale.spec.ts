@@ -211,3 +211,13 @@ describe('customer hierarchy navigation', () => {
     expect(acct.customer.displayName).toBe('Hierarchy Company');
   }, 60_000);
 });
+
+describe('customer lookup by ID document', () => {
+  it('finds the owner by their ID number, exactly, without ever storing the number', async () => {
+    const c = (await createCustomer(db, { segment: 'CONSUMER', displayName: 'Lookup Person', idDocument: 'S1234567D' })).customer;
+    expect((await searchCustomers(db, { q: 'S1234567D' })).items.map((x: any) => x.id)).toEqual([c.id]);
+    expect((await searchCustomers(db, { q: 's1234567d' })).items.map((x: any) => x.id)).toEqual([c.id]); // case does not matter
+    expect((await searchCustomers(db, { q: 'S1234567E' })).items).toEqual([]);
+    expect(JSON.stringify(c)).not.toContain('1234567');
+  });
+});

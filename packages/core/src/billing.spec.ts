@@ -72,7 +72,8 @@ describe('billing', () => {
     const { customer, account } = await newCustomer(db);
     await db.query('UPDATE accounts SET bill_cycle_day=$2 WHERE id=$1', [account!.id, dayOf(today())]);
     const o = await placeOrder(db, { customerId: customer.id, channel: 'SELF_SERVE', payment: { method: 'INSTALLMENT', installmentMonths: 12 }, lines: [{ offerId: 'plan-phone-24' }] });
-    expect(o.totalMinor).toBe(29900);
+    expect(o.totalMinor).toBe(0); // nothing is due at checkout: the whole 29900 is financed
+    expect(o.lines[0].netMinor + o.lines[0].taxMinor).toBe(29900);
     expect(o.payments).toHaveLength(0); // nothing collected upfront
     await advanceOrder(db, o.id, { type: 'ship' });
     await advanceOrder(db, o.id, { type: 'deliver' }); // the service (and its instalment plan) exists once the order activates

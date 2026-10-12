@@ -207,12 +207,12 @@ describe('offer line items', () => {
     await expect(createNode(db, item('bundle-phone2', 'bundle', { itemType: 'DEVICE', sku: 'PHONE-X1-128', quantity: 1 }))).rejects.toThrow(/already used by the line item/);
     await expect(updateNode(db, 'bundle', { fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: ['PHONE-X1-128'] } })).rejects.toThrow(/already reserved by one of this offer/);
     await setStatus(db, 'bundle', 'ACTIVE');
-    const reserved = async () => (await db.query(`SELECT reserved FROM inventory_stock WHERE location_id='WH-MAIN' AND sku='PHONE-X1-128'`)).rows[0]!.reserved as number;
-    const before = await reserved();
+    const onHand = async () => (await db.query(`SELECT on_hand FROM inventory_stock WHERE location_id='WH-MAIN' AND sku='PHONE-X1-128'`)).rows[0]!.onHand as number;
+    const before = await onHand();
     const { customer } = await newCustomer(db);
     const o = await placeOrder(db, { customerId: customer.id, channel: 'TELESALES', payment: { method: 'CASH' }, lines: [{ offerId: 'bundle', quantity: 3 }] });
     expect(o.state).not.toBe('FAILED');
-    expect((await reserved()) - before).toBe(6); // 3 units ordered x line item quantity 2
+    expect(before - (await onHand())).toBe(6); // 3 units ordered x line item quantity 2 (reserved at payment, taken from stock when the service is switched on)
   });
 
   it('can be copied onto a new version of an offer', async () => {

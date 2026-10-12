@@ -65,6 +65,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `order:payment` |  |  |  |  |  | ✓ | ✓ | ✓ |  |  |  |  |  |  |
 | `order:fulfil` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
 | `order:cancel` |  |  |  |  | ✓ |  |  | ✓ |  | ✓ |  | ✓ |  |  |
+| `order:override` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
 | `billing:read` | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  |
 | `billing:pay` |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |  |  |  |  |
 | `billing:credit` |  |  | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |  |  |

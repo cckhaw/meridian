@@ -20,6 +20,20 @@ export function validateParent(node: Pick<CatalogNode, 'level'>, parent: Pick<Ca
 export function validateOffer(o: OfferNode): string[] {
   const errs: string[] = [];
   if (o.prices.length === 0) errs.push('offer needs at least one price component');
+  const variants = o.variants ?? [];
+  if (variants.length) {
+    if (!o.fulfilment?.requiresShipping) errs.push('device variants only make sense for offers that ship a device');
+    const ids = new Set<string>();
+    for (const v of variants) {
+      if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(v.id ?? '')) errs.push(`variant id “${v.id}” may contain lowercase letters, digits and dashes`);
+      if (ids.has(v.id)) errs.push(`variant id “${v.id}” is used twice`);
+      ids.add(v.id);
+      if (!v.colour?.trim()) errs.push('every variant needs a colour');
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$/.test(v.sku ?? '')) errs.push(`variant ${v.id}: enter the stock SKU (letters, digits, dash, dot, underscore)`);
+      if (v.priceDeltaMinor !== undefined && !Number.isInteger(v.priceDeltaMinor)) errs.push(`variant ${v.id}: the price difference must be a whole amount in minor units`);
+    }
+    if (variants.length > 40) errs.push('too many variants (40 at most)');
+  }
   const needsContract = o.kind === 'SIM_DEVICE';
   if (needsContract && !o.contract?.subsidy && (o.contract?.termMonths ?? 0) > 0) errs.push('contract device offers need a subsidy definition');
   if (o.contract && o.contract.termMonths > 0 && !o.contract.etc) errs.push('fixed-term contracts need an ETC policy');

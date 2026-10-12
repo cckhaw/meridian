@@ -325,6 +325,98 @@ describe('orders, payments and retries', () => {
   });
 });
 
+describe('order wizard API, partial cancellation and returns', () => {
+  it('quotes the full summary, lists eligible add-ons, and cancels part of an order', async () => {
+    const agent = await staff(['telesales']); const c = await customer(agent.cookie);
+    const lines = [{ offerId: 'plan-phone-24', options: { variantId: 'silver-128' }, payment: { mode: 'INSTALLMENT', months: 12, downPaymentMinor: 5000 } }, { offerId: 'fiber-1g' }];
+    const q = await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines } });
+    expect(q.status).toBe(200);
+    expect(q.json).toMatchObject({ dueNowMinor: 5000 + 5000, needs: { delivery: true, installation: true }, discountMinor: 2990 });
+    expect(q.json.lines[0]).toMatchObject({ variant: { colour: 'Silver', storage: '128GB' }, instalmentMinor: 1825, group: 'GOODS' });
+    expect(q.json.lines[0].entitlements.length).toBeGreaterThan(0);
+    expect(q.json.groups.map((g: any) => g.group).sort()).toEqual(['GOODS', 'INSTALL']);
+    expect((await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'DEALER', customerId: c, lines } })).status).toBe(403); // channel permission still applies
+
+    const add = await call('GET', `/orders/addons?customerId=${c}&offers=plan-phone-24&channel=TELESALES`, { cookie: agent.cookie });
+    expect(add.json.items.map((i: any) => i.offer.id)).toContain('device-care');
+    const none = await call('GET', `/orders/addons?customerId=${c}&offers=plan-sim-5g&channel=TELESALES`, { cookie: agent.cookie });
+    expect(none.json.items.map((i: any) => i.offer.id)).not.toContain('device-care');
+    const avail = await call('GET', '/catalog/plan-phone-24/availability', { cookie: agent.cookie });
+    expect(avail.json.items.find((v: any) => v.variantId === 'silver-128').available).toBeGreaterThan(0);
+
+    const root_ = await root();
+    const placed = await call('POST', '/orders', { cookie: root_, body: { channel: 'TELESALES', customerId: c, lines, deliveryAddress: '1 Road', payment: { method: 'CREDIT_CARD' } } });
+    expect(placed.status).toBe(200);
+    expect(placed.json.groups.map((g: any) => g.kind).sort()).toEqual(['GOODS', 'INSTALL']);
+    await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'ship' } });
+    const partial = await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'cancel', reason: 'no fibre please' } });
+    expect(partial.status).toBe(200);
+    expect(partial.json.groups.find((g: any) => g.kind === 'INSTALL').status).toBe('CANCELLED');
+    expect(partial.json.groups.find((g: any) => g.kind === 'GOODS').status).toBe('LOCKED');
+    const refused = await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'cancel', groups: ['GOODS'] } });
+    expect(refused.status).toBe(422);
+    expect(refused.json.error.message).toMatch(/point of no return/);
+    await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'deliver' } });
+    const ret = await call('POST', `/orders/${placed.json.id}/actions`, { cookie: root_, body: { type: 'return', reason: 'screen scratched', deductionMinor: 1000 } });
+    expect(ret.status).toBe(200);
+    expect(ret.json.groups.find((g: any) => g.kind === 'GOODS').status).toBe('RETURNED');
+    expect((await call('POST', `/orders/${placed.json.id}/actions`, { cookie: agent.cookie, body: { type: 'return', reason: 'again please' } })).status).toBe(403); // telesales cannot cancel or return
+  });
+
+  it('manages bundle rules (catalog editors only) and sweeps late installations', async () => {
+    const root_ = await root();
+    const agent = await staff(['telesales']);
+    const body = { id: 'watch-fibre', name: 'Fibre + watch: 5.00 off the watch', when: ['kind:FIBER', 'kind:WEARABLE'], target: 'kind:WEARABLE', amountMinor: 500 };
+    expect((await call('POST', '/bundle-rules', { cookie: agent.cookie, body })).status).toBe(403);
+    expect((await call('POST', '/bundle-rules', { cookie: root_, body: { ...body, percentBps: 100 } })).status).toBe(400); // a percentage or an amount, not both
+    expect((await call('POST', '/bundle-rules', { cookie: root_, body })).status).toBe(200);
+    expect((await call('GET', '/bundle-rules', { cookie: agent.cookie })).json.items.map((r: any) => r.id)).toEqual(expect.arrayContaining(['fibre-plus-phone', 'watch-fibre']));
+    expect((await call('PATCH', '/bundle-rules/watch-fibre', { cookie: root_, body: { ...body, amountMinor: 700 } })).json.amountMinor).toBe(700);
+    expect((await call('DELETE', '/bundle-rules/watch-fibre', { cookie: root_ })).status).toBe(200);
+    expect((await call('POST', '/jobs/sweep-orders', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('POST', '/jobs/sweep-orders', { cookie: root_ })).json).toMatchObject({ atRisk: expect.any(Number), cancelled: expect.any(Number) });
+  });
+});
+
+describe('cancellation rules in settings', () => {
+  it('lets only the super user manage the rule base, validates rules, and applies changes to real orders', async () => {
+    const root_ = await root();
+    const admin = await staff(['admin']);
+    expect((await call('GET', '/settings/cancellation', { cookie: admin.cookie })).status).toBe(403);
+    const v = await call('GET', '/settings/cancellation', { cookie: root_ });
+    expect(v.status).toBe(200);
+    expect(v.json.rules.length).toBeGreaterThan(10);
+    expect(v.json.facts.map((f: any) => f.id)).toContain('hoursToVisit');
+    expect(v.json.descriptions['goods-return-window']).toMatch(/within 14 days of delivery/);
+
+    const rule = { id: 'tele-fibre-approval', name: 'Telesales fibre needs approval', action: 'CANCEL', group: 'INSTALL', priority: 1, when: [{ fact: 'groupStatus', op: 'eq', value: 'PENDING' }, { fact: 'channel', op: 'eq', value: 'TELESALES' }], outcome: { allow: true, requiresOverride: true } };
+    expect((await call('POST', '/settings/cancellation/rules', { cookie: root_, body: { ...rule, outcome: { allow: false, feeFixedMinor: 5 } } })).status).toBe(400);
+    expect((await call('POST', '/settings/cancellation/rules', { cookie: root_, body: { ...rule, when: [{ fact: 'hoursToVisit', op: 'in', value: ['x'] }] } })).status).toBe(400);
+    const made = await call('POST', '/settings/cancellation/rules', { cookie: root_, body: rule });
+    expect(made.status).toBe(200);
+    const mine = made.json.rules.find((r: any) => r.id === rule.id);
+    expect(mine.priority).toBeGreaterThan(0);
+    expect((await call('POST', '/settings/cancellation/rules', { cookie: root_, body: rule })).status).toBe(400); // duplicate id
+
+    const c = await customer(root_);
+    const o = await call('POST', '/orders', { cookie: root_, body: { channel: 'TELESALES', customerId: c, lines: [{ offerId: 'fiber-1g' }], payment: { method: 'CASH', confirmed: true, reference: 'R-1' } } });
+    expect(o.json.groups.find((g: any) => g.kind === 'INSTALL')).toMatchObject({ ruleId: 'tele-fibre-approval' });
+
+    const sim = await call('POST', '/settings/cancellation/simulate', { cookie: root_, body: { action: 'CANCEL', group: 'INSTALL', facts: { groupStatus: 'PENDING', channel: 'TELESALES' }, paidMinor: 5000 } });
+    expect(sim.json.decision).toMatchObject({ allow: false, needsOverride: true, rule: { id: 'tele-fibre-approval' } });
+    expect((await call('POST', '/settings/cancellation/simulate', { cookie: root_, body: { action: 'CANCEL', group: 'INSTALL', facts: { groupStatus: 'PENDING', channel: 'TELESALES' }, paidMinor: 5000, canOverride: true } })).json.decision.allow).toBe(true);
+
+    expect((await call('PATCH', `/settings/cancellation/rules/${rule.id}`, { cookie: root_, body: { ...rule, enabled: false } })).json.rules.find((r: any) => r.id === rule.id).enabled).toBe(false);
+    await call('POST', `/settings/cancellation/rules/${rule.id}/move`, { cookie: root_, body: { direction: 'up' } });
+    expect((await call('DELETE', `/settings/cancellation/rules/${rule.id}`, { cookie: root_ })).json.rules.some((r: any) => r.id === rule.id)).toBe(false);
+    expect((await call('POST', '/settings/cancellation/default', { cookie: root_, body: { defaultAllow: true } })).json.settings.defaultAllow).toBe(true);
+    const reset = await call('POST', '/settings/cancellation/reset', { cookie: root_ });
+    expect(reset.json.settings.defaultAllow).toBe(false);
+    expect(reset.json.rules.length).toBe(v.json.rules.length);
+    expect((await call('GET', '/audit?entity=settings', { cookie: root_ })).json.items.some((a: any) => a.action === 'CANCELLATION_RULES_RESET')).toBe(true);
+  });
+});
+
 describe('production safety', () => {
   it('refuses to serve a production deployment that is misconfigured (but still answers the liveness probe)', async () => {
     const keep = { ...process.env };
