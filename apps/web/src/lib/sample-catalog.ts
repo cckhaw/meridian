@@ -1,4 +1,4 @@
-import type { OfferKind } from '@nexus/types';
+import type { OfferKind } from '@meridian/types';
 
 export interface SampleOffer { id: string; name: string; kind: OfferKind; path: string; monthly?: number; term?: 0 | 12 | 24 | 36; subsidy?: number; currency: 'SGD' | 'THB' }
 

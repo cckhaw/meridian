@@ -1,5 +1,5 @@
 'use client';
-import { Badge, Card, LargeTitle, Segmented } from '@nexus/ui';
+import { Badge, Card, LargeTitle, Segmented } from '@meridian/ui';
 import { useMemo, useState } from 'react';
 import { sampleOffers } from '@/lib/sample-catalog';
 

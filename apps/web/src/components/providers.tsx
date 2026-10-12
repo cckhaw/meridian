@@ -1,11 +1,11 @@
 'use client';
-import { AppShell, ThemeProvider } from '@nexus/ui';
-import type { PersonaId } from '@nexus/types';
+import { AppShell, ThemeProvider } from '@meridian/ui';
+import type { PersonaId } from '@meridian/types';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 
-const KEY = 'nexus-persona';
+const KEY = 'meridian-persona';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [persona, setPersona] = useState<PersonaId>('product-configurator');

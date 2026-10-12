@@ -3,7 +3,7 @@ import { fiberFlow, retailDeviceFlow } from './default-definitions.js';
 import { canCancel } from './pnr.js';
 import { validateDefinition } from './validate.js';
 import { evaluateCondition, nextNode } from './walk.js';
-import type { OrderWorkflowDefinition } from '@nexus/types';
+import type { OrderWorkflowDefinition } from '@meridian/types';
 
 describe('validateDefinition', () => {
   it('accepts shipped templates', () => {

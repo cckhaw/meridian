@@ -1,4 +1,4 @@
-import type { OrderWorkflowDefinition, WorkflowNode } from '@nexus/types';
+import type { OrderWorkflowDefinition, WorkflowNode } from '@meridian/types';
 
 /** Structural validation for definitions produced by the visual designer. */
 export function validateDefinition(def: OrderWorkflowDefinition): string[] {

@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import type { CatalogNodeLevel, OfferKind } from '@nexus/types';
+import type { CatalogNodeLevel, OfferKind } from '@meridian/types';
 import type { HydratedDocument } from 'mongoose';
 
 /** Single-collection polymorphic hierarchy keyed by materialised path (prefix queries via ^path/). */

@@ -1,6 +1,6 @@
 'use client';
-import type { OrderWorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowNodeType } from '@nexus/types';
-import { Badge, Button, Card } from '@nexus/ui';
+import type { OrderWorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowNodeType } from '@meridian/types';
+import { Badge, Button, Card } from '@meridian/ui';
 import { useMemo, useRef, useState, type DragEvent, type PointerEvent } from 'react';
 
 const PALETTE: Array<{ type: WorkflowNodeType; label: string }> = [

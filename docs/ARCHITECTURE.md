@@ -1,4 +1,4 @@
-# Nexus architecture
+# Meridian architecture
 
 ## Layout
 | Path | Purpose |

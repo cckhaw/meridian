@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 export type Theme = 'light' | 'dark';
-const KEY = 'nexus-theme';
+const KEY = 'meridian-theme';
 const Ctx = createContext<{ theme: Theme; toggle: () => void }>({ theme: 'light', toggle: () => {} });
 
 /** Inline in <head> to set the class before first paint (default: light, regardless of OS setting). */

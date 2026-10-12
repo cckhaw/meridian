@@ -1,4 +1,4 @@
-import type { CatalogNode, CatalogNodeLevel, OfferNode } from '@nexus/types';
+import type { CatalogNode, CatalogNodeLevel, OfferNode } from '@meridian/types';
 
 /** Network type -> Category -> Group -> Offer. A node's parent must be exactly one level above. */
 const PARENT_LEVEL: Record<CatalogNodeLevel, CatalogNodeLevel | null> = {

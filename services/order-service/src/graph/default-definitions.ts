@@ -1,4 +1,4 @@
-import type { OrderWorkflowDefinition, WorkflowNode, WorkflowNodeType } from '@nexus/types';
+import type { OrderWorkflowDefinition, WorkflowNode, WorkflowNodeType } from '@meridian/types';
 
 let y = 0;
 const n = (id: string, type: WorkflowNodeType, label: string, config: WorkflowNode['config'] = {}): WorkflowNode =>

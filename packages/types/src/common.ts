@@ -1,4 +1,4 @@
-/** ISO-4217 codes for the ASEAN markets Nexus operates in. */
+/** ISO-4217 codes for the ASEAN markets Meridian operates in. */
 export type CurrencyCode =
   | 'SGD' | 'MYR' | 'THB' | 'IDR' | 'VND' | 'PHP' | 'BND' | 'KHR' | 'LAK' | 'MMK' | 'USD';
 

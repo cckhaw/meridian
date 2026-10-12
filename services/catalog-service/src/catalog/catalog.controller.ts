@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import type { CatalogNode } from '@nexus/types';
+import type { CatalogNode } from '@meridian/types';
 import { CatalogService } from './catalog.service.js';
 
 /** TM Forum TMF620 Product Catalog Management — base path /tmf-api/productCatalogManagement/v5. */

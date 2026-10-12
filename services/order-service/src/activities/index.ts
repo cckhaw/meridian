@@ -1,4 +1,4 @@
-import type { Order } from '@nexus/types';
+import type { Order } from '@meridian/types';
 
 /** Activity contracts. Implementations call downstream services; all must be idempotent (keyed by orderId+step). */
 export interface OrderActivities {

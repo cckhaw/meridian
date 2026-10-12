@@ -1,4 +1,4 @@
--- Nexus core schema (PostgreSQL / AlloyDB).
+-- Meridian core schema (PostgreSQL / AlloyDB).
 -- Sharding model: every tenant-owned row carries shard_id = abs(hashtext(customer_id)) % 1024.
 -- Logical shards map to physical AlloyDB clusters via the shard_map table (router lives in app layer).
 -- High-cardinality tables (services, order_lines, usage) are additionally HASH partitioned so a
@@ -122,7 +122,7 @@ CREATE TABLE order_lines (
 ) PARTITION BY HASH (order_id);
 CREATE INDEX order_lines_order_idx ON order_lines (shard_id, order_id);
 
--- Append-only audit of state transitions (also published to Kafka topic nexus.order.events).
+-- Append-only audit of state transitions (also published to Kafka topic meridian.order.events).
 CREATE TABLE order_state_history (
   id          bigint GENERATED ALWAYS AS IDENTITY,
   shard_id    smallint NOT NULL,

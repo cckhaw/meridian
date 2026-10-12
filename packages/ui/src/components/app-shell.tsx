@@ -1,5 +1,5 @@
 'use client';
-import { PERSONAS, type Persona, type PersonaId } from '@nexus/types';
+import { PERSONAS, type Persona, type PersonaId } from '@meridian/types';
 import { useState, type ReactNode } from 'react';
 import { ThemeToggle } from './theme-toggle';
 
@@ -48,12 +48,12 @@ export function AppShell({ persona, onPersonaChange, activeHref, linkComponent, 
     <div className="min-h-dvh lg:pl-72">
       <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-separator bg-bg/70 px-4 pt-[var(--sat)] backdrop-blur-chrome lg:hidden">
         <button className="min-h-tap min-w-tap text-title3 max-md:hidden" aria-label="Menu" aria-expanded={drawer} onClick={() => setDrawer((d) => !d)}>☰</button>
-        <span className="flex-1 truncate text-body font-semibold">Nexus · {current.label}</span>
+        <span className="flex-1 truncate text-body font-semibold">Meridian · {current.label}</span>
         <ThemeToggle />
       </header>
 
       <aside className={`fixed inset-y-0 left-0 z-20 w-72 flex-col gap-4 border-r border-separator bg-bg/80 p-4 backdrop-blur-chrome max-md:hidden lg:flex ${drawer ? 'flex pt-20' : 'hidden'}`}>
-        <div className="hidden items-center justify-between lg:flex"><span className="text-title3 font-bold">Nexus</span><ThemeToggle /></div>
+        <div className="hidden items-center justify-between lg:flex"><span className="text-title3 font-bold">Meridian</span><ThemeToggle /></div>
         {switcher}
         <nav aria-label="Primary" className="flex flex-col gap-1">{items}</nav>
       </aside>

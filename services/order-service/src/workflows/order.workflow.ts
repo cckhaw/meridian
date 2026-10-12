@@ -1,5 +1,5 @@
 import { condition, defineQuery, defineSignal, proxyActivities, setHandler } from '@temporalio/workflow';
-import type { OrderState, OrderWorkflowDefinition } from '@nexus/types';
+import type { OrderState, OrderWorkflowDefinition } from '@meridian/types';
 import type { OrderActivities } from '../activities/index.js';
 import { canCancel } from '../graph/pnr.js';
 import { nextNode, type Facts } from '../graph/walk.js';
@@ -46,7 +46,7 @@ export async function orderWorkflow({ orderId, definition, facts }: OrderWorkflo
   const compensate = async (to: OrderState, why: string) => {
     for (const undo of compensations.reverse()) await undo();
     await move(to, why);
-    await a.publishEvent('nexus.order.events', orderId, { type: to, reason: why });
+    await a.publishEvent('meridian.order.events', orderId, { type: to, reason: why });
     return to;
   };
 
@@ -104,7 +104,7 @@ export async function orderWorkflow({ orderId, definition, facts }: OrderWorkflo
         break;
       case 'END':
         await move('COMPLETED');
-        await a.publishEvent('nexus.order.events', orderId, { type: 'COMPLETED' });
+        await a.publishEvent('meridian.order.events', orderId, { type: 'COMPLETED' });
         return state;
       default: // START, CONDITION: no side effects, routing only
         break;

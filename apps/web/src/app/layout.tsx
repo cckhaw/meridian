@@ -1,10 +1,10 @@
-import { themeInitScript } from '@nexus/ui';
+import { themeInitScript } from '@meridian/ui';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { Providers } from '@/components/providers';
 import './globals.css';
 
-export const metadata: Metadata = { title: { default: 'Nexus', template: '%s · Nexus' }, description: 'Telecom CRM & Billing Suite' };
+export const metadata: Metadata = { title: { default: 'Meridian', template: '%s · Meridian' }, description: 'Telecom CRM & Billing Suite' };
 // viewport-fit=cover lets the shell use safe-area insets on notched phones.
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 

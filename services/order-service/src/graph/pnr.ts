@@ -1,4 +1,4 @@
-import type { OrderState } from '@nexus/types';
+import type { OrderState } from '@meridian/types';
 
 /**
  * Point of No Return: after the PNR node the order can no longer be cancelled by the customer,

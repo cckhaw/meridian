@@ -1,4 +1,4 @@
-import type { OrderWorkflowDefinition, WorkflowNode } from '@nexus/types';
+import type { OrderWorkflowDefinition, WorkflowNode } from '@meridian/types';
 
 export type Facts = Record<string, string | number | boolean>;
 

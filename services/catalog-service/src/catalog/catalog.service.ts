@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import type { CatalogNode, EtcQuote, OfferNode } from '@nexus/types';
+import type { CatalogNode, EtcQuote, OfferNode } from '@meridian/types';
 import type { Model } from 'mongoose';
 import { quoteEtc } from '../etc/etc.calculator.js';
 import { CatalogNodeDoc } from './catalog.schema.js';

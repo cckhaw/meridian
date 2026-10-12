@@ -1,4 +1,4 @@
-import type { ContractTerms, EtcQuote, Money } from '@nexus/types';
+import type { ContractTerms, EtcQuote, Money } from '@meridian/types';
 
 export interface EtcInput {
   offerId: string;

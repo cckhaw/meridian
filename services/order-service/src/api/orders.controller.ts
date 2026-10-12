@@ -1,13 +1,13 @@
 import { BadRequestException, Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
 import type { Client } from '@temporalio/client';
-import type { Order, OrderWorkflowDefinition } from '@nexus/types';
+import type { Order, OrderWorkflowDefinition } from '@meridian/types';
 import { fiberFlow, retailDeviceFlow } from '../graph/default-definitions.js';
 import { validateDefinition } from '../graph/validate.js';
 import type { Facts } from '../graph/walk.js';
 import { cancelRequested, installationScheduled, orderStatus, orderWorkflow, paymentConfirmed } from '../workflows/order.workflow.js';
 
 export const TEMPORAL = Symbol('TEMPORAL');
-export const TASK_QUEUE = 'nexus-orders';
+export const TASK_QUEUE = 'meridian-orders';
 
 /** In-memory registry until the designer persists definitions (see docs/roadmap). */
 const definitions = new Map<string, OrderWorkflowDefinition>([[retailDeviceFlow.id, retailDeviceFlow], [fiberFlow.id, fiberFlow]]);

@@ -1,4 +1,4 @@
 module.exports = {
-  presets: [require('@nexus/ui/tailwind-preset')],
+  presets: [require('@meridian/ui/tailwind-preset')],
   content: ['./src/**/*.{ts,tsx}', '../../packages/ui/src/**/*.{ts,tsx}'],
 };

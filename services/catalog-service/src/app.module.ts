@@ -6,7 +6,7 @@ import { CatalogService } from './catalog/catalog.service.js';
 
 @Module({
   imports: [
-    MongooseModule.forRoot(process.env.MONGO_URL ?? 'mongodb://localhost:27017/nexus_catalog'),
+    MongooseModule.forRoot(process.env.MONGO_URL ?? 'mongodb://localhost:27017/meridian_catalog'),
     MongooseModule.forFeature([{ name: CatalogNodeDoc.name, schema: CatalogNodeSchema }]),
   ],
   controllers: [CatalogController],

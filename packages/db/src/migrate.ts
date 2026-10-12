@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 
 const dir = join(import.meta.dirname, '..', 'migrations');
-const client = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://nexus:nexus@localhost:5432/nexus' });
+const client = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://meridian:meridian@localhost:5432/meridian' });
 await client.connect();
 await client.query('CREATE TABLE IF NOT EXISTS _migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
 for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {

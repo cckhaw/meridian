@@ -1,4 +1,4 @@
-import { Badge, Card, LargeTitle } from '@nexus/ui';
+import { Badge, Card, LargeTitle } from '@meridian/ui';
 import Link from 'next/link';
 
 const modules = [
@@ -13,7 +13,7 @@ const modules = [
 export default function Home() {
   return (
     <>
-      <LargeTitle subtitle="Telecom CRM & Billing for 20M+ subscribers across ASEAN">Welcome to Nexus</LargeTitle>
+      <LargeTitle subtitle="Telecom CRM & Billing for 20M+ subscribers across ASEAN">Welcome to Meridian</LargeTitle>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {modules.map((m) => (
           <Link key={m.href} href={m.href} className="rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">

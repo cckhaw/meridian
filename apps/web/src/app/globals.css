@@ -1,4 +1,4 @@
-@import '@nexus/ui/tokens.css';
+@import '@meridian/ui/tokens.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

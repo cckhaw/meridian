@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { LargeTitle } from '@nexus/ui';
+import { LargeTitle } from '@meridian/ui';
 import { Designer } from './designer';
 
 export const metadata: Metadata = { title: 'Order Rules' };

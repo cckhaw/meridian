@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateOffer, validateParent } from './hierarchy.js';
-import type { OfferNode } from '@nexus/types';
+import type { OfferNode } from '@meridian/types';
 
 const offer = (over: Partial<OfferNode>): OfferNode => ({
   id: 'x', level: 'OFFER', code: 'x', name: 'x', path: 'a/b/c/x', parentId: 'g', status: 'DRAFT', markets: [],

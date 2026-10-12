@@ -1,3 +1,3 @@
-module github.com/nexus/rating-gateway
+module github.com/meridian/rating-gateway
 
 go 1.22
