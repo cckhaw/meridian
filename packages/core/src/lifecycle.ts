@@ -1,7 +1,7 @@
 import { audit } from './audit.js';
 import { etcQuoteForOffer } from './catalog.js';
 import { issueInvoice, invoiceBalance } from './billing.js';
-import { market } from './config.js';
+import { marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { GL } from './config.js';
@@ -57,7 +57,7 @@ export async function changeMsisdn(db: Db, id: string, newMsisdn?: string, actor
     if (s.type !== 'MOBILE') throw rejected('number change applies to mobile services');
     if (s.status !== 'ACTIVE') throw rejected(`service must be ACTIVE (is ${s.status})`);
     const cust = (await q.query('SELECT market_code FROM customers WHERE id=$1', [s.customerId])).rows[0]!;
-    const next = newMsisdn ?? market(cust.marketCode).dialCode + (await q.query(`SELECT nextval('msisdn_seq') AS n`)).rows[0]!.n;
+    const next = newMsisdn ?? (await marketFor(q, cust.marketCode)).dialCode + (await q.query(`SELECT nextval('msisdn_seq') AS n`)).rows[0]!.n;
     if (!/^\+\d{8,15}$/.test(next)) throw invalid('MSISDN must be E.164, e.g. +6591234567');
     try {
       await q.query(`INSERT INTO identifier_registry (type, identifier, service_id) VALUES ('MOBILE', $1, $2)`, [next, id]);

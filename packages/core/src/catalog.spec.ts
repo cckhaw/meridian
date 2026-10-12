@@ -17,16 +17,12 @@ const offer = (id: string, parentId: string, over: Partial<NodeInput> = {}): Nod
 } as NodeInput);
 
 describe('prerequisites ("a phone before its insurance")', () => {
-  beforeAll(async () => {
-    await createNode(db, { ...base, id: 'grp-insurance', level: 'GROUP', code: 'grp-insurance', name: 'Insurance', path: '', parentId: 'mobile-postpaid' } as NodeInput);
-    // Device care needs ANY offer in the device group.
-    await createNode(db, offer('device-care', 'grp-insurance', { name: 'Device Care', requires: ['grp-device'] }));
-  });
+  // The starter catalog ships grp-insurance and device-care (requires any offer in grp-device).
 
   it('is refused on its own, and accepted alongside a phone in the same order', async () => {
     const { customer } = await newCustomer(db);
     const alone = placeOrder(db, { customerId: customer.id, channel: 'RETAIL_ASSISTED', attribution: retail, payment: { method: 'CASH' }, lines: [{ offerId: 'device-care' }] });
-    await expect(alone).rejects.toThrow(/Device Care requires any .* offer.*same order or own one already/);
+    await expect(alone).rejects.toThrow(/Device Care.* requires any .* offer.*same order or own one already/);
     const together = await placeOrder(db, { customerId: customer.id, channel: 'RETAIL_ASSISTED', attribution: retail, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-phone-24' }, { offerId: 'device-care' }] });
     expect(together.state).toBe('COMPLETED');
   });

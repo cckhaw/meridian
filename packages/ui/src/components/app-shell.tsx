@@ -4,13 +4,23 @@ import { ThemeToggle } from './theme-toggle';
 
 export interface NavItem { id: string; label: string; href: string; icon: string }
 export interface ShellUser { name: string; roles: string[] }
+/** The operator's identity: their name, or their logo when one is uploaded (recommended 480×120px, shown at most 40px tall). */
+export interface Brand { name: string; logoUrl?: string | null }
 
-const ICON: Record<string, string> = { house: '⌂', people: '☺', list: '☰', grid: '▦', flow: '⇢', calendar: '▤', doc: '▭', tag: '◈', bag: '◫', box: '▣', person: '◉', bubble: '◌', cube: '◇', coins: '◎', swap: '⇄', ledger: '▥', check: '✓', shield: '⛨', gauge: '◔' };
+export function BrandMark({ brand, className = '' }: { brand: Brand; className?: string }) {
+  return brand.logoUrl
+    // eslint-disable-next-line @next/next/no-img-element
+    ? <img src={brand.logoUrl} alt={brand.name} className={`max-h-10 w-auto max-w-[200px] object-contain object-left ${className}`} />
+    : <span className={`truncate font-bold ${className}`}>{brand.name}</span>;
+}
+
+const ICON: Record<string, string> = { house: '⌂', people: '☺', list: '☰', grid: '▦', flow: '⇢', calendar: '▤', doc: '▭', tag: '◈', bag: '◫', box: '▣', person: '◉', bubble: '◌', cube: '◇', coins: '◎', swap: '⇄', ledger: '▥', check: '✓', shield: '⛨', gauge: '◔', gear: '\u2699\uFE0E' };
 
 type LinkProps = { href: string; className: string; children: ReactNode; 'aria-current'?: 'page' };
 export interface AppShellProps {
   nav: NavItem[];
   user: ShellUser;
+  brand?: Brand;
   activeHref: string;
   onSignOut: () => void;
   onChangePassword: () => void;
@@ -28,7 +38,7 @@ function activeId(nav: NavItem[], path: string): string | undefined {
  * Responsive shell: sidebar on desktop, drawer on tablet, scrollable bottom tab bar on phones (with safe-area padding).
  * Navigation is whatever the server says this user may open; nothing is hard-coded per persona.
  */
-export function AppShell({ nav, user, activeHref, onSignOut, onChangePassword, linkComponent, children }: AppShellProps) {
+export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, onSignOut, onChangePassword, linkComponent, children }: AppShellProps) {
   const [drawer, setDrawer] = useState(false);
   const Link = linkComponent ?? (({ href, className, children: c, ...r }: LinkProps) => <a href={href} className={className} {...r}>{c}</a>);
   const active = activeId(nav, activeHref);
@@ -55,14 +65,14 @@ export function AppShell({ nav, user, activeHref, onSignOut, onChangePassword, l
     <div className="min-h-dvh lg:pl-72">
       <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-separator bg-bg/70 px-4 pt-[var(--sat)] backdrop-blur-chrome lg:hidden">
         <button className="min-h-tap min-w-tap text-title3 max-md:hidden" aria-label="Menu" aria-expanded={drawer} onClick={() => setDrawer((d) => !d)}>☰</button>
-        <span className="flex-1 truncate text-body font-semibold">Meridian</span>
+        <span className="flex min-w-0 flex-1 items-center py-1"><BrandMark brand={brand} className="text-body" /></span>
         <span className="max-w-[40%] truncate text-footnote text-label2">{user.name}</span>
         <ThemeToggle />
         <button onClick={onSignOut} className="min-h-tap px-2 text-subhead text-accent md:hidden">Sign out</button>
       </header>
 
       <aside className={`fixed inset-y-0 left-0 z-20 w-72 flex-col gap-4 border-r border-separator bg-bg/80 p-4 backdrop-blur-chrome max-md:hidden lg:flex ${drawer ? 'flex pt-20' : 'hidden'}`}>
-        <div className="hidden items-center justify-between lg:flex"><span className="text-title3 font-bold">Meridian</span><ThemeToggle /></div>
+        <div className="hidden items-center justify-between lg:flex"><BrandMark brand={brand} className="text-title3" /><ThemeToggle /></div>
         <nav aria-label="Primary" className="flex flex-1 flex-col gap-1 overflow-y-auto">{items}</nav>
         {account}
       </aside>

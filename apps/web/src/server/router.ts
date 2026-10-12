@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as core from '@meridian/core';
 import { DomainError, forbidden, getDb, type Db, type Permission, type SessionUser } from '@meridian/core';
+import { formatMoney } from '@meridian/types';
 import { z, ZodError } from 'zod';
 import { assertCustomer, assertOrder } from './access';
 import { clearCookie, clientIp, readToken, sameOrigin, sessionCookie } from './session';
@@ -196,6 +197,43 @@ route('DELETE', '/catalog/:id', 'catalog:write', async ({ db, user, params }) =>
 get('/catalog/:id/etc', 'catalog:read', ({ db, params, query }) =>
   core.etcQuoteForOffer(db, params.id!, new Date(query.get('contractStart') ?? Date.now()), new Date(query.get('terminationDate') ?? Date.now())));
 
+// ───────────────────────── settings (super user) and public branding ─────────────────────────
+const regionalSchema = z.object({
+  currency: z.string().length(3), symbol: z.string().min(1).max(6), symbolPosition: z.enum(['before', 'after']), symbolSpacing: z.boolean(),
+  thousandSeparator: z.enum([',', '.', ' ', "'", '’', '']), decimalSeparator: z.enum(['.', ',']), decimals: z.number().int().min(0).max(4), grouping: z.enum(['standard', 'indian']),
+  dateFormat: z.enum(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'DD MMM YYYY', 'DD.MM.YYYY']), timeFormat: z.enum(['24h', '12h']), timezone: z.string().min(1).max(60),
+  weekStart: z.union([z.literal(0), z.literal(1), z.literal(6)]), country: z.string().length(2), dialCode: z.string().max(5), taxName: z.string().min(1).max(20), taxBps: z.number().int().min(0).max(10_000),
+});
+const brandingView = (b: core.Branding) => ({ name: b.name, theme: b.theme, logoUrl: b.logo ? `/api/branding/logo?v=${b.logo.sha256.slice(0, 12)}` : null, logo: b.logo });
+
+/** Presentation settings every page needs before sign-in (login screen, store-front): brand, theme, number/date format. Contains nothing sensitive. */
+open('GET', '/branding', async ({ db }) => ({ ...brandingView(await core.getBranding(db)), regional: await core.getRegional(db) }));
+open('GET', '/branding/logo', async ({ db, req }) => {
+  const logo = await core.getLogo(db);
+  if (!logo) throw new DomainError('NOT_FOUND', 'no logo');
+  const etag = `"${logo.sha256}"`;
+  const headers = { etag, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" };
+  if (req.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
+  return new Response(new Uint8Array(logo.bytes), { headers: { ...headers, 'content-type': logo.contentType, 'content-length': String(logo.bytes.length) } });
+});
+get('/settings', 'settings:manage', async ({ db }) => ({
+  regional: await core.getRegional(db), currencyLocked: await core.hasTransactions(db), branding: brandingView(await core.getBranding(db)),
+  themes: Object.values(core.THEMES), logoGuidance: core.LOGO_RECOMMENDATION,
+}));
+post('/settings/regional', 'settings:manage', async ({ db, user, body }) => {
+  const r = await core.setRegional(db, user.username, { ...regionalSchema.parse(body), exponent: 2 });
+  return { regional: r.regional, repricedOffers: r.repriced };
+});
+post('/settings/branding', 'settings:manage', async ({ db, user, body }) => {
+  const b = z.object({ name: z.string().min(1).max(40), theme: z.string().max(20) }).parse(body);
+  return brandingView(await core.setBranding(db, user.username, b));
+});
+post('/settings/logo', 'settings:manage', async ({ db, user, body }) => {
+  const b = z.object({ dataBase64: z.string().min(1).max(800_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') }).parse(body);
+  return brandingView(await core.setLogo(db, user.username, Buffer.from(b.dataBase64, 'base64')));
+});
+route('DELETE', '/settings/logo', 'settings:manage', async ({ db, user }) => brandingView(await core.removeLogo(db, user.username)));
+
 // ───────────────────────── customers ─────────────────────────
 const newCustomer = z.object({
   segment: z.enum(['CONSUMER', 'FAMILY', 'ENTERPRISE', 'IOT_ENTERPRISE']), displayName: z.string().min(1).max(200), idDocument: z.string().min(3).max(40),
@@ -350,7 +388,7 @@ post('/invoices/:id/pay', 'billing:pay', async ({ db, user, params, body }) => {
 post('/invoices/:id/credit', 'billing:credit', async ({ db, user, params, body }) => {
   const b = z.object({ amountMinor: money, reason: z.string().min(3).max(300), caseId: uuid.optional() }).parse(body);
   const limit = user.creditLimitMinor;
-  if (limit !== null && b.amountMinor > limit) throw forbidden(`This credit is above your limit (${(limit / 100).toFixed(2)}). Ask Billing or Finance to issue it.`);
+  if (limit !== null && b.amountMinor > limit) throw forbidden(`This credit is above your limit (${formatMoney(limit, await core.getRegional(db))}). Ask Billing or Finance to issue it.`);
   return core.creditInvoice(db, params.id!, b.amountMinor, b.reason, user.username, b.caseId);
 });
 post('/billing/run', 'billing:run', ({ db, user, body }) => { const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });

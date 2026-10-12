@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { OfferNode, OrderChannel, OrderState, PaymentMethod } from '@meridian/types';
-import { COMMISSION_BPS, GL, market, paymentMode } from './config.js';
+import { COMMISSION_BPS, GL, paymentMode } from './config.js';
+import { marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { checkDependencies, getOffer, monthlyFee } from './catalog.js';
 import { getCustomer } from './customers.js';
@@ -68,7 +69,7 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
     const customer = await getCustomer(q, customerId);
     // The customer's own market decides currency, tax and which offers are sellable; the caller cannot override it.
     const marketCode = (customer.marketCode as string).trim();
-    const mk = market(marketCode);
+    const mk = await marketFor(q, marketCode);
     if (customer.status !== 'ACTIVE') throw rejected(`customer is ${customer.status}`);
     let accountId = input.accountId ?? null;
     if (accountId) {
@@ -243,7 +244,7 @@ async function capture(q: Queryable, o: Row, reference?: string): Promise<boolea
     lines: [
       { account: GL.CASH, debit: o.totalMinor, description: `Order ${o.id.slice(0, 8)} receipt (${o.paymentMethod})` },
       ...[...revenue].map(([account, credit]) => ({ account, credit, description: `Order ${o.id.slice(0, 8)} revenue` })),
-      { account: GL.TAX_PAYABLE, credit: tax, description: `Order ${o.id.slice(0, 8)} ${market(o.marketCode).taxName}` },
+      { account: GL.TAX_PAYABLE, credit: tax, description: `Order ${o.id.slice(0, 8)} ${(await marketFor(q, o.marketCode)).taxName}` },
     ],
   });
   return true;
@@ -268,7 +269,7 @@ async function refundIfCaptured(q: Queryable, o: Row) {
 
 async function activate(q: Queryable, o: Row, ctx: Ctx) {
   const lines = await orderLines(q, o.id);
-  const mk = market(o.marketCode);
+  const mk = await marketFor(q, o.marketCode);
   let accountId: string | null = o.accountId;
   const serviceLines = lines.filter((l) => createsService(l.offer));
   if (serviceLines.length && !accountId) {

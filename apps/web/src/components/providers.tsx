@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { SettingsProvider, useBrand, type ClientPresentation } from './settings-provider';
 
 const PUBLIC = ['/login'];
 
-export function Providers({ children }: { children: ReactNode }) {
-  return <ThemeProvider><AuthProvider><Gate>{children}</Gate></AuthProvider></ThemeProvider>;
+export function Providers({ children, presentation }: { children: ReactNode; presentation: ClientPresentation }) {
+  return <SettingsProvider value={presentation}><ThemeProvider><AuthProvider><Gate>{children}</Gate></AuthProvider></ThemeProvider></SettingsProvider>;
 }
 
 /** Pages outside the shell (login), then the signed-in shell, with a client-side guard that mirrors the server's module list. */
@@ -16,6 +17,7 @@ function Gate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { me, loading, signOut } = useAuth();
+  const brand = useBrand();
   const isPublic = PUBLIC.includes(pathname);
 
   useEffect(() => {
@@ -32,7 +34,7 @@ function Gate({ children }: { children: ReactNode }) {
     || (pathname.startsWith('/orders/') && me.modules.some((m) => m.id === 'orders' || m.id === 'sell'))
     || ((pathname.startsWith('/catalog/manage') || pathname.startsWith('/catalog/edit')) && me.permissions.includes('catalog:write'));
   return (
-    <AppShell nav={me.modules} user={{ name: me.displayName, roles: me.roleLabels }} activeHref={pathname} onSignOut={() => void signOut()} onChangePassword={() => router.push('/change-password')}
+    <AppShell nav={me.modules} brand={brand} user={{ name: me.displayName, roles: me.roleLabels }} activeHref={pathname} onSignOut={() => void signOut()} onChangePassword={() => router.push('/change-password')}
       linkComponent={({ href, ...p }) => <Link href={href} {...p} />}>
       {allowed ? children : <NotAllowed home={me.home} />}
     </AppShell>

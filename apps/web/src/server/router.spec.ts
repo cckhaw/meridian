@@ -383,3 +383,64 @@ describe('catalog hierarchy and dependencies', () => {
     expect((await call('DELETE', '/catalog/draft-net', { cookie: agent.cookie })).status).toBe(403);
   });
 });
+
+describe('settings and branding', () => {
+  // Smallest valid PNG header with a 480x120 IHDR.
+  const png = () => {
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(480, 0); ihdr.writeUInt32BE(120, 4); ihdr[8] = 8; ihdr[9] = 6;
+    const len = Buffer.alloc(4); len.writeUInt32BE(13);
+    return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), len, Buffer.from('IHDR'), ihdr, Buffer.alloc(16)]);
+  };
+
+  it('only the super user reaches settings; administrators and everyone else are refused', async () => {
+    const admin = await staff(['admin']);
+    for (const [m, p] of [['GET', '/settings'], ['POST', '/settings/regional'], ['POST', '/settings/branding'], ['POST', '/settings/logo'], ['DELETE', '/settings/logo']] as const) {
+      expect((await call(m, p, { cookie: admin.cookie, body: {} })).status, `admin ${m} ${p}`).toBe(403);
+      expect((await call(m, p, { body: {} })).status, `anon ${m} ${p}`).toBe(401);
+    }
+    const su = await root();
+    const s = await call('GET', '/settings', { cookie: su });
+    expect(s.status).toBe(200);
+    expect(s.json.themes).toHaveLength(7);
+    expect(s.json.logoGuidance).toMatchObject({ width: 480, height: 120 });
+    expect((await call('GET', '/auth/me', { cookie: su })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(true);
+    expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(false);
+  });
+
+  it('branding is public (login screen), and the logo is served safely', async () => {
+    const su = await root();
+    expect((await call('POST', '/settings/branding', { cookie: su, body: { name: 'Acme Mobile', theme: 'violet' } })).status).toBe(200);
+    expect((await call('POST', '/settings/branding', { cookie: su, body: { name: 'Acme', theme: 'neon' } })).status).toBe(400);
+    const up = await call('POST', '/settings/logo', { cookie: su, body: { dataBase64: png().toString('base64') } });
+    expect(up.status).toBe(200);
+    expect((await call('POST', '/settings/logo', { cookie: su, body: { dataBase64: Buffer.from('<svg><script>alert(1)</script></svg>').toString('base64') } })).status).toBe(400);
+    const pub = await call('GET', '/branding', { origin: null });
+    expect(pub.status).toBe(200);
+    expect(pub.json).toMatchObject({ name: 'Acme Mobile', theme: 'violet', regional: { currency: expect.any(String) } });
+    expect(pub.json.logoUrl).toMatch(/^\/api\/branding\/logo\?v=/);
+    const img = await call('GET', '/branding/logo', { origin: null });
+    expect(img.headers.get('content-type')).toBe('image/png');
+    expect(img.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(img.headers.get('content-security-policy')).toContain('sandbox');
+    expect((await call('DELETE', '/settings/logo', { cookie: su })).json.logoUrl).toBeNull();
+    expect((await call('GET', '/branding/logo', { origin: null })).status).toBe(404);
+  });
+
+  it('saves regional settings, validates them, and records the change in the audit log', async () => {
+    const su = await root();
+    const cur = (await call('GET', '/settings', { cookie: su })).json.regional;
+    const { exponent: _e, ...base } = cur;
+    const bad = await call('POST', '/settings/regional', { cookie: su, body: { ...base, thousandSeparator: '.', decimalSeparator: '.' } });
+    expect(bad.status).toBe(400);
+    // Earlier tests booked orders, so the currency itself is locked...
+    const locked = await call('POST', '/settings/regional', { cookie: su, body: { ...base, currency: 'EUR', symbol: '€' } });
+    expect(locked.status).toBe(422);
+    expect(locked.json.error.message).toMatch(/cannot change/);
+    // ...but how amounts and dates are written stays editable.
+    const ok = await call('POST', '/settings/regional', { cookie: su, body: { ...base, symbolPosition: 'after', symbolSpacing: true, thousandSeparator: '.', decimalSeparator: ',', decimals: 2, taxName: 'VAT', timezone: 'Europe/Berlin', dateFormat: 'DD.MM.YYYY' } });
+    expect(ok.status).toBe(200);
+    expect((await call('GET', '/branding', { origin: null })).json.regional).toMatchObject({ currency: cur.currency, symbolPosition: 'after', decimalSeparator: ',', dateFormat: 'DD.MM.YYYY' });
+    const audit = (await call('GET', '/audit?entity=settings', { cookie: su })).json;
+    expect(JSON.stringify(audit)).toContain('regional');
+  });
+});

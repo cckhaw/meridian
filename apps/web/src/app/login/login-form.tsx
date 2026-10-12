@@ -3,6 +3,7 @@ import { Alert, Button, Card, Field, Input } from '@meridian/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ApiError, post } from '@/lib/api';
+import { useBrand } from '@/components/settings-provider';
 import { useAuth } from '@/lib/auth';
 
 /** Only same-site paths are honoured, so a crafted ?next= cannot bounce a user to another site after sign-in. */
@@ -12,6 +13,7 @@ export function LoginForm() {
   const router = useRouter();
   const next = safeNext(useSearchParams().get('next'));
   const { me, refresh } = useAuth();
+  const brand = useBrand();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
@@ -38,8 +40,11 @@ export function LoginForm() {
     <main className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-[16px] bg-accent text-title2 font-bold text-accent-fg">M</div>
-          <h1 className="text-title1 font-bold tracking-tight">Meridian</h1>
+          {brand.logoUrl
+            // eslint-disable-next-line @next/next/no-img-element
+            ? <img src={brand.logoUrl} alt="" className="mx-auto mb-4 max-h-16 w-auto max-w-[260px] object-contain" />
+            : <div aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-[16px] bg-accent text-title2 font-bold text-accent-fg">{brand.name.slice(0, 1).toUpperCase()}</div>}
+          <h1 className="text-title1 font-bold tracking-tight">{brand.name}</h1>
           <p className="mt-1 text-body text-label2">Sign in to continue</p>
         </div>
         <Card>

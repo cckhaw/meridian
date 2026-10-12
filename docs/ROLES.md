@@ -40,6 +40,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | Finance | ✓ |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
 | Commission | ✓ |  |  |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |
 | Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |
+| Settings |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Audit log | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ |
 
 ## Permission matrix
@@ -77,6 +78,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |
 | `audit:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ |
 | `user:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |
+| `settings:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `order:create:SELF_SERVE` |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
 | `order:create:RETAIL_ASSISTED` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
 | `order:create:QUICK_SALE` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |

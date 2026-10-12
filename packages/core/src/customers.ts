@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Account, Customer, CustomerSegment } from '@meridian/types';
-import { market } from './config.js';
+import { marketFor } from './settings.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
 import { shardFor } from './shard.js';
@@ -61,7 +61,7 @@ export async function createAccount(q: Queryable, customerId: string, o: { name?
   const id = randomUUID();
   await q.query(
     `INSERT INTO accounts (id, shard_id, customer_id, bill_cycle_day, currency, name, payer_account_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [id, c.shardId, customerId, day, market(c.marketCode).currency, o.name ?? 'Main account', o.payerAccountId ?? null],
+    [id, c.shardId, customerId, day, (await marketFor(q, c.marketCode)).currency, o.name ?? 'Main account', o.payerAccountId ?? null],
   );
   return (await q.query<Account>('SELECT * FROM accounts WHERE id=$1', [id])).rows[0]!;
 }

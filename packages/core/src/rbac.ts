@@ -26,6 +26,7 @@ const CORE_PERMISSIONS = [
   'commission:read',
   'audit:read',
   'user:manage',
+  'settings:manage', // super user only: regional format, branding, payment gateways, store-front API keys
 ] as const;
 
 const CHANNEL_PERMISSIONS = CHANNELS.map((c) => `order:create:${c}` as const);
@@ -156,6 +157,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'finance', label: 'Finance', href: '/finance', icon: 'ledger', anyOf: ['finance:read'] },
   { id: 'commission', label: 'Commission', href: '/dealer/commission', icon: 'coins', anyOf: ['commission:read'] },
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
+  { id: 'settings', label: 'Settings', href: '/admin/settings', icon: 'gear', anyOf: ['settings:manage'] },
   { id: 'audit', label: 'Audit log', href: '/admin/audit', icon: 'list', anyOf: ['audit:read'] },
 ];
 

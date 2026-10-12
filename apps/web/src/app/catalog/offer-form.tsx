@@ -5,12 +5,12 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { label, toMinor } from '@/lib/format';
+import { label, step, toInput, toMinor } from '@/lib/format';
 import { slug, type TreeNode } from './node-modals';
 
 const KINDS = ['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE', 'FIBER', 'IOT_CONNECTIVITY', 'VAS', 'NON_TELCO_SUBSCRIPTION', 'PHYSICAL_GOOD'];
 const CHANNELS = ['SELF_SERVE', 'RETAIL_ASSISTED', 'QUICK_SALE', 'TELESALES', 'DEALER', 'CALL_CENTER'];
-const major = (minor?: number) => (minor === undefined ? '' : String(minor / 100));
+const major = toInput;
 
 interface FormState {
   parentId: string; id: string; name: string; kind: string; description: string; market: string; recurring: string; upfront: string; taxInclusive: boolean;
@@ -129,8 +129,8 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
           <Field label="Status"><Select value={f.status} onChange={set('status')}><option value="DRAFT">Draft (not sellable)</option><option value="ACTIVE">Active (sellable)</option>{editing && <option value="RETIRED">Retired</option>}</Select></Field>
           <div className="sm:col-span-2"><Field label="Description" hint="Shown to customers in the store-front."><Input value={f.description} onChange={set('description')} maxLength={500} /></Field></div>
 
-          <Field label={`Monthly fee (${currency})`}><Input type="number" min="0" step="0.01" value={f.recurring} onChange={set('recurring')} disabled={locked} /></Field>
-          <Field label={`Upfront price (${currency})`} hint="Device, SIM kit or installation fee"><Input type="number" min="0" step="0.01" value={f.upfront} onChange={set('upfront')} disabled={locked} /></Field>
+          <Field label={`Monthly fee (${currency})`}><Input type="number" min="0" step={step()} value={f.recurring} onChange={set('recurring')} disabled={locked} /></Field>
+          <Field label={`Upfront price (${currency})`} hint="Device, SIM kit or installation fee"><Input type="number" min="0" step={step()} value={f.upfront} onChange={set('upfront')} disabled={locked} /></Field>
           <label className="flex min-h-tap items-center gap-3 text-body sm:col-span-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.taxInclusive} onChange={tick('taxInclusive')} disabled={locked} />Prices include tax{market ? ` (${market.taxName} ${market.taxBps / 100}%)` : ''}</label>
 
           <Field label="Contract term"><Select value={f.term} onChange={set('term')} disabled={locked}>{[0, 12, 24, 36].map((t) => <option key={t} value={t}>{t === 0 ? 'No contract' : `${t} months`}</option>)}</Select></Field>
@@ -139,7 +139,7 @@ function Inner({ offerId, parentId, fromId, source, markets, roots, sold }: { of
               <Field label="Early termination charge"><Select value={f.etcMethod} onChange={set('etcMethod')} disabled={locked}><option value="SUBSIDY_AMORTISED">Remaining device subsidy</option><option value="REMAINING_RECURRING_PERCENT">% of remaining monthly fees</option></Select></Field>
               {f.etcMethod === 'REMAINING_RECURRING_PERCENT'
                 ? <Field label="% of remaining fees"><Input type="number" min="0" max="100" value={f.etcPercent} onChange={set('etcPercent')} disabled={locked} /></Field>
-                : <><Field label={`Subsidy (${currency})`} hint="What you fund; recovered if the customer leaves early"><Input type="number" min="0" step="0.01" value={f.subsidy} onChange={set('subsidy')} disabled={locked} /></Field><Field label={`Device retail price (${currency})`}><Input type="number" min="0" step="0.01" value={f.retail} onChange={set('retail')} disabled={locked} /></Field></>}
+                : <><Field label={`Subsidy (${currency})`} hint="What you fund; recovered if the customer leaves early"><Input type="number" min="0" step={step()} value={f.subsidy} onChange={set('subsidy')} disabled={locked} /></Field><Field label={`Device retail price (${currency})`}><Input type="number" min="0" step={step()} value={f.retail} onChange={set('retail')} disabled={locked} /></Field></>}
               <Field label="Waive charge in last N months"><Input type="number" min="0" max="12" value={f.waive} onChange={set('waive')} disabled={locked} /></Field>
             </>
           )}
