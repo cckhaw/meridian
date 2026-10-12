@@ -5,13 +5,14 @@ import { del, patch, post, useAction } from '@/lib/api';
 
 /** A node as returned by GET /catalog/tree. Offer-only fields are optional on the other levels. */
 export interface TreeNode {
-  id: string; name: string; level: 'NETWORK_TYPE' | 'CATEGORY' | 'GROUP' | 'OFFER'; status: string; path: string; parentId?: string | null;
+  id: string; name: string; level: 'NETWORK_TYPE' | 'CATEGORY' | 'GROUP' | 'OFFER' | 'LINE_ITEM'; status: string; path: string; parentId?: string | null;
   networkType?: string; kind?: string; description?: string; prices?: any[]; contract?: any; fulfilment?: any; requires?: string[]; excludes?: string[]; salesChannels?: string[]; markets?: string[];
+  itemType?: string; quantity?: number; unit?: string; unlimited?: boolean; sku?: string; sortOrder?: number;
   children: TreeNode[]; offerCount: number; activeOfferCount: number; usage?: { services: number; orders: number };
   [k: string]: any;
 }
 
-const NOUN: Record<string, string> = { NETWORK_TYPE: 'network type', CATEGORY: 'category', GROUP: 'group', OFFER: 'offer' };
+const NOUN: Record<string, string> = { NETWORK_TYPE: 'network type', CATEGORY: 'category', GROUP: 'group', OFFER: 'offer', LINE_ITEM: 'line item' };
 const PARENT_LEVEL: Record<string, TreeNode['level'] | undefined> = { CATEGORY: 'NETWORK_TYPE', GROUP: 'CATEGORY', OFFER: 'GROUP' };
 const NETWORK_TYPES = [['mobile', 'Mobile'], ['fiber', 'Fibre / broadband'], ['iot', 'IoT'], ['none', 'Other / non-network']] as const;
 

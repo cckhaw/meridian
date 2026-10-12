@@ -1,11 +1,11 @@
-import type { CatalogNode, CatalogNodeLevel, ContractTerms, EtcQuote, OfferNode, PriceComponent } from '@meridian/types';
+import type { CatalogNode, CatalogNodeLevel, ContractTerms, EtcQuote, LineItemNode, OfferNode, PriceComponent } from '@meridian/types';
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { quoteEtc } from './etc.js';
-import { validateOffer, validateParent } from './hierarchy.js';
+import { validateLineItem, validateOffer, validateParent } from './hierarchy.js';
 
-export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & { networkType?: string };
+export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
 
 const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
   const d = r.data ?? {};
@@ -17,8 +17,13 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
       ? { kind: r.kind, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
           characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [] }
       : {}),
+    ...(r.level === 'LINE_ITEM'
+      ? { itemType: d.itemType, description: d.description, quantity: d.quantity, unit: d.unit, unlimited: !!d.unlimited, sku: d.sku }
+      : {}),
   } as CatalogNode & { sortOrder: number };
 };
+
+const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, description: i.description || undefined, quantity: i.unlimited ? undefined : i.quantity, unit: i.unit || undefined, unlimited: !!i.unlimited, sku: i.sku || undefined });
 
 const offerData = (o: Partial<OfferNode>) => ({
   description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
@@ -107,6 +112,7 @@ async function assertDependenciesValid(q: Queryable, offerId: string, offerPath:
   graph.nodes.set(offerId, { id: offerId, name: graph.nodes.get(offerId)?.name ?? offerId, path: offerPath, level: 'OFFER', requires });
   const missing = [...requires, ...excludes].filter((t) => !graph.nodes.has(t));
   if (missing.length) throw invalid(`unknown product or hierarchy node: ${missing.join(', ')}`);
+  if ([...requires, ...excludes].some((t) => graph.nodes.get(t)!.level === 'LINE_ITEM')) throw invalid('a line item cannot be a prerequisite or conflict; choose the offer or a hierarchy level');
   if (excludes.some((t) => graph.nodes.get(t)!.level !== 'OFFER')) throw invalid('"cannot be combined with" must list offers, not hierarchy levels');
   const self = requires.filter((t) => expand(graph, t).includes(offerId));
   if (self.length) throw invalid('an offer cannot require itself (or the group it belongs to)');
@@ -164,6 +170,14 @@ export async function checkDependencies(q: Queryable, customerId: string | null,
 }
 
 // ───────────────────────── writes ─────────────────────────
+/** A SKU is reserved from exactly one place: the offer's fulfilment list, or a single line item of that offer. */
+async function assertSkuFree(q: Queryable, offerId: string, sku: string, exceptItemId: string | null) {
+  const offer = (await q.query(`SELECT data->'fulfilment'->'inventorySkus' AS skus FROM catalog_nodes WHERE id=$1`, [offerId])).rows[0];
+  if (((offer?.skus ?? []) as string[]).includes(sku)) throw invalid(`SKU ${sku} is already reserved by the offer itself; list it in one place only`);
+  const other = (await q.query(`SELECT name FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM' AND data->>'sku'=$2 AND id <> $3 LIMIT 1`, [offerId, sku, exceptItemId ?? ''])).rows[0];
+  if (other) throw invalid(`SKU ${sku} is already used by the line item “${other.name}”`);
+}
+
 export async function createNode(q: Queryable, input: NodeInput, actor = 'system'): Promise<CatalogNode> {
   if (!input.id || !/^[a-z0-9][a-z0-9-]*$/.test(input.id)) throw invalid('node id must be lowercase letters, digits and dashes');
   const parent = input.parentId ? (await q.query('SELECT level, path FROM catalog_nodes WHERE id=$1', [input.parentId])).rows[0] : null;
@@ -176,7 +190,13 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
     if (errs.length) throw invalid('invalid offer', errs);
     await assertDependenciesValid(q, input.id, path, input.requires ?? [], input.excludes ?? []);
   }
-  const data = input.level === 'OFFER' ? offerData(input) : { networkType: input.networkType };
+  if ((input.level as CatalogNodeLevel) === 'LINE_ITEM') {
+    const errs = validateLineItem(input as unknown as LineItemNode);
+    if (errs.length) throw invalid(errs.join(' '), errs);
+    if (input.sku) await assertSkuFree(q, input.parentId!, input.sku, null);
+  }
+  const level: CatalogNodeLevel = input.level;
+  const data = level === 'OFFER' ? offerData(input) : level === 'LINE_ITEM' ? lineItemData(input as unknown as Partial<LineItemNode>) : { networkType: input.networkType };
   const next = (await q.query('SELECT COALESCE(max(sort_order), 0) + 10 AS n FROM catalog_nodes WHERE parent_id IS NOT DISTINCT FROM $1', [input.parentId ?? null])).rows[0]!.n as number;
   try {
     await q.query(
@@ -192,6 +212,7 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
 }
 
 export interface NodePatch {
+  itemType?: string; quantity?: number | null; unit?: string; unlimited?: boolean; sku?: string;
   name?: string; networkType?: string; markets?: string[];
   kind?: string; description?: string; prices?: PriceComponent[]; contract?: ContractTerms; fulfilment?: OfferNode['fulfilment'];
   partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[];
@@ -224,6 +245,17 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
 
   if (node.level === 'NETWORK_TYPE') {
     if (patch.networkType) data.networkType = patch.networkType;
+  } else if (node.level === 'LINE_ITEM') {
+    const li = node as LineItemNode;
+    const next = {
+      ...li, itemType: (patch.itemType ?? li.itemType) as LineItemNode['itemType'], description: patch.description ?? li.description,
+      unlimited: patch.unlimited ?? li.unlimited, quantity: patch.unlimited ? undefined : patch.quantity !== undefined ? (patch.quantity ?? undefined) : li.quantity,
+      unit: patch.unit ?? li.unit, sku: patch.sku !== undefined ? (patch.sku || undefined) : li.sku,
+    } as LineItemNode;
+    const errs = validateLineItem(next);
+    if (errs.length) throw invalid(errs.join(' '), errs);
+    if (next.sku) await assertSkuFree(q, cur.parentId, next.sku, id);
+    Object.assign(data, lineItemData(next));
   } else if (node.level === 'OFFER') {
     const o = node as OfferNode;
     const next = {
@@ -239,6 +271,10 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
     }
     const errs = validateOffer(next);
     if (errs.length) throw invalid('invalid offer', errs);
+    // A SKU is reserved once: either on the offer's fulfilment or on one of its line items.
+    const itemSkus = (await q.query(`SELECT data->>'sku' AS sku FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM' AND data->>'sku' IS NOT NULL`, [id])).rows.map((r) => r.sku as string);
+    const dupe = (next.fulfilment?.inventorySkus ?? []).filter((x) => itemSkus.includes(x));
+    if (dupe.length) throw invalid(`stock SKU ${dupe.join(', ')} is already reserved by one of this offer's line items`);
     await assertDependenciesValid(q, id, cur.path, next.requires, next.excludes);
     Object.assign(data, offerData(next));
     kind = next.kind;
@@ -295,12 +331,28 @@ export async function deleteNode(q: Queryable, id: string, actor = 'system') {
   const cur = (await q.query('SELECT id, level FROM catalog_nodes WHERE id=$1', [id])).rows[0];
   if (!cur) throw notFound('catalog node', id);
   const kids = (await q.query('SELECT count(*) AS n FROM catalog_nodes WHERE parent_id=$1', [id])).rows[0]!.n as number;
-  if (kids) throw rejected(`It still contains ${kids} item${kids === 1 ? '' : 's'}. Move or delete them first, or retire it instead.`);
+  // An offer's line items are part of it: they go with it. Every other level must be emptied first.
+  if (kids && cur.level !== 'OFFER') throw rejected(`It still contains ${kids} item${kids === 1 ? '' : 's'}. Move or delete them first, or retire it instead.`);
   const u = await nodeUsage(q, id);
   if (u.services + u.orders > 0) throw rejected(`It has been sold (${u.services} services, ${u.orders} order lines). Retire it instead; history is kept.`);
   if (u.referencedBy.length) throw rejected(`It is used as a dependency by: ${u.referencedBy.join(', ')}. Remove those dependencies first.`);
+  if (kids) await q.query('DELETE FROM catalog_nodes WHERE parent_id=$1 AND level=\'LINE_ITEM\'', [id]);
   await q.query('DELETE FROM catalog_nodes WHERE id=$1', [id]);
   await audit(q, actor, 'catalog', id, 'NODE_DELETED', { level: cur.level });
+}
+
+/** Copies one offer's line items onto another (used when creating a new version of an offer). SKUs are not copied twice onto an offer that already lists them. */
+export async function copyLineItems(q: Queryable, fromOfferId: string, toOfferId: string, actor = 'system'): Promise<number> {
+  await getOffer(q, fromOfferId); await getOffer(q, toOfferId);
+  const items = (await q.query(`SELECT * FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM' ORDER BY sort_order, name`, [fromOfferId])).rows.map(toNode) as Array<LineItemNode & { sortOrder: number }>;
+  let n = 0;
+  for (const it of items) {
+    let id = `${toOfferId}-${it.id.slice(fromOfferId.length + 1) || `i${n + 1}`}`.slice(0, 70);
+    while ((await q.query('SELECT 1 FROM catalog_nodes WHERE id=$1', [id])).rows.length) id = `${id}x`.slice(0, 70);
+    await createNode(q, { id, level: 'LINE_ITEM', code: id, name: it.name, path: '', parentId: toOfferId, status: it.status === 'RETIRED' ? 'DRAFT' : it.status, markets: [], itemType: it.itemType, description: it.description, quantity: it.quantity, unit: it.unit, unlimited: it.unlimited, sku: it.sku } as unknown as NodeInput, actor);
+    n++;
+  }
+  return n;
 }
 
 export const monthlyFee = (o: OfferNode): PriceComponent | undefined => o.prices.find((p) => p.type === 'RECURRING');

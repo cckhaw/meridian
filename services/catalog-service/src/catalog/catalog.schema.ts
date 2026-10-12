@@ -5,7 +5,7 @@ import type { HydratedDocument } from 'mongoose';
 /** Single-collection polymorphic hierarchy keyed by materialised path (prefix queries via ^path/). */
 @Schema({ collection: 'catalog_nodes', timestamps: true, versionKey: 'version' })
 export class CatalogNodeDoc {
-  @Prop({ required: true, enum: ['NETWORK_TYPE', 'CATEGORY', 'GROUP', 'OFFER'], index: true }) level!: CatalogNodeLevel;
+  @Prop({ required: true, enum: ['NETWORK_TYPE', 'CATEGORY', 'GROUP', 'OFFER', 'LINE_ITEM'], index: true }) level!: CatalogNodeLevel;
   @Prop({ required: true }) code!: string;
   @Prop({ required: true }) name!: string;
   @Prop({ required: true, unique: true, index: true }) path!: string;

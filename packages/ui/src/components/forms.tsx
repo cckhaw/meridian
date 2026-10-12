@@ -1,5 +1,5 @@
 'use client';
-import { cloneElement, isValidElement, useEffect, useId, useRef, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { cloneElement, isValidElement, useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 
 const cx = (...p: Array<string | false | undefined>) => p.filter(Boolean).join(' ');
 const control = 'min-h-tap w-full rounded-control border border-separator bg-surface px-3 text-body text-label placeholder:text-label2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50';
@@ -97,4 +97,51 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
 export function IconButton({ label, children, onClick, href, tone }: { label: string; children: ReactNode; onClick?: () => void; href?: string; tone?: 'danger' }) {
   const cls = cx('inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-full text-body hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent', tone === 'danger' ? 'text-danger' : 'text-label2 hover:text-label');
   return href ? <a href={href} aria-label={label} title={label} className={cls}>{children}</a> : <button type="button" aria-label={label} title={label} onClick={onClick} className={cls}>{children}</button>;
+}
+
+export interface MenuItem { label: string; onSelect?: () => void; href?: string; tone?: 'danger'; disabled?: boolean; hidden?: boolean; divider?: boolean }
+
+/**
+ * The "more actions" button (⋯): one tidy control instead of a row of icons. Opens a menu below the button; closes on Escape, outside
+ * click or selection; arrow keys move between items.
+ */
+export function MenuButton({ label, items, align = 'right' }: { label: string; items: MenuItem[]; align?: 'left' | 'right' }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const shown = items.filter((i) => !i.hidden);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); root.current?.querySelector<HTMLElement>('button')?.focus(); }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const els = [...(root.current?.querySelectorAll<HTMLElement>('[role=menuitem]:not([aria-disabled=true])') ?? [])];
+        const i = els.indexOf(document.activeElement as HTMLElement);
+        els[(i + (e.key === 'ArrowDown' ? 1 : -1) + els.length) % els.length]?.focus();
+      }
+    };
+    document.addEventListener('mousedown', away); document.addEventListener('keydown', key);
+    root.current?.querySelector<HTMLElement>('[role=menuitem]:not([aria-disabled=true])')?.focus();
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const cls = (i: MenuItem) => cx('flex min-h-[40px] w-full items-center px-4 text-left text-subhead hover:bg-surface2 focus-visible:bg-surface2 focus-visible:outline-none', i.tone === 'danger' ? 'text-danger' : 'text-label', i.disabled && 'opacity-40');
+  return (
+    <div ref={root} className="relative">
+      <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={label} title={label} onClick={() => setOpen((o) => !o)}
+        className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-full text-title3 leading-none text-label2 hover:bg-surface2 hover:text-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">⋯</button>
+      {open && (
+        <div role="menu" aria-label={label} className={cx('absolute z-40 mt-1 w-56 overflow-hidden rounded-card border border-separator bg-surface py-1 shadow-card', align === 'right' ? 'right-0' : 'left-0')}>
+          {shown.map((i, n) => (
+            <div key={n}>
+              {i.divider && <div role="separator" className="my-1 border-t border-separator" />}
+              {i.href && !i.disabled
+                ? <a role="menuitem" href={i.href} className={cls(i)}>{i.label}</a>
+                : <button type="button" role="menuitem" aria-disabled={i.disabled || undefined} className={cls(i)} onClick={() => { if (i.disabled) return; setOpen(false); i.onSelect?.(); }}>{i.label}</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

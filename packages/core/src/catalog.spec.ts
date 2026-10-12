@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { catalogTree, checkDependencies, createNode, deleteNode, getNode, listNodes, moveNode, nodeUsage, reorderNode, updateNode, type NodeInput } from './catalog.js';
+import { catalogTree, checkDependencies, copyLineItems, createNode, deleteNode, getNode, listNodes, moveNode, nodeUsage, reorderNode, setStatus, updateNode, type NodeInput } from './catalog.js';
 import type { Db } from './db.js';
 import { placeOrder } from './orders.js';
 import { freshDb, newCustomer } from './test-helpers.js';
@@ -151,5 +151,74 @@ describe('editing the hierarchy', () => {
     expect(mobile.activeOfferCount).toBeLessThanOrEqual(mobile.offerCount);
     const flat = (n: any): any[] => [n, ...n.children.flatMap(flat)];
     expect(flat(mobile).find((n) => n.id === 'plan-sim-5g').usage).toEqual({ services: expect.any(Number), orders: expect.any(Number) });
+  });
+});
+
+
+describe('offer line items', () => {
+  const item = (id: string, parentId: string, over: Record<string, unknown> = {}) => ({
+    ...base, id, level: 'LINE_ITEM', code: id, name: id, path: '', parentId, itemType: 'DATA', quantity: 10, unit: 'GB', ...over,
+  } as unknown as NodeInput);
+
+  it('sits under an offer, derives its path, and is validated', async () => {
+    const li = await createNode(db, item('plan-sim-5g-extra', 'plan-sim-5g', { name: 'Bonus data', quantity: 5 }));
+    expect(li.path).toBe(`${(await getNode(db, 'plan-sim-5g')).path}/plan-sim-5g-extra`);
+    expect(li).toMatchObject({ level: 'LINE_ITEM', itemType: 'DATA', quantity: 5, unit: 'GB' });
+    await expect(createNode(db, item('bad-parent', 'grp-sim-only'))).rejects.toThrow(/parent must be OFFER/);
+    await expect(createNode(db, item('bad-type', 'plan-sim-5g', { itemType: 'MAGIC' }))).rejects.toThrow(/kind of line item/);
+    await expect(createNode(db, item('bad-qty', 'plan-sim-5g', { quantity: 0 }))).rejects.toThrow(/whole number/);
+    await expect(createNode(db, item('bad-unl', 'plan-sim-5g', { unlimited: true, quantity: 5 }))).rejects.toThrow(/no quantity/);
+    await expect(createNode(db, item('bad-sku', 'plan-sim-5g', { sku: 'a b' }))).rejects.toThrow(/SKU/);
+    // an offer cannot be placed under a line item, and a line item is never a prerequisite
+    await expect(createNode(db, offer('nested', 'plan-sim-5g-extra'))).rejects.toThrow(/parent must be GROUP/);
+    await expect(createNode(db, offer('needs-item', 'grp-vas', { requires: ['plan-sim-5g-extra'] }))).rejects.toThrow(/line item cannot be a prerequisite/);
+  });
+
+  it('edits, reorders, moves between offers and rolls up under the tree without being counted as offers', async () => {
+    await updateNode(db, 'plan-sim-5g-extra', { quantity: 8, unlimited: false, name: 'Bonus data 8' });
+    expect(await getNode(db, 'plan-sim-5g-extra')).toMatchObject({ name: 'Bonus data 8', quantity: 8 });
+    await updateNode(db, 'plan-sim-5g-extra', { unlimited: true });
+    expect(await getNode(db, 'plan-sim-5g-extra')).toMatchObject({ unlimited: true, quantity: undefined });
+    await reorderNode(db, 'plan-sim-5g-extra', 'up');
+    const moved = await moveNode(db, 'plan-sim-5g-extra', 'plan-phone-12');
+    expect(moved.path.endsWith('/plan-phone-12/plan-sim-5g-extra')).toBe(true);
+    await expect(moveNode(db, 'plan-sim-5g-extra', 'grp-device')).rejects.toThrow(/parent must be OFFER/);
+    const tree = await catalogTree(db);
+    const find = (nodes: any[], id: string): any => { for (const n of nodes) { if (n.id === id) return n; const r = find(n.children, id); if (r) return r; } };
+    expect(find(tree, 'plan-phone-12').children.map((c: any) => c.level)).toContain('LINE_ITEM');
+    expect(find(tree, 'grp-device').offerCount).toBe(3); // line items are not offers
+  });
+
+  it('is deleted with an unsold offer, but blocks deleting a sold one', async () => {
+    await createNode(db, offer('temp-offer', 'grp-vas'));
+    await createNode(db, item('temp-offer-i1', 'temp-offer'));
+    await deleteNode(db, 'temp-offer');
+    await expect(getNode(db, 'temp-offer-i1')).rejects.toThrow(/not found/);
+    const { customer } = await newCustomer(db);
+    await placeOrder(db, { customerId: customer.id, channel: 'RETAIL_ASSISTED', attribution: retail, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-sim-5g' }] });
+    await expect(deleteNode(db, 'plan-sim-5g')).rejects.toThrow(/has been sold/);
+    await deleteNode(db, 'plan-sim-5g-i1'); // a single line item of a sold offer can still be removed from the catalog entry
+  });
+
+  it('a line item with a SKU reserves its own stock; a SKU lives in one place only', async () => {
+    await createNode(db, offer('bundle', 'grp-vas', { fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: ['WATCH-L1'] } }));
+    await expect(createNode(db, item('bundle-watch', 'bundle', { itemType: 'DEVICE', sku: 'WATCH-L1', quantity: 1 }))).rejects.toThrow(/already reserved by the offer/);
+    await createNode(db, item('bundle-phone', 'bundle', { itemType: 'DEVICE', sku: 'PHONE-X1-128', quantity: 2, unit: 'unit' }));
+    await expect(createNode(db, item('bundle-phone2', 'bundle', { itemType: 'DEVICE', sku: 'PHONE-X1-128', quantity: 1 }))).rejects.toThrow(/already used by the line item/);
+    await expect(updateNode(db, 'bundle', { fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: ['PHONE-X1-128'] } })).rejects.toThrow(/already reserved by one of this offer/);
+    await setStatus(db, 'bundle', 'ACTIVE');
+    const reserved = async () => (await db.query(`SELECT reserved FROM inventory_stock WHERE location_id='WH-MAIN' AND sku='PHONE-X1-128'`)).rows[0]!.reserved as number;
+    const before = await reserved();
+    const { customer } = await newCustomer(db);
+    const o = await placeOrder(db, { customerId: customer.id, channel: 'TELESALES', payment: { method: 'CASH' }, lines: [{ offerId: 'bundle', quantity: 3 }] });
+    expect(o.state).not.toBe('FAILED');
+    expect((await reserved()) - before).toBe(6); // 3 units ordered x line item quantity 2
+  });
+
+  it('can be copied onto a new version of an offer', async () => {
+    await createNode(db, offer('plan-sim-5g-v2', 'grp-sim-only', { name: 'v2' }));
+    const n = await copyLineItems(db, 'plan-sim-5g', 'plan-sim-5g-v2');
+    expect(n).toBeGreaterThan(0);
+    expect((await listNodes(db, { level: 'LINE_ITEM' })).filter((i) => i.parentId === 'plan-sim-5g-v2')).toHaveLength(n);
   });
 });
