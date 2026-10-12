@@ -26,6 +26,8 @@ const CORE_PERMISSIONS = [
   'commission:read',
   'audit:read',
   'user:manage',
+  'store:assist', 'kyc:attest', 'kyc:review',
+  'settings:manage', // super user only: regional format, branding, payment gateways, store-front API keys
 ] as const;
 
 const CHANNEL_PERMISSIONS = CHANNELS.map((c) => `order:create:${c}` as const);
@@ -36,7 +38,7 @@ export const isPermission = (p: string): p is Permission => (ALL_PERMISSIONS as 
 
 export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
-  'retail-store', 'dealer', 'customer-service', 'finance', 'fraud', 'revenue-assurance',
+  'retail-store', 'dealer', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance',
 ] as const;
 export type RoleId = (typeof ROLE_IDS)[number];
 export const isRoleId = (r: string): r is RoleId => (ROLE_IDS as readonly string[]).includes(r);
@@ -100,7 +102,8 @@ export const ROLES: Record<RoleId, RoleDef> = {
     id: 'retail-store', label: 'Retail Store', scope: 'store', home: '/orders/new?channel=RETAIL_ASSISTED',
     summary: 'Sells over the counter at one store: assisted and quick-sale orders, SIM changes, store stock. Sees only that store’s orders and stock.',
     permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'),
-      'order:payment', 'order:fulfil', 'order:cancel', 'inventory:read', 'inventory:write', 'commission:read', 'billing:read', 'billing:pay'],
+      'order:payment', 'order:fulfil', 'order:cancel', 'inventory:read', 'inventory:write', 'commission:read', 'billing:read', 'billing:pay',
+      'store:assist', 'kyc:attest'],
   },
   dealer: {
     id: 'dealer', label: 'Dealer', scope: 'dealer', home: '/orders/new?channel=DEALER',
@@ -121,7 +124,12 @@ export const ROLES: Record<RoleId, RoleDef> = {
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',
     summary: 'Reviews orders and accounts: can suspend a service and cancel an order before it ships.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'service:suspend', 'order:read', 'order:cancel', 'audit:read', 'case:read', 'case:create', 'case:write'],
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'service:suspend', 'order:read', 'order:cancel', 'audit:read', 'case:read', 'case:create', 'case:write', 'kyc:review'],
+  },
+  compliance: {
+    id: 'compliance', label: 'KYC Compliance Officer', scope: 'staff', home: '/kyc',
+    summary: 'Reviews identity verification for online sign-ups and referred cases: approves, rejects, or sends back for corrections. Sees identity evidence; cannot sell or change billing.',
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'kyc:review', 'audit:read', 'case:read'],
   },
   'revenue-assurance': {
     id: 'revenue-assurance', label: 'Revenue Assurance', scope: 'staff', home: '/finance',
@@ -131,7 +139,7 @@ export const ROLES: Record<RoleId, RoleDef> = {
 };
 
 /** Priority for choosing the landing page when a user holds several roles. */
-const HOME_PRIORITY: RoleId[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'telesales', 'fraud', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
+const HOME_PRIORITY: RoleId[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
 
 // ───────────────────────── modules (navigation) ─────────────────────────
 export interface ModuleDef {
@@ -147,15 +155,18 @@ export const MODULES: ModuleDef[] = [
   { id: 'overview', label: 'Overview', href: '/', icon: 'house', anyOf: ['dashboard:read'] },
   { id: 'customers', label: 'Customers', href: '/customers', icon: 'person', anyOf: ['customer:search'] },
   { id: 'sell', label: 'New order', href: '/orders/new', icon: 'bag', anyOf: ALL_PERMISSIONS.filter((p) => p.startsWith('order:create:')) as Permission[] },
+  { id: 'assisted', label: 'Assisted sale', href: '/assisted', icon: 'check', anyOf: ['store:assist'] },
   { id: 'orders', label: 'Orders', href: '/orders', icon: 'box', anyOf: ['order:read'] },
   { id: 'billing', label: 'Billing', href: '/billing', icon: 'doc', anyOf: ['billing:read'] },
   { id: 'cases', label: 'Cases', href: '/cases', icon: 'bubble', anyOf: ['case:read'] },
+  { id: 'kyc', label: 'KYC reviews', href: '/kyc', icon: 'shield', anyOf: ['kyc:review'] },
   { id: 'mnp', label: 'Number porting', href: '/mnp', icon: 'swap', anyOf: ['mnp:manage'] },
   { id: 'catalog', label: 'Catalog', href: '/catalog', icon: 'grid', anyOf: ['catalog:read'] },
   { id: 'inventory', label: 'Inventory', href: '/inventory', icon: 'cube', anyOf: ['inventory:read'] },
   { id: 'finance', label: 'Finance', href: '/finance', icon: 'ledger', anyOf: ['finance:read'] },
   { id: 'commission', label: 'Commission', href: '/dealer/commission', icon: 'coins', anyOf: ['commission:read'] },
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
+  { id: 'settings', label: 'Settings', href: '/admin/settings', icon: 'gear', anyOf: ['settings:manage'] },
   { id: 'audit', label: 'Audit log', href: '/admin/audit', icon: 'list', anyOf: ['audit:read'] },
 ];
 

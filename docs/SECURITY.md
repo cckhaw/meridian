@@ -15,6 +15,13 @@
 
 - **Administrators are privileged.** They can create staff and issue one-time passwords, so an administrator could in principle sign in as someone they created or reset. To limit this: nobody can edit their own account through user administration, only the super user can grant or remove the Administrator role, administrators cannot move money themselves, and every user change is audited. Treat administrator accounts like production root, require MFA when you add it, and review the audit log.
 
+## Store-front API
+- Machine access is by **API key** (`Authorization: Bearer mk_…`): only a SHA-256 of the secret is stored, comparison is constant-time, every failure is the same `401`, keys can be revoked instantly and show last use. A key can reach only the store endpoints, never staff routes; a staff session cannot call them either.
+- A shopper’s application needs the creating key **and** its secret token; unknown, foreign and wrong-token requests are indistinguishable (`404`). Sign-ups are throttled per address.
+- The store-front keeps the key and token server-side (HttpOnly cookie for the token), so page scripts cannot read them; its mutations are same-origin only.
+- Payment webhooks are authenticated by the provider’s signature, bound to amount and currency, de-duplicated by event id and replay-limited.
+- A KYC duplicate cannot be approved online, and the existing customer’s id is never disclosed.
+
 ## Request hardening
 - State-changing requests must carry a matching `Origin` (CSRF). The payment webhook is exempt and uses an HMAC signature instead.
 - Request bodies are capped at 1 MB and validated with schemas. Errors never include stack traces or SQL.
@@ -23,7 +30,8 @@
 - Fail closed: a production deployment with missing or weak secrets serves nothing.
 
 ## Data protection
-- ID documents are never stored; only a masked form and a keyed hash for duplicate detection.
+- ID documents entered in the CRM’s customer form are never stored; only a masked form and a keyed hash for duplicate detection.
+- **KYC evidence** (ID number, ID/selfie/signature images) collected for sign-ups is stored **encrypted** (AES-256-GCM; key from `MERIDIAN_DATA_KEY`/`MERIDIAN_ID_PEPPER`), checked for integrity on read, shown only to `kyc:review`, and every view is audited. File types are identified by signature; SVG is never accepted.
 - Money is integer minor units. Every financial event posts a balanced journal; reconciliation checks it.
 - Encryption at rest and in transit is the database and hosting platform’s job (TLS to the database is required in production).
 

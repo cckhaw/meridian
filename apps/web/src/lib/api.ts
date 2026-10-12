@@ -32,6 +32,7 @@ export async function api<T = any>(path: string, init?: RequestInit & { json?: u
 }
 export const post = <T = any>(path: string, json?: unknown, headers?: Record<string, string>) => api<T>(path, { method: 'POST', json: json ?? {}, headers });
 export const patch = <T = any>(path: string, json: unknown) => api<T>(path, { method: 'PATCH', json });
+export const del = <T = any>(path: string) => api<T>(path, { method: 'DELETE' });
 
 /** Fetches `path` (null = skip). `reload()` refetches without clearing current data, so tables do not flash. */
 export function useApi<T = any>(path: string | null) {

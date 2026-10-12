@@ -34,3 +34,8 @@ jobs:
         env:
           MERIDIAN_SUPERUSER_USERNAME: ci-admin
           MERIDIAN_SUPERUSER_PASSWORD: ci-only-Passphrase-123
+      # The store-front is a separate deployable: it must build with nothing but its own two server-side variables.
+      - run: pnpm --filter @meridian/storefront build
+        env:
+          MERIDIAN_API_URL: http://localhost:3000/api
+          MERIDIAN_API_KEY: mk_test_ciciciciic_ci-only-key-ci-only-key-ci-only-key

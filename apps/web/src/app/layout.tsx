@@ -2,17 +2,28 @@ import { themeInitScript } from '@meridian/ui';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { Providers } from '@/components/providers';
+import { loadPresentation } from '@/server/presentation';
 import './globals.css';
 
-export const metadata: Metadata = { title: { default: 'Meridian', template: '%s · Meridian' }, description: 'Telecom CRM & Billing Suite' };
+// Brand, theme and number format come from Settings, so the layout is rendered per request.
+export const dynamic = 'force-dynamic';
+
+export async function generateMetadata(): Promise<Metadata> {
+  const { name } = await loadPresentation();
+  return { title: { default: name, template: `%s · ${name}` }, description: 'Telecom CRM & Billing Suite' };
+}
 // viewport-fit=cover lets the shell use safe-area insets on notched phones.
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const p = await loadPresentation();
   return (
     <html lang="en" suppressHydrationWarning>
-      <head><script dangerouslySetInnerHTML={{ __html: themeInitScript }} /></head>
-      <body><Providers>{children}</Providers></body>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <style dangerouslySetInnerHTML={{ __html: p.css }} />
+      </head>
+      <body><Providers presentation={{ name: p.name, logoUrl: p.logoUrl, regional: p.regional }}>{children}</Providers></body>
     </html>
   );
 }

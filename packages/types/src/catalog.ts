@@ -84,9 +84,15 @@ export interface OfferNode extends CatalogNodeBase {
   partnerCode?: string;
   /** Free-form attributes, validated per kind by the catalog service. */
   characteristics: Record<string, string | number | boolean>;
-  /** Offers that must/must not be bundled with this one. */
+  /**
+   * Prerequisites. Each entry is an offer id OR a hierarchy node id (group/category/network = "any offer beneath it").
+   * Every entry must be satisfied: the customer already owns a matching offer, or buys one in the same order.
+   */
   requires: string[];
+  /** Offers that cannot be in the same order as this one. */
   excludes: string[];
+  /** Channels this offer is sold through. Empty/absent = all channels. */
+  salesChannels?: string[];
 }
 
 export type CatalogNode = NetworkTypeNode | CategoryNode | GroupNode | OfferNode;

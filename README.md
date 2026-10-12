@@ -1,7 +1,9 @@
 # Meridian
 
 CRM, order management, billing and finance for a telecom operator: customers and hierarchies, product catalog, orders and fulfilment,
-subscription lifecycle, bill runs and invoices, double-entry ledger with SAP export, cases, inventory, role-based access.
+subscription lifecycle, bill runs and invoices, double-entry ledger with SAP export, cases, inventory, role-based access,
+an editable product hierarchy with dependencies between products, regional/branding settings, and an independently hosted **self-service store-front**
+with KYC onboarding, Stripe payments and assisted in-store sales.
 
 Sign-in is required. Staff and customers see only the modules and records their **role** allows ([docs/ROLES.md](docs/ROLES.md)).
 
@@ -9,7 +11,8 @@ Sign-in is required. Staff and customers see only the modules and records their 
 
 ```bash
 pnpm install
-pnpm --filter @meridian/web dev      # http://localhost:3000
+pnpm --filter @meridian/web dev         # CRM        http://localhost:3000
+pnpm --filter @meridian/storefront dev  # store-front http://localhost:3100 (needs MERIDIAN_API_URL and MERIDIAN_API_KEY, see docs/STOREFRONT.md)
 ```
 
 Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.development`, development only). With no `DATABASE_URL` it runs an
@@ -26,6 +29,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 
 ## Documentation
 
+- [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
 - [Operating Meridian](docs/OPERATIONS.md): environment, runbook, payments, scale, upgrades
 - [Security model](docs/SECURITY.md): what is protected, and what still needs work
 - [Roles and permissions](docs/ROLES.md): generated from the code that enforces them
@@ -33,7 +37,6 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 
 ## Status
 
-Production-oriented, not feature-complete. **Not included in this release:** a payment gateway (staff-recorded payments and a signed webhook
-are provided), usage rating and charging (the Go gateway is a skeleton), MFA/SSO, customer self-registration, returns and exchanges, a
+Production-oriented, not feature-complete. **Not included in this release:** payment gateways other than Stripe, usage rating and charging (the Go gateway is a skeleton), MFA/SSO, customer login to the store-front (existing customers buying online), returns and exchanges, a
 visual order-workflow designer (the Temporal service exists but is not wired to the app), notifications, GraphQL. See
 [Security](docs/SECURITY.md#not-covered-yet-plan-for-these-before-regulated-go-live) before handling real customer data.

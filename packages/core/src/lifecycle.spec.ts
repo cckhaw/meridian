@@ -72,7 +72,7 @@ describe('subscription lifecycle', () => {
     const b = await newCustomer(db);
     // same shard is required for in-place transfer; find a receiver on the same shard
     let target = b.customer;
-    for (let i = 0; i < 40 && target.shardId !== a.customer.shardId; i++) target = (await newCustomer(db)).customer;
+    for (let i = 0; i < 400 && target.shardId !== a.customer.shardId; i++) target = (await newCustomer(db)).customer;
     expect(target.shardId).toBe(a.customer.shardId);
     const moved = await transferOwnership(db, a.serviceId, target.id);
     expect(moved.customerId).toBe(target.id);

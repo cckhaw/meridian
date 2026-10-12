@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { monthlyFee } from './catalog.js';
-import { DUNNING, GL, INVOICE_TERMS_DAYS, market, paymentMode } from './config.js';
+import { DUNNING, GL, INVOICE_TERMS_DAYS, paymentMode } from './config.js';
+import { marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { addDays, addMonths, dayOf, diffDays, fmt, today, toDate, type DateStr } from './dates.js';
 import { invalid, notFound, rejected } from './errors.js';
@@ -18,7 +19,7 @@ export async function issueInvoice(
   o: { kind: 'CYCLE' | 'FINAL' | 'ADJUSTMENT'; periodStart: DateStr; periodEnd: DateStr; issueDate: DateStr; lines: DraftLine[] },
 ): Promise<Row | null> {
   const customer = (await q.query('SELECT market_code FROM customers WHERE id=$1', [acct.customerId])).rows[0]!;
-  const mk = market(customer.marketCode);
+  const mk = await marketFor(q, customer.marketCode);
   const priced = o.lines.map((l) => ({ ...l, ...taxSplit(l.amountMinor, mk.taxBps, l.taxInclusive) })).filter((l) => l.gross !== 0);
   const net = priced.reduce((s, l) => s + l.net, 0);
   const tax = priced.reduce((s, l) => s + l.tax, 0);
@@ -142,7 +143,7 @@ export async function getInvoice(q: Queryable, id: string): Promise<Row> {
   if (!inv) throw notFound('invoice', id);
   const lines = (await q.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY id', [id])).rows;
   const payments = (await q.query('SELECT id, method, status, amount_minor, reference, created_at FROM payments WHERE invoice_id=$1 ORDER BY created_at', [id])).rows;
-  return { ...inv, balanceMinor: invoiceBalance(inv), lines, payments, taxName: market(inv.marketCode).taxName };
+  return { ...inv, balanceMinor: invoiceBalance(inv), lines, payments, taxName: (await marketFor(q, inv.marketCode)).taxName };
 }
 
 export async function listInvoices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; limit?: number; offset?: number } = {}) {

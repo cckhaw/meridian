@@ -1,6 +1,5 @@
-/** ISO-4217 codes for the ASEAN markets Meridian operates in. */
-export type CurrencyCode =
-  | 'SGD' | 'MYR' | 'THB' | 'IDR' | 'VND' | 'PHP' | 'BND' | 'KHR' | 'LAK' | 'MMK' | 'USD';
+/** ISO-4217 code. Any world currency can be configured under Settings > Regional. */
+export type CurrencyCode = string;
 
 /** Money is always integer minor units (cents/satang/sen) to avoid float drift. */
 export interface Money {

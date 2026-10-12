@@ -2,7 +2,7 @@
 import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
 import { useState } from 'react';
 import { patch, post, useAction, useApi } from '@/lib/api';
-import { dt, label } from '@/lib/format';
+import { dt, label, money } from '@/lib/format';
 
 interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null }
 
@@ -57,7 +57,7 @@ export default function Users() {
           <Card key={r.id} className="!p-4">
             <div className="flex items-start justify-between gap-2"><h3 className="font-semibold">{r.label}</h3><Badge>{r.scope === 'staff' ? 'All records' : `Own ${r.scope}`}</Badge></div>
             <p className="mt-1 text-subhead text-label2">{r.summary}</p>
-            <p className="mt-2 text-caption text-label2">{r.permissions.length} permissions{r.creditLimitMinor === null ? ' · unlimited credit notes' : r.creditLimitMinor ? ` · credit notes up to ${(r.creditLimitMinor / 100).toFixed(2)}` : ''}</p>
+            <p className="mt-2 text-caption text-label2">{r.permissions.length} permissions{r.creditLimitMinor === null ? ' · unlimited credit notes' : r.creditLimitMinor ? ` · credit notes up to ${money(r.creditLimitMinor)}` : ''}</p>
           </Card>
         ))}
       </div>

@@ -28,6 +28,7 @@ const OFFERS: OfferSeed[] = [
     contract: { termMonths: 12, etc: { method: 'SUBSIDY_AMORTISED' }, subsidy: { deviceRetailPrice: sgd(45900), subsidyAmount: sgd(30000) } }, fulfilment: ful({ requiresShipping: true, requiresSimActivation: true, inventorySkus: ['WATCH-L1'] }) },
   { id: 'fiber-1g', group: 'home', name: 'Home Fibre 1 Gbps (24 mo)', kind: 'FIBER', prices: [rec(4900), once(5000)],
     contract: { termMonths: 24, etc: { method: 'REMAINING_RECURRING_PERCENT', percentOfRemaining: 50 } }, fulfilment: ful({ requiresInstallation: true, inventorySkus: ['ONT-ROUTER'] }) },
+  { id: 'device-care', group: 'insurance', name: 'Device Care (insurance)', kind: 'VAS', prices: [rec(900)], contract: { termMonths: 0 }, fulfilment: ful(), requires: ['grp-device'], description: 'Accidental damage cover. Needs a phone plan with a device, bought together or already owned.' },
   { id: 'vas-roaming', group: 'vas', name: 'Roaming Pass Asia', kind: 'VAS', prices: [rec(1500)], contract: { termMonths: 0 }, fulfilment: ful() },
   { id: 'netflix-premium', group: 'video', name: 'Netflix Premium', kind: 'NON_TELCO_SUBSCRIPTION', partnerCode: 'netflix', prices: [rec(1999)], contract: { termMonths: 0 }, fulfilment: ful() },
   { id: 'youtube-premium', group: 'video', name: 'YouTube Premium', kind: 'NON_TELCO_SUBSCRIPTION', partnerCode: 'youtube', prices: [rec(1399)], contract: { termMonths: 0 }, fulfilment: ful() },
@@ -39,7 +40,7 @@ const OFFERS: OfferSeed[] = [
 
 const TREE = [
   { id: 'mobile', level: 'NETWORK_TYPE', name: 'Mobile', networkType: 'mobile', children: [
-    { id: 'postpaid', name: 'Postpaid', groups: ['sim-only', 'device', 'vas'] }, { id: 'wearables', name: 'Wearables', groups: ['wearable'] }] },
+    { id: 'postpaid', name: 'Postpaid', groups: ['sim-only', 'device', 'insurance', 'vas'] }, { id: 'wearables', name: 'Wearables', groups: ['wearable'] }] },
   { id: 'fiber', level: 'NETWORK_TYPE', name: 'Fibre', networkType: 'fiber', children: [{ id: 'residential', name: 'Residential', groups: ['home'] }] },
   { id: 'iot', level: 'NETWORK_TYPE', name: 'IoT', networkType: 'iot', children: [{ id: 'iot-enterprise', name: 'Enterprise IoT', groups: ['enterprise'] }] },
   { id: 'none', level: 'NETWORK_TYPE', name: 'Non-telco', networkType: 'none', children: [

@@ -50,3 +50,10 @@ export function getDb(): Promise<Db> {
   g.__meridianDb.catch(() => { g.__meridianDb = undefined; }); // a failed start must be retried, not cached
   return g.__meridianDb;
 }
+export * from './settings.js';
+export * from './apikeys.js';
+export * from './field-crypto.js';
+export * from './gateways.js';
+export * from './kyc.js';
+export * from './store.js';
+export * from './store-settings.js';

@@ -57,10 +57,13 @@ describe('orderWorkflow', () => {
 
   it('rejects cancel after PNR', async () => {
     let status: unknown;
+    // Signal exactly when activation has started (PNR reached) rather than after a fixed delay, which raced on a loaded machine.
+    let activating!: () => void;
+    const started = new Promise<void>((r) => { activating = r; });
     const { result } = await run(
-      { activateService: async () => { await new Promise((r) => setTimeout(r, 500)); } },
+      { activateService: async () => { activating(); await new Promise((r) => setTimeout(r, 1000)); } },
       async (h) => {
-        await new Promise((r) => setTimeout(r, 250));
+        await started;
         await h.signal(cancelRequested, { reason: 'late' });
         status = await h.query(orderStatus);
       },
