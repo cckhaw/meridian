@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, SearchField, Segmented, Select, Spinner } from '@meridian/ui';
+import { Alert, Button, Card, Empty, LargeTitle, LoadMore, SearchField, Segmented, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -8,6 +8,7 @@ import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useSegments } from '@/lib/segments';
 import { useAuth } from '@/lib/auth';
 import { label } from '@/lib/format';
+import { CustomerForm } from './customer-form';
 
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join('') || '?';
 
@@ -66,27 +67,10 @@ export default function Customers() {
 
 function NewCustomer({ onDone }: { onDone: () => void }) {
   const router = useRouter();
-  const segs = useSegments();
-  const [f, setF] = useState({ segment: '', displayName: '', idDocument: '', email: '', phone: '', billCycleDay: '1' });
   const { run, busy, error } = useAction();
-  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const r = await run(() => post('/customers', { ...f, segment: f.segment || segs.list[0]?.id, account: { billCycleDay: f.billCycleDay === 'daily' ? null : Number(f.billCycleDay) } }));
+  const submit = async (body: Record<string, unknown>) => {
+    const r = await run(() => post('/customers', body));
     if (r) { onDone(); router.push(`/customers/${r.customer.id}`); }
   };
-  return (
-    <Card className="mb-6">
-      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-        <Field label="Segment"><Select value={f.segment} onChange={set('segment')}>{segs.list.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
-        <Field label="Full name / company"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
-        <Field label="ID document (NRIC / passport / UEN)" hint="Stored masked; a keyed hash detects duplicates."><Input required minLength={3} value={f.idDocument} onChange={set('idDocument')} /></Field>
-        <Field label="Bill cycle day" hint="Monthly cycle day, or a daily cycle."><Select value={f.billCycleDay} onChange={set('billCycleDay')}>{[...Array(28)].map((_, i) => <option key={i} value={i + 1}>Day {i + 1}</option>)}<option value="daily">Daily</option></Select></Field>
-        <Field label="Email"><Input type="email" value={f.email} onChange={set('email')} /></Field>
-        <Field label="Phone"><Input type="tel" value={f.phone} onChange={set('phone')} /></Field>
-        {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
-        <div className="sm:col-span-2"><Button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create customer'}</Button></div>
-      </form>
-    </Card>
-  );
+  return <Card className="mb-6"><CustomerForm submitLabel="Create customer" busy={busy} error={error} onSubmit={(b) => void submit(b)} /></Card>;
 }

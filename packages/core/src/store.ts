@@ -280,7 +280,10 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     const p = a.personal as Personal;
     if (!customerId) {
       try {
-        const created = await createCustomer(q, { segment: 'CONSUMER', displayName: p.fullName.trim(), idDocument: p.idNumber.trim(), email: p.email, phone: p.phone, marketCode: await storeMarket(q) });
+        const ad = a.address as Address | null;
+        const created = await createCustomer(q, { segment: 'CONSUMER', displayName: p.fullName.trim(), idDocument: p.idNumber.trim(), email: p.email, phone: p.phone, marketCode: await storeMarket(q),
+          dateOfBirth: /^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth ?? '') ? p.dateOfBirth : undefined, // what the shopper told us for identity verification is kept on the customer
+          address: ad ? { line1: ad.line1, line2: ad.line2, postcode: ad.postcode, city: ad.city, state: ad.state, country: ad.country } : undefined });
         customerId = created.customer.id as string;
       } catch (e) {
         // Never echo the existing customer's id back to an applicant.

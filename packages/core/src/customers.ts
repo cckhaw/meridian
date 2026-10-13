@@ -5,6 +5,7 @@ import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, tsPage, type Page } from './paging.js';
 import { customerIdsMatching, parseQuery } from './search.js';
+import { getBillCycles, cycleToDay, type CustomerDetails } from './customer-config.js';
 import { assertSegmentUsable } from './segments.js';
 import { shardFor } from './shard.js';
 
@@ -15,6 +16,9 @@ export interface NewCustomer {
   marketCode?: string;
   email?: string;
   phone?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  address?: CustomerDetails['address'];
   parentCustomerId?: string;
   /** Create a default account (bill cycle day 1..28, or null for daily). `false` skips it. */
   account?: { name?: string; billCycleDay?: number | null } | false;
@@ -47,9 +51,10 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
     path = `${parent.hierarchyPath}.${path}`;
   }
   await q.query(
-    `INSERT INTO customers (id, shard_id, segment, display_name, id_document_ref, id_document_hash, market_code, parent_customer_id, hierarchy_path, email, phone)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [id, shardId, input.segment, input.displayName.trim(), maskIdDocument(input.idDocument), hash, marketCode, input.parentCustomerId ?? null, path, input.email ?? null, input.phone ?? null],
+    `INSERT INTO customers (id, shard_id, segment, display_name, id_document_ref, id_document_hash, market_code, parent_customer_id, hierarchy_path, email, phone, date_of_birth, gender, address)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    [id, shardId, input.segment, input.displayName.trim(), maskIdDocument(input.idDocument), hash, marketCode, input.parentCustomerId ?? null, path, input.email ?? null, input.phone ?? null,
+     input.dateOfBirth ?? null, input.gender ?? null, input.address && Object.keys(input.address).length ? JSON.stringify(input.address) : null],
   );
   const customer = await getCustomer(q, id);
   if (input.account === false) return { customer };
@@ -60,7 +65,7 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
 export async function createAccount(q: Queryable, customerId: string, o: { name?: string; billCycleDay?: number | null; payerAccountId?: string }): Promise<Account> {
   const c = (await q.query('SELECT shard_id, market_code FROM customers WHERE id=$1', [customerId])).rows[0];
   if (!c) throw notFound('customer', customerId);
-  const day = o.billCycleDay === undefined ? 1 : o.billCycleDay;
+  const day = o.billCycleDay === undefined ? cycleToDay((await getBillCycles(q)).defaultCycle) : o.billCycleDay; // the operator's default cycle unless one was chosen
   if (day !== null && (!Number.isInteger(day) || day < 1 || day > 28)) throw invalid('billCycleDay must be 1-28, or null for a daily cycle');
   const id = randomUUID();
   await q.query(
@@ -122,12 +127,14 @@ export async function listChildren(q: Queryable, customerId: string, o: { deep?:
   return { items: page.items.map(({ cursorOrd: _o, ...rest }) => strip(rest)), nextCursor: page.nextCursor };
 }
 
-export async function updateCustomer(q: Queryable, id: string, patch: { displayName?: string; email?: string; phone?: string; status?: string }) {
-  await getCustomer(q, id);
+export async function updateCustomer(q: Queryable, id: string, patch: { displayName?: string; email?: string; phone?: string; status?: string; dateOfBirth?: string; gender?: string; address?: CustomerDetails['address'] }) {
+  const cur = await getCustomer(q, id);
+  // The address is replaced as a whole when any part of it is sent, merged with what was there so a single changed field does not wipe the rest.
+  const address = patch.address ? { ...((cur.address as object | null) ?? {}), ...patch.address } : undefined;
   await q.query(
     `UPDATE customers SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), phone = COALESCE($4, phone),
-       status = COALESCE($5, status), version = version + 1, updated_at = now() WHERE id = $1`,
-    [id, patch.displayName ?? null, patch.email ?? null, patch.phone ?? null, patch.status ?? null],
+       status = COALESCE($5, status), date_of_birth = COALESCE($6::date, date_of_birth), gender = COALESCE($7, gender), address = COALESCE($8::jsonb, address), version = version + 1, updated_at = now() WHERE id = $1`,
+    [id, patch.displayName ?? null, patch.email ?? null, patch.phone ?? null, patch.status ?? null, patch.dateOfBirth ?? null, patch.gender ?? null, address ? JSON.stringify(address) : null],
   );
   return getCustomer(q, id);
 }

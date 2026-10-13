@@ -14,6 +14,10 @@ export interface Customer extends Auditable {
   marketCode: string;
   parentCustomerId: Uuid | null;
   hierarchyPath: string;
+  /** YYYY-MM-DD, when the operator asks for it. */
+  dateOfBirth?: string | null;
+  gender?: 'FEMALE' | 'MALE' | 'OTHER' | 'UNDISCLOSED' | null;
+  address?: { line1?: string; line2?: string; postcode?: string; city?: string; state?: string; country?: string } | null;
 }
 
 export type AccountStatus = 'ACTIVE' | 'SUSPENDED' | 'CLOSED';

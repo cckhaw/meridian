@@ -557,7 +557,7 @@ describe('segments, customer creation and groups', () => {
     const admin = await root();
     const agent = await staff(['telesales']);
     const make = (extra: object = {}) => call('POST', '/customers', { cookie: agent.cookie, body: { segment: 'CONSUMER', displayName: 'Walk Up', idDocument: `W${++n}${Math.random().toString(36).slice(2, 7)}`, ...extra } });
-    expect((await call('GET', '/meta', { cookie: agent.cookie })).json.customers).toEqual({ allowCreateWithoutOrder: false });
+    expect((await call('GET', '/meta', { cookie: agent.cookie })).json.customers).toMatchObject({ allowCreateWithoutOrder: false });
     expect((await make()).status).toBe(422);                              // the Customers screen cannot create one
     expect((await make({ context: 'order' })).status).toBe(200);           // the order wizard can
     expect((await call('POST', '/settings/customers', { cookie: agent.cookie, body: { allowCreateWithoutOrder: true } })).status).toBe(403);
@@ -606,6 +606,34 @@ describe('segments, customer creation and groups', () => {
     const noRights = await staff(['finance']);
     expect((await call('POST', `/groups/${gid}/members`, { cookie: noRights.cookie, body: { serviceId: svc[0] } })).status).toBe(403);
     expect((await call('DELETE', `/groups/${gid}`, { cookie: cs.cookie })).status).toBe(200);
+  });
+});
+
+describe('the customer form follows the settings', () => {
+  it('asks for what Settings asks for, drops what is hidden, and offers only the bill cycles that are switched on', async () => {
+    const admin = await root();
+    const staffUser = await staff(['product-configurator']);
+    const newC = (body: Record<string, unknown>) => call('POST', '/customers', { cookie: admin, body: { context: 'order', segment: 'CONSUMER', displayName: 'Form Test', idDocument: `FT${Math.random().toString(36).slice(2, 9)}`, ...body } });
+    expect((await call('POST', '/settings/customers', { cookie: staffUser.cookie, body: { allowCreateWithoutOrder: false } })).status).toBe(403);
+    expect((await call('POST', '/settings/customers', { cookie: admin, body: { allowCreateWithoutOrder: false, fields: { postcode: 'required', gender: 'hidden', dateOfBirth: 'required' } } })).json.fields).toMatchObject({ postcode: 'required', gender: 'hidden' });
+    const missing = await newC({ address: { line1: '1 Road' } });
+    expect(missing.status).toBe(400);
+    expect(missing.json.error.message).toMatch(/Date of birth is required\. Postcode is required\./);
+    const ok = await newC({ dateOfBirth: '1991-02-03', gender: 'FEMALE', address: { line1: '1 Jalan Ampang', postcode: '50450', city: 'Kuala Lumpur', country: 'MY' } });
+    expect(ok.status).toBe(200);
+    expect(ok.json.customer).toMatchObject({ dateOfBirth: '1991-02-03', address: { postcode: '50450', country: 'MY' } });
+    expect(ok.json.customer.gender ?? null).toBeNull(); // hidden in Settings, so not kept
+    expect((await call('GET', '/meta', { cookie: admin })).json.customers.fields.postcode).toBe('required');
+
+    expect((await call('POST', '/settings/bill-cycles', { cookie: admin, body: { days: [1, 15, 25], daily: false, defaultCycle: 15 } })).status).toBe(200);
+    const off = await newC({ dateOfBirth: '1991-02-03', address: { postcode: '1' }, account: { billCycleDay: 7 } });
+    expect(off.status).toBe(400);
+    expect(off.json.error.message).toMatch(/Bill cycle day 7 is not offered/);
+    const dflt = await newC({ dateOfBirth: '1991-02-03', address: { postcode: '1' } });
+    expect(dflt.json.account.billCycleDay).toBe(15); // the operator's default
+    expect((await call('GET', '/meta', { cookie: staffUser.cookie })).json.billCycles).toEqual({ days: [1, 15, 25], daily: false, defaultCycle: 15 });
+    await call('POST', '/settings/bill-cycles', { cookie: admin, body: { days: Array.from({ length: 28 }, (_, i) => i + 1), daily: true, defaultCycle: 1 } });
+    await call('POST', '/settings/customers', { cookie: admin, body: { allowCreateWithoutOrder: false, fields: { postcode: 'optional', gender: 'optional', dateOfBirth: 'optional' } } });
   });
 });
 
