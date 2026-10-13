@@ -845,7 +845,11 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
     const out = await (rt.handler as Handler)({ ...base, user });
     return done(out instanceof Response ? out : Response.json(out ?? { ok: true }));
   } catch (e) {
-    if (e instanceof DomainError) return done(fail(e.status, e.code, e.message));
+    if (e instanceof DomainError) {
+      // A validation error carries the individual reasons ("invalid offer": which rule); people need to read them, not just the headline.
+      const why = Array.isArray(e.details) && e.details.every((d) => typeof d === 'string') && e.details.length ? `: ${(e.details as string[]).join('; ')}` : '';
+      return done(fail(e.status, e.code, e.message + why));
+    }
     if (e instanceof ZodError) return done(fail(400, 'INVALID', e.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ')));
     console.error(`[api] ${req.method} ${p}`, e);
     return done(fail(500, 'INTERNAL', 'unexpected server error'));

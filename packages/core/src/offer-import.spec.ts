@@ -72,9 +72,9 @@ describe('creating and updating by offer id', () => {
   });
 
   it('creates an outright device with colours, storage prices and contracts', async () => {
-    await load(csv('grp-electronics,csv-iphone,iPhone 18 Pro Max,PHYSICAL_GOOD,,,1599,yes,,,,,,SHIP,,Black/256GB/IP18-256-BLK/|Black/512GB/IP18-512-BLK/300|Silver/1TB/IP18-1TB-SLV/-50.5,24:400|12:200:2,,,,,,,'));
+    await load(csv('grp-electronics,csv-iphone,iPhone 18 Pro Max,PHYSICAL_GOOD,,,1599,yes,,,,,,SHIP,,Black:256GB:IP18-256/BLK:|Black:512GB:IP18-512-BLK:300|Silver/1TB/IP18-1TB-SLV/-50.5,24:400|12:200:2,,,,,,,'));
     const o = await getOffer(db, 'csv-iphone');
-    expect(o.variants!.map((v) => [v.id, v.sku, v.priceDeltaMinor])).toEqual([['black-256gb', 'IP18-256-BLK', undefined], ['black-512gb', 'IP18-512-BLK', 30000], ['silver-1tb', 'IP18-1TB-SLV', -5050]]);
+    expect(o.variants!.map((v) => [v.id, v.sku, v.priceDeltaMinor])).toEqual([['black-256gb', 'IP18-256/BLK', undefined], ['black-512gb', 'IP18-512-BLK', 30000], ['silver-1tb', 'IP18-1TB-SLV', -5050]]);
     expect(o.deals).toEqual([{ termMonths: 24, subsidyMinor: 40000 }, { termMonths: 12, subsidyMinor: 20000, waiveInLastMonths: 2 }]);
     expect(o.fulfilment.options).toEqual(['SHIP']);
   });

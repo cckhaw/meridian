@@ -1,3 +1,4 @@
+import { SKU_RE, SKU_RULE } from './sku.js';
 import { behaviourOf, LINE_ITEM_TYPES, type CatalogNode, type CatalogNodeLevel, type LineItemNode, type OfferNode } from '@meridian/types';
 
 /** Network type -> Category -> Group -> Offer -> Line item. A node's parent must be exactly one level above. */
@@ -29,7 +30,7 @@ export function validateOffer(o: OfferNode): string[] {
       if (ids.has(v.id)) errs.push(`variant id “${v.id}” is used twice`);
       ids.add(v.id);
       if (!v.colour?.trim()) errs.push('every variant needs a colour');
-      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$/.test(v.sku ?? '')) errs.push(`variant ${v.id}: enter the stock SKU (letters, digits, dash, dot, underscore)`);
+      if (!SKU_RE.test(v.sku ?? '')) errs.push(v.sku ? `variant ${v.colour}${v.storage ? ` ${v.storage}` : ''}: “${v.sku}” is not a valid stock SKU (${SKU_RULE}, up to 50 characters)` : `variant ${v.colour}${v.storage ? ` ${v.storage}` : ''}: enter the stock SKU`);
       if (v.priceDeltaMinor !== undefined && !Number.isInteger(v.priceDeltaMinor)) errs.push(`variant ${v.id}: the price difference must be a whole amount in minor units`);
     }
     if (variants.length > 40) errs.push('too many variants (40 at most)');
@@ -69,7 +70,7 @@ export function validateLineItem(i: Partial<LineItemNode>): string[] {
     if (i.quantity !== undefined && i.quantity !== null) errs.push('an unlimited line item has no quantity');
   } else if (i.quantity !== undefined && i.quantity !== null && (!Number.isInteger(i.quantity) || i.quantity < 1 || i.quantity > 1_000_000)) errs.push('quantity must be a whole number of at least 1');
   if (i.unit && (i.unit.length > 20 || /[\r\n]/.test(i.unit))) errs.push('unit must be short (up to 20 characters)');
-  if (i.sku && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$/.test(i.sku)) errs.push('inventory SKU may contain letters, digits, dash, dot and underscore');
+  if (i.sku && !SKU_RE.test(i.sku)) errs.push(`inventory SKU may contain ${SKU_RULE}`);
   if (i.sku && i.unlimited) errs.push('a line item tied to stock cannot be unlimited');
   if (i.description && i.description.length > 300) errs.push('description is limited to 300 characters');
   return errs;

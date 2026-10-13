@@ -70,6 +70,12 @@ describe('checking a file', () => {
     expect(r.canApply).toBe(true);
   });
 
+  it('accepts part numbers with a slash as SKUs', async () => {
+    const r = await check(csv('WH-MAIN,MJW44LL/A,5,RECEIVE'));
+    expect(r.rows[0]).toMatchObject({ status: 'WARNING' }); // valid; no offer uses it yet
+    expect(r.rows[0]!.message).toMatch(/No offer uses/);
+  });
+
   it('lets the headers vary (Location, Qty) and defaults the action to RECEIVE', async () => {
     const r = await check('Location,SKU,Qty\r\nWH-MAIN,PHONE-X1-128,3');
     expect(r.rows[0]).toMatchObject({ action: 'RECEIVE', quantity: 3, status: 'OK' });

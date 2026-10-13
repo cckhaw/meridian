@@ -4,11 +4,11 @@ import { audit } from './audit.js';
 import { invalid, rejected } from './errors.js';
 import { csvCell, parseCsv } from './csv.js';
 import { adjustStock, MAIN_WAREHOUSE } from './inventory.js';
+import { SKU_RE, SKU_RULE } from './sku.js';
 
 export { parseCsv };
 export const IMPORT_MAX_ROWS = 5000;
 const MAX_QTY = 1_000_000;
-const SKU_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$/;
 
 export type ImportAction = 'RECEIVE' | 'REMOVE' | 'SET';
 const ACTIONS: Record<string, ImportAction> = { RECEIVE: 'RECEIVE', ADD: 'RECEIVE', IN: 'RECEIVE', REMOVE: 'REMOVE', WRITE_OFF: 'REMOVE', WRITEOFF: 'REMOVE', OUT: 'REMOVE', SET: 'SET', COUNT: 'SET' };
@@ -93,7 +93,7 @@ export async function importStock(db: Db, text: string, o: { apply: boolean; act
     if (!r.locationId) return fail(r, 'Enter the location (WH-MAIN or a store id).');
     if (o.storeId && r.locationId !== o.storeId) return fail(r, `You can only load stock for your own store (${o.storeId}).`);
     if (!known.has(r.locationId)) return fail(r, `Unknown location “${r.locationId}”. Use WH-MAIN or a store id from Stores.`);
-    if (!SKU_RE.test(r.sku)) return fail(r, r.sku ? `“${r.sku}” is not a valid SKU (letters, digits, dash, dot, underscore).` : 'Enter the SKU.');
+    if (!SKU_RE.test(r.sku)) return fail(r, r.sku ? `“${r.sku}” is not a valid SKU (${SKU_RULE}).` : 'Enter the SKU.');
     const action = ACTIONS[r.action];
     if (!action) return fail(r, `Unknown action “${r.action}”. Use RECEIVE, REMOVE or SET.`);
     r.action = action;
