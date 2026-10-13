@@ -17,14 +17,14 @@ const major = toInput;
 interface FormState {
   parentId: string; id: string; name: string; kind: string; description: string; market: string; recurring: string; upfront: string; taxInclusive: boolean;
   term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string;
-  requires: string[]; excludes: string[]; channels: string[]; status: string;
+  requires: string[]; excludes: string[]; channels: string[]; status: string; activeFrom: string;
   variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
 }
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: '', description: '', market, recurring: '', upfront: '', taxInclusive: true,
   term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '',
-  requires: [], excludes: [], channels: [], status: 'DRAFT', variants: [],
+  requires: [], excludes: [], channels: [], status: 'DRAFT', activeFrom: '', variants: [],
 });
 
 /** Offers saved before fulfilment options existed carry only the flags; show them as the built-in options they correspond to. */
@@ -33,7 +33,7 @@ const optionsOf = (f: any): string[] => f?.options ?? [f?.requiresShipping && 'S
 function fromOffer(o: any, market: string): FormState {
   const rec = o.prices?.find((p: any) => p.type === 'RECURRING'), once = o.prices?.find((p: any) => p.type === 'ONE_TIME');
   return {
-    ...blank(o.markets?.[0] ?? market), parentId: o.parentId ?? '', id: o.id, name: o.name, kind: o.kind, description: o.description ?? '', status: o.status,
+    ...blank(o.markets?.[0] ?? market), parentId: o.parentId ?? '', id: o.id, name: o.name, kind: o.kind, description: o.description ?? '', status: o.status, activeFrom: o.activeFrom ? localDate(new Date(o.activeFrom)) : '',
     recurring: major(rec?.amount.amountMinor), upfront: major(once?.amount.amountMinor), taxInclusive: (rec ?? once)?.taxInclusive ?? true,
     term: String(o.contract?.termMonths ?? 0), etcMethod: o.contract?.etc?.method ?? 'SUBSIDY_AMORTISED', etcPercent: String(o.contract?.etc?.percentOfRemaining ?? 50), waive: String(o.contract?.etc?.waiveInLastMonths ?? 1),
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
@@ -42,6 +42,11 @@ function fromOffer(o: any, market: string): FormState {
     variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
   };
 }
+
+const localDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); return localDate(d); };
+/** Goes live at the start of the chosen day, in the browser's time zone. */
+const goLive = (day: string) => new Date(`${day}T00:00:00`).toISOString();
 
 type StepId = 'basics' | 'pricing' | 'fulfilment' | 'stock' | 'availability' | 'rules' | 'review';
 const TITLE: Record<StepId, string> = { basics: 'What is it?', pricing: 'Pricing', fulfilment: 'Fulfilment', stock: 'Stock', availability: 'Availability', rules: 'Rules', review: 'Review' };
@@ -155,6 +160,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
       case 'basics': return !f.parentId ? 'Choose the group it belongs to.' : !f.kind ? 'Choose the type of offer.' : !f.name.trim() ? 'Give it a display name.' : null;
       case 'pricing': return prices.length === 0 ? (b?.role === 'GOODS' ? 'Enter the price.' : 'Enter a monthly fee or an upfront price.') : null;
       case 'fulfilment': return b?.goods && !has('SHIP') && !has('COLLECT') ? 'Choose how the customer gets the goods: delivery or collect in store.' : b?.needsInstallation && !has('INSTALL') ? 'Fibre needs an installation option.' : null;
+      case 'review': return f.status === 'SCHEDULED' && (!f.activeFrom || f.activeFrom < tomorrow()) ? 'Choose a go-live date after today.' : null;
       case 'availability': return b?.needsPartner && !f.partner.trim() ? 'Enter the partner code.' : null;
       default: return null;
     }
@@ -166,13 +172,14 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const submit = async () => {
     const ok = await run(async () => {
       if (editing) {
-        await patch(`/catalog/${offerId}`, { ...common, markets: [f.market], ...(locked ? {} : { kind: f.kind, prices, contract }), ...(f.status !== source.status ? { status: f.status } : {}) });
+        await patch(`/catalog/${offerId}`, { ...common, markets: [f.market], ...(locked ? {} : { kind: f.kind, prices, contract }), ...(f.status !== source.status || (f.status === 'SCHEDULED' && f.activeFrom !== (source.activeFrom ? localDate(new Date(source.activeFrom)) : '')) ? { status: f.status, ...(f.status === 'SCHEDULED' ? { activeFrom: goLive(f.activeFrom) } : {}) } : {}) });
         if (f.parentId && f.parentId !== source.parentId) await post(`/catalog/${offerId}/move`, { parentId: f.parentId });
       } else {
         const node = await post('/catalog', { level: 'OFFER', id: f.id || slug(f.name), parentId: f.parentId, markets: [f.market], kind: f.kind, prices, contract, characteristics: {}, ...common, status: 'DRAFT' });
         createdId.current = node.id;
         if (fromId) await post(`/catalog/${node.id}/line-items/copy-from`, { fromId }); // a new version keeps what the old one included
         if (f.status === 'ACTIVE') await patch(`/catalog/${node.id}`, { status: 'ACTIVE' });
+        if (f.status === 'SCHEDULED') await patch(`/catalog/${node.id}`, { status: 'SCHEDULED', activeFrom: goLive(f.activeFrom) });
       }
       return true;
     });
@@ -362,7 +369,10 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
               </dl>
             </Card>
             <Card>
-              <Field label="Status"><Select value={f.status} onChange={set('status')}><option value="DRAFT">Draft (not sellable)</option><option value="ACTIVE">Active (sellable)</option>{editing && <option value="RETIRED">Retired</option>}</Select></Field>
+              <Field label="Status"><Select value={f.status} onChange={set('status')}><option value="DRAFT">Draft (not sellable)</option><option value="SCHEDULED">Scheduled (goes live on a date)</option><option value="ACTIVE">Active (sellable now)</option>{editing && <option value="RETIRED">Retired</option>}</Select></Field>
+              {f.status === 'SCHEDULED' && (
+                <Field label="Goes live on" hint="It becomes sellable at the start of this day. Until then it is hidden from every sales channel."><Input type="date" min={tomorrow()} value={f.activeFrom} onChange={set('activeFrom')} /></Field>
+              )}
             </Card>
             {error && <Alert>{error}</Alert>}
           </div>
@@ -373,7 +383,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
         {at > 0 && <Button type="button" variant="secondary" onClick={() => go(at - 1)}>Back</Button>}
         {stepId !== 'review'
           ? <Button type="button" disabled={!!blocked} onClick={() => go(at + 1)}>Continue</Button>
-          : <Button type="button" disabled={busy || !f.parentId || !f.name.trim() || !f.kind} onClick={() => void submit()}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create offer'}</Button>}
+          : <Button type="button" disabled={busy || !!blocked || !f.parentId || !f.name.trim() || !f.kind} onClick={() => void submit()}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create offer'}</Button>}
         {editing && stepId !== 'review' && <Button type="button" variant="plain" disabled={busy || !!blocked} onClick={() => void submit()}>Save now</Button>}
         <Link href={offerId ? `/catalog?node=${offerId}` : f.parentId ? `/catalog?node=${f.parentId}` : '/catalog'} className="inline-flex min-h-tap items-center rounded-control px-4 text-body font-medium text-accent hover:bg-surface2">Cancel</Link>
         {blocked && <p role="status" className="basis-full text-footnote text-label2">{blocked}</p>}

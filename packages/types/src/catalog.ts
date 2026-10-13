@@ -22,7 +22,9 @@ export interface CatalogNodeBase extends Auditable {
   /** Materialised path, e.g. "mobile/postpaid/family". Indexed in MongoDB. */
   path: string;
   parentId: string | null;
-  status: 'DRAFT' | 'ACTIVE' | 'RETIRED';
+  status: 'DRAFT' | 'SCHEDULED' | 'ACTIVE' | 'RETIRED';
+  /** When a SCHEDULED node goes live (ISO timestamp). */
+  activeFrom?: string | null;
   /** Market the node is sellable in (ISO-3166 alpha-2), empty = all. */
   markets: string[];
 }

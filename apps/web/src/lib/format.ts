@@ -26,4 +26,4 @@ type Tone = 'neutral' | 'success' | 'warning' | 'danger';
 export const tone = (s: string): Tone =>
   ['COMPLETED', 'ACTIVE', 'PAID', 'RESOLVED', 'CLOSED', 'ACTIVATED', 'DELIVERED'].includes(s) ? 'success'
   : ['FAILED', 'OVERDUE', 'TERMINATED', 'CANCELLED', 'VOID', 'URGENT', 'BLOCKED'].includes(s) ? 'danger'
-  : ['SUSPENDED', 'PAYMENT_PENDING', 'AWAITING_INSTALLATION', 'PORTING_OUT', 'OPEN', 'HIGH', 'ISSUED', 'SHIPPED', 'FULFILMENT'].includes(s) ? 'warning' : 'neutral';
+  : ['SUSPENDED', 'PAYMENT_PENDING', 'AWAITING_INSTALLATION', 'PORTING_OUT', 'OPEN', 'HIGH', 'ISSUED', 'SHIPPED', 'FULFILMENT', 'SCHEDULED'].includes(s) ? 'warning' : 'neutral';

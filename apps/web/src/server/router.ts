@@ -196,11 +196,11 @@ const nodeInput = z.discriminatedUnion('level', [
   z.object({ level: z.literal('NETWORK_TYPE'), id: z.string().max(60), name: z.string().min(1).max(100), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
   z.object({ level: z.literal('CATEGORY'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
   z.object({ level: z.literal('GROUP'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional() }),
-  z.object({ level: z.literal('OFFER'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'ACTIVE']).optional(), markets: z.array(z.string().length(2)).default([]), ...offerFields }),
+  z.object({ level: z.literal('OFFER'), id: z.string().max(60), name: z.string().min(1).max(100), parentId: z.string(), status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE']).optional(), activeFrom: z.string().max(40).optional(), markets: z.array(z.string().length(2)).default([]), ...offerFields }),
 ]);
 const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
-  status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
+  status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
   partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(),
 });
@@ -227,10 +227,10 @@ get('/catalog/:id', 'catalog:read', async ({ db, user, params }) => {
 get('/catalog/:id/usage', 'catalog:write', ({ db, params }) => core.nodeUsage(db, params.id!));
 post('/catalog', 'catalog:write', ({ db, user, body }) => core.createNode(db, nodeInput.parse(body) as unknown as core.NodeInput, user.username));
 patch('/catalog/:id', 'catalog:write', async ({ db, user, params, body }) => {
-  const { status, ...fields } = nodePatch.parse(body);
+  const { status, activeFrom, ...fields } = nodePatch.parse(body);
   const edited = Object.values(fields).some((v) => v !== undefined);
   if (edited) await core.updateNode(db, params.id!, fields as core.NodePatch, user.username);
-  return status ? core.setStatus(db, params.id!, status, user.username) : core.getNode(db, params.id!);
+  return status ? core.setStatus(db, params.id!, status, user.username, activeFrom) : core.getNode(db, params.id!);
 });
 post('/catalog/:id/move', 'catalog:write', ({ db, user, params, body }) => core.moveNode(db, params.id!, z.object({ parentId: z.string().nullable() }).parse(body).parentId, user.username));
 post('/catalog/:id/reorder', 'catalog:write', async ({ db, user, params, body }) => { await core.reorderNode(db, params.id!, z.object({ direction: z.enum(['up', 'down']) }).parse(body).direction, user.username); return { ok: true }; });
@@ -756,6 +756,14 @@ function fail(status: number, code: string, message: string, extra: Record<strin
 }
 const MAX_BODY = 1_000_000;
 
+/** Scheduled offers go live on their date: any request notices a due one, at most once every 15 seconds per server. */
+let lastSweep = 0;
+async function sweepScheduled(db: Db) {
+  if (Date.now() - lastSweep < 15_000) return;
+  lastSweep = Date.now();
+  try { await core.activateDueNodes(db); } catch (e) { console.error('[catalog] scheduled activation failed', (e as Error).message); }
+}
+
 export async function dispatch(req: Request, path: string[]): Promise<Response> {
   const started = Date.now();
   const url = new URL(req.url);
@@ -793,6 +801,7 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
     }
     // Liveness must not depend on the database.
     const db = p === '/health' ? (undefined as unknown as Db) : await getDb();
+    if (p !== '/health') await sweepScheduled(db);
     const base = { db, params, query: url.searchParams, body, req };
 
     if (rt.client) {

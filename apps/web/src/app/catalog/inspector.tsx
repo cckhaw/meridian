@@ -72,7 +72,7 @@ function Header({ node, sub, a, actions, menu }: { node: CNode; sub: string; a: 
       <div className="min-w-0 flex-1">
         <p className="text-footnote font-medium uppercase tracking-wide text-accent">{sub}</p>
         <h1 className="text-title1 font-bold tracking-tight sm:text-large-title">{node.name}</h1>
-        <p className="mt-1 flex flex-wrap items-center gap-2 text-subhead text-label2"><Badge tone={tone(node.status)}>{node.status === 'ACTIVE' ? 'Live' : label(node.status)}</Badge>{node.description}</p>
+        <p className="mt-1 flex flex-wrap items-center gap-2 text-subhead text-label2"><Badge tone={tone(node.status)}>{node.status === 'ACTIVE' ? 'Live' : label(node.status)}</Badge>{node.status === 'SCHEDULED' && node.activeFrom && <span>Goes live {new Date(node.activeFrom).toLocaleDateString()}</span>}{node.description}</p>
       </div>
       {a.editable && (
         <div className="flex items-center gap-1">

@@ -30,7 +30,7 @@ Search is on the server and covers the whole catalog by words in the name or cod
 4. **Stock.** Only if a chosen fulfilment option tracks stock: the SKUs reserved when it is sold, and (for devices) colours and storage. A SIM-only plan shows no stock step unless you have turned on stock tracking for SIM activation.
 5. **Availability.** Channels and market, and the partner code for partner subscriptions.
 6. **Rules.** Optional prerequisites and exclusions.
-7. **Review.** A summary with Edit links, then choose Draft or Active and create. Editing an existing offer uses the same steps and lets you jump to any of them.
+7. **Review.** A summary with Edit links, then choose **Draft** (not sellable), **Scheduled** (goes live on a date) or **Active** (sellable now) and create. A scheduled offer needs a go-live date after today; it is hidden from every sales channel until the start of that day, then becomes Active by itself (the server notices a due offer within about 15 seconds). Moving it back to Draft clears the date. Editing an existing offer uses the same steps and lets you jump to any of them.
 
 ## What an offer type is
 

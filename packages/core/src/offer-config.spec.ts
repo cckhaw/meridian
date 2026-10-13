@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createNode, getNode, listNodes, pageOffers, updateNode } from './catalog.js';
+import { activateDueNodes, createNode, getNode, listNodes, pageOffers, setStatus, updateNode } from './catalog.js';
 import type { Db } from './db.js';
 import { createFulfilmentOption, createOfferType, deleteFulfilmentOption, deleteOfferType, expandKinds, listFulfilmentOptions, listOfferTypes, updateFulfilmentOption, updateOfferType } from './offer-config.js';
 import { createsService } from './order-pricing.js';
@@ -91,5 +91,33 @@ describe('prices follow the regional currency', () => {
     await expect(offer('usd-plan', { prices: [{ type: 'RECURRING', amount: { amountMinor: 1000, currency: 'USD' }, taxInclusive: true, periodMonths: 1 }] })).rejects.toThrow(/prices are in SGD/);
     expect(await getNode(db, 'phone-collect')).toBeTruthy();
     expect((await listNodes(db, { level: 'OFFER' })).length).toBeGreaterThan(0);
+  });
+});
+
+describe('scheduled offers', () => {
+  const day = 86_400_000;
+  it('needs a future date, stays hidden until then, and goes live when the date arrives', async () => {
+    const o = await offer('sched-1');
+    await expect(setStatus(db, o.id, 'SCHEDULED', 'admin')).rejects.toThrow(/date it goes live/);
+    await expect(setStatus(db, o.id, 'SCHEDULED', 'admin', new Date(Date.now() - day).toISOString())).rejects.toThrow(/in the future/);
+    const when = new Date(Date.now() + 3 * day).toISOString();
+    const s = await setStatus(db, o.id, 'SCHEDULED', 'admin', when);
+    expect(s).toMatchObject({ status: 'SCHEDULED', activeFrom: when });
+    const live = async () => (await pageOffers(db, { status: 'ACTIVE', limit: 100 })).items.map((n) => n.id);
+    expect(await live()).not.toContain(o.id);
+    await activateDueNodes(db);
+    expect((await getNode(db, o.id)).status).toBe('SCHEDULED');
+    await db.query(`UPDATE catalog_nodes SET active_from = now() - interval '1 minute' WHERE id=$1`, [o.id]);
+    expect(await activateDueNodes(db)).toBe(1);
+    expect(await getNode(db, o.id)).toMatchObject({ status: 'ACTIVE' });
+    expect(await live()).toContain(o.id);
+  });
+
+  it('can be created scheduled, and going back to draft clears the date', async () => {
+    const when = new Date(Date.now() + 2 * day).toISOString();
+    const o = await offer('sched-2', { status: 'SCHEDULED', activeFrom: when });
+    expect(o).toMatchObject({ status: 'SCHEDULED', activeFrom: when });
+    expect(await setStatus(db, o.id, 'DRAFT', 'admin')).toMatchObject({ status: 'DRAFT', activeFrom: null });
+    await expect(offer('sched-3', { status: 'SCHEDULED' })).rejects.toThrow(/date it goes live/);
   });
 });
