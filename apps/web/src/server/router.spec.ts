@@ -243,11 +243,15 @@ describe('data scope', () => {
     const root_ = await root();
     const s1 = await staff(['retail-store'], { storeId: 'STORE-SG-001' }), s2 = await staff(['retail-store'], { storeId: 'STORE-SG-002' });
     const d1 = await staff(['dealer'], { dealerId: 'DLR-1' }), d2 = await staff(['dealer'], { dealerId: 'DLR-2' });
+    await call('POST', '/dealers', { cookie: root_, body: { id: 'DLR-1', name: 'Dealer One' } });
+    await call('POST', '/dealers', { cookie: root_, body: { id: 'DLR-2', name: 'Dealer Two' } });
+    const ag = (await call('POST', '/dealers/DLR-1/agents', { cookie: root_, body: { name: 'Agent One' } })).json.id;
     const c = await customer(root_);
     const o1 = await call('POST', '/orders', { cookie: s1.cookie, body: { channel: 'RETAIL_ASSISTED', customerId: c, storeId: 'STORE-SG-002', lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
     expect(o1.json.storeId).toBe('STORE-SG-001');                  // body's store is ignored
-    const od = await call('POST', '/orders', { cookie: d1.cookie, body: { channel: 'DEALER', customerId: c, dealerId: 'DLR-2', lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
+    const od = await call('POST', '/orders', { cookie: d1.cookie, body: { channel: 'DEALER', customerId: c, dealerId: 'DLR-2', dealerAgentId: ag, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
     expect(od.json.dealerId).toBe('DLR-1');
+    expect(od.json.dealerAgentId).toBe(ag);
 
     expect((await call('GET', `/orders/${o1.json.id}`, { cookie: s2.cookie })).status).toBe(404);
     expect((await call('GET', '/orders', { cookie: s2.cookie })).json.items.some((o: any) => o.id === o1.json.id)).toBe(false);
@@ -548,6 +552,46 @@ describe('settings and branding', () => {
   });
 });
 
+describe('dealers, and who an order is sold by', () => {
+  it('keeps dealers and agents in the CRM and requires both on a dealer order', async () => {
+    const admin = await root();
+    const desk = await staff(['dealer-desk']);
+    const plain = await staff(['telesales']);
+    expect((await call('POST', '/dealers', { cookie: plain.cookie, body: { id: 'ORBIT', name: 'Orbit' } })).status).toBe(403);
+    expect((await call('GET', '/dealers', { cookie: plain.cookie })).status).toBe(403);
+    expect((await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'bad id!', name: 'Bad' } })).status).toBe(400);
+    const d = await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'ORBIT', name: 'Orbit Mobile' } });
+    expect(d.status).toBe(200);
+    expect((await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'ORBIT', name: 'Again' } })).status).toBe(409);
+    const a1 = (await call('POST', '/dealers/ORBIT/agents', { cookie: desk.cookie, body: { name: 'Marcus' } })).json;
+    expect(a1.id).toBe('ORBIT-A001');
+    expect((await call('GET', '/dealers?q=orb', { cookie: desk.cookie })).json.items.map((x: any) => x.id)).toEqual(['ORBIT']);
+    const cust = await customer(admin);
+    const sale = (extra: object) => call('POST', '/orders', { cookie: desk.cookie, body: { channel: 'DEALER', customerId: cust, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true }, ...extra } });
+    expect((await sale({ dealerId: 'ORBIT' })).status).toBe(400);                                  // no agent
+    expect((await sale({ dealerId: 'GHOST', dealerAgentId: a1.id })).status).toBe(400);           // unknown dealer
+    await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'OTHER', name: 'Other' } });
+    const other = (await call('POST', '/dealers/OTHER/agents', { cookie: desk.cookie, body: { name: 'Sam' } })).json;
+    expect((await sale({ dealerId: 'ORBIT', dealerAgentId: other.id })).status).toBe(400);        // someone else's agent
+    const ok = await sale({ dealerId: 'ORBIT', dealerAgentId: a1.id });
+    expect(ok.status).toBe(200);
+    expect(ok.json).toMatchObject({ dealerId: 'ORBIT', dealerAgentId: a1.id, salespersonId: desk.username });
+    await call('PATCH', `/dealer-agents/${a1.id}`, { cookie: desk.cookie, body: { status: 'INACTIVE' } });
+    expect((await sale({ dealerId: 'ORBIT', dealerAgentId: a1.id })).status).toBe(400);          // inactive agent
+    expect((await call('GET', '/dealers/ORBIT/agents?status=ACTIVE', { cookie: desk.cookie })).json.items).toHaveLength(0);
+  });
+
+  it('rings a quick sale up at the signed-in store and keeps self-serve out of the CRM', async () => {
+    const admin = await root();
+    const shop = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    const body = { channel: 'QUICK_SALE', lines: [{ offerId: 'good-toaster' }], payment: { method: 'CASH', confirmed: true } };
+    const r = await call('POST', '/orders', { cookie: shop.cookie, body: { ...body, storeId: 'STORE-SG-002' } });
+    expect(r.json).toMatchObject({ storeId: 'STORE-SG-001', salespersonId: shop.username });      // the store comes from the login, not the request
+    expect((await call('POST', '/orders', { cookie: admin, body: { ...body, storeId: 'STORE-SG-002' } })).status).toBe(400); // no store on the login: no quick sale
+    expect((await call('POST', '/orders', { cookie: admin, body: { ...body, channel: 'SELF_SERVE', customerId: await customer(admin) } })).status).toBe(400);
+  });
+});
+
 describe('store-front API, KYC review and assisted sales', () => {
   const png = () => {
     const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(64, 0); ihdr.writeUInt32BE(64, 4); ihdr[8] = 8; ihdr[9] = 6;
@@ -684,7 +728,7 @@ describe('store-front API, KYC review and assisted sales', () => {
     // compliance officers and other roles cannot run assisted sales
     const officer = await staff(['compliance']);
     expect((await call('POST', '/assisted/applications', { cookie: officer.cookie, body: { lines: [{ offerId: 'plan-sim-5g' }] } })).status).toBe(403);
-    expect((await call('GET', '/auth/me', { cookie: a.cookie })).json.user.modules.map((m: any) => m.id)).toContain('assisted');
+    expect((await call('GET', '/auth/me', { cookie: a.cookie })).json.user.modules.map((m: any) => m.id)).not.toContain('assisted'); // every CRM order is assisted: there is no separate menu for it
   });
 });
 

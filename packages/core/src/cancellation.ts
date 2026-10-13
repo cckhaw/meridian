@@ -280,37 +280,65 @@ function conditionText(c: Condition, group: RuleGroup): string | null {
   void group;
 }
 
-/** A sentence anyone can read: what the rule does and when. Used on the settings screen, in the order wizard's terms, and as the default customer message. */
-export function describeRule(r: CancellationRule, currency = 'SGD'): string {
+/** The two halves of a rule in plain words: when it applies, and what happens then. */
+export function ruleParts(r: CancellationRule, currency = 'SGD'): { when: string; what: string; stage: string; narrowed: boolean } {
   const status = r.when.find((c) => c.fact === 'groupStatus');
   const kind = r.group === 'ANY' ? 'GOODS' : r.group;
-  const stage = status && (status.op === 'eq' || status.op === 'in') ? [...(Array.isArray(status.value) ? status.value : [status.value])].map((v) => STAGE[kind][String(v)] ?? String(v)).map((t, i) => (i ? t.charAt(0).toLowerCase() + t.slice(1) : t)).join(' or ') : '';
+  const states = status && (status.op === 'eq' || status.op === 'in') ? (Array.isArray(status.value) ? status.value : [status.value]).map(String) : [];
+  // "Shipped or delivered" reads as one stage: from the moment it ships.
+  const shown = states.includes('LOCKED') && states.includes('DONE') ? states.filter((v) => v !== 'DONE') : states;
+  const stage = shown.map((v) => STAGE[kind][v] ?? v).map((t, i) => (i ? t.charAt(0).toLowerCase() + t.slice(1) : t)).join(' or ');
   const rest = r.when.map((c) => conditionText(c, r.group)).filter((x): x is string => !!x);
-  const subject = [stage, ...rest].filter(Boolean).join(', ') || 'In every case';
+  const when = [stage, ...rest].filter(Boolean).join(', ') || 'In every case';
   const o = r.outcome;
   let what: string;
   if (r.action === 'FLAG_AT_RISK') what = 'the order is flagged as at risk for follow-up';
   else if (r.action === 'AUTO_CANCEL') what = `it is cancelled automatically${o.refundBps !== undefined && o.refundBps < 10_000 ? ` with ${pct(o.refundBps)} refunded` : ' with a full refund'}`;
-  else if (!o.allow) what = r.action === 'RETURN' ? 'it cannot be returned' : 'it cannot be cancelled';
+  else if (!o.allow) what = r.action === 'RETURN' ? 'it cannot be returned' : r.group === 'ACTIVATION' ? 'it cannot be cancelled; end the service under its contract terms instead' : 'it cannot be cancelled';
   else {
     const bits: string[] = [];
-    const fee = retained({ ...o, refundBps: 10_000 }, 0);
     if ((o.feeFixedMinor ?? 0) > 0 || (o.feePercentBps ?? 0) > 0) bits.push(`${[o.feeFixedMinor ? money(o.feeFixedMinor, currency) : '', o.feePercentBps ? `${pct(o.feePercentBps)} of what was paid` : ''].filter(Boolean).join(' plus ')} is kept`);
-    void fee;
     if (o.refundBps !== undefined && o.refundBps < 10_000) bits.push(`${pct(o.refundBps)} is refunded`);
     what = `${r.action === 'RETURN' ? 'it can be returned' : 'it can be cancelled'}${bits.length ? `; ${bits.join(', ')}` : ' for a full refund'}${o.requiresOverride ? ' (needs supervisor approval)' : ''}`;
   }
-  return `${subject}: ${what}.`.replace(/^([a-z])/, (m) => m.toUpperCase());
+  return { when: when.replace(/^([a-z])/, (m) => m.toUpperCase()), what, stage, narrowed: rest.length > 0 };
 }
 
-/** What the customer is told per part of the order: the enabled rules that apply, in the order they are tried. */
-export async function termsFor(q: Queryable, kinds: GroupKind[], currency: string): Promise<Array<{ group: GroupKind; title: string; text: string }>> {
+/** A sentence anyone can read: what the rule does and when. Used on the settings screen and as the default customer message. */
+export function describeRule(r: CancellationRule, currency = 'SGD'): string {
+  const { when, what } = ruleParts(r, currency);
+  return `${when}: ${what}.`;
+}
+
+/**
+ * What the customer is told per part of the order, as short points in the order things happen (before, during, after).
+ * Written from the rules themselves so the points can never disagree with each other or with what the system does;
+ * the free-text customer message is for the decision shown to staff, not for these terms.
+ */
+export async function termsFor(q: Queryable, kinds: GroupKind[], currency: string): Promise<Array<{ group: GroupKind; title: string; text: string; points: Array<{ when: string; what: string }> }>> {
   const rules = (await listRules(q)).filter((r) => r.enabled && r.showInTerms);
   const TITLE: Record<GroupKind, string> = { GOODS: 'Device and goods', INSTALL: 'Installation', ACTIVATION: 'Mobile and other services' };
   const ACTION_ORDER: RuleAction[] = ['CANCEL', 'RETURN', 'AUTO_CANCEL'];
+  const STAGE_ORDER = ['PENDING', 'LOCKED', 'DONE'];
+  const stageRank = (r: CancellationRule) => {
+    const c = r.when.find((x) => x.fact === 'groupStatus');
+    const vs = c ? (Array.isArray(c.value) ? c.value : [c.value]).map(String) : [];
+    return vs.length ? Math.min(...vs.map((v) => STAGE_ORDER.indexOf(v))) : 0;
+  };
   return kinds.map((g) => {
-    const mine = rules.filter((r) => (r.group === g || r.group === 'ANY') && ACTION_ORDER.includes(r.action)).sort((a, b) => ACTION_ORDER.indexOf(a.action) - ACTION_ORDER.indexOf(b.action) || a.priority - b.priority);
-    return { group: g, title: TITLE[g], text: mine.map((r) => r.message ?? describeRule(r, currency)).join(' ') || 'This part cannot be cancelled once the order is placed.' };
+    const mine = rules.filter((r) => (r.group === g || r.group === 'ANY') && ACTION_ORDER.includes(r.action))
+      .sort((a, b) => stageRank(a) - stageRank(b) || ACTION_ORDER.indexOf(a.action) - ACTION_ORDER.indexOf(b.action) || a.priority - b.priority);
+    // Rules are tried in order, so a plain rule after a narrower one for the same stage is "otherwise" (e.g. the free cancellation after the late-fee one).
+    const seen = new Set<string>();
+    const points = mine.map((r) => {
+      const p = ruleParts(r, currency);
+      const key = `${r.action}|${p.stage}`;
+      const when = !p.narrowed && seen.has(key) ? `Otherwise, ${p.stage.charAt(0).toLowerCase()}${p.stage.slice(1)}` : p.when;
+      seen.add(key);
+      return { when, what: p.what };
+    });
+    if (!points.length) points.push({ when: 'Once the order is placed', what: 'it cannot be cancelled' });
+    return { group: g, title: TITLE[g], points, text: points.map((p) => `${p.when}: ${p.what}.`).join(' ') };
   });
 }
 

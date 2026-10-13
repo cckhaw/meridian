@@ -30,7 +30,7 @@ describe('the cancellation rule base', () => {
     expect(describeRule(rule('install-late'), 'SGD')).toBe('Before the technician is dispatched, less than 24 hours before the visit: it can be cancelled; SGD 50.00 is kept.');
     expect(describeRule(rule('goods-return-window'))).toBe('Once the goods are delivered, within 14 days of delivery: it can be returned for a full refund.');
     expect(describeRule(rule('install-auto-cancel'))).toBe('Before the technician is dispatched, after 21 days: it is cancelled automatically with a full refund.');
-    expect(describeRule(rule('goods-shipped'))).toBe('Once the goods have shipped or once the goods are delivered: it cannot be cancelled.');
+    expect(describeRule(rule('goods-shipped'))).toBe('Once the goods have shipped: it cannot be cancelled.');
   });
 
   it('changing a rule changes behaviour immediately: a different fee and window for late installation cancels', async () => {
@@ -114,9 +114,24 @@ describe('the cancellation rule base', () => {
     expect(group(await fibre(2), 'INSTALL').feeMinor).toBe(5000);
     await edit('install-late', { enabled: false });
     expect((await termsFor(db, ['INSTALL'], 'SGD'))[0]!.text).not.toMatch(/kept/);
-    await edit('install-late', { message: 'A call-out fee applies when you cancel close to the visit.', enabled: true });
-    expect((await termsFor(db, ['INSTALL'], 'SGD'))[0]!.text).toContain('A call-out fee applies when you cancel close to the visit.');
     await resetRules(db, 'admin');
+  });
+
+  it('lists the terms as short points in the order things happen, without contradicting each other', async () => {
+    const [goods, install, service] = await termsFor(db, ['GOODS', 'INSTALL', 'ACTIVATION'], 'SGD');
+    expect(goods!.points).toEqual([
+      { when: 'Before the goods ship', what: 'it can be cancelled for a full refund' },
+      { when: 'Once the goods have shipped', what: 'it cannot be cancelled' },
+      { when: 'Once the goods are delivered, within 14 days of delivery', what: 'it can be returned for a full refund' },
+    ]);
+    expect(install!.points.map((p) => p.when)).toEqual([
+      'Before the technician is dispatched, less than 24 hours before the visit', 'Otherwise, before the technician is dispatched',
+      'Before the technician is dispatched, after 21 days', 'Once the technician is dispatched',
+    ]);
+    expect(service!.points).toEqual([
+      { when: 'Before the service is switched on', what: 'it can be cancelled for a full refund' },
+      { when: 'Once the service is switched on', what: 'it cannot be cancelled; end the service under its contract terms instead' },
+    ]);
   });
 
   it('rejects rules that make no sense', () => {

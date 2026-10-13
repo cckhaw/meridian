@@ -105,3 +105,21 @@ Rules like "fibre + a phone plan = 10% off the phone" are data (`/api/bundle-rul
 | `POST /api/orders/:id/actions` | `cancel` (optionally `groups`), `return`, `ship`, `deliver`, `schedule_installation`, `dispatch_technician`, `complete_installation`, `confirm_payment` |
 
 `GET /api/orders/:id` includes `groups` with what each part can do right now (can it be cancelled, the refund and any fee, the return window) and `cancelAll`, the combined effect of "Cancel order".
+
+## Selling through
+
+All CRM orders are staff-assisted; customers order themselves only through the store-front (the *Self-serve* channel is not offered in the CRM). The **Selling through** panel on the first step of New order records who sold it:
+
+| Channel | Who sold it | Store |
+|---|---|---|
+| Retail store | the signed-in store user (own login) | from the login (staff without a store pick one) |
+| Quick sale (walk-in, goods only) | the signed-in store user | from the login, never from the request; offered to store users only |
+| Call center, Telesales | the signed-in user (own login) | none |
+| Dealer | the operator enters it **on the dealer’s behalf** and chooses the **dealer** and the **dealer agent** | none |
+
+Retail, call-center and telesales users are created under Users & roles. Dealers and their agents are kept under **Dealers** (permission `dealer:manage`, held by the *Dealer Desk* role); an order for a dealer needs an active dealer and one of that dealer’s active agents, and the order records both (`dealer_id`, `dealer_agent_id`).
+
+## What the customer is told
+
+The review step lists, for each part of the order, short points in the order things happen: before it ships or is dispatched, once it has shipped, once delivered. They are generated from the cancellation rules, so they cannot disagree with what the system does or with each other. A rule that is narrower than a later one for the same stage (for example the late-visit fee) is followed by an "Otherwise" point.
+

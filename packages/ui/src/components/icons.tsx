@@ -11,8 +11,8 @@ const G: Record<string, ReactNode> = {
   customers: <><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2" /><circle cx="17" cy="9" r="2.5" /><path d="M16.2 14.1c2.7-.1 4.8 1.5 4.8 4.5" /></>,
   // shopping bag with a plus: start a new order
   sell: <><path d="M5 8h14l-1 12H6L5 8z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /><path d="M12 12v4M10 14h4" /></>,
-  // a person with a verified badge: serving a customer in person
-  assisted: <><circle cx="10" cy="8" r="3.2" /><path d="M4 19c0-3.3 2.7-5.3 6-5.3 1.3 0 2.5.3 3.5.8" /><circle cx="18" cy="16.5" r="3.5" /><path d="m16.4 16.5 1.2 1.2 2.1-2.4" /></>,
+  // a shopfront: partner dealers
+  dealers: <><path d="M4 9.5 5.5 4h13L20 9.5" /><path d="M4 9.5a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0" /><path d="M5.5 12.5V20h13v-7.5" /><path d="M10 20v-4.5h4V20" /></>,
   // parcel
   orders: <><path d="M12 3 20 7v10l-8 4-8-4V7l8-4z" /><path d="m4 7 8 4 8-4M12 11v10" /></>,
   // receipt
@@ -51,7 +51,7 @@ const G: Record<string, ReactNode> = {
 };
 
 /** Legacy names the server may still send, mapped to the icon that pictures the module. */
-const ALIAS: Record<string, string> = { house: 'overview', person: 'customers', bag: 'sell', check: 'assisted', box: 'orders', doc: 'billing', bubble: 'cases', shield: 'kyc', swap: 'mnp', grid: 'catalog', cube: 'inventory', ledger: 'finance', coins: 'commission', people: 'users', gear: 'settings', list: 'audit' };
+const ALIAS: Record<string, string> = { house: 'overview', person: 'customers', bag: 'sell', store: 'dealers', box: 'orders', doc: 'billing', bubble: 'cases', shield: 'kyc', swap: 'mnp', grid: 'catalog', cube: 'inventory', ledger: 'finance', coins: 'commission', people: 'users', gear: 'settings', list: 'audit' };
 
 export type IconName = keyof typeof G;
 export function Icon({ name, size = 22, ...p }: { name: string; size?: number } & Omit<SVGProps<SVGSVGElement>, 'name'>) {

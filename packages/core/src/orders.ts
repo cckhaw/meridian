@@ -14,6 +14,7 @@ import { createsService, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type Gr
 import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.js';
 import { customerIdsMatching, parseQuery } from './search.js';
 import { audit } from './audit.js';
+import { assertDealerSale } from './dealers.js';
 import { taxSplit } from './tax.js';
 import { conflict } from './errors.js';
 
@@ -32,7 +33,7 @@ export interface OrderInput {
   payment: { method: PaymentMethod; installmentMonths?: number; reference?: string; confirmed?: boolean;
     /** Wait in PAYMENT_PENDING for a payment gateway to confirm (online checkout), whatever the payment mode. */
     deferred?: boolean };
-  attribution?: { storeId?: string; salespersonId?: string; dealerId?: string };
+  attribution?: { storeId?: string; salespersonId?: string; dealerId?: string; dealerAgentId?: string };
   deliveryAddress?: string;
   /** Preferred installation visit, booked as soon as the order is paid. */
   installationSlot?: string;
@@ -93,13 +94,17 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
 
   const orderId = randomUUID();
   const att = input.attribution ?? {};
+  if (input.channel === 'DEALER') {
+    if (!att.dealerId || !att.dealerAgentId) throw invalid('a dealer order needs the dealer and the agent who sold it');
+    await assertDealerSale(q, att.dealerId, att.dealerAgentId);
+  }
   const eligible = !!(att.salespersonId || att.dealerId) && input.channel in COMMISSION_BPS;
   const months = priced.lines.find((l) => l.payMode === 'INSTALLMENT')?.months ?? null;
   await q.query(
-    `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id,
+    `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id, dealer_agent_id,
        commission_eligible, payment_method, installment_months, fulfilment, created_by)
-     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-    [orderId, customer.shardId, customerId, input.accountId ?? null, input.channel, priced.dueNow, priced.currency, priced.marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null,
+     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+    [orderId, customer.shardId, customerId, input.accountId ?? null, input.channel, priced.dueNow, priced.currency, priced.marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null, att.dealerAgentId ?? null,
      eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor],
   );
   for (const p of priced.lines) {

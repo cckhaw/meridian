@@ -99,6 +99,19 @@ open('POST', '/webhooks/payment', async ({ db, raw, req }) => {
   return { ok: true, status: inv.status };
 }, { noCsrf: true });
 
+// ───────────────────────── dealers and their agents (master data kept in the CRM) ─────────────────────────
+const dealerBody = z.object({ id: z.string().min(2).max(30).optional(), name: z.string().min(1).max(120), contactName: blank(z.string().max(120)), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) });
+const dealerOnly = (u: SessionUser, id: string) => { if (u.scope.dealerId && u.scope.dealerId !== id) throw forbidden('That dealer is not yours.'); };
+get('/dealers', 'dealer:read', async ({ db, user, query }) => {
+  if (user.scope.dealerId) return { items: [await core.getDealer(db, user.scope.dealerId)], nextCursor: null }; // a dealer's own login sees only that dealer
+  return core.listDealers(db, { q: str(query, 'q'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') });
+});
+post('/dealers', 'dealer:manage', async ({ db, user, body }) => core.createDealer(db, user.username, dealerBody.parse(body)));
+patch('/dealers/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateDealer(db, user.username, params.id!, dealerBody.omit({ id: true }).partial().extend({ status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
+get('/dealers/:id/agents', 'dealer:read', ({ db, user, params, query }) => { dealerOnly(user, params.id!); return core.listAgents(db, params.id!, { status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }); });
+post('/dealers/:id/agents', 'dealer:manage', ({ db, user, params, body }) => core.createAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) }).parse(body)));
+patch('/dealer-agents/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
+
 // ───────────────────────── dashboard / reports ─────────────────────────
 get('/dashboard', 'dashboard:read', async ({ db, user }) => {
   const d = await core.dashboard(db);
@@ -527,7 +540,7 @@ const orderBody = z.object({
   customerId: uuid.optional(), accountId: uuid.optional(), channel: z.enum(core.CHANNELS),
   lines: z.array(lineBody).min(1).max(50),
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), confirmed: z.boolean().optional() }),
-  storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(),
+  storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
   deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(),
 });
 // The wizard's review step: the full priced summary, nothing saved. Same channel permission as placing the order.
@@ -552,10 +565,13 @@ post('/orders', null, async ({ db, user, body, req }) => {
   const s = user.scope;
   // Who sold it is decided here from the session, never from the request body: otherwise commission could be forged.
   const retail = b.channel === 'RETAIL_ASSISTED' || b.channel === 'QUICK_SALE';
-  const storeId = retail ? (s.storeId ?? b.storeId ?? user.storeId ?? undefined) : undefined;
+  if (b.channel === 'SELF_SERVE' && !s.customerId) throw new DomainError('INVALID', 'self-serve orders come from the store-front, not the CRM');
+  // A quick sale is rung up at the user's own store: it is never taken from the request.
+  const storeId = b.channel === 'QUICK_SALE' ? (s.storeId ?? user.storeId ?? undefined) : retail ? (s.storeId ?? b.storeId ?? user.storeId ?? undefined) : undefined;
   const dealerId = b.channel === 'DEALER' ? (s.dealerId ?? b.dealerId ?? user.dealerId ?? undefined) : undefined;
-  if (retail && !storeId) throw new DomainError('INVALID', 'a store is required for retail orders');
+  if (retail && !storeId) throw new DomainError('INVALID', b.channel === 'QUICK_SALE' ? 'a quick sale is rung up at a store: sign in as a store user' : 'a store is required for retail orders');
   if (b.channel === 'DEALER' && !dealerId) throw new DomainError('INVALID', 'a dealer is required for dealer orders');
+  if (b.channel === 'DEALER' && !b.dealerAgentId) throw new DomainError('INVALID', 'choose the dealer’s agent who sold this');
   const customerId = s.customerId ?? b.customerId;
   const portal = !!s.customerId;
   // Only a cashier may state that money was received; everyone else's order waits for confirmation.
@@ -575,7 +591,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, installationSlot: b.installationSlot, actor: user.username,
+      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, installationSlot: b.installationSlot, actor: user.username,
     });
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);
     return order;

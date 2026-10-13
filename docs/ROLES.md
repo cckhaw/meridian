@@ -19,6 +19,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | **Telesales Agent** (`telesales`) | All records | `/orders/new?channel=TELESALES` | none | Sells by phone: creates customers and telesales orders. |
 | **Retail Store** (`retail-store`) | Own store | `/orders/new?channel=RETAIL_ASSISTED` | none | Sells over the counter at one store: assisted and quick-sale orders, SIM changes, store stock. Sees only that store’s orders and stock. |
 | **Dealer** (`dealer`) | Own dealer | `/orders/new?channel=DEALER` | none | A partner who sells for the operator. Sees only their own orders and commission. |
+| **Dealer Desk** (`dealer-desk`) | All records | `/orders/new?channel=DEALER` | none | Operator staff who keep the dealers and their agents and place orders on a dealer’s behalf, naming the dealer and the agent who sold it. |
 | **Customer Service** (`customer-service`) | All records | `/cases` | 200.00 | Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation. |
 | **Finance** (`finance`) | All records | `/finance` | unlimited | Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables. |
 | **Fraud Analyst** (`fraud`) | All records | `/orders` | none | Reviews orders and accounts: can suspend a service and cancel an order before it ships. |
@@ -27,71 +28,73 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 
 ## Modules each role can open
 
-| Module | Administrator | Product Configurator | Billing Operations | Rating & Charging | Customer (self-serve portal) | Call Center Agent | Telesales Agent | Retail Store | Dealer | Customer Service | Finance | Fraud Analyst | Revenue Assurance | KYC Compliance Officer |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Overview | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Customers | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| New order |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
-| Assisted sale |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| Orders | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |
-| Billing | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  |
-| Cases | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  | ✓ |
-| KYC reviews |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
-| Number porting |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
-| Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
-| Inventory | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| Finance | ✓ |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
-| Commission | ✓ |  |  |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |  |
-| Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| Settings |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| Audit log | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |
+| Module | Administrator | Product Configurator | Billing Operations | Rating & Charging | Customer (self-serve portal) | Call Center Agent | Telesales Agent | Retail Store | Dealer | Dealer Desk | Customer Service | Finance | Fraud Analyst | Revenue Assurance | KYC Compliance Officer |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Overview | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Customers | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| New order |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
+| Orders | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |
+| Billing | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  |  | ✓ | ✓ |  | ✓ |  |
+| Cases | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |  | ✓ |
+| KYC reviews |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
+| Number porting |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| Inventory | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| Finance | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
+| Dealers |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
+| Commission | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |
+| Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| Settings |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| Audit log | ✓ |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |
 
 ## Permission matrix
 
-| Permission | Administrator | Product Configurator | Billing Operations | Rating & Charging | Customer (self-serve portal) | Call Center Agent | Telesales Agent | Retail Store | Dealer | Customer Service | Finance | Fraud Analyst | Revenue Assurance | KYC Compliance Officer |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `dashboard:read` | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `customer:search` | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `customer:read` | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `customer:create` |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |  |  |  |  |
-| `customer:write` |  |  |  |  |  | ✓ |  |  |  | ✓ |  |  |  |  |
-| `service:read` | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | ✓ |  | ✓ |  | ✓ |  |  |
-| `service:manage` |  |  |  |  |  | ✓ |  | ✓ |  | ✓ |  |  |  |  |
-| `service:suspend` |  |  |  |  |  | ✓ |  |  |  | ✓ |  | ✓ |  |  |
-| `service:terminate` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
-| `service:transfer` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
-| `mnp:manage` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
-| `order:read` | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |
-| `order:payment` |  |  |  |  |  | ✓ | ✓ | ✓ |  |  |  |  |  |  |
-| `order:fulfil` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `order:cancel` |  |  |  |  | ✓ |  |  | ✓ |  | ✓ |  | ✓ |  |  |
-| `order:override` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
-| `billing:read` | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  |
-| `billing:pay` |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |  |  |  |  |
-| `billing:credit` |  |  | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |  |  |
-| `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |
-| `finance:read` | ✓ |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
-| `finance:export` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
-| `catalog:read` | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
-| `catalog:write` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |
-| `inventory:read` | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `inventory:write` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `case:read` | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  | ✓ |
-| `case:create` |  |  | ✓ |  | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |  |
-| `case:write` |  |  | ✓ |  |  | ✓ |  |  |  | ✓ |  | ✓ |  |  |
-| `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |  |
-| `audit:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |
-| `user:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `store:assist` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `kyc:attest` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `kyc:review` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
-| `settings:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `order:create:SELF_SERVE` |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |
-| `order:create:RETAIL_ASSISTED` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `order:create:QUICK_SALE` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
-| `order:create:TELESALES` |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
-| `order:create:DEALER` |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
-| `order:create:CALL_CENTER` |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
+| Permission | Administrator | Product Configurator | Billing Operations | Rating & Charging | Customer (self-serve portal) | Call Center Agent | Telesales Agent | Retail Store | Dealer | Dealer Desk | Customer Service | Finance | Fraud Analyst | Revenue Assurance | KYC Compliance Officer |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `dashboard:read` | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `customer:search` | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `customer:read` | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `customer:create` |  |  |  |  |  |  | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
+| `customer:write` |  |  |  |  |  | ✓ |  |  |  |  | ✓ |  |  |  |  |
+| `service:read` | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | ✓ |  |  | ✓ |  | ✓ |  |  |
+| `service:manage` |  |  |  |  |  | ✓ |  | ✓ |  |  | ✓ |  |  |  |  |
+| `service:suspend` |  |  |  |  |  | ✓ |  |  |  |  | ✓ |  | ✓ |  |  |
+| `service:terminate` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `service:transfer` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `mnp:manage` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `order:read` | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |
+| `order:payment` |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  |  |
+| `order:fulfil` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `order:cancel` |  |  |  |  | ✓ |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |
+| `order:override` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `billing:read` | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ |  |  | ✓ | ✓ |  | ✓ |  |
+| `billing:pay` |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |  |  |  |  |  |
+| `billing:credit` |  |  | ✓ |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |
+| `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |
+| `finance:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
+| `finance:export` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `catalog:read` | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `catalog:write` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `inventory:read` | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `inventory:write` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `case:read` | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |  | ✓ |
+| `case:create` |  |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |  |  |
+| `case:write` |  |  | ✓ |  |  | ✓ |  |  |  |  | ✓ |  | ✓ |  |  |
+| `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |
+| `dealer:read` |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
+| `dealer:manage` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `audit:read` | ✓ |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |
+| `user:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `store:assist` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `kyc:attest` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `kyc:review` |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |
+| `settings:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `order:create:SELF_SERVE` |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |
+| `order:create:RETAIL_ASSISTED` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `order:create:QUICK_SALE` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
+| `order:create:TELESALES` |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
+| `order:create:DEALER` |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
+| `order:create:CALL_CENTER` |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |
 
 ## Separation of duties
 
