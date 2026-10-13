@@ -45,7 +45,9 @@ describe('api clients', () => {
     const { client, key } = await createApiClient(db, 'root', { name: 'Acme store-front' });
     expect(key).toMatch(/^mk_test_[a-z0-9]{10}_[A-Za-z0-9_-]{32,}$/);
     const row = (await db.query('SELECT * FROM api_clients WHERE id=$1', [client.id])).rows[0]!;
-    expect(JSON.stringify(row)).not.toContain(key.split('_').pop()!);
+    const secret = key.split('_').slice(3).join('_'); // everything after mk_test_<prefix>_ (the secret can itself contain underscores)
+    expect(secret.length).toBeGreaterThanOrEqual(32);
+    expect(JSON.stringify(row)).not.toContain(secret);
     expect((await authenticateApiKey(db, `Bearer ${key}`)).name).toBe('Acme store-front');
     const bad = [null, '', 'Bearer nope', `Bearer ${key.slice(0, -2)}xx`, `Basic ${key}`];
     for (const h of bad) await expect(authenticateApiKey(db, h), String(h)).rejects.toThrow(/valid API key/);
