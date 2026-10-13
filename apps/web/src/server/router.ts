@@ -752,6 +752,16 @@ post('/inventory/adjust', 'inventory:write', async ({ db, user, body }) => {
   return r;
 });
 
+/** Batch stock loading from a CSV file: a template to fill in, a check that changes nothing, then the load (all rows or none). */
+get('/inventory/import-template', 'inventory:write', async ({ db, user, query }) => {
+  const locationId = user.scope.storeId ?? str(query, 'locationId') ?? undefined;
+  return csv(await core.stockTemplate(db, { locationId, withSkus: query.get('skus') === '1' }), query.get('skus') === '1' ? 'meridian-stock-import-with-skus.csv' : 'meridian-stock-import-template.csv');
+});
+post('/inventory/import', 'inventory:write', ({ db, user, body }) => {
+  const b = z.object({ csv: z.string().min(1).max(2_000_000), apply: z.boolean().default(false), confirmRepeat: z.boolean().optional() }).parse(body);
+  return core.importStock(db, b.csv, { apply: b.apply, actor: user.username, storeId: user.scope.storeId, confirmRepeat: b.confirmRepeat });
+}, { maxBody: 2_500_000 });
+
 // ───────────────────────── dispatcher ─────────────────────────
 function fail(status: number, code: string, message: string, extra: Record<string, string> = {}) {
   return new Response(JSON.stringify({ error: { code, message } }), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
