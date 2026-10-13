@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { BrowseList, type Crumb } from './browse-list';
 import { CHILD_LEVEL, type CNode } from './catalog-ui';
 import { ContainerInspector, OfferInspector, Welcome, type Actions, type Detail } from './inspector';
+import { ImportOffers } from './import-offers';
 import { AddNodeModal, EditNodeModal } from './node-modals';
 
 /**
@@ -38,6 +39,7 @@ export function CatalogBrowser() {
   const results = usePaged<CNode>(term ? `/catalog/search?limit=30&q=${encodeURIComponent(term)}` : null);
 
   const [editing, setEditing] = useState<CNode | null>(null);
+  const [importing, setImporting] = useState(false);
   const [adding, setAdding] = useState<{ level: CNode['level']; parent: CNode | null } | null>(null);
   const reloadAll = useCallback(async () => { await Promise.all([list.reload(), nodeId ? detailApi.reload() : summary.reload()]); }, [list.reload, detailApi.reload, summary.reload, nodeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const act = useAction(reloadAll);
@@ -91,6 +93,7 @@ export function CatalogBrowser() {
             onAdd={() => setAdding({ level: location ? CHILD_LEVEL[location.level]! : 'NETWORK_TYPE', parent: detail && !isOffer ? detail.node : location })}
             onReorder={(id, d) => act.run(() => post(`/catalog/${id}/reorder`, { direction: d }))}
             onStatus={a.onStatus} />
+          {editable && <button type="button" onClick={() => setImporting(true)} className="mt-3 inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Import or export offers (CSV)…</button>}
         </aside>
 
         <section aria-live="polite" className={`${showInspectorOnPhone ? '' : 'hidden lg:block'} min-w-0`}>
@@ -105,6 +108,7 @@ export function CatalogBrowser() {
               : <ContainerInspector key={detail.node.id} d={detail} a={a} />}
         </section>
       </div>
+      {importing && <ImportOffers onClose={() => setImporting(false)} onDone={() => void reloadAll()} />}
       {editing && <EditNodeModal node={editing} parentName={detail?.trail[detail.trail.length - 1]?.name} onClose={() => setEditing(null)} onDone={afterEdit} />}
       {adding && <AddNodeModal level={adding.level} parent={adding.parent} onClose={() => setAdding(null)} onDone={() => { setAdding(null); void reloadAll(); }} />}
     </>

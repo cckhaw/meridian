@@ -21,6 +21,7 @@ export * from './etc.js';
 export * from './hierarchy.js';
 export * from './inventory.js';
 export * from './inventory-import.js';
+export * from './offer-import.js';
 export * from './ledger.js';
 export * from './lifecycle.js';
 export * from './orders.js';

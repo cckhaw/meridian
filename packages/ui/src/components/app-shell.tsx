@@ -15,7 +15,7 @@ export function BrandMark({ brand, className = '' }: { brand: Brand; className?:
     : <span className={`truncate font-bold tracking-tight ${className}`}>{brand.name}</span>;
 }
 
-type LinkProps = { href: string; className: string; children: ReactNode; 'aria-current'?: 'page'; onClick?: () => void };
+type LinkProps = { href: string; className: string; children: ReactNode; 'aria-current'?: 'page'; onClick?: () => void; title?: string };
 export interface AppShellProps {
   nav: NavItem[];
   user: ShellUser;
@@ -51,13 +51,16 @@ function grouped(nav: NavItem[]): Array<{ label: string; items: NavItem[] }> {
 }
 
 const KEY = 'meridian-sidebar';
+const COLLAPSE_KEY = 'meridian-sidebar-collapse';
+type SidebarMode = 'expanded' | 'rail' | 'hidden';
 const iconFor = (n: NavItem) => (n.id in ID_ICON ? n.id : n.icon);
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('') || '?';
 const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 
 /**
  * Responsive shell.
- *  - Desktop: a translucent sidebar, grouped by job, that can be hidden entirely (button, or Ctrl/⌘ + \) to give the page the full width. The choice is remembered.
+ *  - Desktop: a translucent sidebar, grouped by job. Collapsing it offers two ways: an icon rail (every place stays one click away, with its name on hover) or hiding it entirely
+ *    for the full page width. Ctrl/⌘ + \ toggles between expanded and the way you last collapsed it. The choice is remembered.
  *  - Tablet: the same sidebar as a drawer.
  *  - Phone: a tab bar with the four main places and a "More" sheet for the rest.
  * Navigation is whatever the server says this user may open; nothing is hard-coded per persona.
@@ -65,22 +68,36 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
 export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, onSignOut, onChangePassword, linkComponent, children }: AppShellProps) {
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
-  const [hidden, setHiddenState] = useState(false);
+  const [mode, setModeState] = useState<SidebarMode>('expanded');
+  const [collapseMenu, setCollapseMenu] = useState(false);
+  const rail = mode === 'rail';
   const Link = linkComponent ?? (({ href, className, children: c, ...r }: LinkProps) => <a href={href} className={className} {...r}>{c}</a>);
   const active = activeId(nav, activeHref);
   const groups = grouped(nav);
 
-  const setHidden = useCallback((h: boolean) => {
-    document.documentElement.dataset.sidebar = h ? 'hidden' : 'expanded';
-    try { localStorage.setItem(KEY, h ? 'hidden' : 'expanded'); } catch { /* private mode: still works for this visit */ }
-    setHiddenState(h);
+  const setMode = useCallback((m: SidebarMode) => {
+    document.documentElement.dataset.sidebar = m;
+    try { localStorage.setItem(KEY, m); if (m !== 'expanded') localStorage.setItem(COLLAPSE_KEY, m); } catch { /* private mode: still works for this visit */ }
+    setModeState(m); setCollapseMenu(false);
   }, []);
-  useEffect(() => { setHiddenState(document.documentElement.dataset.sidebar === 'hidden'); }, []);
+  useEffect(() => { const m = document.documentElement.dataset.sidebar; setModeState(m === 'hidden' || m === 'rail' ? m : 'expanded'); }, []);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === '\\') { e.preventDefault(); setHidden(document.documentElement.dataset.sidebar !== 'hidden'); } };
+    const key = (e: KeyboardEvent) => {
+      if (!((e.ctrlKey || e.metaKey) && e.key === '\\')) return;
+      e.preventDefault();
+      let to: SidebarMode = 'hidden';
+      try { if (localStorage.getItem(COLLAPSE_KEY) === 'rail') to = 'rail'; } catch { /* default */ }
+      setMode(document.documentElement.dataset.sidebar === 'rail' || document.documentElement.dataset.sidebar === 'hidden' ? 'expanded' : to);
+    };
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
-  }, [setHidden]);
+  }, [setMode]);
+  useEffect(() => {
+    if (!collapseMenu) return;
+    const close = (e: Event) => { if (e instanceof KeyboardEvent ? e.key === 'Escape' : !(e.target as HTMLElement).closest('[data-collapse-menu]')) setCollapseMenu(false); };
+    document.addEventListener('keydown', close); document.addEventListener('mousedown', close);
+    return () => { document.removeEventListener('keydown', close); document.removeEventListener('mousedown', close); };
+  }, [collapseMenu]);
   useEffect(() => { setDrawer(false); setSheet(false); }, [activeHref]);
   useEffect(() => {
     if (!drawer && !sheet) return;
@@ -90,17 +107,18 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
   }, [drawer, sheet]);
 
   const navList = (
-    <nav aria-label="Primary" className="flex flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-3 pb-3">
+    <nav aria-label="Primary" className="rail-nav flex flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-3 pb-3">
       {groups.map((g) => (
         <div key={g.label || 'top'} className="flex flex-col gap-0.5">
-          {g.label && <p className="px-3 pb-1 pt-1 text-caption font-semibold uppercase tracking-wider text-label2">{g.label}</p>}
+          {g.label && <p className="rail-hide px-3 pb-1 pt-1 text-caption font-semibold uppercase tracking-wider text-label2">{g.label}</p>}
+          {g.label && <div aria-hidden className="rail-only mx-3 my-1 h-px bg-separator" />}
           {g.items.map((n) => {
             const on = n.id === active;
             return (
-              <Link key={n.id} href={n.href} aria-current={on ? 'page' : undefined}
-                className={`group flex min-h-[40px] items-center gap-3 rounded-[10px] px-2.5 text-[15px] transition-colors active:scale-[.99] ${focusRing} ${on ? 'bg-accent/15 font-semibold text-accent' : 'text-label hover:bg-label/[.06]'}`}>
+              <Link key={n.id} href={n.href} aria-current={on ? 'page' : undefined} title={rail ? n.label : undefined}
+                className={`rail-center group flex min-h-[40px] items-center gap-3 rounded-[10px] px-2.5 text-[15px] transition-colors active:scale-[.99] ${focusRing} ${on ? 'bg-accent/15 font-semibold text-accent' : 'text-label hover:bg-label/[.06]'}`}>
                 <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-[8px] ${on ? 'bg-accent text-accent-fg' : 'bg-label/[.07] text-label2 group-hover:text-label'}`}><Icon name={iconFor(n)} size={17} /></span>
-                <span className="truncate">{n.label}</span>
+                <span className="rail-hide truncate">{n.label}</span>
               </Link>
             );
           })}
@@ -110,24 +128,37 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
   );
 
   const account = (
-    <div className="mx-3 mb-3 rounded-[14px] bg-label/[.05] p-2.5">
-      <div className="flex items-center gap-2.5">
+    <div className="rail-account mx-3 mb-3 rounded-[14px] bg-label/[.05] p-2.5">
+      <div className="flex items-center gap-2.5 rail-center">
         <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent/15 text-subhead font-semibold text-accent">{initials(user.name)}</span>
-        <div className="min-w-0"><p className="truncate text-subhead font-medium">{user.name}</p><p className="truncate text-caption text-label2">{user.roles.join(' · ')}</p></div>
+        <div className="rail-hide min-w-0"><p className="truncate text-subhead font-medium">{user.name}</p><p className="truncate text-caption text-label2">{user.roles.join(' · ')}</p></div>
       </div>
-      <div className="mt-2 flex gap-1.5">
-        <button onClick={onChangePassword} className={`flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote hover:opacity-80 ${focusRing}`}><Icon name="key" size={15} />Password</button>
-        <button onClick={onSignOut} className={`flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote text-danger hover:opacity-80 ${focusRing}`}><Icon name="signout" size={15} />Sign out</button>
+      <div className="rail-col mt-2 flex gap-1.5">
+        <button onClick={onChangePassword} aria-label="Change password" title={rail ? 'Change password' : undefined} className={`flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote hover:opacity-80 ${focusRing}`}><Icon name="key" size={15} /><span className="rail-hide">Password</span></button>
+        <button onClick={onSignOut} aria-label="Sign out" title={rail ? 'Sign out' : undefined} className={`flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote text-danger hover:opacity-80 ${focusRing}`}><Icon name="signout" size={15} /><span className="rail-hide">Sign out</span></button>
       </div>
     </div>
   );
 
   const sidebarHeader = (
-    <div className="flex min-h-[56px] items-center gap-2 px-4">
-      <span className="min-w-0 flex-1"><BrandMark brand={brand} className="text-title3" /></span>
+    <div className="rail-col relative flex min-h-[56px] items-center gap-2 px-4">
+      <span className="rail-hide min-w-0 flex-1"><BrandMark brand={brand} className="text-title3" /></span>
       <ThemeToggle />
-      <button onClick={() => (drawer ? setDrawer(false) : setHidden(true))} aria-label="Hide sidebar" title="Hide sidebar (Ctrl or ⌘ + \)"
-        className={`inline-flex min-h-tap min-w-tap items-center justify-center rounded-full text-label2 hover:bg-label/[.07] hover:text-label ${focusRing}`}><Icon name="sidebar" size={20} /></button>
+      {rail ? (
+        <button onClick={() => setMode('expanded')} aria-label="Expand sidebar" title="Expand sidebar (Ctrl or ⌘ + \\)"
+          className={`inline-flex min-h-tap min-w-tap items-center justify-center rounded-full text-label2 hover:bg-label/[.07] hover:text-label ${focusRing}`}><Icon name="sidebar" size={20} /></button>
+      ) : (
+        <span data-collapse-menu className="relative">
+          <button onClick={() => (drawer ? setDrawer(false) : setCollapseMenu((o) => !o))} aria-label="Collapse sidebar" aria-haspopup="menu" aria-expanded={collapseMenu} title="Collapse sidebar (Ctrl or ⌘ + \\)"
+            className={`inline-flex min-h-tap min-w-tap items-center justify-center rounded-full text-label2 hover:bg-label/[.07] hover:text-label ${focusRing}`}><Icon name="sidebar" size={20} /></button>
+          {collapseMenu && (
+            <div role="menu" aria-label="Collapse the sidebar" className="material-thick absolute right-0 top-full z-50 mt-1 w-56 rounded-[12px] border border-separator p-1 shadow-card">
+              <button role="menuitem" onClick={() => setMode('rail')} className={`flex min-h-tap w-full flex-col items-start justify-center rounded-[9px] px-3 text-left hover:bg-label/[.07] ${focusRing}`}><span className="text-subhead font-medium">Icons only</span><span className="text-caption text-label2">Keep a slim bar of icons</span></button>
+              <button role="menuitem" onClick={() => setMode('hidden')} className={`flex min-h-tap w-full flex-col items-start justify-center rounded-[9px] px-3 text-left hover:bg-label/[.07] ${focusRing}`}><span className="text-subhead font-medium">Hide completely</span><span className="text-caption text-label2">Full width for the page</span></button>
+            </div>
+          )}
+        </span>
+      )}
     </div>
   );
 
@@ -147,7 +178,7 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
 
       {/* Desktop: reveal button, only present while the sidebar is hidden */}
       <div className="shell-reveal fixed left-3 top-3 z-30 items-center gap-1 rounded-full border border-separator p-1 material-thick shadow-card">
-        <button onClick={() => setHidden(false)} aria-label="Show sidebar" title="Show sidebar (Ctrl or ⌘ + \)" aria-expanded={!hidden}
+        <button onClick={() => setMode('expanded')} aria-label="Show sidebar" title="Show sidebar (Ctrl or ⌘ + \)" aria-expanded={mode !== 'hidden'}
           className={`inline-flex min-h-tap min-w-tap items-center justify-center rounded-full text-label hover:bg-label/[.07] ${focusRing}`}><Icon name="sidebar" size={20} /></button>
         <span className="pr-3"><BrandMark brand={brand} className="text-subhead" /></span>
       </div>

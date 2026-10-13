@@ -752,6 +752,13 @@ post('/inventory/adjust', 'inventory:write', async ({ db, user, body }) => {
   return r;
 });
 
+/** Bulk offers from a CSV file: a template (optionally with every current offer, to edit in bulk), a check that changes nothing, then the load (all rows or none). */
+get('/catalog-import/template', 'catalog:write', async ({ db, query }) => csv(await core.offersTemplate(db, { withOffers: query.get('offers') === '1' }), query.get('offers') === '1' ? 'meridian-offers-export.csv' : 'meridian-offers-import-template.csv'));
+post('/catalog-import', 'catalog:write', ({ db, user, body }) => {
+  const b = z.object({ csv: z.string().min(1).max(2_000_000), apply: z.boolean().default(false) }).parse(body);
+  return core.importOffers(db, b.csv, { apply: b.apply, actor: user.username });
+}, { maxBody: 2_500_000 });
+
 /** Batch stock loading from a CSV file: a template to fill in, a check that changes nothing, then the load (all rows or none). */
 get('/inventory/import-template', 'inventory:write', async ({ db, user, query }) => {
   const locationId = user.scope.storeId ?? str(query, 'locationId') ?? undefined;
