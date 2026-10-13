@@ -90,7 +90,7 @@ function NewGroup({ accountId, onClose, onDone }: { accountId: string; onClose: 
             <legend className="mb-1 text-subhead font-medium">Supplementary services</legend>
             <ul className="max-h-48 divide-y divide-separator overflow-y-auto rounded-control bg-surface2">
               {items.filter((s) => s.id !== principal).map((s) => (
-                <li key={s.id}><label className="flex min-h-tap cursor-pointer items-center gap-3 px-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={sup.includes(s.id)} onChange={() => toggle(s.id)} /><span className="font-mono text-footnote">{s.identifier}</span><span className="text-footnote text-label2">{s.offerName}</span></label></li>
+                <li key={s.id}><label className="flex min-h-tap cursor-pointer items-center gap-3 px-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={sup.includes(s.id)} onChange={() => toggle(s.id)} /><span className="font-mono text-footnote">{s.identifier}</span><span className="text-footnote text-label2">{s.offerName}</span></label></li>
               ))}
               {items.length <= 1 && <li className="px-3 py-3 text-footnote text-label2">No other services available to add.</li>}
             </ul>

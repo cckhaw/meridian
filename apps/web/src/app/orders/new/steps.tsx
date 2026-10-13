@@ -397,7 +397,7 @@ export function ReviewStep({ w }: { w: Wizard }) {
       <Card>
         <p className="mb-2 text-subhead font-semibold">Changing their mind</p>
         <Terms groups={q.groups} />
-        <label className="mt-4 flex min-h-tap items-start gap-3 text-body"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={w.consent} onChange={(e) => w.setConsent(e.target.checked)} />The customer has been told what they pay today and each month, the contract, and when the order can be cancelled.</label>
+        <label className="mt-4 flex min-h-tap items-start gap-3 text-body"><input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={w.consent} onChange={(e) => w.setConsent(e.target.checked)} />The customer has been told what they pay today and each month, the contract, and when the order can be cancelled.</label>
       </Card>
     </div>
   );
@@ -415,7 +415,7 @@ export function PayStep({ w }: { w: Wizard }) {
         <Card className="space-y-4">
           <Field label="Payment method"><Segmented label="Payment method" value={w.pay.method} options={['CASH', 'CREDIT_CARD', 'QR'].map((m) => ({ value: m, label: label(m) }))} onChange={(m) => w.setPay({ ...w.pay, method: m })} /></Field>
           {w.cashier && (<>
-            <label className="flex min-h-tap items-center gap-3 text-body"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={w.pay.received} onChange={(e) => w.setPay({ ...w.pay, received: e.target.checked })} />Payment received now</label>
+            <label className="flex min-h-tap items-center gap-3 text-body"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={w.pay.received} onChange={(e) => w.setPay({ ...w.pay, received: e.target.checked })} />Payment received now</label>
             {w.pay.received && <Field label={refLabel} hint={w.manual ? 'Required: this is the audit evidence for the payment.' : undefined}><Input value={w.pay.reference} onChange={(e) => w.setPay({ ...w.pay, reference: e.target.value })} /></Field>}
             {!w.pay.received && <p className="text-footnote text-label2">The order will wait for payment confirmation.</p>}
           </>)}

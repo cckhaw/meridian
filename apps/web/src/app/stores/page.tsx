@@ -57,7 +57,7 @@ function StoreForm({ store, onClose, onDone }: { store: any; onClose: () => void
         <div className="sm:col-span-2"><Field label="Address"><Input maxLength={300} value={f.address} onChange={set('address')} /></Field></div>
         <Field label="Phone"><Input maxLength={40} value={f.phone} onChange={set('phone')} /></Field>
         {!isNew && (
-          <label className="flex min-h-tap items-center gap-3 sm:col-span-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.status === 'ACTIVE'} onChange={(e) => setF({ ...f, status: e.target.checked ? 'ACTIVE' : 'INACTIVE' })} />Active: staff can be assigned and orders can be sold here</label>
+          <label className="flex min-h-tap items-center gap-3 sm:col-span-2"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.status === 'ACTIVE'} onChange={(e) => setF({ ...f, status: e.target.checked ? 'ACTIVE' : 'INACTIVE' })} />Active: staff can be assigned and orders can be sold here</label>
         )}
         {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
         <div className="flex flex-wrap gap-3 sm:col-span-2">

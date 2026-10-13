@@ -105,7 +105,7 @@ function ValueInput({ fact, cond, onChange }: { fact: FactMeta; cond: Cond; onCh
     const sel: string[] = Array.isArray(cond.value) ? cond.value : [];
     return (
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {fact.values?.map(([k, l]) => <label key={k} className="flex min-h-[32px] items-center gap-2 text-subhead"><input type="checkbox" className="h-4 w-4 accent-[rgb(var(--accent))]" checked={sel.includes(k)} onChange={(e) => set(e.target.checked ? [...sel, k] : sel.filter((x) => x !== k))} />{label(l)}</label>)}
+        {fact.values?.map(([k, l]) => <label key={k} className="flex min-h-[32px] items-center gap-2 text-subhead"><input type="checkbox" className="h-4 w-4 shrink-0 accent-[rgb(var(--accent))]" checked={sel.includes(k)} onChange={(e) => set(e.target.checked ? [...sel, k] : sel.filter((x) => x !== k))} />{label(l)}</label>)}
       </div>
     );
   }
@@ -179,7 +179,7 @@ function RuleEditor({ v, rule, creating, onClose, onSaved }: { v: View; rule: Ru
                 <Field label="Percent of what was paid kept" hint="Added to the fixed fee."><Input type="number" min="0" max="100" step="0.01" value={r.outcome.feePercentBps ? r.outcome.feePercentBps / 100 : ''} onChange={(e) => out({ feePercentBps: e.target.value ? Math.round(Number(e.target.value) * 100) : undefined })} /></Field>
                 <Field label="Percent refunded" hint="100 refunds everything; use less for restocking charges."><Input type="number" min="0" max="100" step="0.01" value={r.outcome.refundBps === undefined ? '' : r.outcome.refundBps / 100} placeholder="100" onChange={(e) => out({ refundBps: e.target.value === '' ? undefined : Math.round(Number(e.target.value) * 100) })} /></Field>
                 {r.action === 'RETURN' && <Field label="Most that may be deducted for damage (percent)" hint="The person handling a return can deduct up to this share."><Input type="number" min="0" max="100" step="0.01" value={r.outcome.maxDeductionBps === undefined ? '' : r.outcome.maxDeductionBps / 100} placeholder="100" onChange={(e) => out({ maxDeductionBps: e.target.value === '' ? undefined : Math.round(Number(e.target.value) * 100) })} /></Field>}
-                {decides && <label className="flex min-h-tap items-center gap-3 sm:col-span-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={!!r.outcome.requiresOverride} onChange={(e) => out({ requiresOverride: e.target.checked || undefined })} />Only with a supervisor’s approval</label>}
+                {decides && <label className="flex min-h-tap items-center gap-3 sm:col-span-2"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={!!r.outcome.requiresOverride} onChange={(e) => out({ requiresOverride: e.target.checked || undefined })} />Only with a supervisor’s approval</label>}
               </div>
             )}
           </fieldset>
@@ -188,7 +188,7 @@ function RuleEditor({ v, rule, creating, onClose, onSaved }: { v: View; rule: Ru
         {decides || r.action === 'AUTO_CANCEL' ? (
           <>
             <Field label="What the customer is told (optional)" hint="Leave blank to use the sentence below."><Input value={r.message ?? ''} maxLength={300} onChange={(e) => set({ message: e.target.value })} /></Field>
-            <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={r.showInTerms} onChange={(e) => set({ showInTerms: e.target.checked })} />Show this in the order terms customers see</label>
+            <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={r.showInTerms} onChange={(e) => set({ showInTerms: e.target.checked })} />Show this in the order terms customers see</label>
           </>
         ) : null}
 
@@ -237,7 +237,7 @@ function Simulator({ v }: { v: View }) {
         <Field label="Who is acting"><Select value={s.initiatedBy} onChange={(e) => setS({ ...s, initiatedBy: e.target.value })}><option value="STAFF">A staff member</option><option value="CUSTOMER">The customer</option><option value="SYSTEM">The system</option></Select></Field>
         {s.action === 'RETURN' && <Field label="Condition"><Select value={s.returnCondition} onChange={(e) => setS({ ...s, returnCondition: e.target.value })}><option value="GOOD">As new</option><option value="DAMAGED">Damaged</option><option value="INCOMPLETE">Missing parts</option></Select></Field>}
         <Field label={`Amount paid for this part (${v.currency})`}><Input type="number" min="0" step={step()} value={s.paid} onChange={(e) => setS({ ...s, paid: e.target.value })} /></Field>
-        <label className="flex min-h-tap items-center gap-3 sm:self-end"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={s.canOverride} onChange={(e) => setS({ ...s, canOverride: e.target.checked })} />Person has override approval</label>
+        <label className="flex min-h-tap items-center gap-3 sm:self-end"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={s.canOverride} onChange={(e) => setS({ ...s, canOverride: e.target.checked })} />Person has override approval</label>
       </div>
       <div className="mt-4"><Button onClick={run} disabled={act.busy}>{act.busy ? 'Working…' : 'See what happens'}</Button></div>
       {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}

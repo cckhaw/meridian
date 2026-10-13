@@ -17,7 +17,7 @@ export function CustomerSettings() {
       <Card>
         <SectionTitle>Creating customers</SectionTitle>
         <label className="flex min-h-tap items-start gap-3">
-          <input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={allow} disabled={toggle.busy}
+          <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={allow} disabled={toggle.busy}
             onChange={async (e) => { const v = e.target.checked; setPending(v); await toggle.run(() => post('/settings/customers', { allowCreateWithoutOrder: v })); setPending(null); }} />
           <span>
             <span className="block font-medium">Allow creating a customer from the Customers page</span>
@@ -67,11 +67,11 @@ function SegmentForm({ segment, used, onClose, onDone }: { segment: any; used: b
         <Field label="Name"><Input required maxLength={40} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <Field label="Description" hint="Shown to staff when they choose a segment."><Input maxLength={200} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
         <label className="flex min-h-tap items-start gap-3">
-          <input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={f.individual} disabled={!isNew && used} onChange={(e) => setF({ ...f, individual: e.target.checked })} />
+          <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.individual} disabled={!isNew && used} onChange={(e) => setF({ ...f, individual: e.target.checked })} />
           <span><span className="block">Customers are individuals</span><span className="block text-footnote text-label2">{!isNew && used ? 'Fixed, because customers already belong to this segment.' : 'One customer per ID document: the same person cannot be added twice.'}</span></span>
         </label>
         {!isNew && (
-          <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />Active: can be chosen for new customers and moves</label>
+          <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />Active: can be chosen for new customers and moves</label>
         )}
         {isNew && <p className="text-footnote text-label2">A short code is issued from the name and never changes.</p>}
         {error && <Alert>{error}</Alert>}

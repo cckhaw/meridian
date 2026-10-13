@@ -80,7 +80,7 @@ function RolePicker({ roles, value, onChange }: { roles: Role[]; value: string[]
       <legend className="mb-1 text-subhead font-medium">Roles</legend>
       {roles.map((r) => (
         <label key={r.id} className="flex min-h-tap cursor-pointer items-start gap-3 rounded-control bg-surface2 p-3">
-          <input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={value.includes(r.id)} onChange={(e) => onChange(e.target.checked ? [...value, r.id] : value.filter((x) => x !== r.id))} />
+          <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={value.includes(r.id)} onChange={(e) => onChange(e.target.checked ? [...value, r.id] : value.filter((x) => x !== r.id))} />
           <span><span className="font-medium">{r.label}</span><span className="block text-footnote text-label2">{r.summary}</span></span>
         </label>
       ))}
