@@ -3,6 +3,7 @@ import { Alert, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, SearchF
 import { useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { ImportStock } from './import-stock';
 
 export default function Inventory() {
   const { can, me } = useAuth();
@@ -11,6 +12,7 @@ export default function Inventory() {
   const term = useDebounced(q.trim());
   const locations = useApi<{ items: string[] }>(me?.storeId ? null : '/inventory/locations');
   const list = usePaged(`/inventory?limit=50&locationId=${encodeURIComponent(loc)}&sku=${encodeURIComponent(term)}`);
+  const [importing, setImporting] = useState(false);
   const [f, setF] = useState({ locationId: me?.storeId ?? 'WH-MAIN', sku: '', delta: '10' });
   const { run, busy, error: aerr, ok } = useAction(list.reload);
   return (
@@ -18,6 +20,7 @@ export default function Inventory() {
       <LargeTitle subtitle="On-hand, reserved and available stock by location. Search by SKU prefix.">Inventory</LargeTitle>
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
         <SearchField label="Search SKU" placeholder="SKU starts with…" value={q} onChange={setQ} className="md:max-w-md md:flex-1" />
+ {can('inventory:write') && <Button type="button" variant="secondary" className="md:ml-auto" onClick={() => setImporting(true)}>Import from CSV</Button>}
         {!me?.storeId && <Select aria-label="Location" value={loc} onChange={(e) => setLoc(e.target.value)} className="md:max-w-[220px]"><option value="">All locations</option>{(locations.data?.items ?? []).map((l) => <option key={l}>{l}</option>)}</Select>}
       </div>
       {list.error && <Alert>{list.error}</Alert>}{list.loading && list.items.length === 0 && <Spinner />}
@@ -30,6 +33,7 @@ export default function Inventory() {
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="stock lines" />
         </>
       )}
+      {importing && <ImportStock locations={locations.data?.items ?? []} onClose={() => setImporting(false)} onDone={list.reload} />}
       {can('inventory:write') && <><SectionTitle>Goods receipt / adjustment</SectionTitle>
       <Card><form className="grid gap-3 sm:grid-cols-4 sm:items-end" onSubmit={(e) => { e.preventDefault(); void run(() => post('/inventory/adjust', { locationId: f.locationId, sku: f.sku, delta: Number(f.delta) }), 'Stock updated'); }}>
         <Field label="Location"><Input required readOnly={!!me?.storeId} value={f.locationId} onChange={(e) => setF({ ...f, locationId: e.target.value })} /></Field>

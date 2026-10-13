@@ -26,7 +26,7 @@ See `.env.example`.
 1. Provision PostgreSQL. Set the variables above and deploy. Open the site: you should see the sign-in screen.
 2. Sign in as the super user. Under **Users & roles**, create one **Administrator** for day-to-day administration, then use that account. Keep the super user for emergencies.
 3. **Define the catalog**: first review **Settings → Catalog** (offer types and fulfilment options; collect in store is built in, and turn on stock tracking for SIM activation only if you count SIM cards), then Catalog → New offer, a short guided flow: network types, categories, groups, then offers with prices, contract terms, ETC rules and fulfilment. Activate what you want to sell. (`MERIDIAN_SEED=starter` loads a sample catalog to edit instead of starting empty.)
-4. **Set up stores** (Stores): add each retail store (the system issues its id, for example `STORE-00001`) with its name, address and phone. Then **receive stock** (Inventory → Goods receipt) for each warehouse and store; a store's id is its stock location id.
+4. **Set up stores** (Stores): add each retail store (the system issues its id, for example `STORE-00001`) with its name, address and phone. Then **receive stock** for each warehouse and store (a store's id is its stock location id): one SKU at a time under Inventory → Goods receipt, or many at once with **Import from CSV** (see below).
 5. **Create staff**: pick the roles; store users are assigned one of the stores you set up in step 4 (search it by id or name), dealers a dealer id. Each gets a one-time password and must change it at first sign-in. Retail store, call center and telesales staff each sign in with their own user, so every order carries the person who took it.
 5a. **Set up dealers** (Dealers): create each dealer (the system issues its dealer id) and its agents. Dealer orders are placed in the CRM on the dealer’s behalf by *Dealer Desk* staff (or by a login bound to that dealer), who name the dealer and the agent who sold it.
 6. **Create customers** and, for the self-serve portal, a portal login linked to one customer.
@@ -104,3 +104,14 @@ Everything lives in the database, so after a reset you start from section 2:
 - **Catalog, stock, bundle discounts**, and the **cancellation rules** (the standard policy returns the first time it is needed).
 - **Users and roles** (everyone is signed out), then **dealers and their agents**.
 - **Outside the database**: update the store-front's API key and URL, and the Stripe webhook endpoint and signing secret if the deployment URL or secrets changed. Customers' old store-front orders and receipts no longer exist.
+
+## Loading stock from a CSV file
+
+Inventory → **Import from CSV** (needs the stock-write permission; a store user can only load their own store).
+
+1. **Download the template.** *Template with all my SKUs* lists every SKU your offers, their colour/storage options and line items use, for the location you choose, with the quantity blank. *Empty template* is just the header.
+2. **Fill it in.** Columns: `location_id` (`WH-MAIN` or a store id), `sku`, `quantity` (a whole number) and `action`: `RECEIVE` adds stock (the default), `REMOVE` writes stock off, `SET` is a stock count (on hand becomes this number). A row with no quantity is skipped, so leave the SKUs that did not arrive. Lines starting with `#` are ignored. Up to 5,000 rows per file.
+3. **Check the file.** Nothing changes yet. Every row is marked Ready, Check (for example a SKU no offer uses, which may be a typo) or Problem, with the line number and the reason: unknown location, invalid SKU, not a whole number, the same SKU twice, or taking stock below what is reserved for orders.
+4. **Load.** The file loads only if no row is a problem, and then all rows load together: a file is never half loaded. Reserved stock is never taken away, and the load is recorded in the audit log.
+
+API: `GET /api/inventory/import-template[?skus=1&locationId=…]` and `POST /api/inventory/import` with `{ "csv": "...", "apply": false }` (check) or `true` (load).
