@@ -8,20 +8,43 @@ import { api } from '@/lib/api';
 interface Offer {
   id: string; name: string; kind: string; kindName?: string; description?: string; group: string; monthlyMinor: number; upfrontMinor: number; contractMonths: number;
   requiresShipping: boolean; requiresText: string[]; excludes: string[];
+  deals: Array<{ termMonths: number; subsidyMinor: number; priceMinor: number }>; hostsDevice: boolean;
   includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
 }
-interface Quote { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number }>; upfrontMinor: number; monthlyMinor: number; violations: string[]; requiresShipping: boolean; taxName: string }
+interface Quote { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number } }>; upfrontMinor: number; monthlyMinor: number; violations: string[]; requiresShipping: boolean; taxName: string }
 
 const TABS = [
-  { value: 'all', label: 'All' }, { value: 'sim', label: 'SIM only' }, { value: 'device', label: 'SIM + device' }, { value: 'more', label: 'Add-ons & more' },
+  { value: 'all', label: 'All' }, { value: 'sim', label: 'SIM only' }, { value: 'device', label: 'SIM + device' }, { value: 'goods', label: 'Devices' }, { value: 'more', label: 'Add-ons & more' },
 ] as const;
 type Tab = (typeof TABS)[number]['value'];
 /** "100 GB" / "Unlimited" for allowances; "2 ×" for several units; nothing for a single device or SIM. */
 const amountOf = (i: Offer['includes'][number]) =>
   i.unlimited ? 'Unlimited' : !i.quantity ? '' : ['unit', 'SIM'].includes(i.unit ?? '') ? (i.quantity > 1 ? `${i.quantity} ×` : '') : `${i.quantity.toLocaleString()}${i.unit ? ` ${i.unit}` : ''}`;
 /** Which kinds each tab asks the server for, so filtering happens in the database and not in the browser. */
-const TAB_QUERY: Record<Tab, string> = { all: '', sim: '&kind=SIM_ONLY', device: '&kind=SIM_DEVICE', more: '&notKind=SIM_ONLY,SIM_DEVICE' };
+const TAB_QUERY: Record<Tab, string> = { all: '', sim: '&kind=SIM_ONLY', device: '&kind=SIM_DEVICE', goods: '&kind=PHYSICAL_GOOD', more: '&notKind=SIM_ONLY,SIM_DEVICE,PHYSICAL_GOOD' };
 const KIND_LABEL: Record<string, string> = { SIM_ONLY: 'SIM only', SIM_DEVICE: 'SIM + device', WEARABLE: 'Wearable', FIBER: 'Home fibre', VAS: 'Add-on', NON_TELCO_SUBSCRIPTION: 'Subscription', PHYSICAL_GOOD: 'Device', IOT_CONNECTIVITY: 'IoT' };
+
+/** How a device in the basket is bought: outright, or on a contract with one of the plans in the basket. */
+function ContractChoice({ offer, value, plans, names, money, onChange }: { offer: Offer; value?: { planId: string; term: number }; plans: string[]; names: Map<string, string>; money: (n: number) => string; onChange: (v: { planId: string; term: number } | null) => void }) {
+  return (
+    <div className="mt-3 space-y-2">
+      <Segmented label={`How to buy ${offer.name}`} value={value ? 'contract' : 'outright'} options={[{ value: 'outright', label: 'Outright' }, { value: 'contract', label: 'On a contract' }]}
+        onChange={(v) => (v === 'outright' ? onChange(null) : plans[0] && onChange({ planId: plans[0], term: offer.deals[0]!.termMonths }))} />
+      {!value && plans.length === 0 && <p className="text-footnote text-label2">Choose a SIM plan too to buy this on a contract.</p>}
+      {value && (
+        <div className="grid gap-2 text-subhead">
+          <label className="grid gap-1"><span className="text-footnote text-label2">With plan</span>
+            <select className="min-h-tap rounded-control border border-separator bg-surface px-3" value={value.planId} onChange={(e) => onChange({ ...value, planId: e.target.value })}>
+              {plans.map((id) => <option key={id} value={id}>{names.get(id) ?? id}</option>)}</select></label>
+          <label className="grid gap-1"><span className="text-footnote text-label2">Contract</span>
+            <select className="min-h-tap rounded-control border border-separator bg-surface px-3" value={value.term} onChange={(e) => onChange({ ...value, term: Number(e.target.value) })}>
+              {offer.deals.map((d) => <option key={d.termMonths} value={d.termMonths}>{d.termMonths} months · {money(d.priceMinor)} today</option>)}</select></label>
+          <p className="text-footnote text-label2">If you leave before the contract ends, you repay the part of the saving that is left.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Home() {
   const { money, brand } = useConfig();
@@ -36,11 +59,14 @@ export default function Home() {
   const [term, setTerm] = useState('');
   useEffect(() => { const t = setTimeout(() => setTerm(search.trim()), 250); return () => clearTimeout(t); }, [search]);
   const [basket, setBasket] = useState<Record<string, number>>({});
+  /** Devices the shopper wants on a contract: which plan in the basket, and for how long. */
+  const [deals, setDeals] = useState<Record<string, { planId: string; term: number }>>({});
+  const [hosts, setHosts] = useState<Record<string, boolean>>({}); // which products seen so far can carry a device on a contract
   const [quote, setQuote] = useState<Quote | null>(null);
   const [starting, setStarting] = useState(false);
   const seq = useRef(0);
 
-  const remember = (list: Offer[]) => setKnown((k) => ({ ...k, ...Object.fromEntries(list.map((o) => [o.id, o.name])) }));
+  const remember = (list: Offer[]) => { setKnown((k) => ({ ...k, ...Object.fromEntries(list.map((o) => [o.id, o.name])) })); setHosts((h) => ({ ...h, ...Object.fromEntries(list.map((o) => [o.id, o.hostsDevice])) })); };
   // The shop shows a dozen plans at a time and searches the rest on the server, so a large catalog stays quick.
   useEffect(() => {
     let live = true;
@@ -55,12 +81,19 @@ export default function Home() {
     catch (e) { setError((e as Error).message); } finally { setLoadingMore(false); }
   };
   useEffect(() => {
-    try { const s = JSON.parse(sessionStorage.getItem('basket') ?? '{}'); if (s && typeof s === 'object') setBasket(s); } catch { /* private mode */ }
+    try {
+      const s = JSON.parse(sessionStorage.getItem('basket') ?? '{}'); if (s && typeof s === 'object') setBasket(s);
+      const d = JSON.parse(sessionStorage.getItem('deals') ?? '{}'); if (d && typeof d === 'object') setDeals(d);
+      const h = JSON.parse(sessionStorage.getItem('hosts') ?? '{}'); if (h && typeof h === 'object') setHosts(h);
+    } catch { /* private mode */ }
   }, []);
-  useEffect(() => { try { sessionStorage.setItem('basket', JSON.stringify(basket)); } catch { /* ignore */ } }, [basket]);
+  useEffect(() => { try { sessionStorage.setItem('basket', JSON.stringify(basket)); sessionStorage.setItem('deals', JSON.stringify(deals)); sessionStorage.setItem('hosts', JSON.stringify(hosts)); } catch { /* ignore */ } }, [basket, deals, hosts]);
 
   // Prices always come from the server; this only asks it to total the basket.
-  const lines = useMemo(() => Object.entries(basket).map(([offerId, quantity]) => ({ offerId, quantity })), [basket]);
+  const lines = useMemo(() => Object.entries(basket).map(([offerId, quantity]) => {
+    const d = deals[offerId];
+    return d && basket[d.planId] ? { offerId, quantity, attachTo: d.planId, dealTermMonths: d.term } : { offerId, quantity }; // a contract only counts while its plan is in the basket
+  }), [basket, deals]);
   const requote = useCallback(async () => {
     const n = ++seq.current;
     if (!lines.length) { setQuote(null); return; }
@@ -69,7 +102,8 @@ export default function Home() {
   }, [lines]);
   useEffect(() => { void requote(); }, [requote]);
 
-  const toggle = (id: string) => setBasket((b) => { const n = { ...b }; if (n[id]) delete n[id]; else n[id] = 1; return n; });
+  const toggle = (id: string) => { setBasket((b) => { const n = { ...b }; if (n[id]) delete n[id]; else n[id] = 1; return n; }); setDeals((d) => { const n = { ...d }; delete n[id]; return n; }); };
+  const plansInBasket = Object.keys(basket).filter((id) => hosts[id] && !Object.entries(deals).some(([dev, v]) => v.planId === id && basket[dev]));
   const shown = offers ?? [];
   const names = new Map(Object.entries(known));
 
@@ -116,8 +150,18 @@ export default function Home() {
               <p className="text-footnote text-label2">
                 {o.monthlyMinor && o.upfrontMinor ? `${money(o.upfrontMinor)} upfront · ` : ''}{o.contractMonths ? `${o.contractMonths}-month contract` : o.monthlyMinor ? 'No contract' : ''}
               </p>
+              {o.deals?.length > 0 && (
+                <div className="mt-3 rounded-control bg-accent/10 px-3 py-2 text-footnote">
+                  <p className="font-medium text-accent">Or on a contract with a SIM plan</p>
+                  <ul className="mt-0.5 text-label2">{o.deals.map((d) => <li key={d.termMonths}>{d.termMonths} months: <strong className="tabular-nums text-label">{money(d.priceMinor)}</strong> today, save {money(d.subsidyMinor)}</li>)}</ul>
+                </div>
+              )}
               {o.requiresText.length > 0 && <p className="mt-2 rounded-control bg-accent/10 px-3 py-2 text-footnote text-accent">Needs {o.requiresText.join(' + ')} in your order</p>}
               {o.requiresShipping && <p className="mt-1 text-footnote text-label2">Delivered to your door</p>}
+              {chosen && o.deals?.length > 0 && (
+                <ContractChoice offer={o} value={deals[o.id]} plans={[...plansInBasket, ...(deals[o.id] ? [deals[o.id]!.planId] : [])].filter((x, i, a) => a.indexOf(x) === i)} names={names} money={money}
+                  onChange={(v) => setDeals((d) => { const n = { ...d }; if (v) n[o.id] = v; else delete n[o.id]; return n; })} />
+              )}
               <div className="mt-auto pt-4">
                 <Button variant={chosen ? 'secondary' : 'primary'} className="w-full" aria-pressed={chosen} onClick={() => toggle(o.id)}>{chosen ? 'Remove from basket' : o.kind === 'SIM_ONLY' || o.kind === 'SIM_DEVICE' ? 'Choose this plan' : 'Add to basket'}</Button>
               </div>

@@ -9,6 +9,8 @@ import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { gatewayById, type GatewayEvent } from './gateways.js';
 import { addDocument, attestInPerson, personalProblems, submitRemote, syncCase, markVerified, type Attestation, type Personal } from './kyc.js';
 import { advanceOrder, cancelOrder, getOrder, placeOrderTx, type OrderInput } from './orders.js';
+import { createsService, priceBasket } from './order-pricing.js';
+import { behaviourOf } from '@meridian/types';
 import { getBranding, getRegional, marketFor } from './settings.js';
 import { activeGateways, getStoreSettings } from './store-settings.js';
 import { taxSplit } from './tax.js';
@@ -16,7 +18,15 @@ import { taxSplit } from './tax.js';
 export type StoreChannel = 'SELF_SERVE' | 'RETAIL_ASSISTED';
 export interface Address { line1: string; line2?: string; city: string; state?: string; postcode: string; country: string }
 export interface Consent { termsVersion: string; acceptedTerms: boolean; privacyAccepted: boolean; marketingOptIn: boolean; authorisedAssistant?: boolean }
-export interface CartLine { offerId: string; quantity?: number }
+/** `attachTo` (with `dealTermMonths`) buys a device on a contract with another product in the basket: the offer id of that plan. */
+export interface CartLine { offerId: string; quantity?: number; attachTo?: string; dealTermMonths?: number }
+const storedLine = (l: CartLine): CartLine => ({ offerId: l.offerId, quantity: l.quantity ?? 1, ...(l.attachTo ? { attachTo: l.attachTo, dealTermMonths: l.dealTermMonths } : {}) });
+/** The basket as order lines: a device on a contract points at its plan by position. */
+const orderLines = (lines: CartLine[]) => lines.map((l) => {
+  const plan = l.attachTo ? lines.findIndex((x) => x.offerId === l.attachTo) : -1;
+  if (l.attachTo && plan < 0) throw invalid('The plan this device goes with is not in the basket.');
+  return { offerId: l.offerId, quantity: l.quantity, ...(l.attachTo ? { attachTo: plan, dealTermMonths: l.dealTermMonths } : {}) };
+});
 
 const MAX_LINE_QTY = 5;
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -31,7 +41,11 @@ async function storeMarket(q: Queryable, customerId?: string | null): Promise<st
 // ───────────────────────── catalog and pricing (always computed here, never taken from the client) ─────────────────────────
 export interface StoreOffer {
   id: string; name: string; kind: string; /** The offer type's name as the operator set it (Settings → Catalog). */ kindName?: string; description?: string; group: string; path: string[];
-  monthlyMinor: number; upfrontMinor: number; contractMonths: number; requiresShipping: boolean; requires: string[]; requiresText: string[]; excludes: string[];
+  monthlyMinor: number; upfrontMinor: number; contractMonths: number; requiresShipping: boolean; requires: string[];
+  /** Contracts this device can be bought on with a plan, with the price the customer pays on each. */
+  deals: Array<{ termMonths: number; subsidyMinor: number; priceMinor: number }>;
+  /** A plan a device can be bought on a contract with (a plan that has no device of its own). */
+  hostsDevice: boolean; requiresText: string[]; excludes: string[];
   /** What the offer includes (its active line items), in the operator's order. */
   includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
 }
@@ -73,6 +87,12 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel, o: { q?:
         id: n.id, name: n.name, kind: n.kind, kindName: typeNames.get(n.kind as string), description: n.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
         monthlyMinor: fee ? split(fee.amount.amountMinor, fee.taxInclusive) : 0, upfrontMinor: up, contractMonths: n.contract?.termMonths ?? 0,
         requiresShipping: !!n.fulfilment?.requiresShipping, requires: n.requires, excludes: n.excludes, includes: items.get(n.id) ?? [],
+        deals: (n.deals ?? []).map((d) => {
+          let left = d.subsidyMinor; // the subsidy comes off the first upfront price, as in an order
+          const price = n.prices.filter((p) => p.type === 'ONE_TIME').reduce((t, p) => { const cut = Math.min(left, p.amount.amountMinor); left -= cut; return t + split(p.amount.amountMinor - cut, p.taxInclusive); }, 0);
+          return { termMonths: d.termMonths, subsidyMinor: up - price, priceMinor: price };
+        }),
+        hostsDevice: createsService(n) && behaviourOf(n).role === 'PLAN' && !behaviourOf(n).goods,
         requiresText: n.requires.map((id) => { const r = req.get(id); return r ? (r.level === 'OFFER' ? r.name : `any ${r.name}`) : id; }),
       };
     }),
@@ -84,7 +104,7 @@ const collectOnly = (o: OfferNode) => !!o.fulfilment?.requiresCollection && !o.f
 
 export interface Quote {
   currency: string; taxName: string;
-  lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number }>;
+  lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; retailMinor: number } }>;
   upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; violations: string[];
 }
 
@@ -114,6 +134,15 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
     lines.push({ offerId: off.id, name: off.name, quantity: qty, upfrontMinor: up, monthlyMinor: fee ? taxSplit(fee.amount.amountMinor * qty, mk.taxBps, fee.taxInclusive).gross : 0 });
     if (off.fulfilment?.requiresShipping) shipping = true;
     offers.push(off);
+  }
+  // A device bought on a contract with a plan is priced by the same code the order uses, so the shopper is quoted exactly what is charged.
+  if (o.lines.some((l) => l.attachTo)) {
+    const priced = await priceBasket(q, { customerId: o.customerId ?? undefined, channel: o.channel, marketCode, lines: orderLines(o.lines), payment: { method: 'CREDIT_CARD' } }, { soft: true });
+    priced.lines.forEach((pl, i) => {
+      if (!pl.deal) return;
+      lines[i]!.upfrontMinor = pl.gross;
+      lines[i]!.deal = { planName: priced.lines[pl.attachPosition!]!.offer.name, termMonths: pl.deal.termMonths, retailMinor: pl.listGross + pl.deal.subsidyMinor };
+    });
   }
   const violations = await checkDependencies(q, o.customerId ?? null, offers.map((x) => x.id));
   return {
@@ -151,7 +180,7 @@ export async function createApplication(q: Queryable, o: { channel: StoreChannel
   await q.query(
     `INSERT INTO applications (id, client_id, channel, token_hash, customer_id, lines, store_id, created_by, created_ip, expires_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + ($10 || ' hours')::interval)`,
-    [id, o.clientId ?? null, o.channel, token ? hashToken(token) : null, o.customerId ?? null, JSON.stringify(o.lines.map((l) => ({ offerId: l.offerId, quantity: l.quantity ?? 1 }))),
+    [id, o.clientId ?? null, o.channel, token ? hashToken(token) : null, o.customerId ?? null, JSON.stringify(o.lines.map(storedLine)),
      o.staff?.storeId ?? null, o.staff?.username ?? null, o.ip ?? null, String(s.applicationTtlHours)],
   );
   if (o.staff) await audit(q, o.staff.username, 'application', id, 'CREATE', { customerId: o.customerId ?? null });
@@ -172,7 +201,7 @@ export async function updateApplication(q: Queryable, id: string, access: AppAcc
   if (p.lines) {
     const quote = await quoteBasket(q, { lines: p.lines, channel: access.channel, customerId: a.customerId });
     if (quote.violations.length) throw rejected(quote.violations.join(' '));
-    add('lines', JSON.stringify(p.lines.map((l) => ({ offerId: l.offerId, quantity: l.quantity ?? 1 }))));
+    add('lines', JSON.stringify(p.lines.map(storedLine)));
   }
   if (p.personal) {
     const merged = { ...a.personal, ...p.personal };
@@ -266,7 +295,7 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
 
     const staff = access.staff;
     const input: OrderInput = {
-      customerId, channel: access.channel, lines: (a.lines as CartLine[]).map((l) => ({ offerId: l.offerId, quantity: l.quantity })),
+      customerId, channel: access.channel, lines: orderLines(a.lines as CartLine[]),
       payment: access.channel === 'SELF_SERVE' ? { method: 'CREDIT_CARD', deferred: true } : o.assistedPayment ?? { method: 'CASH', deferred: true },
       attribution: staff ? { storeId: staff.storeId ?? undefined, salespersonId: staff.username } : undefined,
       deliveryAddress: addressLine(a.address as Address | null), actor: staff?.username ?? `store:${a.clientId?.slice(0, 8) ?? 'self'}`,
