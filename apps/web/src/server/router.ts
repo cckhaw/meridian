@@ -611,6 +611,7 @@ const orderBody = z.object({
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), confirmed: z.boolean().optional() }),
   storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
   deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(),
+  delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), pickupStoreId: z.string().max(50).optional() }).optional(),
 });
 // The wizard's review step: the full priced summary, nothing saved. Same channel permission as placing the order.
 post('/orders/quote', null, async ({ db, user, body }) => {
@@ -661,7 +662,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, installationSlot: b.installationSlot, actor: user.username,
+      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, actor: user.username,
     });
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);
     return order;
@@ -679,6 +680,7 @@ const orderAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('confirm_payment'), reference: z.string().max(100).optional() }), z.object({ type: z.literal('schedule_installation'), slot: z.string() }),
   z.object({ type: z.literal('dispatch_technician') }), z.object({ type: z.literal('complete_installation') }),
   z.object({ type: z.literal('ship'), trackingNumber: z.string().max(100).optional() }), z.object({ type: z.literal('deliver') }),
+  z.object({ type: z.literal('ready_for_collection') }), z.object({ type: z.literal('collect') }),
   z.object({ type: z.literal('cancel'), reason: z.string().max(300).default('cancelled by user'), groups: z.array(z.enum(['ACTIVATION', 'GOODS', 'INSTALL'])).max(3).optional() }),
   z.object({ type: z.literal('return'), reason: z.string().min(3).max(300), deductionMinor: z.number().int().min(0).optional(), condition: z.enum(['GOOD', 'DAMAGED', 'INCOMPLETE']).optional() }),
 ]);

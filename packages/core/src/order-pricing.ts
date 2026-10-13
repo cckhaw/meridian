@@ -30,6 +30,14 @@ export function createsService(o: OfferNode): boolean {
 /** Which part of the order fulfils an offer: a visit, a parcel (shipped or collected in store), or just switching the service on. */
 export const groupOf = (o: OfferNode): GroupKind => (o.fulfilment?.requiresInstallation ? 'INSTALL' : o.fulfilment?.requiresShipping || o.fulfilment?.requiresCollection ? 'GOODS' : 'ACTIVATION');
 
+export type DeliveryMethod = 'SHIP' | 'COLLECT';
+/** How the goods of an order can reach the customer: what every goods offer in it allows (an offer may ship, be collected in store, or both). */
+export function deliveryMethods(offers: OfferNode[]): DeliveryMethod[] {
+  const goods = offers.filter((o) => groupOf(o) === 'GOODS');
+  if (!goods.length) return [];
+  return (['SHIP', 'COLLECT'] as const).filter((m) => goods.every((o) => (m === 'SHIP' ? !!o.fulfilment?.requiresShipping : !!o.fulfilment?.requiresCollection)));
+}
+
 /** Stock to reserve for an offer: its own SKUs, with the chosen variant's SKU standing in for the device SKUs the variants cover. */
 export function skusFor(o: OfferNode, v?: DeviceVariant): string[] {
   const own = o.fulfilment?.inventorySkus ?? [];
@@ -110,6 +118,10 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
   }
   const violations = await checkDependencies(q, input.customerId ?? null, [...offers.keys()]);
   if (violations.length) fail(violations.join(' '));
+  // Goods in one order travel together: they must share a way to reach the customer (counter sales hand them over at once).
+  if (!RETAIL_CHANNELS.includes(input.channel) && [...offers.values()].some((o) => groupOf(o) === 'GOODS') && deliveryMethods([...offers.values()]).length === 0) {
+    fail('These items cannot be delivered the same way (one can only be collected in store, another can only be shipped). Place them as separate orders.');
+  }
   for (const of of offers.values()) {
     if (input.channel === 'QUICK_SALE' && (!behaviourOf(of).outright || of.contract?.termMonths)) throw rejected('quick-sale supports outright goods only');
     if (of.salesChannels?.length && !of.salesChannels.includes(input.channel)) throw rejected(`${of.name} is not sold through this channel`);
@@ -211,6 +223,8 @@ export interface OrderQuote {
   problems: string[];
   groups: Array<{ group: GroupKind; title: string; text: string; points: Array<{ when: string; what: string }>; items: string[] }>;
   needs: { delivery: boolean; installation: boolean; customer: boolean };
+  /** How the goods can reach the customer (ship, collect in store, or both) when the order has goods and is not sold over a counter. */
+  deliveryMethods: DeliveryMethod[];
   installationSlaDays: number | null;
 }
 
@@ -232,6 +246,7 @@ export async function quoteOrder(q: Queryable, input: PricingInput): Promise<Ord
     dueNowMinor: p.dueNow, monthlyPlanMinor: p.monthlyPlanMinor, monthlyInstalmentMinor: p.monthlyInstalmentMinor, monthlyTotalMinor: p.monthlyPlanMinor + p.monthlyInstalmentMinor, discountMinor: p.discountMinor,
     groups: terms.map((t) => ({ ...t, items: p.lines.filter((l) => l.group === t.group).map((l) => l.offer.name) })),
     needs: { delivery: kinds.includes('GOODS') && !RETAIL_CHANNELS.includes(input.channel), installation: kinds.includes('INSTALL'), customer: p.hasService },
+    deliveryMethods: RETAIL_CHANNELS.includes(input.channel) ? [] : deliveryMethods(p.lines.map((l) => l.offer)),
     installationSlaDays: kinds.includes('INSTALL') ? await autoCancelDays(q, 'INSTALL') : null,
   };
 }

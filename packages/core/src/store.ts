@@ -30,7 +30,7 @@ async function storeMarket(q: Queryable, customerId?: string | null): Promise<st
 
 // ───────────────────────── catalog and pricing (always computed here, never taken from the client) ─────────────────────────
 export interface StoreOffer {
-  id: string; name: string; kind: string; description?: string; group: string; path: string[];
+  id: string; name: string; kind: string; /** The offer type's name as the operator set it (Settings → Catalog). */ kindName?: string; description?: string; group: string; path: string[];
   monthlyMinor: number; upfrontMinor: number; contractMonths: number; requiresShipping: boolean; requires: string[]; requiresText: string[]; excludes: string[];
   /** What the offer includes (its active line items), in the operator's order. */
   includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
@@ -50,8 +50,10 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel, o: { q?:
     const up = ancestors.get(n.id) ?? [];
     return up.length && up.every((a) => a.status === 'ACTIVE') ? up.map((a) => a.name) : null;
   };
-  const offers = found.filter((n) => chain(n) !== null);
+  // Offers that can only be collected in a store are sold in store: the online shop has no pickup-store step.
+  const offers = found.filter((n) => chain(n) !== null && (channel === 'RETAIL_ASSISTED' || !collectOnly(n)));
   const ids = offers.map((n) => n.id);
+  const typeNames = new Map((await q.query('SELECT id, name FROM offer_types WHERE id = ANY($1::text[])', [[...new Set(offers.map((n) => n.kind as string))]])).rows.map((r) => [r.id as string, r.name as string]));
   const items = new Map<string, StoreOffer['includes']>();
   if (ids.length) for (const r of (await q.query(`SELECT * FROM catalog_nodes WHERE level='LINE_ITEM' AND status='ACTIVE' AND parent_id = ANY($1) ORDER BY sort_order, name, id`, [ids])).rows) {
     const d = r.data ?? {};
@@ -68,7 +70,7 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel, o: { q?:
       const fee = monthlyFee(n);
       const path = [...(chain(n) ?? []), n.name];
       return {
-        id: n.id, name: n.name, kind: n.kind, description: n.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
+        id: n.id, name: n.name, kind: n.kind, kindName: typeNames.get(n.kind as string), description: n.description, group: path[path.length - 2] ?? '', path: path.slice(0, -1),
         monthlyMinor: fee ? split(fee.amount.amountMinor, fee.taxInclusive) : 0, upfrontMinor: up, contractMonths: n.contract?.termMonths ?? 0,
         requiresShipping: !!n.fulfilment?.requiresShipping, requires: n.requires, excludes: n.excludes, includes: items.get(n.id) ?? [],
         requiresText: n.requires.map((id) => { const r = req.get(id); return r ? (r.level === 'OFFER' ? r.name : `any ${r.name}`) : id; }),
@@ -76,6 +78,9 @@ export async function storeCatalog(q: Queryable, channel: StoreChannel, o: { q?:
     }),
   };
 }
+
+/** An offer whose goods can only be collected in a store (it cannot be shipped). */
+const collectOnly = (o: OfferNode) => !!o.fulfilment?.requiresCollection && !o.fulfilment?.requiresShipping;
 
 export interface Quote {
   currency: string; taxName: string;
@@ -103,6 +108,7 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
     if (off.markets.length && !off.markets.includes(marketCode)) throw rejected(`${off.name} is not available in your country.`);
     if (off.salesChannels?.length && !off.salesChannels.includes(o.channel)) throw rejected(`${off.name} is not sold through this channel.`);
     if (off.prices.some((p) => p.amount.currency !== mk.currency)) throw rejected(`${off.name} is not priced in ${mk.currency}.`);
+    if (o.channel !== 'RETAIL_ASSISTED' && collectOnly(off)) throw rejected(`${off.name} can only be collected in a store, so it cannot be ordered online.`);
     const up = off.prices.filter((p) => p.type === 'ONE_TIME').reduce((s, p) => s + taxSplit(p.amount.amountMinor * qty, mk.taxBps, p.taxInclusive).gross, 0);
     const fee = monthlyFee(off);
     lines.push({ offerId: off.id, name: off.name, quantity: qty, upfrontMinor: up, monthlyMinor: fee ? taxSplit(fee.amount.amountMinor * qty, mk.taxBps, fee.taxInclusive).gross : 0 });

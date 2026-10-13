@@ -10,7 +10,8 @@ import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve, restockConsumed } from './inventory.js';
 import { postJournal } from './ledger.js';
 import { today } from './dates.js';
-import { createsService, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type GroupKind, type LineInput } from './order-pricing.js';
+import { createsService, deliveryMethods, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type GroupKind, type LineInput } from './order-pricing.js';
+import { assertStoreUsable } from './stores.js';
 import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.js';
 import { customerIdsMatching, parseQuery } from './search.js';
 import { audit } from './audit.js';
@@ -35,6 +36,8 @@ export interface OrderInput {
     deferred?: boolean };
   attribution?: { storeId?: string; salespersonId?: string; dealerId?: string; dealerAgentId?: string };
   deliveryAddress?: string;
+  /** How goods reach the customer: shipped to the address, or collected at a store they choose. Default: shipped when the offers allow it. */
+  delivery?: { method: 'SHIP' | 'COLLECT'; pickupStoreId?: string };
   /** Preferred installation visit, booked as soon as the order is paid. */
   installationSlot?: string;
   actor?: string;
@@ -92,6 +95,18 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
     if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now()) throw invalid('the installation date must be in the future');
   }
 
+  // How the goods reach the customer. A counter sale hands them over at once, so there is nothing to choose.
+  let delivery: { method: 'SHIP' | 'COLLECT'; pickupStoreId?: string } | undefined;
+  const methods = RETAIL_CHANNELS.includes(input.channel) ? [] : deliveryMethods(priced.lines.map((l) => l.offer));
+  if (methods.length) {
+    const method = input.delivery?.method ?? (methods.includes('SHIP') ? 'SHIP' : 'COLLECT');
+    if (!methods.includes(method)) throw invalid(method === 'COLLECT' ? 'these items cannot be collected in store' : 'these items cannot be shipped: they are collected in store');
+    if (method === 'COLLECT') {
+      if (!input.delivery?.pickupStoreId) throw invalid('choose the store where the customer will collect');
+      await assertStoreUsable(q, input.delivery.pickupStoreId);
+      delivery = { method, pickupStoreId: input.delivery.pickupStoreId };
+    } else delivery = { method };
+  }
   const orderId = randomUUID();
   const att = input.attribution ?? {};
   if (input.channel === 'DEALER') {
@@ -105,7 +120,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
        commission_eligible, payment_method, installment_months, fulfilment, created_by)
      VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
     [orderId, customer.shardId, customerId, input.accountId ?? null, input.channel, priced.dueNow, priced.currency, priced.marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null, att.dealerAgentId ?? null,
-     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor],
+     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(delivery ? { delivery } : {}), ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor],
   );
   for (const p of priced.lines) {
     await q.query(
@@ -263,12 +278,14 @@ async function orderLines(q: Queryable, orderId: string): Promise<Array<Row & { 
 
 async function reserveStock(q: Queryable, o: Row) {
   const loc = o.storeId ?? MAIN_WAREHOUSE;
+  const pickup = o.fulfilment?.delivery?.method === 'COLLECT' ? (o.fulfilment.delivery.pickupStoreId as string) : null;
   for (const l of await orderLines(q, o.id)) {
+    const at = pickup && l.fulfilGroup === 'GOODS' ? pickup : loc; // goods collected in store come out of that store's stock
     const variant = l.options?.sku ? (l.offer.variants ?? []).find((v) => v.id === l.options.variantId) : undefined;
-    for (const sku of skusFor(l.offer, variant)) await reserve(q, o.id, loc, sku, l.quantity, l.fulfilGroup);
+    for (const sku of skusFor(l.offer, variant)) await reserve(q, o.id, at, sku, l.quantity, l.fulfilGroup);
     // Line items that carry a SKU (e.g. the phone inside a bundle) reserve their own stock: item quantity x units ordered.
     const items = (await q.query(`SELECT data->>'sku' AS sku, COALESCE((data->>'quantity')::int, 1) AS qty FROM catalog_nodes WHERE parent_id=$1 AND level='LINE_ITEM' AND status='ACTIVE' AND data->>'sku' IS NOT NULL ORDER BY sort_order`, [l.offerId])).rows;
-    for (const it of items) await reserve(q, o.id, loc, it.sku as string, l.quantity * (it.qty as number), l.fulfilGroup);
+    for (const it of items) await reserve(q, o.id, at, it.sku as string, l.quantity * (it.qty as number), l.fulfilGroup);
   }
 }
 
@@ -472,7 +489,9 @@ export type OrderAction =
   | { type: 'dispatch_technician' }
   | { type: 'complete_installation' }
   | { type: 'ship'; trackingNumber?: string }
-  | { type: 'deliver' };
+  | { type: 'deliver' }
+  | { type: 'ready_for_collection' }
+  | { type: 'collect' };
 
 export async function advanceOrder(db: Db, orderId: string, action: OrderAction, actor = 'system'): Promise<Row> {
   return db.tx(async (q) => {
@@ -492,7 +511,7 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
     const lines = await orderLines(q, orderId);
     const want = (kind: GroupKind, ...states: string[]) => {
       const g = findGroup(gs, kind);
-      if (!g || !states.includes(g.status)) throw rejected(kind === 'GOODS' ? (action.type === 'ship' ? 'nothing to ship yet' : 'nothing has been shipped') : action.type === 'schedule_installation' && g?.status === 'LOCKED' ? 'technician already dispatched' : `cannot ${action.type}: the ${kind === 'INSTALL' ? 'installation' : 'delivery'} is ${g ? g.status.toLowerCase() : 'not part of this order'}`);
+      if (!g || !states.includes(g.status)) throw rejected(kind === 'GOODS' ? (action.type === 'ship' ? 'nothing to ship yet' : action.type === 'collect' || action.type === 'ready_for_collection' ? 'nothing is waiting to be collected' : 'nothing has been shipped') : action.type === 'schedule_installation' && g?.status === 'LOCKED' ? 'technician already dispatched' : `cannot ${action.type}: the ${kind === 'INSTALL' ? 'installation' : 'delivery'} is ${g ? g.status.toLowerCase() : 'not part of this order'}`);
       return g;
     };
     switch (action.type) {
@@ -525,12 +544,32 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
       }
       case 'ship': {
         const g = want('GOODS', 'PENDING');
+        if (o.fulfilment?.delivery?.method === 'COLLECT') throw rejected('this order is collected in store, not shipped');
         await consumeReservations(q, orderId, 'GOODS');
         const tracking = action.trackingNumber ?? `TRK-${orderId.slice(0, 8).toUpperCase()}`;
         await patchGroup(q, g.id, `status='LOCKED', locked_at=now(), details = details || $2::jsonb`, [JSON.stringify({ trackingNumber: tracking })]);
         await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [orderId, JSON.stringify({ trackingNumber: tracking })]);
         await markPointOfNoReturn(q, o);
         await note(q, o, actor, `Goods shipped (${tracking}): the delivery can no longer be cancelled`);
+        break;
+      }
+      case 'ready_for_collection': {
+        want('GOODS', 'PENDING');
+        if (o.fulfilment?.delivery?.method !== 'COLLECT') throw rejected('this order is shipped, not collected in store');
+        if (o.fulfilment.readyForCollection) throw rejected('it is already marked ready for collection');
+        await q.query(`UPDATE orders SET fulfilment = fulfilment || '{"readyForCollection":true}'::jsonb WHERE id=$1`, [orderId]);
+        await note(q, o, actor, `Ready for collection at ${o.fulfilment.delivery.pickupStoreId}. It can still be cancelled until it is collected`);
+        break;
+      }
+      case 'collect': {
+        const g = want('GOODS', 'PENDING');
+        if (o.fulfilment?.delivery?.method !== 'COLLECT') throw rejected('this order is shipped, not collected in store');
+        if (!o.fulfilment.readyForCollection) throw rejected('mark it ready for collection first');
+        await consumeReservations(q, orderId, 'GOODS'); // the goods leave the store with the customer
+        await patchGroup(q, g.id, `status='DONE', locked_at=now(), done_at=now(), details = details || $2::jsonb`, [JSON.stringify({ collectedAt: new Date().toISOString() })]);
+        await markPointOfNoReturn(q, o);
+        await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'GOODS' && createsService(l.offer)));
+        await note(q, o, actor, `Collected in store (${o.fulfilment.delivery.pickupStoreId})`);
         break;
       }
       case 'deliver': {
@@ -801,7 +840,7 @@ function nextActions(o: Row, gs: Row[]): string[] {
   const install = findGroup(gs, 'INSTALL'), goods = findGroup(gs, 'GOODS');
   if (install?.status === 'PENDING') out.push('schedule_installation', ...(o.fulfilment?.slot ? ['dispatch_technician'] : []));
   if (install?.status === 'LOCKED') out.push('complete_installation');
-  if (goods?.status === 'PENDING') out.push('ship');
+  if (goods?.status === 'PENDING') out.push(...(o.fulfilment?.delivery?.method === 'COLLECT' ? [o.fulfilment.readyForCollection ? 'collect' : 'ready_for_collection'] : ['ship']));
   if (goods?.status === 'LOCKED') out.push('deliver');
   return TERMINAL.includes(o.state) ? [] : out;
 }

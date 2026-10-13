@@ -274,3 +274,73 @@ describe('payment structure, variants and bundles', () => {
     expect(justFibre.refundMinor).toBe(5000 - 2990);
   });
 });
+
+describe('collect in store', () => {
+  const price = { type: 'ONE_TIME', amount: { amountMinor: 20000, currency: 'SGD' }, taxInclusive: true };
+  const goods = async (id: string, options: string[], sku: string) => {
+    const { createNode } = await import('./catalog.js');
+    const { adjustStock } = await import('./inventory.js');
+    await createNode(db, { id, level: 'OFFER', name: id, parentId: 'grp-sim-only', kind: 'PHYSICAL_GOOD', status: 'ACTIVE', markets: [], prices: [price], contract: { termMonths: 0 }, characteristics: {}, requires: [], excludes: [],
+      fulfilment: { options, inventorySkus: [sku] } } as never);
+    await adjustStock(db, 'STORE-SG-001', sku, 5);
+    await adjustStock(db, 'WH-MAIN', sku, 5);
+    return id;
+  };
+  const place = async (offerId: string, delivery?: { method: 'SHIP' | 'COLLECT'; pickupStoreId?: string }) => {
+    const { customer } = await newCustomer(db);
+    return placeOrder(db, { customerId: customer.id, channel: 'TELESALES', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId }], delivery, deliveryAddress: delivery?.method === 'COLLECT' ? undefined : '1 Test Road' });
+  };
+
+  it('reserves at the chosen store, is ready then collected, and the customer can cancel until then', async () => {
+    const id = await goods('collect-only-tv', ['COLLECT'], 'TV-COLLECT');
+    await expect(place(id)).rejects.toThrow(/choose the store/);                           // collect-only: a pickup store is needed
+    await expect(place(id, { method: 'SHIP' })).rejects.toThrow(/collected in store/);     // and it cannot be shipped
+    await expect(place(id, { method: 'COLLECT', pickupStoreId: 'STORE-NOPE' })).rejects.toThrow(/unknown store/);
+    let o = await place(id, { method: 'COLLECT', pickupStoreId: 'STORE-SG-001' });
+    expect((await stockAt(db, 'STORE-SG-001', 'TV-COLLECT'))!.reserved).toBe(1);           // from the store, not the warehouse
+    expect((await stockAt(db, 'WH-MAIN', 'TV-COLLECT'))!.reserved).toBe(0);
+    expect(o.state).toBe('FULFILMENT');
+    expect(o.nextActions).toEqual(['ready_for_collection']);
+    await expect(advanceOrder(db, o.id, { type: 'ship' })).rejects.toThrow(/collected in store/);
+    await expect(advanceOrder(db, o.id, { type: 'collect' })).rejects.toThrow(/ready for collection first/);
+    o = await advanceOrder(db, o.id, { type: 'ready_for_collection' });
+    expect(o.nextActions).toEqual(['collect']);
+    expect(group(o, 'GOODS').canCancel).toBe(true);                                         // still cancellable: it has not left the store
+    o = await advanceOrder(db, o.id, { type: 'collect' });
+    expect(group(o, 'GOODS').status).toBe('DONE');
+    expect(o.state).toBe('COMPLETED');
+    expect((await stockAt(db, 'STORE-SG-001', 'TV-COLLECT'))).toMatchObject({ onHand: 4, reserved: 0 });
+  });
+
+  it('cancelling before collection refunds in full and returns the stock', async () => {
+    const id = await goods('collect-radio', ['COLLECT'], 'RADIO-COLLECT');
+    const o = await place(id, { method: 'COLLECT', pickupStoreId: 'STORE-SG-001' });
+    const c = await cancelOrder(db, o.id, 'changed my mind', 'cs');
+    expect(c.state).toBe('CANCELLED');
+    expect(c.refundedMinor).toBe(o.totalMinor);
+    expect(await stockAt(db, 'STORE-SG-001', 'RADIO-COLLECT')).toMatchObject({ onHand: 5, reserved: 0 });
+  });
+
+  it('lets the customer choose when an offer can be shipped or collected, and shipping is the default', async () => {
+    const id = await goods('either-way-speaker', ['SHIP', 'COLLECT'], 'SPK-EITHER');
+    expect((await quoteOrderFor(id)).deliveryMethods).toEqual(['SHIP', 'COLLECT']);
+    const shipped = await place(id);                                                       // no choice given: shipped
+    expect(shipped.fulfilment.delivery).toEqual({ method: 'SHIP' });
+    expect(shipped.nextActions).toEqual(['ship']);
+    const collected = await place(id, { method: 'COLLECT', pickupStoreId: 'STORE-SG-001' });
+    expect(collected.fulfilment.delivery).toMatchObject({ method: 'COLLECT', pickupStoreId: 'STORE-SG-001' });
+  });
+
+  it('refuses a basket whose goods cannot travel the same way', async () => {
+    const a = await goods('only-collect-lamp', ['COLLECT'], 'LAMP-C');
+    const b = await goods('only-ship-lamp', ['SHIP'], 'LAMP-S');
+    const { customer } = await newCustomer(db);
+    await expect(placeOrder(db, { customerId: customer.id, channel: 'TELESALES', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: a }, { offerId: b }], deliveryAddress: 'x' })).rejects.toThrow(/separate orders/);
+    expect((await quoteOrderFor(a, b)).problems.join(' ')).toMatch(/separate orders/);
+  });
+
+  async function quoteOrderFor(...ids: string[]) {
+    const { quoteOrder } = await import('./order-pricing.js');
+    return quoteOrder(db, { channel: 'TELESALES', lines: ids.map((offerId) => ({ offerId })), payment: { method: 'CREDIT_CARD' } });
+  }
+});

@@ -35,6 +35,8 @@ export function NewOrder() {
   const [dealer, setDealer] = useState<Party | null>(null);
   const [agent, setAgent] = useState<Party | null>(null);
   const [address, setAddress] = useState('');
+  const [method, setMethod] = useState<'SHIP' | 'COLLECT' | ''>('');
+  const [pickupStore, setPickupStore] = useState('');
   const [slot, setSlot] = useState('');
   const [pay, setPay] = useState({ method: 'CASH', reference: '', received: true });
   const [consent, setConsent] = useState(false);
@@ -78,6 +80,9 @@ export function NewOrder() {
 
   // ── which steps this order needs ──
   const needs = quote?.needs ?? { delivery: false, installation: false };
+  const methods: Array<'SHIP' | 'COLLECT'> = quote?.deliveryMethods ?? [];
+  const how: 'SHIP' | 'COLLECT' | null = !needs.delivery || methods.length === 0 ? null : method && methods.includes(method) ? method : methods.includes('SHIP') ? 'SHIP' : 'COLLECT';
+  const shipTo = how === 'SHIP' || (needs.delivery && how === null);
   const steps = useMemo<StepId[]>(() => {
     const s: StepId[] = ['product'];
     if (!quick) s.push('device', 'addons');
@@ -99,7 +104,7 @@ export function NewOrder() {
       case 'device': return items.some((i) => i.offer.variants?.length && !i.variantId) ? 'Choose a colour and storage.' : null;
       case 'payment': return quoteError;
       case 'customer': return !customer ? 'Choose or create the customer to continue.' : problems[0] ?? null;
-      case 'delivery': return needs.delivery && !address.trim() ? 'Enter the delivery address.' : needs.installation && !needs.delivery && !address.trim() ? 'Enter the installation address.' : null;
+      case 'delivery': return how === 'COLLECT' && !pickupStore ? 'Choose the store where the customer will collect.' : shipTo && !address.trim() ? 'Enter the delivery address.' : needs.installation && !shipTo && !address.trim() ? 'Enter the installation address.' : null;
       case 'review': return problems[0] ?? (!consent ? 'Confirm the customer has been told the terms.' : null);
       case 'pay': return needsRef && !pay.reference.trim() ? 'Enter the receipt or approval number.' : problems[0] ?? null;
       default: return null;
@@ -111,7 +116,8 @@ export function NewOrder() {
 
   const submit = async () => {
     const o = await run(() => post('/orders', {
-      ...body, installationSlot: slot ? new Date(slot).toISOString() : undefined, deliveryAddress: address || undefined,
+      ...body, installationSlot: slot ? new Date(slot).toISOString() : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
+      delivery: how ? { method: how, pickupStoreId: how === 'COLLECT' ? pickupStore : undefined } : undefined,
       payment: { method: (quote?.dueNowMinor ?? 0) > 0 ? pay.method : 'CASH', reference: pay.reference || undefined, confirmed: cashier && pay.received && (quote?.dueNowMinor ?? 0) > 0 ? true : undefined },
       storeId: retail ? me?.storeId || store || undefined : undefined, dealerId: channel === 'DEALER' ? dealer?.id : undefined, dealerAgentId: channel === 'DEALER' ? agent?.id : undefined,
     }, { 'idempotency-key': idemKey.current }));
@@ -122,7 +128,7 @@ export function NewOrder() {
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
-    address, setAddress, slot, setSlot, pay, setPay, consent, setConsent, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
+    address, setAddress, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
 
