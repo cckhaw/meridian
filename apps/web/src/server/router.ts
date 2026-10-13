@@ -112,6 +112,14 @@ get('/dealers/:id/agents', 'dealer:read', ({ db, user, params, query }) => { dea
 post('/dealers/:id/agents', 'dealer:manage', ({ db, user, params, body }) => core.createAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) }).parse(body)));
 patch('/dealer-agents/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
 
+// ───────────────────────── retail stores (master data kept in the CRM) ─────────────────────────
+const storeBody = z.object({ name: z.string().min(1).max(120), address: blank(z.string().max(300)), phone: blank(z.string().max(40)), marketCode: blank(z.string().length(2)) });
+// Whoever sets up staff or sells over a counter needs to find a store; only store:manage may change one.
+get('/stores', ['store:manage', 'user:manage', 'order:create:RETAIL_ASSISTED', 'order:create:QUICK_SALE'], ({ db, query }) => core.listStores(db, { q: str(query, 'q'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/stores', 'store:manage', ({ db, user, body }) => core.createStore(db, user.username, storeBody.parse(body)));
+patch('/stores/:id', 'store:manage', ({ db, user, params, body }) => core.updateStore(db, user.username, params.id!, storeBody.partial().extend({ status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
+route('DELETE', '/stores/:id', 'store:manage', async ({ db, user, params }) => { await core.deleteStore(db, user.username, params.id!); return { ok: true }; });
+
 // ───────────────────────── dashboard / reports ─────────────────────────
 get('/dashboard', 'dashboard:read', async ({ db, user }) => {
   const d = await core.dashboard(db);
@@ -616,6 +624,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
   // A quick sale is rung up at the user's own store: it is never taken from the request.
   const storeId = b.channel === 'QUICK_SALE' ? (s.storeId ?? user.storeId ?? undefined) : retail ? (s.storeId ?? b.storeId ?? user.storeId ?? undefined) : undefined;
   const dealerId = b.channel === 'DEALER' ? (s.dealerId ?? b.dealerId ?? user.dealerId ?? undefined) : undefined;
+  if (storeId) await core.assertStoreUsable(db, storeId); // sold at a store that exists and is switched on
   if (retail && !storeId) throw new DomainError('INVALID', b.channel === 'QUICK_SALE' ? 'a quick sale is rung up at a store: sign in as a store user' : 'a store is required for retail orders');
   if (b.channel === 'DEALER' && !dealerId) throw new DomainError('INVALID', 'a dealer is required for dealer orders');
   if (b.channel === 'DEALER' && !b.dealerAgentId) throw new DomainError('INVALID', 'choose the dealer’s agent who sold this');

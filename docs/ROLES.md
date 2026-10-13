@@ -41,6 +41,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
 | Inventory | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
 | Finance | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
+| Stores | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Dealers |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
 | Commission | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |
 | Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -83,6 +84,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |
 | `dealer:read` |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
 | `dealer:manage` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `store:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `audit:read` | ✓ |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |
 | `user:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `store:assist` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |

@@ -2,6 +2,7 @@
 import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, SearchField, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
 import { useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
+import { StorePicker } from '@/app/stores/store-picker';
 import { dt, label, money } from '@/lib/format';
 
 interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null }
@@ -98,11 +99,11 @@ function UserForm({ roles, onDone }: { roles: Role[]; onDone: (r?: any) => void 
         <Field label="Full name"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
         <Field label="Email"><Input type="email" value={f.email} onChange={set('email')} /></Field>
         <div className="sm:col-span-2"><RolePicker roles={roles} value={f.roles} onChange={(v) => setF({ ...f, roles: v })} /></div>
-        {needs(roles, f.roles, 'store') && <Field label="Store ID" hint="The store whose orders and stock they can see, e.g. STORE-SG-001"><Input required value={f.storeId} onChange={set('storeId')} /></Field>}
+        {needs(roles, f.roles, 'store') && <Field label="Store" hint="The store whose orders and stock they can see. Add stores under Stores."><StorePicker value={f.storeId} onChange={(id) => setF({ ...f, storeId: id })} /></Field>}
         {needs(roles, f.roles, 'dealer') && <Field label="Dealer ID" hint="Their orders and commission are limited to this dealer"><Input required value={f.dealerId} onChange={set('dealerId')} /></Field>}
         {needs(roles, f.roles, 'customer') && <Field label="Customer ID" hint="Open the customer’s page and copy the id from the address bar. One portal login per customer."><Input required value={f.customerId} onChange={set('customerId')} /></Field>}
         {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
-        <div className="sm:col-span-2"><Button type="submit" disabled={busy || f.roles.length === 0}>{busy ? 'Creating…' : 'Create user'}</Button><span className="ml-3 text-footnote text-label2">A one-time password is generated for you to hand over.</span></div>
+        <div className="sm:col-span-2"><Button type="submit" disabled={busy || f.roles.length === 0 || (needs(roles, f.roles, 'store') && !f.storeId)}>{busy ? 'Creating…' : 'Create user'}</Button><span className="ml-3 text-footnote text-label2">A one-time password is generated for you to hand over.</span></div>
       </form>
     </Card>
   );
@@ -120,11 +121,11 @@ function EditUser({ user, roles, onDone }: { user: any; roles: Role[]; onDone: (
         <Field label="Email"><Input type="email" value={f.email} onChange={set('email')} /></Field>
         <Field label="Status" hint="Disabling signs them out immediately"><Select value={f.status} onChange={set('status')}><option value="ACTIVE">Active</option><option value="DISABLED">Disabled</option></Select></Field>
         <div className="sm:col-span-2"><RolePicker roles={roles} value={f.roles} onChange={(v) => setF({ ...f, roles: v })} /></div>
-        {needs(roles, f.roles, 'store') && <Field label="Store ID"><Input required value={f.storeId} onChange={set('storeId')} /></Field>}
+        {needs(roles, f.roles, 'store') && <Field label="Store"><StorePicker value={f.storeId} onChange={(id) => setF({ ...f, storeId: id })} /></Field>}
         {needs(roles, f.roles, 'dealer') && <Field label="Dealer ID"><Input required value={f.dealerId} onChange={set('dealerId')} /></Field>}
         <p className="text-footnote text-label2 sm:col-span-2">Changing roles or scope signs the user out so the new access applies at once.</p>
         {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
-        <div className="flex gap-2 sm:col-span-2"><Button type="submit" disabled={busy || f.roles.length === 0}>Save</Button><Button type="button" variant="secondary" onClick={onDone}>Cancel</Button></div>
+        <div className="flex gap-2 sm:col-span-2"><Button type="submit" disabled={busy || f.roles.length === 0 || (needs(roles, f.roles, 'store') && !f.storeId)}>Save</Button><Button type="button" variant="secondary" onClick={onDone}>Cancel</Button></div>
       </form>
     </Card>
   );

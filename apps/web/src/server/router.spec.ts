@@ -609,6 +609,38 @@ describe('segments, customer creation and groups', () => {
   });
 });
 
+describe('stores', () => {
+  it('lets an administrator keep stores and pick one when creating store staff', async () => {
+    const admin = await staff(['admin']);
+    const nobody = await staff(['finance']);
+    expect((await call('POST', '/stores', { cookie: nobody.cookie, body: { name: 'Nope' } })).status).toBe(403);
+    expect((await call('GET', '/stores', { cookie: nobody.cookie })).status).toBe(403);
+    const st = await call('POST', '/stores', { cookie: admin.cookie, body: { id: 'IGNORED', name: 'Clementi Mall', address: '3155 Commonwealth Ave West' } });
+    expect(st.status).toBe(200);
+    expect(st.json.id).toMatch(/^STORE-\d{5}$/);
+    const id = st.json.id as string;
+    expect((await call('GET', '/stores?q=clem&status=ACTIVE', { cookie: admin.cookie })).json.items.map((s: any) => s.id)).toEqual([id]);
+    // a store user is created against it and then sees only its orders
+    const made = await call('POST', '/users', { cookie: admin.cookie, body: { username: `clerk.${++n}`, displayName: 'Clerk', roles: ['retail-store'], storeId: id } });
+    expect(made.status).toBe(200);
+    expect((await call('POST', '/users', { cookie: admin.cookie, body: { username: `clerk.${++n}`, displayName: 'Ghost', roles: ['retail-store'], storeId: 'STORE-NOPE' } })).status).toBe(400);
+    expect((await call('DELETE', `/stores/${id}`, { cookie: admin.cookie })).status).toBe(422); // has staff: switch it off instead
+    expect((await call('PATCH', `/stores/${id}`, { cookie: admin.cookie, body: { status: 'INACTIVE' } })).json.status).toBe('INACTIVE');
+    const empty = (await call('POST', '/stores', { cookie: admin.cookie, body: { name: 'Pop-up' } })).json.id;
+    expect((await call('DELETE', `/stores/${empty}`, { cookie: admin.cookie })).status).toBe(200);
+  });
+
+  it('refuses a sale at a store that is switched off', async () => {
+    const root_ = await root();
+    const shop = await staff(['retail-store'], { storeId: 'STORE-SG-002' });
+    await call('PATCH', '/stores/STORE-SG-002', { cookie: root_, body: { status: 'INACTIVE' } });
+    const sale = await call('POST', '/orders', { cookie: shop.cookie, body: { channel: 'RETAIL_ASSISTED', customerId: await customer(root_), lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
+    expect(sale.status).toBe(400);
+    expect(sale.json.error.message).toMatch(/switched off/);
+    await call('PATCH', '/stores/STORE-SG-002', { cookie: root_, body: { status: 'ACTIVE' } });
+  });
+});
+
 describe('dealers, and who an order is sold by', () => {
   it('keeps dealers and agents in the CRM and requires both on a dealer order', async () => {
     const admin = await root();

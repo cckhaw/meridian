@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { audit } from './audit.js';
+import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
@@ -234,6 +235,7 @@ export async function createUser(db: Db, actor: string, i: NewUser): Promise<{ u
   if (!i.displayName.trim()) throw invalid('displayName is required');
   const roles = parseRoles(i.roles);
   checkBinding(roles, i);
+  if (i.storeId) await assertStoreUsable(db, i.storeId); // a store user is bound to a store that exists under Stores and is switched on
   if (i.customerId && !(await db.query('SELECT 1 FROM customers WHERE id=$1', [i.customerId])).rows.length) throw notFound('customer', i.customerId);
   const temp = i.password ? undefined : temporaryPassword();
   const password = i.password ?? temp!;
@@ -273,6 +275,7 @@ export async function updateUser(db: Db, actor: string, id: string, p: { display
     const roles = p.roles ? parseRoles(p.roles) : (u.roles as RoleId[]);
     const storeId = p.storeId === undefined ? u.storeId : p.storeId, dealerId = p.dealerId === undefined ? u.dealerId : p.dealerId;
     checkBinding(roles, { storeId, dealerId, customerId: u.customerId });
+    if (storeId && storeId !== u.storeId) await assertStoreUsable(q, storeId);
     await q.query(
       `UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), roles=$4, status = COALESCE($5, status), store_id=$6, dealer_id=$7, updated_at=now() WHERE id=$1`,
       [id, p.displayName?.trim() ?? null, p.email ?? null, roles, p.status ?? null, storeId, dealerId]);

@@ -43,7 +43,6 @@ export function NewOrder() {
   const dir = useRef<'fwd' | 'back'>('fwd');
   const idemKey = useRef(crypto.randomUUID()); // one key per form: a double-click or retry cannot create a second order
   const meta = useApi('/meta');
-  const stores = useApi<{ items: string[] }>(retail && !me?.storeId && can('inventory:read') ? '/inventory/locations' : null);
   const { run, busy, error } = useAction();
   const marketCode = me?.marketCode ?? 'SG';
   const cashier = can('order:payment') && !portal;
@@ -121,7 +120,7 @@ export function NewOrder() {
 
   if (channels.length === 0) return <Alert tone="info">Your role cannot create orders.</Alert>;
   const w: Wizard = {
-    channel, channels, setChannel, store, setStore, storeOptions: (stores.data?.items ?? []).filter((l) => l.startsWith('STORE-')), dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
+    channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
     address, setAddress, slot, setSlot, pay, setPay, consent, setConsent, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
