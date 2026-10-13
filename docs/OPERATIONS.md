@@ -28,7 +28,7 @@ See `.env.example`.
 3. **Define the catalog** (Catalog → Create or edit offers): network types, categories, groups, then offers with prices, contract terms, ETC rules and fulfilment. Activate what you want to sell. (`MERIDIAN_SEED=starter` loads a sample catalog to edit instead of starting empty.)
 4. **Receive stock** (Inventory → Goods receipt) for each warehouse and store location. Store ids (for example `STORE-SG-001`) are the location ids.
 5. **Create staff**: pick the roles; store users need a store id, dealers a dealer id. Each gets a one-time password and must change it at first sign-in. Retail store, call center and telesales staff each sign in with their own user, so every order carries the person who took it.
-5a. **Set up dealers** (Dealers): create each dealer (a dealer id and name) and its agents. Dealer orders are placed in the CRM on the dealer’s behalf by *Dealer Desk* staff (or by a login bound to that dealer), who name the dealer and the agent who sold it.
+5a. **Set up dealers** (Dealers): create each dealer (the system issues its dealer id) and its agents. Dealer orders are placed in the CRM on the dealer’s behalf by *Dealer Desk* staff (or by a login bound to that dealer), who name the dealer and the agent who sold it.
 6. **Create customers** and, for the self-serve portal, a portal login linked to one customer.
 7. **Settings** (super user): set the currency and number/date format **before the first order** (the currency is locked once orders, invoices or payments exist), upload the logo and pick a colour theme.
 8. **Online store** (optional): see [STOREFRONT.md](STOREFRONT.md). Create an API key, switch on a payment gateway, deploy `apps/storefront`, and schedule `POST /api/jobs/expire-applications` hourly.

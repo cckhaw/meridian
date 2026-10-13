@@ -45,7 +45,7 @@ async function staff(roles: string[], extra: Partial<NewUser> = {}) {
 const root = async () => (await signIn(SU.username, SU.password, '10.9.9.9')).cookie!;
 
 const customer = async (cookie: string, name = `Cust ${++n}`) =>
-  (await call('POST', '/customers', { cookie, body: { segment: 'CONSUMER', displayName: name, idDocument: `ID${n}${Math.random().toString(36).slice(2, 7)}` } })).json.customer.id as string;
+  (await call('POST', '/customers', { cookie, body: { context: 'order', segment: 'CONSUMER', displayName: name, idDocument: `ID${n}${Math.random().toString(36).slice(2, 7)}` } })).json.customer.id as string;
 
 describe('authentication', () => {
   it('serves health without a session but nothing else', async () => {
@@ -242,15 +242,15 @@ describe('data scope', () => {
   it('store and dealer users only see their own orders, stock and commission', async () => {
     const root_ = await root();
     const s1 = await staff(['retail-store'], { storeId: 'STORE-SG-001' }), s2 = await staff(['retail-store'], { storeId: 'STORE-SG-002' });
-    const d1 = await staff(['dealer'], { dealerId: 'DLR-1' }), d2 = await staff(['dealer'], { dealerId: 'DLR-2' });
-    await call('POST', '/dealers', { cookie: root_, body: { id: 'DLR-1', name: 'Dealer One' } });
-    await call('POST', '/dealers', { cookie: root_, body: { id: 'DLR-2', name: 'Dealer Two' } });
-    const ag = (await call('POST', '/dealers/DLR-1/agents', { cookie: root_, body: { name: 'Agent One' } })).json.id;
+    const dealerOne = (await call('POST', '/dealers', { cookie: root_, body: { name: 'Dealer One' } })).json.id as string;
+    const dealerTwo = (await call('POST', '/dealers', { cookie: root_, body: { name: 'Dealer Two' } })).json.id as string;
+    const d1 = await staff(['dealer'], { dealerId: dealerOne }), d2 = await staff(['dealer'], { dealerId: dealerTwo });
+    const ag = (await call('POST', `/dealers/${dealerOne}/agents`, { cookie: root_, body: { name: 'Agent One' } })).json.id;
     const c = await customer(root_);
     const o1 = await call('POST', '/orders', { cookie: s1.cookie, body: { channel: 'RETAIL_ASSISTED', customerId: c, storeId: 'STORE-SG-002', lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
     expect(o1.json.storeId).toBe('STORE-SG-001');                  // body's store is ignored
-    const od = await call('POST', '/orders', { cookie: d1.cookie, body: { channel: 'DEALER', customerId: c, dealerId: 'DLR-2', dealerAgentId: ag, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
-    expect(od.json.dealerId).toBe('DLR-1');
+    const od = await call('POST', '/orders', { cookie: d1.cookie, body: { channel: 'DEALER', customerId: c, dealerId: dealerTwo, dealerAgentId: ag, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
+    expect(od.json.dealerId).toBe(dealerOne);
     expect(od.json.dealerAgentId).toBe(ag);
 
     expect((await call('GET', `/orders/${o1.json.id}`, { cookie: s2.cookie })).status).toBe(404);
@@ -552,33 +552,93 @@ describe('settings and branding', () => {
   });
 });
 
+describe('segments, customer creation and groups', () => {
+  it('creates customers outside an order only when the operator allows it', async () => {
+    const admin = await root();
+    const agent = await staff(['telesales']);
+    const make = (extra: object = {}) => call('POST', '/customers', { cookie: agent.cookie, body: { segment: 'CONSUMER', displayName: 'Walk Up', idDocument: `W${++n}${Math.random().toString(36).slice(2, 7)}`, ...extra } });
+    expect((await call('GET', '/meta', { cookie: agent.cookie })).json.customers).toEqual({ allowCreateWithoutOrder: false });
+    expect((await make()).status).toBe(422);                              // the Customers screen cannot create one
+    expect((await make({ context: 'order' })).status).toBe(200);           // the order wizard can
+    expect((await call('POST', '/settings/customers', { cookie: agent.cookie, body: { allowCreateWithoutOrder: true } })).status).toBe(403);
+    expect((await call('POST', '/settings/customers', { cookie: admin, body: { allowCreateWithoutOrder: true } })).status).toBe(200);
+    expect((await make()).status).toBe(200);
+    await call('POST', '/settings/customers', { cookie: admin, body: { allowCreateWithoutOrder: false } });
+  });
+
+  it('lets the super user maintain segments and staff move a customer between them', async () => {
+    const admin = await root();
+    const agent = await staff(['customer-service']);
+    expect((await call('GET', '/segments', { cookie: agent.cookie })).json.map((s: any) => s.id)).toEqual(['CONSUMER', 'ENTERPRISE', 'IOT']);
+    expect((await call('POST', '/settings/segments', { cookie: agent.cookie, body: { name: 'VIP' } })).status).toBe(403);
+    const vip = (await call('POST', '/settings/segments', { cookie: admin, body: { name: 'VIP', description: 'Top customers' } })).json;
+    expect(vip.id).toBe('VIP');
+    expect((await call('GET', '/settings/customers', { cookie: admin })).json.segments.find((s: any) => s.id === 'VIP')).toMatchObject({ customers: 0 });
+    const c = await customer(admin);
+    const move = (reason: string) => call('POST', `/customers/${c}/segment`, { cookie: agent.cookie, body: { segment: 'VIP', reason } });
+    expect((await move('')).status).toBe(400);
+    expect((await move('Spends over $500 a month')).status).toBe(200);
+    expect((await call('GET', `/customers/${c}/segment-history`, { cookie: agent.cookie })).json.items[0]).toMatchObject({ fromSegment: 'CONSUMER', toSegment: 'VIP', changedBy: agent.username });
+    expect((await call('GET', '/customers?segment=VIP', { cookie: agent.cookie })).json.items.map((x: any) => x.id)).toEqual([c]);
+    const facts = (await call('GET', '/settings/cancellation', { cookie: admin })).json.facts;
+    expect(facts.find((f: any) => f.id === 'segment').values.map((v: any) => v[0])).toContain('VIP');
+  });
+
+  it('manages a group of services through the API, with the principal rule enforced', async () => {
+    const admin = await root();
+    const cs = await staff(['customer-service']);
+    const c = await customer(admin);
+    const acct = (await call('GET', `/customers/${c}/accounts`, { cookie: admin })).json.items[0].id;
+    const svc: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const o = (await call('POST', '/orders', { cookie: admin, body: { channel: 'CALL_CENTER', customerId: c, accountId: acct, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } })).json;
+      svc.push((await db.query('SELECT id FROM services WHERE order_id=$1', [o.id])).rows[0]!.id);
+    }
+    const make = await call('POST', `/accounts/${acct}/groups`, { cookie: cs.cookie, body: { name: 'Home', principalServiceId: svc[0], supplementaryServiceIds: [svc[1]], benefits: { allowances: { dataGb: 50, voiceMinutes: null }, discountBps: 1000 } } });
+    expect(make.status).toBe(200);
+    expect(make.json.benefits).toEqual({ allowances: { dataGb: 50 }, discountBps: 1000 });
+    const gid = make.json.id;
+    expect((await call('POST', `/groups/${gid}/members`, { cookie: cs.cookie, body: { serviceId: svc[2] } })).json.members).toHaveLength(3);
+    expect((await call('DELETE', `/groups/${gid}/members/${svc[0]}`, { cookie: cs.cookie })).status).toBe(422); // the principal cannot leave first
+    expect((await call('POST', `/groups/${gid}/principal`, { cookie: cs.cookie, body: { serviceId: svc[1] } })).status).toBe(200);
+    expect((await call('DELETE', `/groups/${gid}/members/${svc[0]}`, { cookie: cs.cookie })).status).toBe(200);
+    expect((await call('GET', `/accounts/${acct}/groups`, { cookie: cs.cookie })).json.items.map((g: any) => g.name)).toEqual(['Home']);
+    const noRights = await staff(['finance']);
+    expect((await call('POST', `/groups/${gid}/members`, { cookie: noRights.cookie, body: { serviceId: svc[0] } })).status).toBe(403);
+    expect((await call('DELETE', `/groups/${gid}`, { cookie: cs.cookie })).status).toBe(200);
+  });
+});
+
 describe('dealers, and who an order is sold by', () => {
   it('keeps dealers and agents in the CRM and requires both on a dealer order', async () => {
     const admin = await root();
     const desk = await staff(['dealer-desk']);
     const plain = await staff(['telesales']);
-    expect((await call('POST', '/dealers', { cookie: plain.cookie, body: { id: 'ORBIT', name: 'Orbit' } })).status).toBe(403);
+    expect((await call('POST', '/dealers', { cookie: plain.cookie, body: { name: 'Orbit' } })).status).toBe(403);
     expect((await call('GET', '/dealers', { cookie: plain.cookie })).status).toBe(403);
-    expect((await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'bad id!', name: 'Bad' } })).status).toBe(400);
-    const d = await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'ORBIT', name: 'Orbit Mobile' } });
+    expect((await call('POST', '/dealers', { cookie: desk.cookie, body: { name: '  ' } })).status).toBe(400);
+    const d = await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'CHOSEN-BY-CALLER', name: 'Orbit Mobile' } });
     expect(d.status).toBe(200);
-    expect((await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'ORBIT', name: 'Again' } })).status).toBe(409);
-    const a1 = (await call('POST', '/dealers/ORBIT/agents', { cookie: desk.cookie, body: { name: 'Marcus' } })).json;
-    expect(a1.id).toBe('ORBIT-A001');
-    expect((await call('GET', '/dealers?q=orb', { cookie: desk.cookie })).json.items.map((x: any) => x.id)).toEqual(['ORBIT']);
+    expect(d.json.id).toMatch(/^DLR-\d{5}$/);                                                      // issued by the system; a requested id is ignored
+    const ORBIT = d.json.id as string;
+    const next = (await call('POST', '/dealers', { cookie: desk.cookie, body: { name: 'Next' } })).json.id as string;
+    expect(Number(next.slice(4))).toBe(Number(ORBIT.slice(4)) + 1);
+    const a1 = (await call('POST', `/dealers/${ORBIT}/agents`, { cookie: desk.cookie, body: { name: 'Marcus' } })).json;
+    expect(a1.id).toBe(`${ORBIT}-A001`);
+    expect((await call('GET', '/dealers?q=orbit', { cookie: desk.cookie })).json.items.map((x: any) => x.id)).toEqual([ORBIT]);
     const cust = await customer(admin);
     const sale = (extra: object) => call('POST', '/orders', { cookie: desk.cookie, body: { channel: 'DEALER', customerId: cust, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true }, ...extra } });
-    expect((await sale({ dealerId: 'ORBIT' })).status).toBe(400);                                  // no agent
+    expect((await sale({ dealerId: ORBIT })).status).toBe(400);                                  // no agent
     expect((await sale({ dealerId: 'GHOST', dealerAgentId: a1.id })).status).toBe(400);           // unknown dealer
-    await call('POST', '/dealers', { cookie: desk.cookie, body: { id: 'OTHER', name: 'Other' } });
-    const other = (await call('POST', '/dealers/OTHER/agents', { cookie: desk.cookie, body: { name: 'Sam' } })).json;
-    expect((await sale({ dealerId: 'ORBIT', dealerAgentId: other.id })).status).toBe(400);        // someone else's agent
-    const ok = await sale({ dealerId: 'ORBIT', dealerAgentId: a1.id });
+    const OTHER = (await call('POST', '/dealers', { cookie: desk.cookie, body: { name: 'Other' } })).json.id as string;
+    const other = (await call('POST', `/dealers/${OTHER}/agents`, { cookie: desk.cookie, body: { name: 'Sam' } })).json;
+    expect((await sale({ dealerId: ORBIT, dealerAgentId: other.id })).status).toBe(400);        // someone else's agent
+    const ok = await sale({ dealerId: ORBIT, dealerAgentId: a1.id });
     expect(ok.status).toBe(200);
-    expect(ok.json).toMatchObject({ dealerId: 'ORBIT', dealerAgentId: a1.id, salespersonId: desk.username });
+    expect(ok.json).toMatchObject({ dealerId: ORBIT, dealerAgentId: a1.id, salespersonId: desk.username });
     await call('PATCH', `/dealer-agents/${a1.id}`, { cookie: desk.cookie, body: { status: 'INACTIVE' } });
-    expect((await sale({ dealerId: 'ORBIT', dealerAgentId: a1.id })).status).toBe(400);          // inactive agent
-    expect((await call('GET', '/dealers/ORBIT/agents?status=ACTIVE', { cookie: desk.cookie })).json.items).toHaveLength(0);
+    expect((await sale({ dealerId: ORBIT, dealerAgentId: a1.id })).status).toBe(400);          // inactive agent
+    expect((await call('GET', `/dealers/${ORBIT}/agents?status=ACTIVE`, { cookie: desk.cookie })).json.items).toHaveLength(0);
   });
 
   it('rings a quick sale up at the signed-in store and keeps self-serve out of the CRM', async () => {

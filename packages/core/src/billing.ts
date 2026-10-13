@@ -124,6 +124,21 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
     lines.push({ serviceId: s.id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
       description: `${p.o.name} ${s.identifier} (pro-rated ${active}/${days} days)`, amountMinor: daily ? p.amount : Math.round((p.monthly * active) / days) });
   }
+  // Group benefit: a percentage off the recurring fee of each supplementary service in a group of this account.
+  const discounted = (await q.query(
+    `SELECT s.id, s.identifier, s.offer_id, s.activated_at::date::text AS activated, (g.benefits->>'discountBps')::int AS bps, g.name AS group_name
+       FROM service_group_members m JOIN service_groups g ON g.id = m.group_id AND g.status = 'ACTIVE'
+       JOIN services s ON s.id = m.service_id
+      WHERE g.account_id=$1 AND m.role='SUPPLEMENTARY' AND s.status='ACTIVE' AND s.activated_at::date <= $2::date AND COALESCE((g.benefits->>'discountBps')::int, 0) > 0
+      ORDER BY g.name, s.identifier LIMIT 5000`, [a.id, periodEnd])).rows;
+  for (const s of discounted) {
+    const p = await periodFee(s.offerId);
+    if (!p) continue;
+    const active = s.activated > periodStart ? diffDays(periodEnd, s.activated) + 1 : days;
+    const fee = daily || s.activated <= periodStart ? p.amount : Math.round((p.monthly * active) / days);
+    const off = Math.round((fee * s.bps) / 10_000);
+    if (off > 0) lines.push({ serviceId: s.id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive, description: `Group discount ${s.groupName}: ${s.identifier} (${s.bps / 100}% off)`, amountMinor: -off });
+  }
   // Instalments and one-off adjustments
   const charges = (await q.query(`SELECT * FROM service_charges WHERE account_id=$1 AND remaining_cycles > 0 ORDER BY created_at`, [a.id])).rows;
   for (const c of charges) {

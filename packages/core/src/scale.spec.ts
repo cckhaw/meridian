@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { browseChildren, nodeDetail, pageOffers, searchNodes } from './catalog.js';
-import { addToGroup, createAccount, createCustomer, customerLineage, getAccount, listAccounts, listChildren, listGroupMembers, searchCustomers } from './customers.js';
+import { createAccount, createCustomer, customerLineage, getAccount, listAccounts, listChildren, searchCustomers } from './customers.js';
 import { customer360 } from './reports.js';
 import { listServices } from './lifecycle.js';
 import { listStock, listStockLocations } from './inventory.js';
@@ -169,14 +169,11 @@ describe('catalog browsing at scale', () => {
 });
 
 describe('customer hierarchy navigation', () => {
-  it('walks group → customer → account → services with paged, searchable levels', async () => {
-    const group = (await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Hierarchy Group', idDocument: 'UEN-GROUP-1' })).customer;
+  it('walks customer → account → services with paged, searchable levels', async () => {
     const company = (await createCustomer(db, { segment: 'ENTERPRISE', displayName: 'Hierarchy Company', idDocument: 'UEN-CO-1', account: false })).customer;
-    await addToGroup(db, group.id as string, company.id as string, 'MEMBER');
-    // 45 departments under the company, 30 accounts on it, 12 members in the group
+    // 45 departments under the company, 30 accounts on it
     for (let i = 0; i < 45; i++) await createCustomer(db, { segment: 'ENTERPRISE', displayName: `Dept ${String(i).padStart(2, '0')}`, idDocument: 'UEN-CO-1', parentCustomerId: company.id as string, account: false });
     for (let i = 0; i < 30; i++) await createAccount(db, company.id as string, { name: `Cost centre ${i}` });
-    for (let i = 0; i < 11; i++) { const m = (await createCustomer(db, { segment: 'ENTERPRISE', displayName: `Member ${i}`, idDocument: `UEN-M-${i}`, account: false })).customer; await addToGroup(db, group.id as string, m.id as string, 'MEMBER'); }
 
     const seenAccounts: string[] = []; let cur: string | undefined;
     do { const p = await listAccounts(db, company.id as string, { limit: 10, cursor: cur }); expect(p.items.length).toBeLessThanOrEqual(10); seenAccounts.push(...p.items.map((a: any) => a.id)); cur = p.nextCursor ?? undefined; } while (cur);
@@ -189,22 +186,15 @@ describe('customer hierarchy navigation', () => {
     expect(kids.nextCursor).toBeTruthy();
     expect((await listChildren(db, company.id as string, { q: 'dept 07' })).items.map((k: any) => k.displayName)).toEqual(['Dept 07']);
 
-    const members = await listGroupMembers(db, group.id as string, { limit: 5 });
-    expect(members.items).toHaveLength(5);
-    expect((await listGroupMembers(db, group.id as string, { q: 'member 3' })).items.map((k: any) => k.displayName)).toEqual(['Member 3']);
-
     const dept = (kids.items[0] as any).id as string;
     const lin = await customerLineage(db, dept);
     expect(lin.ancestors.map((a: any) => a.displayName)).toEqual(['Hierarchy Company']);
-    expect((await customerLineage(db, company.id as string)).groups.map((g: any) => g.displayName)).toEqual(['Hierarchy Group']);
 
     const c360 = await customer360(db, company.id as string);
     expect(c360.accountCount).toBe(30);
     expect(c360.accounts).toHaveLength(20); // a first page, not all of them
     expect(c360.childCount).toBe(45);
     expect(c360.children).toHaveLength(10);
-    expect(c360.memberOf.map((g: any) => g.displayName)).toEqual(['Hierarchy Group']);
-    expect((await customer360(db, group.id as string)).memberCount).toBe(12);
 
     const acct = await getAccount(db, seenAccounts[0]!);
     expect(acct).toMatchObject({ balanceMinor: 0, serviceCount: 0 });

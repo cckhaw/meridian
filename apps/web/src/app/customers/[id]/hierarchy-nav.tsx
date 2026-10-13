@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useDebounced, usePaged, type PagedState } from '@/lib/api';
 import { label, money } from '@/lib/format';
+import { useSegments } from '@/lib/segments';
 
 const DOT: Record<string, string> = { ACTIVE: 'bg-success', SUSPENDED: 'bg-warning', PORTING_OUT: 'bg-warning', TERMINATED: 'bg-label2/50', PENDING: 'bg-warning', CLOSED: 'bg-label2/50' };
 const Dot = ({ status }: { status: string }) => <span role="img" aria-label={label(status)} className={`h-2 w-2 shrink-0 rounded-full ${DOT[status] ?? 'bg-label2/50'}`} />;
@@ -57,8 +58,7 @@ function Section({ title, count, url, defaultOpen = false, searchLabel, row, emp
 export interface NavProps {
   customer: { id: string; displayName: string; segment: string };
   ancestors: Array<{ id: string; displayName: string; segment: string }>;
-  groups: Array<{ id: string; displayName: string; role: string }>;
-  counts: { accounts: number; children: number; members: number };
+  counts: { accounts: number; children: number };
   canBrowse: boolean;           // staff can move to other customers; a portal customer only sees their own
   canBilling: boolean;
   accountId: string | null;
@@ -68,31 +68,26 @@ export interface NavProps {
 }
 
 /**
- * Where am I? Group → customer → account → service, as one tree you can walk. Everything below the customer loads when you open it, a page at a time,
+ * Where am I? Customer → account → service (with departments above or below), as one tree you can walk. Everything below the customer loads when you open it, a page at a time,
  * so an enterprise with thousands of departments, accounts and lines stays instant.
  */
 export function HierarchyNav(p: NavProps) {
+  const segs = useSegments();
   const onCustomer = !p.accountId;
   return (
-    <nav aria-label="Group, customer, account and services" className="rounded-card bg-surface p-1.5 shadow-card">
+    <nav aria-label="Customer, account and services" className="rounded-card bg-surface p-1.5 shadow-card">
       <div role="tree" aria-label="Hierarchy">
-        {p.canBrowse && p.groups.length > 0 && (
-          <div role="none" className="mb-1">
-            <p className="px-2 pb-0.5 pt-1.5 text-caption font-semibold uppercase tracking-wide text-label2">Group</p>
-            {p.groups.map((g) => <CustomerLink key={g.id} id={g.id} name={g.displayName} hint={label(g.role)} />)}
-          </div>
-        )}
         {p.canBrowse && p.ancestors.length > 0 && (
           <div role="none" className="mb-1">
             <p className="px-2 pb-0.5 pt-1.5 text-caption font-semibold uppercase tracking-wide text-label2">Parent</p>
-            {p.ancestors.map((a, i) => <CustomerLink key={a.id} id={a.id} name={a.displayName} hint={label(a.segment)} indent={i} />)}
+            {p.ancestors.map((a, i) => <CustomerLink key={a.id} id={a.id} name={a.displayName} hint={segs.name(a.segment)} indent={i} />)}
           </div>
         )}
 
         <div role="none" className="mt-1 border-t border-separator pt-1">
           <p className="px-2 pb-0.5 pt-1.5 text-caption font-semibold uppercase tracking-wide text-label2">Customer</p>
           <button role="treeitem" aria-selected={onCustomer} aria-current={onCustomer ? 'page' : undefined} onClick={() => p.onAccount(null)} style={{ marginLeft: p.ancestors.length * 14 }} className={`flex min-h-[44px] items-center gap-2 rounded-control px-2 text-left text-subhead focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${onCustomer ? 'bg-accent/12 font-semibold text-accent' : 'hover:bg-surface2'}`}>
-            <Initial name={p.customer.displayName} /><span className="min-w-0 flex-1"><span className="block truncate">{p.customer.displayName}</span><span className="block truncate text-caption font-normal text-label2">{label(p.customer.segment)}</span></span>
+            <Initial name={p.customer.displayName} /><span className="min-w-0 flex-1"><span className="block truncate">{p.customer.displayName}</span><span className="block truncate text-caption font-normal text-label2">{segs.name(p.customer.segment)}</span></span>
           </button>
 
           <div role="group" className="ml-3 border-l border-separator pl-1">
@@ -101,11 +96,7 @@ export function HierarchyNav(p: NavProps) {
               row={(a) => <AccountNode a={a} selected={p.accountId === a.id} serviceId={p.serviceId} canBilling={p.canBilling} onAccount={p.onAccount} onService={p.onService} />} />
             {p.canBrowse && p.counts.children > 0 && (
               <Section title="Departments" count={p.counts.children} searchLabel="Find department" url={(t) => `/customers/${p.customer.id}/children?limit=10&q=${encodeURIComponent(t)}`}
-                row={(k) => <CustomerLink id={k.id} name={k.displayName} hint={`${label(k.segment)} · ${(k.serviceCount ?? 0).toLocaleString()} services`} />} />
-            )}
-            {p.canBrowse && p.counts.members > 0 && (
-              <Section title="Group members" count={p.counts.members} searchLabel="Find member" url={(t) => `/customers/${p.customer.id}/members?limit=10&q=${encodeURIComponent(t)}`}
-                row={(k) => <CustomerLink id={k.id} name={k.displayName} hint={`${label(k.role)} · ${(k.serviceCount ?? 0).toLocaleString()} services`} />} />
+                row={(k) => <CustomerLink id={k.id} name={k.displayName} hint={`${segs.name(k.segment)} · ${(k.serviceCount ?? 0).toLocaleString()} services`} />} />
             )}
           </div>
         </div>

@@ -100,14 +100,14 @@ open('POST', '/webhooks/payment', async ({ db, raw, req }) => {
 }, { noCsrf: true });
 
 // ───────────────────────── dealers and their agents (master data kept in the CRM) ─────────────────────────
-const dealerBody = z.object({ id: z.string().min(2).max(30).optional(), name: z.string().min(1).max(120), contactName: blank(z.string().max(120)), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) });
+const dealerBody = z.object({ name: z.string().min(1).max(120), contactName: blank(z.string().max(120)), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) });
 const dealerOnly = (u: SessionUser, id: string) => { if (u.scope.dealerId && u.scope.dealerId !== id) throw forbidden('That dealer is not yours.'); };
 get('/dealers', 'dealer:read', async ({ db, user, query }) => {
   if (user.scope.dealerId) return { items: [await core.getDealer(db, user.scope.dealerId)], nextCursor: null }; // a dealer's own login sees only that dealer
   return core.listDealers(db, { q: str(query, 'q'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') });
 });
 post('/dealers', 'dealer:manage', async ({ db, user, body }) => core.createDealer(db, user.username, dealerBody.parse(body)));
-patch('/dealers/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateDealer(db, user.username, params.id!, dealerBody.omit({ id: true }).partial().extend({ status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
+patch('/dealers/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateDealer(db, user.username, params.id!, dealerBody.partial().extend({ status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
 get('/dealers/:id/agents', 'dealer:read', ({ db, user, params, query }) => { dealerOnly(user, params.id!); return core.listAgents(db, params.id!, { status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }); });
 post('/dealers/:id/agents', 'dealer:manage', ({ db, user, params, body }) => core.createAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) }).parse(body)));
 patch('/dealer-agents/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
@@ -127,7 +127,7 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
 });
 get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
-get('/meta', null, ({ user }) => ({ markets: core.MARKETS, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode() }));
+get('/meta', null, async ({ db, user }) => ({ markets: core.MARKETS, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db) }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', () => Object.values(core.ROLES).map(({ id, label, summary, scope, permissions, creditLimitMinor }) => ({ id, label, summary, scope, permissions, creditLimitMinor })));
@@ -404,8 +404,11 @@ const asRule = (b: z.infer<typeof cancelRuleBody>, priority: number) => ({ ...b,
 const cancellationView = async (db: core.Db) => {
   const currency = (await core.getRegional(db)).currency;
   const rules = await core.listRules(db);
+  // Rules can be written against any customer segment the operator has defined, so the list comes from Settings → Customers.
+  const segments = (await core.listSegments(db)).map((s) => [s.id, s.name.toLowerCase()] as [string, string]);
+  const facts = core.FACTS.map((f) => (f.id === 'segment' ? { ...f, values: segments } : f));
   return {
-    rules, settings: await core.getCancellationSettings(db), facts: core.FACTS, ops: core.OPS.map(([id, label, types]) => ({ id, label, types })), currency,
+    rules, settings: await core.getCancellationSettings(db), facts, ops: core.OPS.map(([id, label, types]) => ({ id, label, types })), currency,
     descriptions: Object.fromEntries(rules.map((r) => [r.id, core.describeRule(r, currency)])),
   };
 };
@@ -441,12 +444,15 @@ route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, use
 
 // ───────────────────────── customers ─────────────────────────
 const newCustomer = z.object({
-  segment: z.enum(['CONSUMER', 'FAMILY', 'ENTERPRISE', 'IOT_ENTERPRISE']), displayName: z.string().min(1).max(200), idDocument: z.string().min(3).max(40),
+  segment: z.string().min(1).max(40), displayName: z.string().min(1).max(200), idDocument: z.string().min(3).max(40),
   marketCode: z.string().length(2).optional(), email: blank(z.string().email()), phone: blank(z.string().max(30)),
   parentCustomerId: uuid.optional(), account: z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).optional(),
 });
 get('/customers', 'customer:search', ({ db, query }) => core.searchCustomers(db, { q: str(query, 'q'), segment: str(query, 'segment'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/customers', 'customer:create', async ({ db, user, body }) => {
+  // A customer normally comes into being with their first order. The order wizard says so (context: 'order'); the Customers screen needs the setting.
+  const viaOrder = z.object({ context: z.literal('order').optional() }).parse(body).context === 'order';
+  if (!viaOrder && !(await core.getCustomerSettings(db)).allowCreateWithoutOrder) throw new DomainError('REJECTED', 'Customers are created while placing their first order. Your administrator has not allowed creating one on its own (Settings → Customers).');
   const r = await core.createCustomer(db, newCustomer.parse(body));
   await core.audit(db, user.username, 'customer', r.customer.id, 'CREATED');
   return r;
@@ -476,17 +482,58 @@ get('/customers/:id/accounts', 'customer:read', async ({ db, user, params, query
   const page = await core.listAccounts(db, params.id!, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') });
   return { ...page, items: noBalance(user, page.items) };
 });
-get('/customers/:id/members', 'customer:search', ({ db, params, query }) => core.listGroupMembers(db, params.id!, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/accounts/:id', 'customer:read', async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return noBalance(user, [a])[0]; });
 post('/customers/:id/accounts', 'customer:write', ({ db, params, body }) => core.createAccount(db, params.id!, z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).parse(body)));
-post('/customers/:id/group', 'customer:write', ({ db, params, body }) => {
-  const b = z.object({ memberCustomerId: uuid, role: z.enum(['OWNER', 'MEMBER', 'DEPARTMENT']).optional() }).parse(body);
-  return core.addToGroup(db, params.id!, b.memberCustomerId, b.role).then(() => ({ ok: true }));
+
+// ───────────────────────── segments and customer settings ─────────────────────────
+get('/segments', 'customer:search', ({ db }) => core.listSegments(db, { activeOnly: true }));
+get('/settings/customers', 'settings:manage', async ({ db }) => ({ settings: await core.getCustomerSettings(db), segments: await core.listSegments(db, { withCounts: true }) }));
+post('/settings/customers', 'settings:manage', ({ db, user, body }) => core.setCustomerSettings(db, user.username, z.object({ allowCreateWithoutOrder: z.boolean() }).parse(body)));
+post('/settings/segments', 'settings:manage', ({ db, user, body }) => core.createSegment(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), individual: z.boolean().optional() }).parse(body)));
+patch('/settings/segments/:id', 'settings:manage', ({ db, user, params, body }) => core.updateSegment(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), individual: z.boolean(), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
+post('/customers/:id/segment', 'customer:write', async ({ db, user, params, body }) => {
+  const b = z.object({ segment: z.string().min(1).max(40), reason: z.string().max(300) }).parse(body);
+  return db.tx((q) => core.moveCustomerSegment(q, user.username, params.id!, b.segment, b.reason));
+});
+get('/customers/:id/segment-history', 'customer:read', async ({ db, user, params }) => { assertCustomer(user, params.id!); return { items: await core.listSegmentChanges(db, params.id!) }; });
+
+// ───────────────────────── groups of services (principal + supplementary) ─────────────────────────
+const benefitsBody = z.object({
+  allowances: z.object({ dataGb: z.number().nullable().optional(), voiceMinutes: z.number().nullable().optional(), smsCount: z.number().nullable().optional() }).optional(),
+  discountBps: z.number().int().nullable().optional(),
+}).transform((b) => ({ allowances: b.allowances && Object.fromEntries(Object.entries(b.allowances).filter(([, v]) => v !== null && v !== undefined)), discountBps: b.discountBps ?? undefined })) as unknown as z.ZodType<core.GroupBenefits>;
+const groupScope = async (u: SessionUser, db: core.Db, groupId: string) => { const g = await core.getGroup(db, groupId); assertCustomer(u, g.customerId); return g; };
+get('/accounts/:id/groups', 'customer:read', async ({ db, user, params, query }) => {
+  const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId);
+  return core.listGroups(db, { accountId: params.id!, limit: num(query, 'limit'), cursor: str(query, 'cursor') });
+});
+post('/accounts/:id/groups', 'service:manage', async ({ db, user, params, body }) => {
+  const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId);
+  const b = z.object({ name: z.string().min(1).max(80), principalServiceId: uuid, supplementaryServiceIds: z.array(uuid).max(200).optional(), benefits: benefitsBody.optional() }).parse(body);
+  return db.tx((q) => core.createGroup(q, user.username, { accountId: params.id!, ...b }));
+});
+get('/groups/:id', 'customer:read', ({ db, user, params }) => groupScope(user, db, params.id!));
+patch('/groups/:id', 'service:manage', async ({ db, user, params, body }) => {
+  await groupScope(user, db, params.id!);
+  return db.tx((q) => core.updateGroup(q, user.username, params.id!, z.object({ name: z.string().min(1).max(80).optional(), benefits: benefitsBody.optional() }).parse(body)));
+});
+route('DELETE', '/groups/:id', 'service:manage', async ({ db, user, params }) => { await groupScope(user, db, params.id!); await db.tx((q) => core.dissolveGroup(q, user.username, params.id!)); return { ok: true }; });
+post('/groups/:id/members', 'service:manage', async ({ db, user, params, body }) => {
+  await groupScope(user, db, params.id!);
+  return db.tx((q) => core.addGroupMember(q, user.username, params.id!, z.object({ serviceId: uuid }).parse(body).serviceId));
+});
+route('DELETE', '/groups/:id/members/:serviceId', 'service:manage', async ({ db, user, params }) => {
+  await groupScope(user, db, params.id!);
+  return (await db.tx((q) => core.removeGroupMember(q, user.username, params.id!, params.serviceId!))) ?? { closed: true };
+});
+post('/groups/:id/principal', 'service:manage', async ({ db, user, params, body }) => {
+  await groupScope(user, db, params.id!);
+  return db.tx((q) => core.changePrincipal(q, user.username, params.id!, z.object({ serviceId: uuid }).parse(body).serviceId));
 });
 
 // ───────────────────────── services ─────────────────────────
 get('/services', 'service:read', ({ db, user, query }) => core.listServices(db, {
-  customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
+  customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'), groupable: query.get('groupable') === '1',
 }));
 const svcAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('suspend'), reason: z.string().optional() }), z.object({ action: z.literal('resume') }),

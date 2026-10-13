@@ -9,6 +9,7 @@ import { conflict, invalid, notFound, rejected } from './errors.js';
 import { GL } from './config.js';
 import { today } from './dates.js';
 import { createAccount } from './customers.js';
+import { releaseFromGroup } from './groups.js';
 
 async function lockService(q: Queryable, id: string): Promise<Row> {
   const s = (await q.query('SELECT * FROM services WHERE id=$1 FOR UPDATE', [id])).rows[0];
@@ -83,6 +84,7 @@ export async function transferOwnership(db: Db, id: string, toCustomerId: string
     const to = (await q.query('SELECT id, status, shard_id FROM customers WHERE id=$1', [toCustomerId])).rows[0];
     if (!to) throw notFound('customer', toCustomerId);
     if (to.status !== 'ACTIVE') throw rejected('receiving customer is not active');
+    await releaseFromGroup(q, actor, id); // the new owner's account is a different account, so the service leaves its group
     let acct = toAccountId;
     if (acct) {
       const a = (await q.query('SELECT customer_id FROM accounts WHERE id=$1', [acct])).rows[0];
@@ -108,6 +110,7 @@ export async function terminateService(db: Db, id: string, o: { reason?: string;
     const s = await lockService(q, id);
     if (s.status === 'TERMINATED') throw rejected('service is already terminated');
     const when = o.date ?? new Date();
+    await releaseFromGroup(q, actor, id); // a principal with supplementary services must be handed over first
     let etc = 0, waived = false, invoice: Row | null = null;
     if (s.contractTermMonths > 0 && s.contractStart) {
       const quote = await etcQuoteForOffer(q, s.offerId, new Date(s.contractStart), when);
@@ -164,13 +167,14 @@ export async function cancelPortOut(db: Db, id: string, actor = 'system') {
   });
 }
 
-export async function listServices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; q?: string; limit?: number; cursor?: string }): Promise<Page<Row>> {
+export async function listServices(q: Queryable, f: { customerId?: string; accountId?: string; status?: string; q?: string; limit?: number; cursor?: string; /** only live services that are not in a group yet (what a group can still take) */ groupable?: boolean }): Promise<Page<Row>> {
   const limit = pageSize(f.limit, 50, 200);
   const { params, p } = sqlBuilder();
   const where: string[] = [];
   if (f.customerId) where.push(`s.customer_id = ${p(f.customerId)}`);
   if (f.accountId) where.push(`s.account_id = ${p(f.accountId)}`);
   if (f.status) where.push(`s.status = ${p(f.status)}`);
+  if (f.groupable) where.push(`s.status IN ('PENDING','ACTIVE','SUSPENDED')`, `m.service_id IS NULL`);
   const text = (f.q ?? '').trim().replace(/[\s()-]/g, '');
   if (text) { // a number (or part of its start); with or without the country code
     const dial = (await getRegional(q)).dialCode;
@@ -181,7 +185,7 @@ export async function listServices(q: Queryable, f: { customerId?: string; accou
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(s.identifier, s.id) > (${p(cur[0])}::text, ${p(cur[1])}::uuid)`);
   const rows = (await q.query(
-    `SELECT s.*, c.name AS offer_name FROM services s LEFT JOIN catalog_nodes c ON c.id = s.offer_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    `SELECT s.*, c.name AS offer_name, m.group_id, m.role AS group_role FROM services s LEFT JOIN catalog_nodes c ON c.id = s.offer_id LEFT JOIN service_group_members m ON m.service_id = s.id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY s.identifier, s.id LIMIT ${p(limit + 1)}`, params)).rows;
   return toPage(rows, limit, (r) => [r.identifier as string, r.id as string]);
 }

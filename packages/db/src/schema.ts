@@ -1,6 +1,5 @@
 import { bigint, boolean, char, index, integer, pgEnum, pgTable, primaryKey, smallint, text, timestamp, uuid, uniqueIndex } from 'drizzle-orm/pg-core';
 
-export const customerSegment = pgEnum('customer_segment', ['CONSUMER', 'FAMILY', 'ENTERPRISE', 'IOT_ENTERPRISE']);
 export const accountStatus = pgEnum('account_status', ['ACTIVE', 'SUSPENDED', 'CLOSED']);
 export const serviceType = pgEnum('service_type', ['MOBILE', 'FIBER', 'IOT', 'SUBSCRIPTION']);
 export const serviceStatus = pgEnum('service_status', ['PENDING', 'ACTIVE', 'SUSPENDED', 'PORTING_OUT', 'TERMINATED']);
@@ -24,7 +23,7 @@ const audit = {
 export const customers = pgTable('customers', {
   id: uuid('id').notNull().defaultRandom(),
   shardId: smallint('shard_id').notNull(),
-  segment: customerSegment('segment').notNull(),
+  segment: text('segment').notNull(), // a code from customer_segments
   displayName: text('display_name').notNull(),
   idDocumentRef: text('id_document_ref').notNull(),
   marketCode: char('market_code', { length: 2 }).notNull(),
@@ -59,7 +58,7 @@ export const services = pgTable('services', {
   ...audit,
 }, (t) => [primaryKey({ columns: [t.shardId, t.identifier, t.id] }), uniqueIndex('services_identifier_uq').on(t.shardId, t.type, t.identifier)]);
 
-export const groupMemberships = pgTable('group_memberships', {
+export const legacyGroupMemberships = pgTable('legacy_group_memberships', {
   groupCustomerId: uuid('group_customer_id').notNull(),
   memberCustomerId: uuid('member_customer_id').notNull(),
   shardId: smallint('shard_id').notNull(),

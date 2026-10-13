@@ -3,6 +3,7 @@ import { Alert, Badge, Button, Card, Field, Input, LoadMore, SearchField, Segmen
 import { useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { label, money, step as moneyStep } from '@/lib/format';
+import { useSegments } from '@/lib/segments';
 import { Row, Section } from './wizard-ui';
 import { SellingPanel } from './selling-panel';
 import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, newItem, type Cust, type Item } from './wizard-types';
@@ -230,20 +231,19 @@ export function PaymentStep({ w }: { w: Wizard }) {
 }
 
 // ───────────────────────── 5. customer ─────────────────────────
-const SEGMENTS = [['CONSUMER', 'Consumer'], ['FAMILY', 'Family'], ['ENTERPRISE', 'Enterprise'], ['IOT_ENTERPRISE', 'IoT enterprise']];
-
 export function CustomerStep({ w }: { w: Wizard }) {
   const [mode, setMode] = useState<'existing' | 'new'>('existing');
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
   const list = usePaged<any>(term.length >= 3 ? `/customers?limit=6&q=${encodeURIComponent(term)}` : null);
   const full = useApi<any>(w.customer ? `/customers/${w.customer.id}` : null);
-  const [f, setF] = useState({ segment: 'CONSUMER', displayName: '', idDocument: '', email: '', phone: '' });
+  const segs = useSegments();
+  const [f, setF] = useState({ segment: '', displayName: '', idDocument: '', email: '', phone: '' });
   const { run, busy, error } = useAction();
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
-    const r = await run(() => post('/customers', { ...f, email: f.email || undefined, phone: f.phone || undefined, account: { billCycleDay: 1 } }));
+    const r = await run(() => post('/customers', { ...f, context: 'order', segment: f.segment || segs.list[0]?.id, email: f.email || undefined, phone: f.phone || undefined, account: { billCycleDay: 1 } }));
     if (r) w.setCustomer({ id: r.customer.id, displayName: r.customer.displayName, segment: r.customer.segment, kycStatus: r.customer.kycStatus });
   };
 
@@ -254,7 +254,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
         <Card>
           <div className="flex items-start justify-between gap-3">
             <div><p className="text-title3 font-semibold">{w.customer.displayName}</p>
-              <p className="mt-1 flex flex-wrap items-center gap-2 text-subhead text-label2"><Badge>{label(w.customer.segment ?? '')}</Badge>
+              <p className="mt-1 flex flex-wrap items-center gap-2 text-subhead text-label2"><Badge>{segs.name(w.customer.segment ?? '')}</Badge>
                 <Badge tone={(full.data?.customer.kycStatus ?? w.customer.kycStatus) === 'VERIFIED' ? 'success' : 'warning'}>{(full.data?.customer.kycStatus ?? w.customer.kycStatus) === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge>
                 {full.data && <span>{full.data.serviceSummary.reduce((n: number, s: any) => n + (s.status !== 'TERMINATED' ? s.n : 0), 0)} services · {full.data.accountCount} accounts</span>}</p></div>
             <button className="text-subhead text-accent" onClick={() => { w.setCustomer(null); w.setAccountId(''); }}>Change</button>
@@ -281,7 +281,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
             {list.items.map((c: any) => (
               <li key={c.id}><button type="button" onClick={() => w.setCustomer({ id: c.id, displayName: c.displayName, segment: c.segment, kycStatus: c.kycStatus })} className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-surface2 focus-visible:bg-surface2 focus-visible:outline-none">
                 <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent/12 font-semibold text-accent">{c.displayName.trim()[0]?.toUpperCase()}</span>
-                <span className="min-w-0 flex-1"><span className="block truncate font-medium">{c.displayName}</span><span className="block truncate text-footnote text-label2">{label(c.segment)} · ID {c.idDocumentRef}{c.phone ? ` · ${c.phone}` : ''}</span></span>
+                <span className="min-w-0 flex-1"><span className="block truncate font-medium">{c.displayName}</span><span className="block truncate text-footnote text-label2">{segs.name(c.segment)} · ID {c.idDocumentRef}{c.phone ? ` · ${c.phone}` : ''}</span></span>
                 <Badge tone={c.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{c.kycStatus === 'VERIFIED' ? 'KYC ✓' : 'KYC pending'}</Badge>
               </button></li>
             ))}
@@ -290,7 +290,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
       ) : (
         <Card>
           <form onSubmit={create} className="grid gap-4 sm:grid-cols-2">
-            <Field label="Segment"><Select value={f.segment} onChange={set('segment')}>{SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
+            <Field label="Segment"><Select value={f.segment} onChange={set('segment')}>{segs.list.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
             <Field label="Full name / company"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
             <Field label="ID document number" hint="NRIC, passport or UEN. Stored masked; used to spot duplicates."><Input required minLength={3} value={f.idDocument} onChange={set('idDocument')} /></Field>
             <Field label="Mobile number"><Input type="tel" value={f.phone} onChange={set('phone')} /></Field>
@@ -347,6 +347,7 @@ function Terms({ groups }: { groups: Array<{ group: string; title: string; point
 
 // ───────────────────────── 7. review ─────────────────────────
 export function ReviewStep({ w }: { w: Wizard }) {
+  const segs = useSegments();
   const q = w.quote;
   if (!q) return <Spinner />;
   return (
@@ -356,7 +357,7 @@ export function ReviewStep({ w }: { w: Wizard }) {
       <Card>
         <p className="text-footnote font-semibold uppercase tracking-wide text-label2">Customer</p>
         <p className="text-title3 font-semibold">{w.quick ? 'Walk-in sale' : w.customer?.displayName}</p>
-        {!w.quick && w.customer && <p className="text-subhead text-label2">{label(w.customer.segment ?? '')}{w.customer.kycStatus === 'VERIFIED' ? ' · KYC verified' : ''}</p>}
+        {!w.quick && w.customer && <p className="text-subhead text-label2">{segs.name(w.customer.segment ?? '')}{w.customer.kycStatus === 'VERIFIED' ? ' · KYC verified' : ''}</p>}
       </Card>
       {q.lines.map((l: any, i: number) => (
         <Card key={i}>
