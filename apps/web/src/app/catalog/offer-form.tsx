@@ -274,11 +274,12 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                   const upd = (p: Partial<FormState['deals'][number]>) => setF({ ...f, deals: f.deals.map((x, k) => (k === i ? { ...x, ...p } : x)) });
                   const price = Number(f.upfront || 0), cut = Number(d.subsidy || 0);
                   return (
-                    <div key={i} className="grid gap-2 rounded-control bg-surface2 p-3 sm:grid-cols-[130px_1fr_110px_auto] sm:items-end">
+                    <div key={i} className="grid gap-x-3 gap-y-2 rounded-control bg-surface2 p-3 sm:grid-cols-[150px_minmax(0,1fr)_130px_auto] sm:items-end">
                       <Field label="Contract"><Select value={d.term} onChange={(e) => upd({ term: e.target.value })}>{[12, 24, 36].filter((t) => String(t) === d.term || !f.deals.some((x) => x.term === String(t))).map((t) => <option key={t} value={t}>{t} months</option>)}</Select></Field>
-                      <Field label={`Subsidy (${currency})`} hint={cut > 0 && price > cut ? `Customer pays ${new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(price - cut)}` : 'Taken off the price'}><Input type="number" min="0" step={moneyStep()} value={d.subsidy} onChange={(e) => upd({ subsidy: e.target.value })} /></Field>
-                      <Field label="Free last months"><Input type="number" min="0" max="35" value={d.waive} onChange={(e) => upd({ waive: e.target.value })} /></Field>
+                      <Field label={`Subsidy (${currency})`}><Input type="number" min="0" step={moneyStep()} value={d.subsidy} onChange={(e) => upd({ subsidy: e.target.value })} /></Field>
+                      <Field label="Free months"><Input type="number" min="0" max="35" value={d.waive} onChange={(e) => upd({ waive: e.target.value })} /></Field>
                       <Button type="button" variant="plain" onClick={() => setF({ ...f, deals: f.deals.filter((_, k) => k !== i) })}>Remove</Button>
+                      <p className="text-footnote text-label2 sm:col-span-4">{cut > 0 && price > cut ? <>Customer pays <strong>{new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(price - cut)}</strong> on a {d.term}-month contract. No early-termination charge in the last {d.waive || 0} {Number(d.waive) === 1 ? 'month' : 'months'}.</> : 'Enter the amount taken off the price on this contract.'}</p>
                     </div>
                   );
                 })}
