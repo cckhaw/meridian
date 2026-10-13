@@ -2,35 +2,13 @@ import { createHash } from 'node:crypto';
 import type { Db, Queryable } from './db.js';
 import { audit } from './audit.js';
 import { invalid, rejected } from './errors.js';
+import { csvCell, parseCsv } from './csv.js';
 import { adjustStock, MAIN_WAREHOUSE } from './inventory.js';
 
+export { parseCsv };
 export const IMPORT_MAX_ROWS = 5000;
 const MAX_QTY = 1_000_000;
 const SKU_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$/;
-
-/** A small CSV reader: quoted cells, doubled quotes, commas and line breaks inside quotes, CRLF, a leading byte-order mark. Each row remembers the line it started on. */
-export function parseCsv(text: string): Array<{ line: number; cells: string[] }> {
-  const src = text.replace(/^﻿/, '');
-  const rows: Array<{ line: number; cells: string[] }> = [];
-  let cells: string[] = [], cell = '', quoted = false, line = 1, start = 1, touched = false;
-  const endCell = () => { cells.push(cell); cell = ''; };
-  const endRow = () => { endCell(); if (touched || cells.some((c) => c.length)) rows.push({ line: start, cells }); cells = []; touched = false; start = line + 1; };
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i]!;
-    if (quoted) {
-      if (ch === '"') { if (src[i + 1] === '"') { cell += '"'; i++; } else quoted = false; }
-      else { if (ch === '\n') line++; cell += ch; }
-    } else if (ch === '"' && cell === '') { quoted = true; touched = true; }
-    else if (ch === ',') { endCell(); touched = true; }
-    else if (ch === '\r') { /* part of CRLF */ }
-    else if (ch === '\n') { endRow(); line++; start = line; }
-    else { cell += ch; touched = true; }
-  }
-  if (quoted) throw invalid('The file has a quotation mark that is never closed.');
-  if (cell.length || cells.length || touched) endRow();
-  return rows;
-}
-const csvCell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
 
 export type ImportAction = 'RECEIVE' | 'REMOVE' | 'SET';
 const ACTIONS: Record<string, ImportAction> = { RECEIVE: 'RECEIVE', ADD: 'RECEIVE', IN: 'RECEIVE', REMOVE: 'REMOVE', WRITE_OFF: 'REMOVE', WRITEOFF: 'REMOVE', OUT: 'REMOVE', SET: 'SET', COUNT: 'SET' };

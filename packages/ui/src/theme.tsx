@@ -6,7 +6,7 @@ const KEY = 'meridian-theme';
 const Ctx = createContext<{ theme: Theme; toggle: () => void }>({ theme: 'light', toggle: () => {} });
 
 /** Inline in <head> to set the class before first paint (default: light, regardless of OS setting). */
-export const themeInitScript = `try{if(localStorage.getItem('${KEY}')==='dark')document.documentElement.classList.add('dark');if(localStorage.getItem('meridian-sidebar')==='hidden')document.documentElement.dataset.sidebar='hidden'}catch(e){}`;
+export const themeInitScript = `try{if(localStorage.getItem('${KEY}')==='dark')document.documentElement.classList.add('dark');var s=localStorage.getItem('meridian-sidebar');if(s==='hidden'||s==='rail')document.documentElement.dataset.sidebar=s}catch(e){}`;
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>('light');

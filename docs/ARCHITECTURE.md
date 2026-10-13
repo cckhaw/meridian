@@ -22,7 +22,7 @@
 - **Point of No Return**: a `POINT_OF_NO_RETURN` node flips a flag; later `cancelRequested` signals are rejected with a reason (`graph/pnr.ts`).
 - **Money** is integer minor units everywhere.
 - **Design system**: CSS-variable tokens (light default, `.dark` class), 44px minimum hit targets, safe-area insets, reduced-motion support.
-  Breakpoints: phone <768 (bottom tab bar), tablet 768–1023 (drawer), desktop ≥1024 (sidebar).
+  Breakpoints: phone <768 (bottom tab bar), tablet 768–1023 (drawer), desktop ≥1024 (sidebar). On desktop the sidebar's collapse button offers **Icons only** (a 72px rail: every place stays one click away, with its name on hover) or **Hide completely** (full page width, with a Show button). The choice is remembered, and Ctrl/⌘ + \ toggles between expanded and the way it was last collapsed.
 
 ## How the working system fits together
 - `apps/web` route handlers (`src/server/router.ts`) validate input with zod and call `@meridian/core`; pages are client components over that API.
