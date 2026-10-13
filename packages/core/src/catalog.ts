@@ -13,7 +13,7 @@ export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'>
 const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
   const d = r.data ?? {};
   return {
-    id: r.id, level: r.level, code: r.code, name: r.name, path: r.path, parentId: r.parentId, status: r.status,
+    id: r.id, level: r.level, code: r.code, name: r.name, path: r.path, parentId: r.parentId, status: r.status, activeFrom: r.activeFrom ? new Date(r.activeFrom).toISOString() : null,
     markets: r.markets, version: r.version, createdAt: r.createdAt, updatedAt: r.updatedAt, sortOrder: r.sortOrder ?? 0,
     ...(r.level === 'NETWORK_TYPE' ? { networkType: d.networkType } : {}),
     ...(r.level === 'OFFER'
@@ -225,8 +225,8 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
   const next = (await q.query('SELECT COALESCE(max(sort_order), 0) + 10 AS n FROM catalog_nodes WHERE parent_id IS NOT DISTINCT FROM $1', [input.parentId ?? null])).rows[0]!.n as number;
   try {
     await q.query(
-      `INSERT INTO catalog_nodes (id, level, code, name, path, parent_id, status, kind, markets, data, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [input.id, input.level, input.id, input.name, path, input.parentId ?? null, input.status ?? 'DRAFT', input.kind ?? null, input.markets ?? [], JSON.stringify(data), next],
+      `INSERT INTO catalog_nodes (id, level, code, name, path, parent_id, status, kind, markets, data, sort_order, active_from) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [input.id, input.level, input.id, input.name, path, input.parentId ?? null, input.status ?? 'DRAFT', input.kind ?? null, input.markets ?? [], JSON.stringify(data), next, input.status === 'SCHEDULED' ? scheduleDate(input.activeFrom) : null],
     );
   } catch (e) {
     if (/duplicate key/.test((e as Error).message)) throw conflict(`catalog node ${input.id} or path ${path} already exists`);
@@ -312,11 +312,27 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
   return getNode(q, id);
 }
 
-export async function setStatus(q: Queryable, id: string, status: 'ACTIVE' | 'RETIRED' | 'DRAFT', actor = 'system') {
-  const r = await q.query('UPDATE catalog_nodes SET status=$2, version=version+1, updated_at=now() WHERE id=$1', [id, status]);
+/** A go-live date must be a real date in the future. */
+function scheduleDate(v: string | null | undefined): Date {
+  const d = v ? new Date(v) : null;
+  if (!d || Number.isNaN(d.getTime())) throw invalid('choose the date it goes live');
+  if (d.getTime() <= Date.now()) throw invalid('the go-live date must be in the future');
+  return d;
+}
+
+export async function setStatus(q: Queryable, id: string, status: 'ACTIVE' | 'RETIRED' | 'DRAFT' | 'SCHEDULED', actor = 'system', activeFrom?: string | null) {
+  const when = status === 'SCHEDULED' ? scheduleDate(activeFrom) : null;
+  const r = await q.query('UPDATE catalog_nodes SET status=$2, active_from=$3, version=version+1, updated_at=now() WHERE id=$1', [id, status, when]);
   if (!r.rowCount) throw notFound('catalog node', id);
-  await audit(q, actor, 'catalog', id, `STATUS_${status}`);
+  await audit(q, actor, 'catalog', id, `STATUS_${status}`, when ? { activeFrom: when.toISOString() } : undefined);
   return getNode(q, id);
+}
+
+/** Makes every scheduled node whose date has arrived live. Cheap (partial index), so it is safe to call often. */
+export async function activateDueNodes(q: Queryable): Promise<number> {
+  const r = await q.query(`UPDATE catalog_nodes SET status='ACTIVE', version=version+1, updated_at=now() WHERE status='SCHEDULED' AND active_from <= now() RETURNING id`);
+  for (const row of r.rows) await audit(q, 'system', 'catalog', row.id as string, 'STATUS_ACTIVE', { scheduled: true });
+  return r.rowCount ?? 0;
 }
 
 /** Moves a node under another parent of the correct level and rewrites the paths of everything beneath it. */
