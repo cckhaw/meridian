@@ -508,7 +508,7 @@ describe('settings and branding', () => {
     const su = await root();
     const s = await call('GET', '/settings', { cookie: su });
     expect(s.status).toBe(200);
-    expect(s.json.themes).toHaveLength(7);
+    expect(s.json.themes).toHaveLength(8);
     expect(s.json.logoGuidance).toMatchObject({ width: 480, height: 120 });
     expect((await call('GET', '/auth/me', { cookie: su })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(true);
     expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(false);
