@@ -5,11 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, post, useAction, useApi, useDebounced } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { money } from '@/lib/format';
+import type { Party } from './steps';
 import { AddonsStep, CustomerStep, DeliveryStep, DeviceStep, PayStep, PaymentStep, ProductStep, ReviewStep, type Wizard } from './steps';
 import { financeable, lineBody, newItem, type Cust, type Item, type StepId } from './wizard-types';
 import { Row, StepFrame, Stepper } from './wizard-ui';
 
-const ALL_CHANNELS = ['SELF_SERVE', 'RETAIL_ASSISTED', 'QUICK_SALE', 'TELESALES', 'DEALER', 'CALL_CENTER'];
+// Every CRM order is staff-assisted. Self-serve orders come from the store-front, so that channel is not offered here.
+const ALL_CHANNELS = ['RETAIL_ASSISTED', 'QUICK_SALE', 'CALL_CENTER', 'TELESALES', 'DEALER'];
 
 /**
  * A guided order: plan, device, add-ons, how to pay, customer, delivery, review, payment. One decision per screen, with the running total always in view.
@@ -19,7 +21,8 @@ export function NewOrder() {
   const { me, can } = useAuth();
   const sp = useSearchParams();
   const router = useRouter();
-  const channels = ALL_CHANNELS.filter((c) => can(`order:create:${c}`));
+  // A quick sale is rung up at the signed-in user's own store, so only store users are offered it.
+  const channels = ALL_CHANNELS.filter((c) => can(`order:create:${c}`) && (c !== 'QUICK_SALE' || !!me?.storeId));
   const wanted = sp.get('channel');
   const [channel, setChannelRaw] = useState(wanted && channels.includes(wanted) ? wanted : channels[0] ?? '');
   const portal = !!me?.customerId && !can('customer:search');
@@ -29,7 +32,8 @@ export function NewOrder() {
   const [customer, setCustomer] = useState<Cust | null>(null);
   const [accountId, setAccountId] = useState('');
   const [store, setStore] = useState(me?.storeId ?? '');
-  const [dealer, setDealer] = useState(me?.dealerId ?? '');
+  const [dealer, setDealer] = useState<Party | null>(null);
+  const [agent, setAgent] = useState<Party | null>(null);
   const [address, setAddress] = useState('');
   const [slot, setSlot] = useState('');
   const [pay, setPay] = useState({ method: 'CASH', reference: '', received: true });
@@ -92,7 +96,7 @@ export function NewOrder() {
   const blocked: string | null = (() => {
     if (quoteError && stepId !== 'product') return quoteError;
     switch (stepId) {
-      case 'product': return items.length === 0 ? 'Choose at least one item to continue.' : retail && !(me?.storeId || store) ? 'Choose the store first.' : channel === 'DEALER' && !(me?.dealerId || dealer) ? 'Enter the dealer first.' : null;
+      case 'product': return items.length === 0 ? 'Choose at least one item to continue.' : retail && !(me?.storeId || store) ? 'Choose the store first.' : channel === 'DEALER' && !dealer ? 'Choose the dealer first.' : channel === 'DEALER' && !agent ? 'Choose the dealer’s agent who made the sale.' : null;
       case 'device': return items.some((i) => i.offer.variants?.length && !i.variantId) ? 'Choose a colour and storage.' : null;
       case 'payment': return quoteError;
       case 'customer': return !customer ? 'Choose or create the customer to continue.' : problems[0] ?? null;
@@ -110,14 +114,14 @@ export function NewOrder() {
     const o = await run(() => post('/orders', {
       ...body, installationSlot: slot ? new Date(slot).toISOString() : undefined, deliveryAddress: address || undefined,
       payment: { method: (quote?.dueNowMinor ?? 0) > 0 ? pay.method : 'CASH', reference: pay.reference || undefined, confirmed: cashier && pay.received && (quote?.dueNowMinor ?? 0) > 0 ? true : undefined },
-      storeId: retail ? me?.storeId || store || undefined : undefined, dealerId: channel === 'DEALER' ? me?.dealerId || dealer || undefined : undefined,
+      storeId: retail ? me?.storeId || store || undefined : undefined, dealerId: channel === 'DEALER' ? dealer?.id : undefined, dealerAgentId: channel === 'DEALER' ? agent?.id : undefined,
     }, { 'idempotency-key': idemKey.current }));
     if (o) router.push(`/orders/${o.id}`);
   };
 
   if (channels.length === 0) return <Alert tone="info">Your role cannot create orders.</Alert>;
   const w: Wizard = {
-    channel, channels, setChannel, store, setStore, storeOptions: (stores.data?.items ?? []).filter((l) => l.startsWith('STORE-')), dealer, setDealer, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
+    channel, channels, setChannel, store, setStore, storeOptions: (stores.data?.items ?? []).filter((l) => l.startsWith('STORE-')), dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
     address, setAddress, slot, setSlot, pay, setPay, consent, setConsent, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };

@@ -95,14 +95,9 @@ Currency: the gateway receives the order’s currency and integer minor-unit amo
 
 ## 6. Assisted sales (customer in the store)
 
-For a shop assistant (`store:assist`; the *Retail Store* role has it) with the customer physically present: **Assisted sale** in the CRM.
+Every order taken in the CRM is an assisted sale, so there is no separate menu for it: staff use **New order** and the **Selling through** panel there (see [Orders](ORDERS.md#selling-through)). The customer is found or created by ID in the order wizard and KYC rules apply as for any order.
 
-1. Choose the customer (new, or an existing one) and the basket (prices and prerequisites worked out by the CRM; existing customers can add, say, Device Care to a phone they already own).
-2. Enter their details; **check the original ID in person** and tick that it is valid, matches, and the photo matches the customer (`kyc:attest`). The same age/expiry/duplicate rules run; a duplicate ID refers the case to compliance instead of approving it. An already-verified customer only needs to be confirmed present.
-3. **Customer’s authority.** The customer accepts the terms and privacy notice, authorises the named assistant to complete the order on their behalf, and **signs on screen**. The signature image is stored with the KYC evidence and the consent (who, when, which terms version) is stored on the application.
-4. **Payment** is taken on the counter (cash, terminal, QR) with a receipt number, by someone holding `order:payment`, and the sale completes. The order is on the `RETAIL_ASSISTED` channel with the store and assistant attributed (commission, stock, store-scoped visibility), exactly like any counter sale.
-
-Assistants see only their own store’s applications. Identity fields freeze once KYC is decided; only the delivery address and the signed consent can still be added.
+The step-by-step assisted-application API (`/api/assisted/*`: ID sighting, signed consent, checkout) is still served for integrations, but the CRM no longer has a screen for it.
 
 ## 7. Limits of this release
 

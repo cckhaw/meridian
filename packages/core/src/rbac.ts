@@ -25,6 +25,7 @@ const CORE_PERMISSIONS = [
   'inventory:read', 'inventory:write',
   'case:read', 'case:create', 'case:write',
   'commission:read',
+  'dealer:read', 'dealer:manage', // dealers and their agents are master data kept in the CRM
   'audit:read',
   'user:manage',
   'store:assist', 'kyc:attest', 'kyc:review',
@@ -39,7 +40,7 @@ export const isPermission = (p: string): p is Permission => (ALL_PERMISSIONS as 
 
 export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
-  'retail-store', 'dealer', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance',
+  'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance',
 ] as const;
 export type RoleId = (typeof ROLE_IDS)[number];
 export const isRoleId = (r: string): r is RoleId => (ROLE_IDS as readonly string[]).includes(r);
@@ -109,7 +110,12 @@ export const ROLES: Record<RoleId, RoleDef> = {
   dealer: {
     id: 'dealer', label: 'Dealer', scope: 'dealer', home: '/orders/new?channel=DEALER',
     summary: 'A partner who sells for the operator. Sees only their own orders and commission.',
-    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'commission:read'],
+    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'commission:read', 'dealer:read'],
+  },
+  'dealer-desk': {
+    id: 'dealer-desk', label: 'Dealer Desk', scope: 'staff', home: '/orders/new?channel=DEALER',
+    summary: 'Operator staff who keep the dealers and their agents and place orders on a dealer’s behalf, naming the dealer and the agent who sold it.',
+    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'order:payment', 'commission:read', 'dealer:read', 'dealer:manage'],
   },
   'customer-service': {
     id: 'customer-service', label: 'Customer Service', scope: 'staff', home: '/cases', creditLimitMinor: 20_000,
@@ -140,7 +146,7 @@ export const ROLES: Record<RoleId, RoleDef> = {
 };
 
 /** Priority for choosing the landing page when a user holds several roles. */
-const HOME_PRIORITY: RoleId[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
+const HOME_PRIORITY: RoleId[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
 
 // ───────────────────────── modules (navigation) ─────────────────────────
 export interface ModuleDef {
@@ -156,7 +162,6 @@ export const MODULES: ModuleDef[] = [
   { id: 'overview', label: 'Overview', href: '/', icon: 'house', anyOf: ['dashboard:read'] },
   { id: 'customers', label: 'Customers', href: '/customers', icon: 'person', anyOf: ['customer:search'] },
   { id: 'sell', label: 'New order', href: '/orders/new', icon: 'bag', anyOf: ALL_PERMISSIONS.filter((p) => p.startsWith('order:create:')) as Permission[] },
-  { id: 'assisted', label: 'Assisted sale', href: '/assisted', icon: 'check', anyOf: ['store:assist'] },
   { id: 'orders', label: 'Orders', href: '/orders', icon: 'box', anyOf: ['order:read'] },
   { id: 'billing', label: 'Billing', href: '/billing', icon: 'doc', anyOf: ['billing:read'] },
   { id: 'cases', label: 'Cases', href: '/cases', icon: 'bubble', anyOf: ['case:read'] },
@@ -165,6 +170,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'catalog', label: 'Catalog', href: '/catalog', icon: 'grid', anyOf: ['catalog:read'] },
   { id: 'inventory', label: 'Inventory', href: '/inventory', icon: 'cube', anyOf: ['inventory:read'] },
   { id: 'finance', label: 'Finance', href: '/finance', icon: 'ledger', anyOf: ['finance:read'] },
+  { id: 'dealers', label: 'Dealers', href: '/dealers', icon: 'store', anyOf: ['dealer:read'] },
   { id: 'commission', label: 'Commission', href: '/dealer/commission', icon: 'coins', anyOf: ['commission:read'] },
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
   { id: 'settings', label: 'Settings', href: '/admin/settings', icon: 'gear', anyOf: ['settings:manage'] },

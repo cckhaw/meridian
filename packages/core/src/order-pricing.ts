@@ -209,7 +209,7 @@ export interface OrderQuote {
   lines: OrderQuoteLine[]; bundles: Priced['bundles'];
   dueNowMinor: number; monthlyPlanMinor: number; monthlyInstalmentMinor: number; monthlyTotalMinor: number; discountMinor: number;
   problems: string[];
-  groups: Array<{ group: GroupKind; title: string; text: string; items: string[] }>;
+  groups: Array<{ group: GroupKind; title: string; text: string; points: Array<{ when: string; what: string }>; items: string[] }>;
   needs: { delivery: boolean; installation: boolean; customer: boolean };
   installationSlaDays: number | null;
 }

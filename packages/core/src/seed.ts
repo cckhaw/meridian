@@ -7,6 +7,7 @@ import { addDays, dayOf, today } from './dates.js';
 import { adjustStock } from './inventory.js';
 import { placeOrder } from './orders.js';
 import { createCase } from './cases.js';
+import { createAgent, createDealer } from './dealers.js';
 
 const sgd = (amountMinor: number) => ({ amountMinor, currency: 'SGD' as const });
 const base = { status: 'ACTIVE' as const, markets: ['SG'], parentId: null };
@@ -114,6 +115,9 @@ export async function seedReference(db: Db): Promise<void> {
 /** Demo tenants created through the real order/billing code paths, with history backdated so bills, an overdue account and a suspension exist. */
 export async function seedDemo(db: Db): Promise<void> {
   if ((await db.query(`SELECT 1 FROM customers WHERE display_name='Tan Wei Ming' LIMIT 1`)).rows.length) return;
+  await createDealer(db, 'seed', { id: 'dealer-orbit', name: 'Orbit Mobile Partners', contactName: 'Priya Nair', email: 'partners@orbit.example.com' });
+  const orbitAgent = await createAgent(db, 'seed', 'dealer-orbit', { name: 'Marcus Teo', phone: '+6591110000' });
+  await createAgent(db, 'seed', 'dealer-orbit', { name: 'Aisha Rahman', phone: '+6592220000' });
   const retail = { storeId: 'STORE-SG-001', salespersonId: 'agent-lee' };
   const mk = async (name: string, doc: string, extra: Partial<Parameters<typeof createCustomer>[1]> = {}) =>
     (await createCustomer(db, { segment: 'CONSUMER', displayName: name, idDocument: doc, email: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`, phone: '+6590000000', ...extra }));
@@ -133,7 +137,7 @@ export async function seedDemo(db: Db): Promise<void> {
   const acme = await mk('Acme Holdings Pte Ltd', 'UEN201912345K', { segment: 'ENTERPRISE' });
   for (const dept of ['Finance', 'Engineering', 'Operations']) {
     const d = await mk(`Acme ${dept}`, 'UEN201912345K', { segment: 'ENTERPRISE', parentCustomerId: acme.customer.id });
-    await placeOrder(db, { customerId: d.customer.id, channel: 'DEALER', attribution: { dealerId: 'dealer-orbit' }, payment: { method: 'INSTALLMENT', installmentMonths: 12 }, lines: [{ offerId: 'plan-phone-12', quantity: 3 }] });
+    await placeOrder(db, { customerId: d.customer.id, channel: 'DEALER', attribution: { dealerId: 'dealer-orbit', dealerAgentId: orbitAgent.id as string }, payment: { method: 'INSTALLMENT', installmentMonths: 12 }, lines: [{ offerId: 'plan-phone-12', quantity: 3 }] });
   }
   const orbit = await mk('Orbit Logistics IoT', 'UEN201898765Z', { segment: 'IOT_ENTERPRISE' });
   await placeOrder(db, { customerId: orbit.customer.id, channel: 'CALL_CENTER', payment: { method: 'CASH' }, lines: [{ offerId: 'iot-m2m', quantity: 5000 }] });
@@ -147,10 +151,13 @@ export async function seedDemo(db: Db): Promise<void> {
   // ── history: pretend the services went live 3 months ago, then run bill cycles ──
   await db.query(`UPDATE services SET activated_at = now() - interval '100 days', contract_start = now() - interval '100 days' WHERE customer_id <> $1`, [wei.customer.id]);
   await db.query(`UPDATE services SET activated_at = now() - interval '40 days', contract_start = now() - interval '40 days' WHERE customer_id = $1`, [wei.customer.id]);
+  // Bill cycle days run 1-28, so the demo bills on the nearest earlier day that is one.
+  const cycleDay = (d: string) => { while (dayOf(d) > 28) d = addDays(d, -1); return d; };
   const t = today();
-  await db.query(`UPDATE accounts SET bill_cycle_day = $1 WHERE customer_id <> $2`, [dayOf(t), olivia.customer.id]);
-  await runBillCycle(db, t); // this month's invoices for everyone (Olivia excluded)
-  const oldDate = addDays(t, -45);
+  const billDate = cycleDay(t);
+  await db.query(`UPDATE accounts SET bill_cycle_day = $1 WHERE customer_id <> $2`, [dayOf(billDate), olivia.customer.id]);
+  await runBillCycle(db, billDate); // this month's invoices for everyone (Olivia excluded)
+  const oldDate = cycleDay(addDays(t, -45));
   await db.query(`UPDATE accounts SET bill_cycle_day = $1 WHERE customer_id = $2`, [dayOf(oldDate), olivia.customer.id]);
   await runBillCycle(db, oldDate); // Olivia's invoice, issued 45 days ago and never paid
   await runDunning(db, t); // -> overdue, services suspended

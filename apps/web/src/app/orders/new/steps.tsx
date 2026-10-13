@@ -4,12 +4,16 @@ import { useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { label, money, step as moneyStep } from '@/lib/format';
 import { Row, Section } from './wizard-ui';
+import { SellingPanel } from './selling-panel';
 import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, newItem, type Cust, type Item } from './wizard-types';
+
+export interface Party { id: string; name: string }
 
 /** Everything the steps share. The shell owns it so going back and forward never loses a choice. */
 export interface Wizard {
   channel: string; channels: string[]; setChannel: (c: string) => void;
-  store: string; setStore: (s: string) => void; storeOptions: string[]; dealer: string; setDealer: (s: string) => void;
+  store: string; setStore: (s: string) => void; storeOptions: string[];
+  dealer: Party | null; setDealer: (d: Party | null) => void; agent: Party | null; setAgent: (a: Party | null) => void; soldBy: { name: string; username: string };
   quick: boolean; retail: boolean; portal: boolean; cashier: boolean; manual: boolean; marketCode: string; fixedStore?: string | null; fixedDealer?: string | null;
   items: Item[]; setItems: (f: (cur: Item[]) => Item[]) => void;
   quote: any | null; quoting: boolean; quoteError: string | null;
@@ -62,13 +66,7 @@ function OfferPicker({ w, kind, placeholder, noteFor }: { w: Wizard; kind: strin
 export function ProductStep({ w }: { w: Wizard }) {
   return (
     <>
-      {(w.channels.length > 1 || w.retail || w.channel === 'DEALER') && (
-        <Card className="mb-5"><div className="grid gap-4 sm:grid-cols-2">
-          {w.channels.length > 1 && <Field label="Selling through"><Select value={w.channel} onChange={(e) => w.setChannel(e.target.value)}>{w.channels.map((c) => <option key={c} value={c}>{label(c)}</option>)}</Select></Field>}
-          {w.retail && (w.fixedStore ? <Field label="Store"><Input readOnly value={w.fixedStore} /></Field> : <Field label="Store"><Select value={w.store} onChange={(e) => w.setStore(e.target.value)}><option value="">Choose a store…</option>{w.storeOptions.map((s) => <option key={s}>{s}</option>)}</Select></Field>)}
-          {w.channel === 'DEALER' && (w.fixedDealer ? <Field label="Dealer"><Input readOnly value={w.fixedDealer} /></Field> : <Field label="Dealer ID"><Input value={w.dealer} onChange={(e) => w.setDealer(e.target.value)} /></Field>)}
-        </div></Card>
-      )}
+      {!w.portal && <SellingPanel w={w} />}
       {w.kindHint && <p className="mb-3 text-subhead text-label2">Showing {label(w.kindHint.split(',')[0]!).toLowerCase()} only · <button className="text-accent" onClick={w.clearKindHint}>Show everything</button></p>}
       <OfferPicker w={w} kind={w.quick ? 'PHYSICAL_GOOD' : w.kindHint ?? PRODUCT_KINDS} placeholder={w.quick ? 'Search goods' : 'Search plans and products'} noteFor={(o) => (o.fulfilment?.requiresInstallation ? 'Needs an installation visit' : undefined)} />
     </>
@@ -325,8 +323,24 @@ export function DeliveryStep({ w }: { w: Wizard }) {
       )}
       <div className="rounded-card bg-surface p-4 shadow-card">
         <p className="mb-2 text-subhead font-semibold">When you can still cancel</p>
-        <ul className="space-y-2 text-subhead text-label2">{(w.quote?.groups ?? []).map((g: any) => <li key={g.group}><strong className="text-label">{g.title}.</strong> {g.text}</li>)}</ul>
+        <Terms groups={w.quote?.groups ?? []} />
       </div>
+    </div>
+  );
+}
+
+/** Changing their mind: one block per part of the order, with a short point for each moment (before, during, after), in the order they happen. */
+function Terms({ groups }: { groups: Array<{ group: string; title: string; points: Array<{ when: string; what: string }> }> }) {
+  return (
+    <div className="space-y-4">
+      {groups.map((g) => (
+        <section key={g.group} aria-label={g.title}>
+          <h4 className="text-subhead font-semibold">{g.title}</h4>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-subhead text-label2 marker:text-label3">
+            {g.points.map((p, i) => <li key={i}><span className="text-label">{p.when}:</span> {p.what}.</li>)}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
@@ -381,7 +395,7 @@ export function ReviewStep({ w }: { w: Wizard }) {
       </Card>
       <Card>
         <p className="mb-2 text-subhead font-semibold">Changing their mind</p>
-        <ul className="space-y-2 text-subhead text-label2">{q.groups.map((g: any) => <li key={g.group}><strong className="text-label">{g.title}.</strong> {g.text}</li>)}</ul>
+        <Terms groups={q.groups} />
         <label className="mt-4 flex min-h-tap items-start gap-3 text-body"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={w.consent} onChange={(e) => w.setConsent(e.target.checked)} />The customer has been told what they pay today and each month, the contract, and when the order can be cancelled.</label>
       </Card>
     </div>

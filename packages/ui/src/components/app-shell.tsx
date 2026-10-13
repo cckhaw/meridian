@@ -36,7 +36,7 @@ function activeId(nav: NavItem[], path: string): string | undefined {
 /** Sidebar sections: what you do, grouped by the job it belongs to. Modules not listed fall under "More". */
 const GROUPS: Array<{ label: string; ids: string[] }> = [
   { label: '', ids: ['overview'] },
-  { label: 'Sell', ids: ['sell', 'assisted'] },
+  { label: 'Sell', ids: ['sell', 'dealers'] },
   { label: 'Customers & service', ids: ['customers', 'orders', 'cases', 'mnp', 'kyc'] },
   { label: 'Money', ids: ['billing', 'finance', 'commission'] },
   { label: 'Products & stock', ids: ['catalog', 'inventory'] },
@@ -208,4 +208,4 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
 }
 
 /** Modules that have their own icon (anything else falls back to the icon name the server sent). */
-const ID_ICON: Record<string, true> = { overview: true, customers: true, sell: true, assisted: true, orders: true, billing: true, cases: true, kyc: true, mnp: true, catalog: true, inventory: true, finance: true, commission: true, users: true, settings: true, audit: true, account: true };
+const ID_ICON: Record<string, true> = { overview: true, customers: true, sell: true, dealers: true, orders: true, billing: true, cases: true, kyc: true, mnp: true, catalog: true, inventory: true, finance: true, commission: true, users: true, settings: true, audit: true, account: true };
