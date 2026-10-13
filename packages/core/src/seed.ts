@@ -94,7 +94,8 @@ export async function seedReference(db: Db): Promise<void> {
       const gp = groupParent.get(o.group)!;
       await createNode(q, { ...base, id: o.id, level: 'OFFER', code: o.id, name: o.name, path: `${gp}/${o.id}`, parentId: `grp-${o.group}`, kind: o.kind, prices: o.prices,
         contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode, description: o.description, characteristics: {}, requires: o.requires ?? [], excludes: o.excludes ?? [],
-        variants: o.fulfilment.inventorySkus.includes('PHONE-X1-128') ? PHONE_VARIANTS : [] } as never);
+        variants: o.fulfilment.inventorySkus.includes('PHONE-X1-128') ? PHONE_VARIANTS : [],
+        deals: o.id === 'good-phone-outright' ? [{ termMonths: 12, subsidyMinor: 20000, waiveInLastMonths: 1 }, { termMonths: 24, subsidyMinor: 40000, waiveInLastMonths: 1 }] : [] } as never);
     }
     for (const [offerId, items] of Object.entries(LINE_ITEMS)) {
       for (const [i, it] of items.entries()) {

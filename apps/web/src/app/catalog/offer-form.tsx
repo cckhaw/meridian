@@ -19,12 +19,14 @@ interface FormState {
   term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string;
   requires: string[]; excludes: string[]; channels: string[]; status: string; activeFrom: string;
   variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
+  /** Contracts this device can be bought on with a plan. */
+  deals: Array<{ term: string; subsidy: string; waive: string }>;
 }
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: '', description: '', market, recurring: '', upfront: '', taxInclusive: true,
   term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '',
-  requires: [], excludes: [], channels: [], status: 'DRAFT', activeFrom: '', variants: [],
+  requires: [], excludes: [], channels: [], status: 'DRAFT', activeFrom: '', variants: [], deals: [],
 });
 
 /** Offers saved before fulfilment options existed carry only the flags; show them as the built-in options they correspond to. */
@@ -39,6 +41,7 @@ function fromOffer(o: any, market: string): FormState {
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
     options: optionsOf(o.fulfilment), skus: (o.fulfilment?.inventorySkus ?? []).join(', '), trackSim: (o.fulfilment?.inventorySkus ?? []).length > 0,
     partner: o.partnerCode ?? '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
+    deals: (o.deals ?? []).map((d: any) => ({ term: String(d.termMonths), subsidy: major(d.subsidyMinor), waive: String(d.waiveInLastMonths ?? 1) })),
     variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
   };
 }
@@ -151,7 +154,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
     ...(etcMethod === 'SUBSIDY_AMORTISED' ? { subsidy: { subsidyAmount: money(f.subsidy || '0'), deviceRetailPrice: money(f.retail || '0') } } : {}),
   };
   const fulfilment = { options: f.options, inventorySkus: tracksStock ? csv(f.skus) : [] };
-  const common = { name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
+  const deals = b?.outright ? f.deals.filter((d) => d.subsidy).map((d) => ({ termMonths: Number(d.term), subsidyMinor: toMinor(d.subsidy), waiveInLastMonths: Number(d.waive || 1) })) : [];
+  const common = { deals, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
     variants: hasDevice && tracksStock ? f.variants.filter((v) => v.colour.trim() && v.sku.trim()).map((v) => ({ id: slug(`${v.colour}-${v.storage}`) || slug(v.sku), colour: v.colour.trim(), storage: v.storage.trim() || undefined, sku: v.sku.trim(), priceDeltaMinor: v.delta ? toMinor(v.delta) : undefined })) : [] };
 
   // What stops the person moving on from this step, in words.
@@ -262,6 +266,25 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                 )}
               </Card>
             )}
+            {b.outright && (
+              <Card className="space-y-3">
+                <div><p className="font-medium">Also sell on a contract with a plan</p>
+                  <p className="text-footnote text-label2">Optional. The customer pays the price above less the subsidy, can spread it over the contract, and ends up with a contract on whichever plan they pick. If they leave early they repay the subsidy that is left.</p></div>
+                {f.deals.map((d, i) => {
+                  const upd = (p: Partial<FormState['deals'][number]>) => setF({ ...f, deals: f.deals.map((x, k) => (k === i ? { ...x, ...p } : x)) });
+                  const price = Number(f.upfront || 0), cut = Number(d.subsidy || 0);
+                  return (
+                    <div key={i} className="grid gap-2 rounded-control bg-surface2 p-3 sm:grid-cols-[130px_1fr_110px_auto] sm:items-end">
+                      <Field label="Contract"><Select value={d.term} onChange={(e) => upd({ term: e.target.value })}>{[12, 24, 36].filter((t) => String(t) === d.term || !f.deals.some((x) => x.term === String(t))).map((t) => <option key={t} value={t}>{t} months</option>)}</Select></Field>
+                      <Field label={`Subsidy (${currency})`} hint={cut > 0 && price > cut ? `Customer pays ${new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(price - cut)}` : 'Taken off the price'}><Input type="number" min="0" step={moneyStep()} value={d.subsidy} onChange={(e) => upd({ subsidy: e.target.value })} /></Field>
+                      <Field label="Free last months"><Input type="number" min="0" max="35" value={d.waive} onChange={(e) => upd({ waive: e.target.value })} /></Field>
+                      <Button type="button" variant="plain" onClick={() => setF({ ...f, deals: f.deals.filter((_, k) => k !== i) })}>Remove</Button>
+                    </div>
+                  );
+                })}
+                {f.deals.length < 3 && <Button type="button" variant="secondary" onClick={() => setF({ ...f, deals: [...f.deals, { term: ([12, 24, 36].find((t) => !f.deals.some((x) => x.term === String(t))) ?? 24).toString(), subsidy: '', waive: '1' }] })}>Add a contract</Button>}
+              </Card>
+            )}
           </div>
         )}
 
@@ -361,6 +384,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                 <Line k="Type" v={`${type?.name ?? '—'}`} onEdit={() => go(steps.indexOf('basics'))} />
                 <Line k="Group" v={where || names[f.parentId] || '—'} onEdit={() => go(steps.indexOf('basics'))} />
                 <Line k="Price" v={[f.recurring && b.role !== 'GOODS' ? `${f.recurring} ${currency}/month` : '', f.upfront ? `${f.upfront} ${currency} ${upfrontLabel.toLowerCase()}` : ''].filter(Boolean).join(' · ') || '—'} onEdit={() => go(steps.indexOf('pricing'))} />
+                {b.outright && f.deals.some((d) => d.subsidy) && <Line k="On a contract with a plan" v={f.deals.filter((d) => d.subsidy).map((d) => `${d.term} months`).join(', ')} onEdit={() => go(steps.indexOf('pricing'))} />}
                 {b.contract !== 'none' && <Line k="Contract" v={term ? `${term} months` : 'None'} onEdit={() => go(steps.indexOf('pricing'))} />}
                 {steps.includes('fulfilment') && <Line k="Fulfilment" v={chosenOptions.map((o: any) => o.name).join(', ') || '—'} onEdit={() => go(steps.indexOf('fulfilment'))} />}
                 {steps.includes('stock') && <Line k="Stock" v={[csv(f.skus).join(', '), f.variants.filter((v) => v.colour.trim()).length ? `${f.variants.filter((v) => v.colour.trim()).length} colour/storage options` : ''].filter(Boolean).join(' · ') || 'No SKUs'} onEdit={() => go(steps.indexOf('stock'))} />}

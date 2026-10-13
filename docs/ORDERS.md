@@ -131,3 +131,7 @@ An offer can be delivered, collected in store, or both (Settings → Catalog →
 - Staff mark the order **Ready for collection**, then **Customer has collected**. Until it is collected the goods have not left the store, so the order can still be cancelled with a full refund; once collected, the return rules apply as for delivered goods.
 - Offers that can only be collected are sold in store and through staff channels, not in the online shop.
 
+
+## Device on a contract with a plan
+
+A device sold outright can also be bought on a contract with a plan (see Catalog → Devices on a contract with a plan). In the new-order wizard's Device step, choose **On a contract**, the plan and the length. The order line carries the plan it belongs to and the contract; the device price is the retail price less the subsidy and can be paid by instalments no longer than the contract. The plan switches on when the device is delivered, with the contract, and the device instalments are billed on the plan. The terms are saved with the service, so an early-termination charge (the unearned subsidy, nothing in the free last months) never changes when the catalog does. Cancelling the plan alone is refused while its device is part of the order; returning the device in the cooling-off period keeps the plan and ends the contract and the instalments without a charge.
