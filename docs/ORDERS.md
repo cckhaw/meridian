@@ -135,3 +135,7 @@ An offer can be delivered, collected in store, or both (Settings → Catalog →
 ## Device on a contract with a plan
 
 A device sold outright can also be bought on a contract with a plan (see Catalog → Devices on a contract with a plan). In the new-order wizard's Device step, choose **On a contract**, the plan and the length. The order line carries the plan it belongs to and the contract; the device price is the retail price less the subsidy and can be paid by instalments no longer than the contract. The plan switches on when the device is delivered, with the contract, and the device instalments are billed on the plan. The terms are saved with the service, so an early-termination charge (the unearned subsidy, nothing in the free last months) never changes when the catalog does. Cancelling the plan alone is refused while its device is part of the order; returning the device in the cooling-off period keeps the plan and ends the contract and the instalments without a charge.
+
+### In the online shop
+
+The shop lists each device's contracts (for example "24 months: $599 today, save $400") on its card. With a SIM plan in the basket, choosing a device offers **On a contract**: the plan, and the length. The basket total, the sign-up review and the order all use the contract price from the server, and the device is paid in full with the rest of the order (the shop does not offer instalments). The cart lines carry `attachTo` (the plan's offer id) and `dealTermMonths` through `/store/quote`, `/store/applications` and checkout.

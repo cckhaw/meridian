@@ -286,7 +286,7 @@ route('DELETE', '/settings/logo', 'settings:manage', async ({ db, user }) => bra
 const clientRoute = (method: string, path: string, h: (c: PublicCtx & { client: core.ApiClient }) => unknown, extra: Partial<Route> = {}) =>
   route(method, path, null, h as unknown as Handler, { client: true, ...extra });
 const selfAccess = (c: { client: core.ApiClient; req: Request }): core.AppAccess => ({ channel: 'SELF_SERVE', clientId: c.client.id, token: c.req.headers.get('x-application-token') ?? undefined });
-const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional() })).min(1).max(10) });
+const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional(), attachTo: z.string().max(80).optional(), dealTermMonths: z.number().int().optional() })).min(1).max(10) });
 const personalSchema = z.object({
   fullName: z.string().max(100), dateOfBirth: z.string().max(10), nationality: z.string().max(60).optional(), idType: z.enum(core.ID_TYPES), idNumber: z.string().max(30),
   idExpiry: blank(z.string().max(10)), email: z.string().max(120), phone: z.string().max(25),

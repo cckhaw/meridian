@@ -8,7 +8,7 @@ import { updateNode } from './catalog.js';
 import type { Db } from './db.js';
 import { createCustomer } from './customers.js';
 import { decideKycCase, type Personal, getKycCase, getKycDocument, listKycCases, markVerified } from './kyc.js';
-import { getOrder, placeOrder } from './orders.js';
+import { advanceOrder, getOrder, placeOrder } from './orders.js';
 import { applicationView, applyGatewayEvent, cancelApplication, checkout, createApplication, expireApplications, quoteBasket, startPayment, storeCatalog, storeConfig, submitKyc, testGatewayOutcome, updateApplication, uploadDocument, type AppAccess } from './store.js';
 import { getStoreSettings, setStoreSettings, DEFAULT_STORE_SETTINGS } from './store-settings.js';
 import { freshDb } from './test-helpers.js';
@@ -388,5 +388,48 @@ describe('KYC required for services', () => {
     await expect(setStoreSettings(db, 'r', { ...s, gateways: { enabled: ['stripe'], default: 'test' } })).rejects.toThrow(/default/);
     await expect(setStoreSettings(db, 'r', { ...s, termsUrl: 'javascript:alert(1)' })).rejects.toThrow(/URL/);
     await expect(setStoreSettings(db, 'r', { ...s, minAge: -1 })).rejects.toThrow(/age/);
+  });
+});
+
+describe('a device on a contract in the online shop', () => {
+  const lines = [{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright', attachTo: 'plan-sim-5g', dealTermMonths: 24 }];
+  it('lists the contracts a device offers and which plans can host one', async () => {
+    const cat = await storeCatalog(db, 'SELF_SERVE', { limit: 100 });
+    const phone = cat.offers.find((o) => o.id === 'good-phone-outright')!;
+    expect(phone.deals.map((d) => d.termMonths)).toEqual([12, 24]);
+    expect(phone.deals[1]!.priceMinor).toBe(phone.upfrontMinor - phone.deals[1]!.subsidyMinor);
+    expect(cat.offers.find((o) => o.id === 'plan-sim-5g')!.hostsDevice).toBe(true);
+    expect(cat.offers.find((o) => o.id === 'plan-phone-24')!.hostsDevice).toBe(false);
+  });
+
+  it('quotes the contract price and refuses a plan that is not in the basket or a contract the device does not offer', async () => {
+    const plain = await quoteBasket(db, { channel: 'SELF_SERVE', lines: [{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright' }] });
+    const q = await quoteBasket(db, { channel: 'SELF_SERVE', lines });
+    const phone = q.lines[1]!;
+    expect(phone.upfrontMinor).toBe(plain.lines[1]!.upfrontMinor - 40000);
+    expect(phone.deal).toMatchObject({ planName: '5G SIM-only 100GB', termMonths: 24 });
+    await expect(quoteBasket(db, { channel: 'SELF_SERVE', lines: [{ offerId: 'good-phone-outright', attachTo: 'plan-sim-5g', dealTermMonths: 24 }] })).rejects.toThrow(/not in the basket/);
+    await expect(quoteBasket(db, { channel: 'SELF_SERVE', lines: [{ ...lines[0]! }, { offerId: 'good-phone-outright', attachTo: 'plan-sim-5g', dealTermMonths: 36 }] })).rejects.toThrow(/not offered on a 36-month contract/);
+  });
+
+  it('checks out at the quoted price and gives the plan the contract once the phone is delivered', async () => {
+    const s = await getStoreSettings(db);
+    await setStoreSettings(db, 'root', { ...s, kycMode: 'auto' });
+    const a = await selfServe(lines);
+    await updateApplication(db, a.id, a.acc, { personal: person(), consent: { ...consent } });
+    await uploadAll(a.id, a.acc);
+    await submitKyc(db, a.id, a.acc);
+    await db.query(`UPDATE applications SET address=$2, consent=$3 WHERE id=$1`, [a.id, JSON.stringify(address), JSON.stringify({ ...consent, termsVersion: '1' })]);
+    const out = await checkout(db, a.id, a.acc);
+    const quote = await quoteBasket(db, { channel: 'SELF_SERVE', lines });
+    expect(out.order.totalMinor).toBe(quote.upfrontMinor);
+    expect(out.order.lines.find((l: any) => l.deal)?.deal).toMatchObject({ termMonths: 24, subsidyMinor: 40000 });
+    await testGatewayOutcome(db, a.id, a.acc, 'succeed');
+    await advanceOrder(db, out.order.id, { type: 'ship' });
+    const done = await advanceOrder(db, out.order.id, { type: 'deliver' });
+    const svc = (await db.query('SELECT * FROM services WHERE id=$1', [done.services[0].id])).rows[0]!;
+    expect(svc.contractTermMonths).toBe(24);
+    expect(svc.deal).toMatchObject({ termMonths: 24, subsidyMinor: 40000 });
+    await setStoreSettings(db, 'root', s);
   });
 });

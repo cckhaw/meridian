@@ -9,7 +9,7 @@ import { PaymentStep, type PaymentStart } from './payment';
 
 interface View {
   id: string; status: string; expiresAt: string;
-  quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number }>; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; taxName: string } | null;
+  quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number } }>; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; taxName: string } | null;
   personal: Record<string, string | undefined>; personalProblems: string[]; address: Record<string, string> | null; consent: Record<string, unknown> | null;
   kyc: { status: string; method: string; reason: string | null; returned: boolean } | null; documents: string[];
   order: { id: string; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; lines: Array<{ name: string; quantity: number }> } | null;
@@ -138,7 +138,7 @@ function Summary({ view }: { view: View }) {
     <Card className="!p-4">
       <h2 className="mb-2 text-subhead font-semibold">Your order</h2>
       <ul className="space-y-1 text-subhead">
-        {q.lines.map((l) => <li key={l.offerId} className="flex justify-between gap-3"><span>{l.name}{l.quantity > 1 ? ` × ${l.quantity}` : ''}</span><span className="tabular-nums text-label2">{l.monthlyMinor ? `${money(l.monthlyMinor)}/mo` : money(l.upfrontMinor)}</span></li>)}
+        {q.lines.map((l) => <li key={l.offerId} className="flex justify-between gap-3"><span>{l.name}{l.quantity > 1 ? ` × ${l.quantity}` : ''}{l.deal && <span className="block text-footnote text-label2">On a {l.deal.termMonths}-month contract with {l.deal.planName}</span>}</span><span className="tabular-nums text-label2">{l.monthlyMinor ? `${money(l.monthlyMinor)}/mo` : money(l.upfrontMinor)}</span></li>)}
       </ul>
       <p className="mt-2 border-t border-separator pt-2 text-subhead font-medium">Due today <span className="float-right tabular-nums">{money(q.upfrontMinor)}</span></p>
       {q.monthlyMinor > 0 && <p className="text-footnote text-label2">then {money(q.monthlyMinor)} every month · prices include {q.taxName}</p>}
