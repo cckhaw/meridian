@@ -13,7 +13,7 @@ export interface Party { id: string; name: string }
 /** Everything the steps share. The shell owns it so going back and forward never loses a choice. */
 export interface Wizard {
   channel: string; channels: string[]; setChannel: (c: string) => void;
-  store: string; setStore: (s: string) => void; storeOptions: string[];
+  store: string; setStore: (s: string) => void;
   dealer: Party | null; setDealer: (d: Party | null) => void; agent: Party | null; setAgent: (a: Party | null) => void; soldBy: { name: string; username: string };
   quick: boolean; retail: boolean; portal: boolean; cashier: boolean; manual: boolean; marketCode: string; fixedStore?: string | null; fixedDealer?: string | null;
   items: Item[]; setItems: (f: (cur: Item[]) => Item[]) => void;

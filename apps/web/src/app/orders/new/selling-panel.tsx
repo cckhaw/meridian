@@ -2,6 +2,7 @@
 import { Card, Field, Input, SearchField, Select } from '@meridian/ui';
 import { useEffect, useState } from 'react';
 import { useApi, useDebounced } from '@/lib/api';
+import { StorePicker } from '@/app/stores/store-picker';
 import type { Party, Wizard } from './steps';
 
 export const CHANNEL_LABEL: Record<string, string> = {
@@ -77,7 +78,7 @@ export function SellingPanel({ w }: { w: Wizard }) {
         <Fixed label={w.channel === 'DEALER' ? 'Entered by' : 'Sold by'} value={soldBy} hint="Your login" />
         {w.retail && (w.fixedStore
           ? <Fixed label="Store" value={w.fixedStore} hint="Taken from your login" />
-          : <Field label="Store"><Select value={w.store} onChange={(e) => w.setStore(e.target.value)}><option value="">Choose a store…</option>{w.storeOptions.map((s) => <option key={s}>{s}</option>)}</Select></Field>)}
+          : <Field label="Store"><StorePicker value={w.store} onChange={w.setStore} /></Field>)}
         {w.channel === 'DEALER' && <DealerPicker w={w} />}
       </div>
       {WHO[w.channel] && <p className="mt-3 text-footnote text-label2">{WHO[w.channel]}</p>}

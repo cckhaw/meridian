@@ -102,6 +102,8 @@ export async function seedReference(db: Db): Promise<void> {
           quantity: it.quantity, unit: it.unit, unlimited: it.unlimited, markets: [] } as never);
       }
     }
+    for (const [id, name, address] of [['STORE-SG-001', 'Orchard Flagship', '391 Orchard Road, Singapore'], ['STORE-SG-002', 'Tampines Hub', '1 Tampines Walk, Singapore']])
+      await q.query(`INSERT INTO stores (id, name, market_code, address, created_by) VALUES ($1,$2,'SG',$3,'seed') ON CONFLICT DO NOTHING`, [id, name, address]);
     const stock: Array<[string, string, number]> = [
       ['WH-MAIN', 'PHONE-X1-128', 200], ['WH-MAIN', 'WATCH-L1', 100], ['WH-MAIN', 'ONT-ROUTER', 500], ['WH-MAIN', 'TOASTER-T1', 50], ['WH-MAIN', 'FRIDGE-F1', 20],
       ['WH-MAIN', 'PHONE-X1-128-SLV', 100], ['WH-MAIN', 'PHONE-X1-256', 100], ['STORE-SG-001', 'PHONE-X1-128-SLV', 6], ['STORE-SG-001', 'PHONE-X1-256', 6],

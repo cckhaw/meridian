@@ -65,3 +65,4 @@ export * from './cancellation.js';
 export * from './dealers.js';
 export * from './segments.js';
 export * from './groups.js';
+export * from './stores.js';

@@ -26,6 +26,7 @@ const CORE_PERMISSIONS = [
   'case:read', 'case:create', 'case:write',
   'commission:read',
   'dealer:read', 'dealer:manage', // dealers and their agents are master data kept in the CRM
+  'store:manage', // retail stores are master data kept in the CRM; staff are bound to one when created
   'audit:read',
   'user:manage',
   'store:assist', 'kyc:attest', 'kyc:review',
@@ -67,7 +68,7 @@ export const ROLES: Record<RoleId, RoleDef> = {
     id: 'admin', label: 'Administrator', scope: 'staff', home: '/admin/users',
     summary: 'Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits.',
     permissions: ['dashboard:read', 'user:manage', 'audit:read', 'catalog:read', 'catalog:write', 'customer:search', 'customer:read', 'service:read', 'order:read',
-      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read'],
+      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage'],
   },
   'product-configurator': {
     id: 'product-configurator', label: 'Product Configurator', scope: 'staff', home: '/catalog',
@@ -170,6 +171,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'catalog', label: 'Catalog', href: '/catalog', icon: 'grid', anyOf: ['catalog:read'] },
   { id: 'inventory', label: 'Inventory', href: '/inventory', icon: 'cube', anyOf: ['inventory:read'] },
   { id: 'finance', label: 'Finance', href: '/finance', icon: 'ledger', anyOf: ['finance:read'] },
+  { id: 'stores', label: 'Stores', href: '/stores', icon: 'pin', anyOf: ['store:manage'] },
   { id: 'dealers', label: 'Dealers', href: '/dealers', icon: 'store', anyOf: ['dealer:read'] },
   { id: 'commission', label: 'Commission', href: '/dealer/commission', icon: 'coins', anyOf: ['commission:read'] },
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
