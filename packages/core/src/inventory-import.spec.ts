@@ -96,6 +96,23 @@ describe('loading a file', () => {
     expect((await stockAt(db, 'WH-MAIN', 'NEW-SKU-1')).onHand).toBe(5);
   });
 
+  it('stops the same file being loaded twice, because receiving twice would count the delivery twice (a stock count is safe to repeat)', async () => {
+    const text = csv('WH-MAIN,REPEAT-SKU-1,10,RECEIVE');
+    expect((await check(text)).repeat).toBeNull();
+    await load(text);
+    const again = await check(`# a note\r\n${text}\r\n\r\n`); // comments and blank lines do not make it a different file
+    expect(again.repeat).toMatchObject({ by: 'admin' });
+    await expect(load(text)).rejects.toThrow(/already loaded/);
+    expect((await stockAt(db, 'WH-MAIN', 'REPEAT-SKU-1')).onHand).toBe(10);
+    await importStock(db, text, { apply: true, actor: 'admin', confirmRepeat: true });
+    expect((await stockAt(db, 'WH-MAIN', 'REPEAT-SKU-1')).onHand).toBe(20); // only when someone says it is a new delivery
+    const count = csv('WH-MAIN,REPEAT-SKU-1,7,SET');
+    await load(count);
+    expect((await check(count)).repeat).toBeNull();
+    await load(count);
+    expect((await stockAt(db, 'WH-MAIN', 'REPEAT-SKU-1')).onHand).toBe(7);
+  });
+
   it('keeps a store user to their own store', async () => {
     const r = await check(csv('WH-MAIN,PHONE-X1-128,1', 'STORE-SG-001,PHONE-X1-128,1'), { storeId: 'STORE-SG-001' });
     expect(r.rows[0]).toMatchObject({ status: 'ERROR' });

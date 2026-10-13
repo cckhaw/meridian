@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Db, Queryable } from './db.js';
 import { audit } from './audit.js';
 import { invalid, rejected } from './errors.js';
@@ -44,6 +45,8 @@ export interface ImportRowResult {
 }
 export interface ImportResult {
   applied: boolean; canApply: boolean; rows: ImportRowResult[];
+  /** This exact file was already loaded, and it adds or removes stock: loading it again would count the same delivery twice. */
+  repeat: { at: string; by: string } | null;
   summary: { ok: number; warnings: number; errors: number; skipped: number; unitsAdded: number; unitsRemoved: number };
 }
 
@@ -78,9 +81,11 @@ export async function stockTemplate(q: Queryable, o: { locationId?: string; with
  * Checks a stock file (and, with `apply`, loads it). Every row is judged first and the file loads only if no row is an error, all in one transaction:
  * a file is never half loaded. RECEIVE adds, REMOVE writes off, SET makes on-hand equal a counted number. Reserved stock is never taken away.
  */
-export async function importStock(db: Db, text: string, o: { apply: boolean; actor: string; storeId?: string | null }): Promise<ImportResult> {
+export async function importStock(db: Db, text: string, o: { apply: boolean; actor: string; storeId?: string | null; confirmRepeat?: boolean }): Promise<ImportResult> {
   const parsed = parseCsv(text).filter((r) => !(r.cells[0] ?? '').trimStart().startsWith('#') && r.cells.some((c) => c.trim()));
   if (!parsed.length) throw invalid('The file is empty. Download the template and fill it in.');
+  // The file's identity is its filled-in rows (comments, blank lines and spacing do not count), so a re-saved copy is still recognised.
+  const fileHash = createHash('sha256').update(parsed.map((r) => r.cells.map((c) => c.trim()).join('\u0001')).join('\n')).digest('hex');
   const header = parsed[0]!.cells.map((c) => c.trim().toLowerCase().replace(/[\s-]+/g, '_'));
   const col: Partial<Record<'location' | 'sku' | 'quantity' | 'action', number>> = {};
   header.forEach((h, i) => { const k = COLUMNS[h]; if (k && col[k] === undefined) col[k] = i; });
@@ -146,9 +151,15 @@ export async function importStock(db: Db, text: string, o: { apply: boolean; act
   };
   const applicable = rows.filter((r) => r.status === 'OK' || r.status === 'WARNING');
   const canApply = summary.errors === 0 && applicable.length > 0;
-  if (!o.apply) return { applied: false, canApply, rows, summary };
+  // SET is a count and gives the same answer however often it is loaded; RECEIVE and REMOVE would be applied twice.
+  const before = applicable.some((r) => r.action !== 'SET')
+    ? (await db.query(`SELECT at, actor FROM audit_log WHERE entity='inventory' AND action='STOCK_IMPORTED' AND detail->>'fileHash' = $1 ORDER BY id DESC LIMIT 1`, [fileHash])).rows[0]
+    : null;
+  const repeat = before ? { at: new Date(before.at as string).toISOString(), by: before.actor as string } : null;
+  if (!o.apply) return { applied: false, canApply, rows, summary, repeat };
   if (summary.errors) throw rejected(`${summary.errors} ${summary.errors === 1 ? 'row has' : 'rows have'} a problem, so nothing was loaded. Fix ${summary.errors === 1 ? 'it' : 'them'} and try again.`);
   if (!applicable.length) throw rejected('There is nothing to load: every row was skipped.');
+  if (repeat && !o.confirmRepeat) throw rejected(`This file was already loaded on ${repeat.at.slice(0, 10)} by ${repeat.by}. Loading it again would add or remove the same stock twice. Load it again only if it is a new delivery with the same numbers.`);
 
   await db.tx(async (q) => {
     for (const r of applicable) {
@@ -159,7 +170,7 @@ export async function importStock(db: Db, text: string, o: { apply: boolean; act
       if (delta !== 0) await adjustStock(q, r.locationId, r.sku, delta);
       else if (!cur) await q.query('INSERT INTO inventory_stock (location_id, sku, on_hand) VALUES ($1,$2,0) ON CONFLICT DO NOTHING', [r.locationId, r.sku]);
     }
-    await audit(q, o.actor, 'inventory', 'import', 'STOCK_IMPORTED', { rows: applicable.length, unitsAdded: summary.unitsAdded, unitsRemoved: summary.unitsRemoved, locations: [...new Set(applicable.map((r) => r.locationId))].slice(0, 20) });
+    await audit(q, o.actor, 'inventory', 'import', 'STOCK_IMPORTED', { fileHash, repeated: !!repeat, rows: applicable.length, unitsAdded: summary.unitsAdded, unitsRemoved: summary.unitsRemoved, locations: [...new Set(applicable.map((r) => r.locationId))].slice(0, 20) });
   });
-  return { applied: true, canApply: false, rows, summary };
+  return { applied: true, canApply: false, rows, summary, repeat };
 }

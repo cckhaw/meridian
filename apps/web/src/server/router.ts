@@ -758,8 +758,8 @@ get('/inventory/import-template', 'inventory:write', async ({ db, user, query })
   return csv(await core.stockTemplate(db, { locationId, withSkus: query.get('skus') === '1' }), query.get('skus') === '1' ? 'meridian-stock-import-with-skus.csv' : 'meridian-stock-import-template.csv');
 });
 post('/inventory/import', 'inventory:write', ({ db, user, body }) => {
-  const b = z.object({ csv: z.string().min(1).max(2_000_000), apply: z.boolean().default(false) }).parse(body);
-  return core.importStock(db, b.csv, { apply: b.apply, actor: user.username, storeId: user.scope.storeId });
+  const b = z.object({ csv: z.string().min(1).max(2_000_000), apply: z.boolean().default(false), confirmRepeat: z.boolean().optional() }).parse(body);
+  return core.importStock(db, b.csv, { apply: b.apply, actor: user.username, storeId: user.scope.storeId, confirmRepeat: b.confirmRepeat });
 }, { maxBody: 2_500_000 });
 
 // ───────────────────────── dispatcher ─────────────────────────

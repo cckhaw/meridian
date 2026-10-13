@@ -5,7 +5,7 @@ import { post, useAction } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
 interface Row { line: number; locationId: string; sku: string; action: string; quantity: number | null; before: number | null; after: number | null; status: 'OK' | 'WARNING' | 'ERROR' | 'SKIPPED'; message?: string }
-interface Result { applied: boolean; canApply: boolean; rows: Row[]; summary: { ok: number; warnings: number; errors: number; skipped: number; unitsAdded: number; unitsRemoved: number } }
+interface Result { applied: boolean; canApply: boolean; repeat: { at: string; by: string } | null; rows: Row[]; summary: { ok: number; warnings: number; errors: number; skipped: number; unitsAdded: number; unitsRemoved: number } }
 const TONE = { OK: 'success', WARNING: 'warning', ERROR: 'danger', SKIPPED: 'neutral' } as const;
 const SHOWN_OK = 100;
 
@@ -16,18 +16,19 @@ export function ImportStock({ locations, onClose, onDone }: { locations: string[
   const [name, setName] = useState('');
   const [text, setText] = useState('');
   const [result, setResult] = useState<Result | null>(null);
+  const [again, setAgain] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const { run, busy, error } = useAction();
   const options = [...new Set(['WH-MAIN', ...locations])];
 
   const pick = async (f: File | undefined) => {
-    setResult(null);
+    setResult(null); setAgain(false);
     if (!f) return;
     if (f.size > 1_900_000) { setName(''); setText(''); return void run(async () => { throw new Error('That file is too large (2 MB at most). Split it into several files.'); }); }
     setName(f.name); setText(await f.text());
   };
   const check = () => run(async () => setResult(await post<Result>('/inventory/import', { csv: text, apply: false })));
-  const load = () => run(async () => { const r = await post<Result>('/inventory/import', { csv: text, apply: true }); setResult(r); onDone(); });
+  const load = () => run(async () => { const r = await post<Result>('/inventory/import', { csv: text, apply: true, confirmRepeat: again }); setResult(r); onDone(); });
   const s = result?.summary;
   const problems = (result?.rows ?? []).filter((r) => r.status === 'ERROR' || r.status === 'WARNING');
   const good = (result?.rows ?? []).filter((r) => r.status === 'OK');
@@ -65,6 +66,13 @@ export function ImportStock({ locations, onClose, onDone }: { locations: string[
               <p role="status" className="text-subhead">
                 <strong>{s.ok + s.warnings}</strong> ready to load · <strong className={s.errors ? 'text-danger' : ''}>{s.errors}</strong> with a problem · {s.skipped} skipped · {s.unitsAdded.toLocaleString()} units in{s.unitsRemoved ? ` · ${s.unitsRemoved.toLocaleString()} out` : ''}
               </p>
+              {result.repeat && (
+                <div className="space-y-2 rounded-card bg-warning/10 p-4 text-subhead" role="alert">
+                  <p className="font-semibold">This file was already loaded on {new Date(result.repeat.at).toLocaleDateString()} by {result.repeat.by}.</p>
+                  <p>Loading it again would add or remove the same stock a second time.</p>
+                  <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={again} onChange={(e) => setAgain(e.target.checked)} />It is a new delivery with the same numbers: load it again.</label>
+                </div>
+              )}
               {s.errors > 0 && <Alert>Nothing is loaded until every row is fixed. Correct the lines below in your file and check it again.</Alert>}
               {(problems.length > 0 || good.length > 0) && (
                 <TableWrap><thead><tr><Th>Line</Th><Th>Location</Th><Th>SKU</Th><Th>Action</Th><Th right>Qty</Th><Th right>On hand</Th><Th>Result</Th></tr></thead><tbody>
@@ -76,7 +84,7 @@ export function ImportStock({ locations, onClose, onDone }: { locations: string[
                 </tbody></TableWrap>
               )}
               {good.length > SHOWN_OK && <p className="text-footnote text-label2">…and {good.length - SHOWN_OK} more rows that are ready.</p>}
-              <Button onClick={() => void load()} disabled={busy || !result.canApply}>{busy ? 'Loading…' : `Load ${s.ok + s.warnings} ${s.ok + s.warnings === 1 ? 'row' : 'rows'}`}</Button>
+              <Button onClick={() => void load()} disabled={busy || !result.canApply || (!!result.repeat && !again)}>{busy ? 'Loading…' : `Load ${s.ok + s.warnings} ${s.ok + s.warnings === 1 ? 'row' : 'rows'}`}</Button>
             </section>
           )}
         </div>
