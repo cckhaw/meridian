@@ -40,11 +40,19 @@ export function LoginForm() {
     <main className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          {brand.logoUrl
-            // eslint-disable-next-line @next/next/no-img-element
-            ? <img src={brand.logoUrl} alt="" className="mx-auto mb-4 max-h-16 w-auto max-w-[260px] object-contain" />
-            : <div aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-[16px] bg-accent text-title2 font-bold text-accent-fg">{brand.name.slice(0, 1).toUpperCase()}</div>}
-          <h1 className="text-title1 font-bold tracking-tight">{brand.name}</h1>
+          {brand.logoUrl ? (
+            // The logo is the brand: it replaces the name rather than sitting above it. The name stays in the page for screen readers.
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={brand.logoUrl} alt="" className="mx-auto mb-3 max-h-20 w-auto max-w-[300px] object-contain" />
+              <h1 className="sr-only">{brand.name}</h1>
+            </>
+          ) : (
+            <>
+              <div aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-[16px] bg-accent text-title2 font-bold text-accent-fg">{brand.name.slice(0, 1).toUpperCase()}</div>
+              <h1 className="text-title1 font-bold tracking-tight">{brand.name}</h1>
+            </>
+          )}
           <p className="mt-1 text-body text-label2">Sign in to continue</p>
         </div>
         <Card>
