@@ -78,3 +78,17 @@ API: `POST /api/catalog` with `level: "LINE_ITEM"`, `parentId: <offer id>`, `ite
 ## Dependencies between products
 
 See the offer form: *Customer must first have* (an offer, or "any offer in a group/category") and *Cannot be bought together with*. A prerequisite is met by the same order or by what the customer already owns.
+
+## Devices on a contract with a plan
+
+A phone does not need a "plan with a device" offer of its own for every plan. On a device sold **outright** (the Outright goods behaviour), the Pricing step has **Also sell on a contract with a plan**: add one to three contracts (12, 24 or 36 months), each with a **subsidy** the operator takes off the price and the number of **free last months** (no early-termination charge at the end).
+
+When the device is added to an order together with a plan that has no device of its own (a SIM-only plan, for example), staff choose **On a contract** and the plan and length:
+
+- the device costs its price less the subsidy, upfront or by instalments no longer than the contract;
+- the plan switches on when the device is delivered, with that contract, and the device instalments are billed on the plan;
+- leaving early charges the subsidy that has not been earned yet, whatever later happens to the catalog (the terms are saved with the service);
+- returning the device in the cooling-off period keeps the plan but ends the contract and the instalments without a charge;
+- the plan and its device are cancelled together while they are still cancellable.
+
+The built-in **Plan with a device** type remains for fixed bundles of one plan and one phone.

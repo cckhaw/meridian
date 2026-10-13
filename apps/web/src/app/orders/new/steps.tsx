@@ -7,7 +7,7 @@ import { useSegments } from '@/lib/segments';
 import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { SellingPanel } from './selling-panel';
-import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, newItem, type Cust, type Item } from './wizard-types';
+import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, isPlan, newItem, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
@@ -130,10 +130,38 @@ function VariantPicker({ w, item }: { w: Wizard; item: Item }) {
   );
 }
 
+/** How a device is bought: outright, or on a contract with one of the plans in the basket. */
+function ContractChoice({ w, item }: { w: Wizard; item: Item }) {
+  const deals: any[] = item.offer.deals ?? [];
+  const taken = new Set(w.items.filter((x) => x.key !== item.key && x.deal).map((x) => x.deal!.planKey));
+  const plans = w.items.filter((x) => isPlan(x.offer) && x.quantity === 1 && !taken.has(x.key));
+  const set = (deal: Item['deal']) => w.setItems((c) => c.map((x) => (x.key === item.key ? { ...x, deal, payMode: 'UPFRONT' } : x)));
+  const l = w.quote?.lines?.[w.items.findIndex((x) => x.key === item.key)];
+  return (
+    <Card className="mb-4 space-y-3">
+      <div><p className="font-semibold">{item.offer.name}</p><p className="text-footnote text-label2">Buy it outright, or on a contract with a plan and pay less today.</p></div>
+      <Segmented label={`How ${item.offer.name} is bought`} value={item.deal ? 'CONTRACT' : 'OUTRIGHT'} options={[{ value: 'OUTRIGHT', label: 'Outright' }, { value: 'CONTRACT', label: 'On a contract' }]}
+        onChange={(v) => (v === 'OUTRIGHT' ? set(undefined) : plans[0] && set({ planKey: plans[0].key, term: deals[0].termMonths }))} />
+      {!item.deal && plans.length === 0 && <p className="text-footnote text-label2">Add a plan (a SIM-only plan, for example) to buy this device on a contract.</p>}
+      {item.deal && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="With plan"><Select value={item.deal.planKey} onChange={(e) => set({ ...item.deal!, planKey: e.target.value })}>
+            {w.items.filter((x) => x.key === item.deal!.planKey || plans.some((p) => p.key === x.key)).map((x) => <option key={x.key} value={x.key}>{x.offer.name}</option>)}</Select></Field>
+          <Field label="Contract"><Select value={item.deal.term} onChange={(e) => set({ ...item.deal!, term: Number(e.target.value) })}>
+            {deals.map((d) => <option key={d.termMonths} value={d.termMonths}>{d.termMonths} months · {money(d.subsidyMinor)} off</option>)}</Select></Field>
+          {l?.deal && <p className="text-footnote text-label2 sm:col-span-2">Price on this contract: <strong>{money(l.priceMinor)}</strong> (retail {money(l.deal.retailMinor)}). Leaving early repays the subsidy that is left.</p>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function DeviceStep({ w }: { w: Wizard }) {
   const withVariants = w.items.filter((i) => i.offer.variants?.length);
+  const contractable = w.items.filter((i) => i.offer.deals?.length);
   return (
     <>
+      {contractable.map((i) => <ContractChoice key={i.key} w={w} item={i} />)}
       {withVariants.map((i) => <VariantPicker key={i.key} w={w} item={i} />)}
       {withVariants.length === 0 && <p className="mb-4 rounded-card bg-surface px-4 py-5 text-subhead text-label2 shadow-card">The plans you chose do not come with a device. You can add one below, or continue.</p>}
       <Section title="Add a device or accessory"><OfferPicker w={w} kind={DEVICE_KINDS} placeholder="Search devices" /></Section>
@@ -188,8 +216,8 @@ export function PaymentStep({ w }: { w: Wizard }) {
       <div className="space-y-4">
         {w.items.map((it, idx) => {
           const l = lines[idx];
-          const can = financeable(it.offer);
-          const term = it.offer.contract?.termMonths || 36;
+          const can = financeable(it.offer) || !!it.deal;
+          const term = it.deal?.term ?? (it.offer.contract?.termMonths || 36);
           const months = MONTHS.filter((m) => m <= term);
           return (
             <Card key={it.key}>
@@ -204,7 +232,7 @@ export function PaymentStep({ w }: { w: Wizard }) {
                   <Segmented label={`Payment for ${it.offer.name}`} value={it.payMode} options={[{ value: 'UPFRONT', label: 'Pay in full today' }, { value: 'INSTALLMENT', label: 'Instalments' }]} onChange={(v) => update(it.key, { payMode: v })} />
                   {it.payMode === 'INSTALLMENT' && (
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Spread over" hint={it.offer.contract?.termMonths ? `No longer than the ${it.offer.contract.termMonths}-month contract.` : undefined}>
+                      <Field label="Spread over" hint={term < 36 ? `No longer than the ${term}-month contract.` : undefined}>
                         <Select value={it.months} onChange={(e) => update(it.key, { months: Number(e.target.value) })}>{months.map((m) => <option key={m} value={m}>{m} months</option>)}</Select>
                       </Field>
                       <Field label="Down payment today" hint="Optional. Taken now; the rest is on the monthly bill."><Input type="number" inputMode="decimal" min="0" step={moneyStep()} value={it.down} onChange={(e) => update(it.key, { down: e.target.value })} /></Field>
@@ -384,14 +412,15 @@ export function ReviewStep({ w }: { w: Wizard }) {
           )}
           <dl className="mt-3 border-t border-separator pt-2">
             {l.monthlyFeeMinor > 0 && <Row k="Plan fee" v={`${money(l.monthlyFeeMinor)} / month`} />}
-            <Row k="Contract" v={l.contractMonths ? `${l.contractMonths} months` : 'No contract'} />
+            <Row k="Contract" v={l.contractMonths ? `${l.contractMonths} months` : (q.lines.find((x: any) => x.deal?.attachTo === i) ? `${q.lines.find((x: any) => x.deal?.attachTo === i).deal.termMonths} months (with ${q.lines.find((x: any) => x.deal?.attachTo === i).name})` : 'No contract')} />
+            {l.deal && <Row k="Contract price" v={`${money(l.deal.retailMinor)} retail − ${money(l.deal.subsidyMinor)} subsidy, with ${l.deal.planName}`} />}
             {l.discountMinor > 0 && <Row k="Bundle discount" v={`− ${money(l.discountMinor)}`} />}
             {l.payMode === 'INSTALLMENT' ? (<>
               <Row k="Device price" v={money(l.priceMinor)} />
               <Row k="Down payment today" v={money(l.downMinor)} />
               <Row k="Instalments" v={`${l.months} × ${money(l.instalmentMinor)} / month`} />
             </>) : <Row k="Upfront" v={money(l.paidNowMinor)} />}
-            {l.etc && l.contractMonths > 0 && <Row k="If cancelled early" v={l.etc.method === 'SUBSIDY_AMORTISED' ? 'Early-termination charge for the unrecovered device subsidy' : `Early-termination charge of ${l.etc.percentOfRemaining ?? 0}% of the remaining fees`} />}
+            {l.contractMonths > 0 && (l.deal || l.etc) && <Row k="If cancelled early" v={l.deal || l.etc.method === 'SUBSIDY_AMORTISED' ? 'Early-termination charge for the unrecovered device subsidy' : `Early-termination charge of ${l.etc.percentOfRemaining ?? 0}% of the remaining fees`} />}
           </dl>
         </Card>
       ))}

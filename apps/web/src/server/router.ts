@@ -181,11 +181,12 @@ const contractSchema = z.object({
 const fulfilmentSchema = z.object({ requiresShipping: z.boolean().default(false), requiresInstallation: z.boolean().default(false), requiresSimActivation: z.boolean().default(false), requiresCollection: z.boolean().optional(),
   options: z.array(z.string().max(40)).max(12).optional(), inventorySkus: z.array(z.string().max(50)).max(20).default([]) });
 const variantSchema = z.object({ id: z.string().max(40), colour: z.string().min(1).max(40), storage: z.string().max(20).optional(), sku: z.string().max(50), priceDeltaMinor: z.number().int().optional() });
+const dealSchema = z.object({ termMonths: z.number().int(), subsidyMinor: z.number().int(), waiveInLastMonths: z.number().int().min(0).max(35).optional() });
 const offerFields = {
   kind: z.string().min(1).max(40), // an offer type id (Settings → Catalog → Offer types)
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
   partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
-  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]),
+  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]),
 };
 const lineItemFields = {
   itemType: z.enum(LINE_ITEM_TYPES), description: z.string().max(300).optional(), quantity: z.number().int().min(1).max(1_000_000).optional(),
@@ -202,7 +203,7 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(),
+  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(),
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
@@ -596,13 +597,14 @@ get('/services/:id/etc', 'service:read', async ({ db, user, params }) => {
   if (!s) throw new DomainError('NOT_FOUND', 'service not found');
   assertCustomer(user, s.customerId);
   if (!s.contractTermMonths || !s.contractStart) return { chargeMinor: 0, monthsRemaining: 0, waived: false };
-  return core.etcQuoteForOffer(db, s.offerId, new Date(s.contractStart), new Date());
+  return core.etcQuoteForService(db, s, new Date());
 });
 
 // ───────────────────────── orders ─────────────────────────
 const lineBody = z.object({
   offerId: z.string(), quantity: z.number().int().min(1).max(1_000_000).optional(), msisdn: z.string().optional(), serialNumber: z.string().optional(),
   options: z.object({ variantId: z.string().max(40).optional() }).optional(),
+  attachTo: z.number().int().min(0).max(49).optional(), dealTermMonths: z.number().int().optional(),
   payment: z.object({ mode: z.enum(['UPFRONT', 'INSTALLMENT']), months: z.number().int().optional(), downPaymentMinor: z.number().int().min(0).optional() }).optional(),
 });
 const orderBody = z.object({

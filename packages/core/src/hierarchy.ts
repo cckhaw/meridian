@@ -42,6 +42,20 @@ export function validateOffer(o: OfferNode): string[] {
   if (b.goods && b.outright && !o.fulfilment.requiresShipping && !o.fulfilment.requiresCollection) errs.push('goods must be delivered or collected in store');
   if (b.needsInstallation && !o.fulfilment.requiresInstallation) errs.push('this type of offer must have an installation option');
   if (!b.goods && o.contract?.subsidy) errs.push('only offers with a device can carry a device subsidy');
+  const deals = o.deals ?? [];
+  if (deals.length) {
+    const price = o.prices.filter((p) => p.type === 'ONE_TIME').reduce((t, p) => t + p.amount.amountMinor, 0);
+    if (!b.outright) errs.push('only a device sold outright can be offered on a contract with a plan');
+    const terms = new Set<number>();
+    for (const d of deals) {
+      if (![12, 24, 36].includes(d.termMonths)) errs.push('a contract lasts 12, 24 or 36 months');
+      if (terms.has(d.termMonths)) errs.push(`there are two ${d.termMonths}-month contracts`);
+      terms.add(d.termMonths);
+      if (!Number.isInteger(d.subsidyMinor) || d.subsidyMinor <= 0) errs.push(`${d.termMonths} months: enter the subsidy`);
+      else if (d.subsidyMinor >= price) errs.push(`${d.termMonths} months: the subsidy must be less than the device price`);
+      if (d.waiveInLastMonths !== undefined && (!Number.isInteger(d.waiveInLastMonths) || d.waiveInLastMonths < 0 || d.waiveInLastMonths >= d.termMonths)) errs.push(`${d.termMonths} months: the charge-free months at the end must be fewer than the term`);
+    }
+  }
   const clash = o.requires.filter((r) => o.excludes.includes(r));
   if (clash.length) errs.push(`offers both required and excluded: ${clash.join(', ')}`);
   return errs;

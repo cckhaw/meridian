@@ -62,7 +62,7 @@ export function NewOrder() {
   const setChannel = (c: string) => { setChannelRaw(c); setItemsRaw([]); setIndex(0); idemKey.current = crypto.randomUUID(); };
 
   // ── the server's quote, refreshed as the basket changes ──
-  const body = useMemo(() => ({ channel, customerId: quick || portal ? undefined : customer?.id, accountId: accountId || undefined, lines: items.map(lineBody) }), [channel, quick, portal, customer?.id, accountId, items]);
+  const body = useMemo(() => ({ channel, customerId: quick || portal ? undefined : customer?.id, accountId: accountId || undefined, lines: items.map((i) => lineBody(i, items)) }), [channel, quick, portal, customer?.id, accountId, items]);
   const key = useDebounced(JSON.stringify(body), 250);
   const [quote, setQuote] = useState<any>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);

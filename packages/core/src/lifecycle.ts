@@ -1,5 +1,7 @@
+import type { EtcQuote } from '@meridian/types';
 import { audit } from './audit.js';
 import { etcQuoteForOffer } from './catalog.js';
+import { quoteEtc } from './etc.js';
 import { issueInvoice, invoiceBalance } from './billing.js';
 import { getRegional, marketFor } from './settings.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
@@ -102,6 +104,15 @@ export async function transferOwnership(db: Db, id: string, toCustomerId: string
   });
 }
 
+/** The early-termination charge for a running service. A device bought on a contract with the plan carries its own terms; otherwise the plan's own contract applies. */
+export async function etcQuoteForService(q: Queryable, s: Row, when: Date): Promise<EtcQuote> {
+  const d = s.deal as { termMonths: number; subsidyMinor: number; waiveInLastMonths?: number; currency: string } | null;
+  if (!d) return etcQuoteForOffer(q, s.offerId, new Date(s.contractStart), when);
+  const money = { amountMinor: d.subsidyMinor, currency: d.currency };
+  return quoteEtc({ offerId: s.offerId, contractStart: new Date(s.contractStart), terminationDate: when,
+    contract: { termMonths: d.termMonths as 12 | 24 | 36, etc: { method: 'SUBSIDY_AMORTISED', waiveInLastMonths: d.waiveInLastMonths ?? 1 }, subsidy: { subsidyAmount: money, deviceRetailPrice: money } } });
+}
+
 export interface TerminationResult { service: Row; etcMinor: number; waived: boolean; invoice: Row | null }
 
 /** Terminates a service. A fixed-term contract still running triggers an Early Termination Charge on a final invoice. */
@@ -113,7 +124,7 @@ export async function terminateService(db: Db, id: string, o: { reason?: string;
     await releaseFromGroup(q, actor, id); // a principal with supplementary services must be handed over first
     let etc = 0, waived = false, invoice: Row | null = null;
     if (s.contractTermMonths > 0 && s.contractStart) {
-      const quote = await etcQuoteForOffer(q, s.offerId, new Date(s.contractStart), when);
+      const quote = await etcQuoteForService(q, s, when);
       etc = quote.chargeMinor; waived = quote.waived;
     }
     await q.query(`UPDATE services SET status='TERMINATED', terminated_at=$2, version=version+1, updated_at=now() WHERE id=$1`, [id, when.toISOString()]);

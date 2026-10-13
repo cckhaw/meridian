@@ -85,6 +85,18 @@ export interface DeviceVariant {
   priceDeltaMinor?: number;
 }
 
+/**
+ * A contract a device can be bought on together with any plan: the customer pays the retail price less the subsidy, the contract runs for the term,
+ * and ending it early charges the unamortised subsidy.
+ */
+export interface DeviceDeal {
+  termMonths: number;
+  /** What the operator takes off the device price for this contract, in minor units. Also the amount the early-termination charge is based on. */
+  subsidyMinor: number;
+  /** No early-termination charge in the last months of the contract. Defaults to 1. */
+  waiveInLastMonths?: number;
+}
+
 export interface OfferNode extends CatalogNodeBase {
   level: 'OFFER';
   kind: OfferKind;
@@ -109,6 +121,8 @@ export interface OfferNode extends CatalogNodeBase {
   salesChannels?: string[];
   /** Device colour/storage choices. When present the customer picks one; its SKU is reserved instead of the offer's own device SKUs. */
   variants?: DeviceVariant[];
+  /** Contracts this device can be bought on with a plan (outright devices only). Empty/absent = sold outright only. */
+  deals?: DeviceDeal[];
 }
 
 /**
