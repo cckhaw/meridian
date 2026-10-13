@@ -6,14 +6,16 @@ import { del, patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { label, money, step, toMinor } from '@/lib/format';
 
-const KINDS = ['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE', 'FIBER', 'IOT_CONNECTIVITY', 'VAS', 'NON_TELCO_SUBSCRIPTION', 'PHYSICAL_GOOD'];
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
-const kindName = (t: string) => (t.startsWith('kind:') ? label(t.slice(5)) : t.slice(6));
 
 /** "Fibre + a phone plan = 10% off the phone": what must be in the order, what gets the discount, and by how much. */
 export default function Bundles() {
   const { can } = useAuth();
   const rules = useApi<{ items: any[] }>('/bundle-rules');
+  const config = useApi<{ types: Array<{ id: string; name: string }> }>('/catalog-config');
+  const KINDS = (config.data?.types ?? []).map((t) => t.id);
+  const typeName = (id: string) => config.data?.types.find((t) => t.id === id)?.name ?? label(id);
+  const kindName = (t: string) => (t.startsWith('kind:') ? typeName(t.slice(5)) : t.slice(6));
   const act = useAction(rules.reload);
   const [f, setF] = useState({ name: '', a: 'FIBER', b: 'SIM_DEVICE', target: 'SIM_DEVICE', mode: 'percent', value: '10' });
   const edit = can('catalog:write');
@@ -50,9 +52,9 @@ export default function Bundles() {
           <h2 className="mb-3 text-title3 font-semibold">New bundle discount</h2>
           <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2"><Field label="Name" hint="What agents and customers will see, e.g. “Fibre + phone plan: 10% off the phone”."><Input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={120} /></Field></div>
-            <Field label="Order contains"><Select value={f.a} onChange={(e) => setF({ ...f, a: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{label(k)}</option>)}</Select></Field>
-            <Field label="and also"><Select value={f.b} onChange={(e) => setF({ ...f, b: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{label(k)}</option>)}</Select></Field>
-            <Field label="Discount applies to"><Select value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{label(k)}</option>)}</Select></Field>
+            <Field label="Order contains"><Select value={f.a} onChange={(e) => setF({ ...f, a: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{typeName(k)}</option>)}</Select></Field>
+            <Field label="and also"><Select value={f.b} onChange={(e) => setF({ ...f, b: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{typeName(k)}</option>)}</Select></Field>
+            <Field label="Discount applies to"><Select value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{typeName(k)}</option>)}</Select></Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Type"><Select value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value })}><option value="percent">Percent off</option><option value="amount">Amount off</option></Select></Field>
               <Field label={f.mode === 'percent' ? 'Percent' : 'Amount'}><Input required type="number" min="0.01" step={f.mode === 'percent' ? '0.01' : step()} value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></Field>

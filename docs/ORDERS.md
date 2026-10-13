@@ -123,3 +123,11 @@ Retail, call-center and telesales users are created under Users & roles. Dealers
 
 The review step lists, for each part of the order, short points in the order things happen: before it ships or is dispatched, once it has shipped, once delivered. They are generated from the cancellation rules, so they cannot disagree with what the system does or with each other. A rule that is narrower than a later one for the same stage (for example the late-visit fee) is followed by an "Otherwise" point.
 
+## Collect in store
+
+An offer can be delivered, collected in store, or both (Settings → Catalog → Fulfilment options). In the order wizard's delivery step the customer chooses when both are allowed; goods that can only be collected need a **collection store**. If one order mixes goods that can only be collected with goods that can only be shipped, the wizard asks for two orders.
+
+- The stock is reserved at the **collection store**, not the warehouse.
+- Staff mark the order **Ready for collection**, then **Customer has collected**. Until it is collected the goods have not left the store, so the order can still be cancelled with a full refund; once collected, the return rules apply as for delivered goods.
+- Offers that can only be collected are sold in store and through staff channels, not in the online shop.
+

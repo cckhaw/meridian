@@ -8,6 +8,7 @@ import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { SellingPanel } from './selling-panel';
 import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, newItem, type Cust, type Item } from './wizard-types';
+import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
 
@@ -36,10 +37,11 @@ const priceLine = (o: any) => {
 };
 
 function OfferCard({ o, chosen, onToggle, note }: { o: any; chosen: boolean; onToggle: () => void; note?: string }) {
+  const types = useOfferTypes();
   return (
     <button type="button" onClick={onToggle} aria-pressed={chosen}
       className={`relative rounded-card border p-4 text-left shadow-card transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${chosen ? 'border-accent bg-accent/5' : 'border-transparent bg-surface hover:-translate-y-0.5'}`}>
-      <div className="flex items-start justify-between gap-2"><span className="font-medium">{o.name}</span><Badge>{label(o.kind)}</Badge></div>
+      <div className="flex items-start justify-between gap-2"><span className="font-medium">{o.name}</span><Badge>{types.name(o.kind)}</Badge></div>
       {o.description && <p className="mt-1 line-clamp-2 text-footnote text-label2">{o.description}</p>}
       <p className="mt-2 text-subhead font-medium">{priceLine(o)}</p>
       <p className="text-footnote text-label2">{o.contract?.termMonths > 0 ? `${o.contract.termMonths}-month contract` : o.kind === 'PHYSICAL_GOOD' ? 'Outright purchase' : 'No contract'}{o.variants?.length ? ` · ${new Set(o.variants.map((v: any) => v.colour)).size} colours` : ''}</p>

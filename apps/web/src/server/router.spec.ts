@@ -609,6 +609,33 @@ describe('segments, customer creation and groups', () => {
   });
 });
 
+describe('catalog configuration', () => {
+  it('lets the super user maintain offer types and fulfilment options, and offers use them', async () => {
+    const admin = await root();
+    const cfg = await staff(['product-configurator']);
+    expect((await call('GET', '/settings/catalog', { cookie: cfg.cookie })).status).toBe(403);         // only the super user configures
+    const view = (await call('GET', '/catalog-config', { cookie: cfg.cookie })).json;                  // but whoever works on the catalog can read the lists
+    expect(view.types.map((t: any) => t.id)).toContain('SIM_ONLY');
+    expect(view.options.map((o: any) => o.id)).toEqual(['SHIP', 'COLLECT', 'INSTALL', 'SIM']);
+    const t = await call('POST', '/settings/offer-types', { cookie: admin, body: { name: 'Prepaid top-up', template: 'VAS' } });
+    expect(t.status).toBe(200);
+    const o = await call('POST', '/settings/fulfilment-options', { cookie: admin, body: { name: 'Locker', mechanic: 'COLLECT', tracksStock: true } });
+    expect(o.json.id).toBe('LOCKER');
+    const base = { level: 'OFFER', parentId: 'grp-sim-only', kind: t.json.id, markets: [], prices: [{ type: 'RECURRING', amount: { amountMinor: 500, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { options: [] } };
+    const made = await call('POST', '/catalog', { cookie: cfg.cookie, body: { ...base, id: 'prepaid-topup-5', name: 'Top-up 5' } });
+    expect(made.status).toBe(200);
+    expect(made.json).toMatchObject({ kind: 'PREPAID_TOP_UP', template: 'VAS' });
+    const goods = await call('POST', '/catalog', { cookie: cfg.cookie, body: { ...base, id: 'locker-good', name: 'Locker good', kind: 'PHYSICAL_GOOD', prices: [{ type: 'ONE_TIME', amount: { amountMinor: 900, currency: 'SGD' }, taxInclusive: true }], fulfilment: { options: ['LOCKER'], inventorySkus: ['LK-1'] } } });
+    expect(goods.json.fulfilment).toMatchObject({ requiresCollection: true, requiresShipping: false, options: ['LOCKER'] });
+    expect((await call('POST', '/catalog', { cookie: cfg.cookie, body: { ...base, id: 'eur-plan', name: 'Euro plan', kind: 'SIM_ONLY', prices: [{ type: 'RECURRING', amount: { amountMinor: 500, currency: 'EUR' }, taxInclusive: true, periodMonths: 1 }] } })).status).toBe(400); // wrong currency
+    expect((await call('PATCH', `/settings/offer-types/${t.json.id}`, { cookie: admin, body: { status: 'INACTIVE' } })).status).toBe(200);
+    expect((await call('POST', '/catalog', { cookie: cfg.cookie, body: { ...base, id: 'prepaid-topup-10', name: 'Top-up 10' } })).status).toBe(400); // switched off
+    expect((await call('DELETE', `/settings/offer-types/${t.json.id}`, { cookie: admin })).status).toBe(422); // an offer uses it
+    const facts = (await call('GET', '/settings/cancellation', { cookie: admin })).json.facts;
+    expect(facts.find((f: any) => f.id === 'offerKinds').values.map((v: any) => v[0])).toContain('PREPAID_TOP_UP');
+  });
+});
+
 describe('stores', () => {
   it('lets an administrator keep stores and pick one when creating store staff', async () => {
     const admin = await staff(['admin']);

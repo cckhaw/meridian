@@ -5,6 +5,7 @@ import { useRef } from 'react';
 import type { PagedState } from '@/lib/api';
 import { label, money } from '@/lib/format';
 import { CHILD_LEVEL, LEVEL_NOUN, LEVEL_PLURAL, STATUS_DOT, STATUS_TEXT, type CNode } from './catalog-ui';
+import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Crumb { id: string | null; name: string }
 
@@ -92,12 +93,13 @@ export function BrowseList(p: Props) {
 }
 
 function Row({ node, selected, showTrail, editable, canUp, canDown, onOpen, onReorder, onStatus }: { node: CNode; selected: boolean; showTrail: boolean; editable: boolean; canUp: boolean; canDown: boolean; onOpen: () => void; onReorder: (id: string, d: 'up' | 'down') => void; onStatus: (id: string, s: string) => void }) {
+  const types = useOfferTypes();
   const isOffer = node.level === 'OFFER', isItem = node.level === 'LINE_ITEM', container = !isOffer && !isItem;
   const rec = node.prices?.find((x: any) => x.type === 'RECURRING');
   const once = node.prices?.find((x: any) => x.type === 'ONE_TIME');
   const sub = showTrail
     ? `${label(node.level)}${node.trail?.length ? ` · ${node.trail.map((t) => t.name).join(' › ')}` : ''}`
-    : isOffer ? `${label(node.kind ?? '')}${node.contract?.termMonths ? ` · ${node.contract.termMonths}-month` : ''}${node.lineItemCount ? ` · ${node.lineItemCount} included` : ''}`
+    : isOffer ? `${types.name(node.kind)}${node.contract?.termMonths ? ` · ${node.contract.termMonths}-month` : ''}${node.lineItemCount ? ` · ${node.lineItemCount} included` : ''}`
     : `${node.activeOfferCount.toLocaleString()} of ${node.offerCount.toLocaleString()} offer${node.offerCount === 1 ? '' : 's'} live`;
   return (
     <li className={`group relative flex items-center ${node.status === 'RETIRED' ? 'opacity-60' : ''}`}>

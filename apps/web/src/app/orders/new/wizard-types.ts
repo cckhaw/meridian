@@ -1,3 +1,4 @@
+import { behaviourOf } from '@meridian/types';
 import { toMinor } from '@/lib/format';
 
 export type StepId = 'product' | 'device' | 'addons' | 'payment' | 'customer' | 'delivery' | 'review' | 'pay';
@@ -23,7 +24,7 @@ export const MONTHS = [3, 6, 12, 24, 36];
 
 const oneTime = (o: any) => (o.prices ?? []).filter((p: any) => p.type === 'ONE_TIME').reduce((s: number, p: any) => s + p.amount.amountMinor, 0);
 /** An item can be paid by instalments when it comes with a service to bill them to and there is something upfront to spread. */
-export const financeable = (o: any) => o.kind !== 'PHYSICAL_GOOD' && (o.kind !== 'WEARABLE' || (o.prices ?? []).some((p: any) => p.type === 'RECURRING')) && oneTime(o) + Math.max(0, ...((o.variants ?? []).map((v: any) => v.priceDeltaMinor ?? 0))) > 0;
+export const financeable = (o: any) => !!behaviourOf(o).service && (!behaviourOf(o).serviceNeedsFee || (o.prices ?? []).some((p: any) => p.type === 'RECURRING')) && oneTime(o) + Math.max(0, ...((o.variants ?? []).map((v: any) => v.priceDeltaMinor ?? 0))) > 0;
 
 export const newItem = (offer: any): Item => ({
   key: `${offer.id}-${Math.random().toString(36).slice(2, 8)}`, offer, quantity: 1, msisdn: '',

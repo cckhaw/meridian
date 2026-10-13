@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { label, money, tone } from '@/lib/format';
 import { CHILD_LEVEL, LEVEL_NOUN, LEVEL_PLURAL, type CNode } from './catalog-ui';
 import { LineItemsSection } from './line-items';
+import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Detail {
   node: CNode; trail: Array<{ id: string; name: string; level: string }>; lineItems: CNode[];
@@ -90,6 +91,7 @@ type Tab = 'included' | 'pricing' | 'rules' | 'sales';
 
 /** An offer opened for reading: header, then one section at a time so nothing is below the fold. */
 export function OfferInspector({ d, a }: { d: Detail; a: Actions }) {
+  const types = useOfferTypes();
   const offer = d.node;
   const sold = (d.usage?.services ?? 0) + (d.usage?.orders ?? 0);
   const [tab, setTab] = useState<Tab>('included');
@@ -105,7 +107,7 @@ export function OfferInspector({ d, a }: { d: Detail; a: Actions }) {
   const fulfil = [f.requiresShipping && 'Ships to the customer', f.requiresInstallation && 'Installation visit', f.requiresSimActivation && 'SIM activation'].filter(Boolean) as string[];
   return (
     <div className="space-y-5">
-      <Header node={offer} sub={label(offer.kind ?? 'Offer')} a={a}
+      <Header node={offer} sub={types.name(offer.kind) || 'Offer'} a={a}
         actions={<Link href={`/catalog/edit/${offer.id}`} className="inline-flex min-h-[40px] items-center gap-2 rounded-control bg-accent px-4 text-subhead font-medium text-accent-fg hover:opacity-90"><span aria-hidden>✎</span>Edit offer</Link>}
         menu={<MenuButton label={`Actions for ${offer.name}`} items={[
           { label: offer.status === 'ACTIVE' ? 'Retire' : 'Make live', onSelect: () => a.onStatus(offer.id, offer.status === 'ACTIVE' ? 'RETIRED' : 'ACTIVE') },
