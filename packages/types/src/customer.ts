@@ -1,6 +1,7 @@
 import type { Auditable, IsoDateTime, Uuid } from './common.js';
 
-export type CustomerSegment = 'CONSUMER' | 'FAMILY' | 'ENTERPRISE' | 'IOT_ENTERPRISE';
+/** A code from the customer_segments table (CONSUMER, ENTERPRISE, IOT to start with; operators add more). */
+export type CustomerSegment = string;
 
 export interface Customer extends Auditable {
   id: Uuid;

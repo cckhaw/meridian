@@ -5,11 +5,13 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useSegments } from '@/lib/segments';
 import { d, dt, label, money, tone } from '@/lib/format';
 import { AccountPane } from './account-pane';
 import { CasesPanel } from './cases-panel';
 import { HierarchyNav } from './hierarchy-nav';
 import { ServicesTable } from './services-panel';
+import { SegmentChange } from './segment-change';
 
 const CHANNEL_PERMS = ['SELF_SERVE', 'RETAIL_ASSISTED', 'QUICK_SALE', 'TELESALES', 'DEALER', 'CALL_CENTER'].map((c) => `order:create:${c}`);
 
@@ -26,6 +28,7 @@ export function CustomerView({ id }: { id: string }) {
   const accountId = sp.get('account'), serviceId = accountId ? sp.get('service') : null;
   const { data: c, error, loading, reload } = useApi<any>(`/customers/${id}`);
   const [navOpen, setNavOpen] = useState(false);
+  const segs = useSegments();
 
   const select = useCallback((account: string | null, service?: string | null) => {
     const q = new URLSearchParams();
@@ -41,12 +44,12 @@ export function CustomerView({ id }: { id: string }) {
   const cust = c.customer;
   const canBrowse = can('customer:search');
   const acctName: string | undefined = c.accounts.find((a: any) => a.id === accountId)?.name;
-  const trail = [...(canBrowse ? c.memberOf.slice(0, 1).map((g: any) => ({ label: g.displayName, href: `/customers/${g.id}` })) : []), { label: cust.displayName, href: accountId ? path : undefined },
+  const trail = [{ label: cust.displayName, href: accountId ? path : undefined },
     ...(accountId ? [{ label: acctName ?? 'Account', href: serviceId ? `${path}?account=${accountId}` : undefined }] : []), ...(serviceId ? [{ label: 'Service' }] : [])];
 
   return (
     <>
-      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{label(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><Badge tone={cust.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{cust.kycStatus === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
+      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{segs.name(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><Badge tone={cust.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{cust.kycStatus === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
 
       <div className="mb-4 flex items-center justify-between gap-3 lg:hidden">
         <nav aria-label="Where you are" className="min-w-0 flex-1 truncate text-subhead text-label2">{trail.map((t, i) => <span key={i}>{i > 0 && ' › '}{t.label}</span>)}</nav>
@@ -55,7 +58,7 @@ export function CustomerView({ id }: { id: string }) {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(280px,340px)_1fr] lg:items-start">
         <aside className={`${navOpen ? 'block' : 'hidden'} min-w-0 lg:sticky lg:top-6 lg:block lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto`}>
-          <HierarchyNav customer={cust} ancestors={c.ancestors} groups={c.memberOf} counts={{ accounts: c.accountCount, children: c.childCount, members: c.memberCount }}
+          <HierarchyNav customer={cust} ancestors={c.ancestors} counts={{ accounts: c.accountCount, children: c.childCount }}
             canBrowse={canBrowse} canBilling={can('billing:read')} accountId={accountId} serviceId={serviceId} onAccount={(a) => select(a)} onService={(a, s) => select(a, s)} />
         </aside>
 
@@ -89,7 +92,9 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
       <div className="mt-4 flex flex-wrap gap-2">
         {can(...CHANNEL_PERMS) && <Link href={`/orders/new?customerId=${id}`}><Button>New order</Button></Link>}
         {can('billing:read') && <Link href={`/billing?customerId=${id}`}><Button variant="secondary">Invoices</Button></Link>}
+        {can('customer:write') && <SegmentChange customer={c.customer} onDone={reload} />}
       </div>
+      <SegmentHistory customerId={id} segment={c.customer.segment} />
 
       {c.recommendations.length > 0 && (
         <>
@@ -143,6 +148,21 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
 
       {can('case:read') && <CasesPanel customerId={id} cases={c.cases} onChange={() => void reload()} />}
     </>
+  );
+}
+
+function SegmentHistory({ customerId, segment }: { customerId: string; segment: string }) {
+  const segs = useSegments();
+  const h = useApi<{ items: any[] }>(`/customers/${customerId}/segment-history?s=${segment}`);
+  const items = h.data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <details className="mt-3 text-subhead text-label2">
+      <summary className="cursor-pointer select-none py-1">Segment history ({items.length})</summary>
+      <ul className="mt-1 space-y-1 pl-1">
+        {items.map((x: any) => <li key={x.id}><span className="text-label">{segs.name(x.fromSegment)} → {segs.name(x.toSegment)}</span> · {dt(x.changedAt)} · {x.changedBy}<span className="block text-footnote">“{x.reason}”</span></li>)}
+      </ul>
+    </details>
   );
 }
 

@@ -1,7 +1,8 @@
 import type { OfferNode } from '@meridian/types';
 import { createNode } from './catalog.js';
 import { runBillCycle, payInvoice, runDunning } from './billing.js';
-import { addToGroup, createCustomer } from './customers.js';
+import { createCustomer } from './customers.js';
+import { createGroup } from './groups.js';
 import type { Db } from './db.js';
 import { addDays, dayOf, today } from './dates.js';
 import { adjustStock } from './inventory.js';
@@ -115,9 +116,9 @@ export async function seedReference(db: Db): Promise<void> {
 /** Demo tenants created through the real order/billing code paths, with history backdated so bills, an overdue account and a suspension exist. */
 export async function seedDemo(db: Db): Promise<void> {
   if ((await db.query(`SELECT 1 FROM customers WHERE display_name='Tan Wei Ming' LIMIT 1`)).rows.length) return;
-  await createDealer(db, 'seed', { id: 'dealer-orbit', name: 'Orbit Mobile Partners', contactName: 'Priya Nair', email: 'partners@orbit.example.com' });
-  const orbitAgent = await createAgent(db, 'seed', 'dealer-orbit', { name: 'Marcus Teo', phone: '+6591110000' });
-  await createAgent(db, 'seed', 'dealer-orbit', { name: 'Aisha Rahman', phone: '+6592220000' });
+  const orbitDealer = await createDealer(db, 'seed', { name: 'Orbit Mobile Partners', contactName: 'Priya Nair', email: 'partners@orbit.example.com' });
+  const orbitAgent = await createAgent(db, 'seed', orbitDealer.id as string, { name: 'Marcus Teo', phone: '+6591110000' });
+  await createAgent(db, 'seed', orbitDealer.id as string, { name: 'Aisha Rahman', phone: '+6592220000' });
   const retail = { storeId: 'STORE-SG-001', salespersonId: 'agent-lee' };
   const mk = async (name: string, doc: string, extra: Partial<Parameters<typeof createCustomer>[1]> = {}) =>
     (await createCustomer(db, { segment: 'CONSUMER', displayName: name, idDocument: doc, email: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`, phone: '+6590000000', ...extra }));
@@ -126,20 +127,23 @@ export async function seedDemo(db: Db): Promise<void> {
   await placeOrder(db, { customerId: wei.customer.id, channel: 'RETAIL_ASSISTED', attribution: retail, payment: { method: 'CREDIT_CARD' },
     lines: [{ offerId: 'plan-phone-24' }, { offerId: 'netflix-premium' }] });
 
-  const lim = await mk('Lim Family', 'S7654321B', { segment: 'FAMILY' });
-  for (const [n, d] of [['Lim Hui Ling', 'S1111111C'], ['Lim Jun Jie', 'S2222222D'], ['Lim Mei Xin', 'S3333333E']] as const) {
-    const m = await mk(n, d, { segment: 'FAMILY' });
-    await addToGroup(db, lim.customer.id, m.customer.id, 'MEMBER');
-    await placeOrder(db, { customerId: m.customer.id, channel: 'SELF_SERVE', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: 'plan-sim-5g' }] });
+  // A household as a Group of services on one account: Hui Ling's line is the principal, the family's lines are supplementary and share a data pool and a discount.
+  const lim = await mk('Lim Hui Ling', 'S1111111C');
+  const limLines: string[] = [];
+  for (let n = 0; n < 4; n++) {
+    const o = await placeOrder(db, { customerId: lim.customer.id, accountId: lim.account!.id, channel: 'SELF_SERVE', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: 'plan-sim-5g' }] });
+    limLines.push((await db.query(`SELECT id FROM services WHERE order_id=$1 LIMIT 1`, [o.id])).rows[0]!.id as string);
   }
+  await createGroup(db, 'seed', { accountId: lim.account!.id as string, name: 'Lim household', principalServiceId: limLines[0]!, supplementaryServiceIds: limLines.slice(1),
+    benefits: { allowances: { dataGb: 200, voiceMinutes: 3000, smsCount: 1000 }, discountBps: 1000 } });
   await placeOrder(db, { customerId: lim.customer.id, channel: 'TELESALES', attribution: { salespersonId: 'agent-nur' }, payment: { method: 'QR' }, lines: [{ offerId: 'fiber-1g' }] });
 
   const acme = await mk('Acme Holdings Pte Ltd', 'UEN201912345K', { segment: 'ENTERPRISE' });
   for (const dept of ['Finance', 'Engineering', 'Operations']) {
     const d = await mk(`Acme ${dept}`, 'UEN201912345K', { segment: 'ENTERPRISE', parentCustomerId: acme.customer.id });
-    await placeOrder(db, { customerId: d.customer.id, channel: 'DEALER', attribution: { dealerId: 'dealer-orbit', dealerAgentId: orbitAgent.id as string }, payment: { method: 'INSTALLMENT', installmentMonths: 12 }, lines: [{ offerId: 'plan-phone-12', quantity: 3 }] });
+    await placeOrder(db, { customerId: d.customer.id, channel: 'DEALER', attribution: { dealerId: orbitDealer.id as string, dealerAgentId: orbitAgent.id as string }, payment: { method: 'INSTALLMENT', installmentMonths: 12 }, lines: [{ offerId: 'plan-phone-12', quantity: 3 }] });
   }
-  const orbit = await mk('Orbit Logistics IoT', 'UEN201898765Z', { segment: 'IOT_ENTERPRISE' });
+  const orbit = await mk('Orbit Logistics IoT', 'UEN201898765Z', { segment: 'IOT' });
   await placeOrder(db, { customerId: orbit.customer.id, channel: 'CALL_CENTER', payment: { method: 'CASH' }, lines: [{ offerId: 'iot-m2m', quantity: 5000 }] });
 
   const olivia = await mk('Olivia Ng', 'S4444444F');

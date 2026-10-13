@@ -32,7 +32,7 @@ async function recommend(q: Queryable, customerId: string, overdue: number): Pro
 export async function customer360(q: Queryable, id: string): Promise<Row> {
   const customer = await getCustomer(q, id);
   // Everything here is a count or a short slice. Accounts, services, members and departments are listed (paged) by their own calls.
-  const [accounts, svcSummary, orders, invoices, cases, children, memberCount, lineage, balance, acctCount] = await Promise.all([
+  const [accounts, svcSummary, orders, invoices, cases, children, groupCount, lineage, balance, acctCount] = await Promise.all([
     listAccounts(q, id, { limit: 20 }),
     q.query(`SELECT type, status, count(*) AS n FROM services WHERE customer_id=$1 GROUP BY type, status ORDER BY type, status`, [id]),
     q.query(`SELECT o.id, o.state, o.channel, o.total_minor, o.currency, o.created_at,
@@ -40,7 +40,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
     q.query(`SELECT i.id, i.number, i.status, i.issue_date, i.due_date, i.total_minor, i.currency, i.total_minor - i.paid_minor - i.credited_minor AS balance_minor FROM invoices i WHERE i.customer_id=$1 ORDER BY i.issue_date DESC, i.number DESC LIMIT 10`, [id]),
     q.query(`SELECT id, number, type, status, priority, subject, created_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
     listChildren(q, id, { limit: 10 }),
-    q.query(`SELECT count(*) AS n FROM group_memberships WHERE group_customer_id=$1`, [id]),
+    q.query(`SELECT count(*) AS n FROM service_groups WHERE customer_id=$1 AND status='ACTIVE'`, [id]),
     customerLineage(q, id),
     q.query(`SELECT COALESCE(sum(CASE WHEN status='OVERDUE' THEN total_minor - paid_minor - credited_minor END),0) AS overdue,
       COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS outstanding FROM invoices WHERE customer_id=$1 AND status IN ('ISSUED','OVERDUE')`, [id]),
@@ -50,7 +50,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
   const childCount = (await q.query('SELECT count(*) AS n FROM customers WHERE parent_customer_id=$1', [id])).rows[0]!.n;
   return {
     customer, accounts: accounts.items, accountCount: acctCount.rows[0]!.n, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows,
-    children: children.items, childCount, memberCount: memberCount.rows[0]!.n, ancestors: lineage.ancestors, memberOf: lineage.groups,
+    children: children.items, childCount, groupCount: groupCount.rows[0]!.n, ancestors: lineage.ancestors,
     outstandingMinor: b.outstanding, overdueMinor: b.overdue,
     recommendations: await recommend(q, id, b.overdue),
   };

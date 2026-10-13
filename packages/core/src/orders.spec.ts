@@ -108,7 +108,7 @@ describe('order capture and fulfilment', () => {
   });
 
   it('bulk-activates an IoT fleet', async () => {
-    const { customer } = await newCustomer(db, { segment: 'IOT_ENTERPRISE', idDocument: 'UEN-IOT-1' });
+    const { customer } = await newCustomer(db, { segment: 'IOT', idDocument: 'UEN-IOT-1' });
     const o = await placeOrder(db, { customerId: customer.id, channel: 'CALL_CENTER', payment: { method: 'CASH' }, lines: [{ offerId: 'iot-m2m', quantity: 10_000 }] });
     expect(o.state).toBe('COMPLETED');
     expect(o.serviceCount).toBe(10_000);

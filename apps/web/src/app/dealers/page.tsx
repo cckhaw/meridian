@@ -46,7 +46,7 @@ export default function Dealers() {
 
 function DealerForm({ dealer, onClose, onDone }: { dealer: any; onClose: () => void; onDone: () => void }) {
   const isNew = !dealer.id;
-  const [f, setF] = useState({ id: dealer.id ?? '', name: dealer.name ?? '', contactName: dealer.contactName ?? '', email: dealer.email ?? '', phone: dealer.phone ?? '', status: dealer.status ?? 'ACTIVE' });
+  const [f, setF] = useState({ name: dealer.name ?? '', contactName: dealer.contactName ?? '', email: dealer.email ?? '', phone: dealer.phone ?? '', status: dealer.status ?? 'ACTIVE' });
   const { run, busy, error } = useAction();
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   return (
@@ -54,9 +54,9 @@ function DealerForm({ dealer, onClose, onDone }: { dealer: any; onClose: () => v
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => {
         e.preventDefault();
         const body = { name: f.name, contactName: f.contactName, email: f.email, phone: f.phone };
-        if (await run(() => (isNew ? post('/dealers', { ...body, id: f.id }) : patch(`/dealers/${dealer.id}`, { ...body, status: f.status })))) onDone();
+        if (await run(() => (isNew ? post('/dealers', body) : patch(`/dealers/${dealer.id}`, { ...body, status: f.status })))) onDone();
       }}>
-        <Field label="Dealer id" hint={isNew ? 'Used on orders and commission; cannot be changed later' : undefined}><Input required readOnly={!isNew} value={f.id} onChange={set('id')} autoCapitalize="none" /></Field>
+        {!isNew && <Field label="Dealer id" hint="Issued by the system"><Input readOnly value={dealer.id} className="bg-surface2 font-mono" /></Field>}
         <Field label="Name"><Input required value={f.name} onChange={set('name')} /></Field>
         <Field label="Contact person"><Input value={f.contactName} onChange={set('contactName')} /></Field>
         <Field label="Phone"><Input value={f.phone} onChange={set('phone')} /></Field>

@@ -1,14 +1,13 @@
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
-import { conflict, invalid, notFound } from './errors.js';
+import { invalid, notFound } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
 
 /** Dealers and their agents: master data managed in the CRM. Staff operating the CRM sell on behalf of a dealer and name the agent. */
-const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{1,29}$/;
 const text = (v: string | undefined | null, max: number) => { const t = v?.trim(); if (t && t.length > max) throw invalid(`too long (max ${max} characters)`); return t || null; };
 
-export interface DealerInput { id?: string; name: string; contactName?: string; email?: string; phone?: string }
+export interface DealerInput { name: string; contactName?: string; email?: string; phone?: string }
 
 export async function listDealers(q: Queryable, f: { q?: string; status?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
   const limit = pageSize(f.limit, 25, 100);
@@ -32,17 +31,16 @@ export async function getDealer(q: Queryable, id: string): Promise<Row> {
   return r;
 }
 
+/** The dealer id is issued by the system (DLR-00001, …) and never edited, so it can be quoted on orders and commission without clashes. */
 export async function createDealer(q: Queryable, actor: string, i: DealerInput): Promise<Row> {
-  const id = (i.id ?? '').trim();
-  if (!ID.test(id)) throw invalid('the dealer id is 2–30 letters, numbers, dashes or underscores');
   const name = text(i.name, 120);
   if (!name) throw invalid('dealer name is required');
   const r = await q.query(
-    `INSERT INTO dealers (id, name, contact_name, email, phone, created_by) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING *`,
-    [id, name, text(i.contactName, 120), text(i.email, 200), text(i.phone, 40), actor]);
-  if (!r.rowCount) throw conflict(`dealer ${id} already exists`);
-  await audit(q, actor, 'dealer', id, 'create', { name });
-  return r.rows[0]!;
+    `INSERT INTO dealers (id, name, contact_name, email, phone, created_by) VALUES ('DLR-' || lpad(nextval('dealer_id_seq')::text, 5, '0'), $1,$2,$3,$4,$5) RETURNING *`,
+    [name, text(i.contactName, 120), text(i.email, 200), text(i.phone, 40), actor]);
+  const d = r.rows[0]!;
+  await audit(q, actor, 'dealer', d.id as string, 'create', { name });
+  return d;
 }
 
 export async function updateDealer(q: Queryable, actor: string, id: string, p: Partial<Omit<DealerInput, 'id'>> & { status?: 'ACTIVE' | 'INACTIVE' }): Promise<Row> {

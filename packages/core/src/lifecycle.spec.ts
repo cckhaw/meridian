@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runBillCycle, payInvoice } from './billing.js';
-import { addToGroup, createCustomer, listChildren, searchCustomers } from './customers.js';
+import { createCustomer, listChildren, searchCustomers } from './customers.js';
 import { changeMsisdn, changeSim, completePortOut, requestPortOut, suspendService, resumeService, terminateService, transferOwnership } from './lifecycle.js';
 import { createCase } from './cases.js';
 import { customer360, reconcile } from './reports.js';
@@ -40,14 +40,12 @@ describe('customer hierarchy', () => {
     const { customer, serviceId } = await withService('plan-sim-5g');
     const msisdn = (await db.query('SELECT identifier FROM services WHERE id=$1', [serviceId])).rows[0]!.identifier as string;
     expect((await searchCustomers(db, { q: msisdn })).items.map((c) => c.id)).toContain(customer.id);
-    const owner = await newCustomer(db, { segment: 'FAMILY' });
-    await addToGroup(db, owner.customer.id, customer.id);
     await createCase(db, { customerId: customer.id, type: 'FIBER_ASSURANCE', subject: 'Slow speeds' });
     const c360 = await customer360(db, customer.id);
     expect(c360.accounts).toHaveLength(1);
     expect(c360.serviceSummary[0]).toMatchObject({ type: 'MOBILE', status: 'ACTIVE', n: 1 });
     expect(c360.cases).toHaveLength(1);
-    expect(c360.memberOf[0].displayName).toBe(owner.customer.displayName);
+    expect(Number(c360.groupCount)).toBe(0);
     expect(c360.recommendations.map((r: any) => r.id)).toEqual(expect.arrayContaining(['device', 'fiber', 'ott']));
   });
 });

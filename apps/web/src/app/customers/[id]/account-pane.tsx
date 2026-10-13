@@ -2,11 +2,14 @@
 import { Alert, Badge, Card, Empty, LoadMore, Spinner, Stat, TableWrap, Td, Th } from '@meridian/ui';
 import Link from 'next/link';
 import { useApi, usePaged } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { d, label, money, tone } from '@/lib/format';
+import { GroupsPanel } from './groups-panel';
 import { ServicePanel, ServicesTable } from './services-panel';
 
 /** One billing account: what it owes, its recent invoices, and its services (searchable, paged). A service opened from the tree appears first. */
 export function AccountPane({ accountId, serviceId, canBilling, onChange, onClearService }: { accountId: string; serviceId: string | null; canBilling: boolean; onChange: () => void; onClearService: () => void }) {
+  const { can } = useAuth();
   const acct = useApi<any>(`/accounts/${accountId}`);
   const svc = useApi<any>(serviceId ? `/services/${serviceId}` : null);
   const invoices = usePaged<any>(canBilling ? `/invoices?accountId=${accountId}&limit=5` : null);
@@ -57,6 +60,8 @@ export function AccountPane({ accountId, serviceId, canBilling, onChange, onClea
           )}
         </section>
       )}
+
+      {can('service:read') && <GroupsPanel accountId={accountId} canManage={can('service:manage')} />}
 
       <ServicesTable accountId={accountId} onChange={refresh} />
     </div>

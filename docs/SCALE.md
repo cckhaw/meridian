@@ -25,7 +25,7 @@ Every list in Meridian is built so that opening a screen costs the same whether 
 | Screen | List API | Search | Notes |
 |---|---|---|---|
 | Customers | `GET /customers` | name, e-mail, phone, id | segment filter |
-| Customer → departments / group members / accounts / services | `/customers/:id/children`, `/members`, `/accounts`, `/services?accountId=` | name, number | loaded when the node is opened |
+| Customer → departments / accounts / services / groups | `/customers/:id/children`, `/accounts`, `/services?accountId=`, `/accounts/:id/groups` | name, number | loaded when the node is opened |
 | Orders, invoices, cases | `/orders`, `/invoices`, `/cases` | customer, number | status filters |
 | Inventory | `/inventory`, `/inventory/locations` | SKU prefix | locations via skip-scan |
 | Audit, users, KYC, GL | `/audit`, `/users`, `/kyc/cases`, `/gl` | actor / username / — | newest first |

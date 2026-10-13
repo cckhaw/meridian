@@ -5,6 +5,7 @@ import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, tsPage, type Page } from './paging.js';
 import { customerIdsMatching, parseQuery } from './search.js';
+import { assertSegmentUsable } from './segments.js';
 import { shardFor } from './shard.js';
 
 export interface NewCustomer {
@@ -33,8 +34,9 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
   const shardId = shardFor(id);
   const marketCode = input.marketCode ?? 'SG';
   const hash = hashIdDocument(input.idDocument);
-  // Individuals must be unique by ID document; enterprises/departments may legitimately share one.
-  if (input.segment === 'CONSUMER' || input.segment === 'FAMILY') {
+  // Individuals must be unique by ID document; companies and fleets (non-individual segments) may legitimately share one.
+  const segment = await assertSegmentUsable(q, input.segment);
+  if (segment.individual) {
     const dup = (await q.query('SELECT id FROM customers WHERE id_document_hash=$1 AND market_code=$2 LIMIT 1', [hash, marketCode])).rows[0];
     if (dup) throw conflict(`a customer with this ID document already exists (${dup.id})`);
   }
@@ -120,16 +122,6 @@ export async function listChildren(q: Queryable, customerId: string, o: { deep?:
   return { items: page.items.map(({ cursorOrd: _o, ...rest }) => strip(rest)), nextCursor: page.nextCursor };
 }
 
-export async function addToGroup(q: Queryable, groupCustomerId: string, memberCustomerId: string, role: 'OWNER' | 'MEMBER' | 'DEPARTMENT' = 'MEMBER') {
-  const g = await getCustomer(q, groupCustomerId);
-  await getCustomer(q, memberCustomerId);
-  await q.query(
-    `INSERT INTO group_memberships (group_customer_id, member_customer_id, shard_id, role) VALUES ($1,$2,$3,$4)
-     ON CONFLICT (shard_id, group_customer_id, member_customer_id) DO UPDATE SET role = EXCLUDED.role`,
-    [groupCustomerId, memberCustomerId, g.shardId, role],
-  );
-}
-
 export async function updateCustomer(q: Queryable, id: string, patch: { displayName?: string; email?: string; phone?: string; status?: string }) {
   await getCustomer(q, id);
   await q.query(
@@ -173,28 +165,9 @@ export async function getAccount(q: Queryable, accountId: string): Promise<Row> 
   return { ...a, balanceMinor: Number(bal.rows[0]!.b), serviceCount: Number(svc.rows[0]!.n), customer: cust.rows[0] };
 }
 
-/** Members of a group customer, paged and searchable by name. */
-export async function listGroupMembers(q: Queryable, groupId: string, f: { q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
-  const limit = pageSize(f.limit, 20, 100);
-  const { params, p } = sqlBuilder();
-  const where = [`m.group_customer_id = ${p(groupId)}`];
-  const pq = await parseQuery(q, f.q);
-  if (pq.kind === 'words') where.push(`to_tsvector('simple', c.display_name) @@ to_tsquery('simple', ${p(pq.tsquery)})`);
-  else if (pq.kind !== 'empty') where.push(`c.id IN (${customerIdsMatching(pq, p)})`);
-  const cur = decodeCursor(f.cursor, 2);
-  if (cur) where.push(`(c.display_name, c.id) > (${p(cur[0])}::text, ${p(cur[1])}::uuid)`);
-  const rows = (await q.query(
-    `SELECT c.id, c.display_name, c.segment, c.status, m.role, (SELECT count(*) FROM services s WHERE s.customer_id = c.id AND s.status IN ('ACTIVE','SUSPENDED')) AS service_count
-       FROM group_memberships m JOIN customers c ON c.id = m.member_customer_id WHERE ${where.join(' AND ')} ORDER BY c.display_name, c.id LIMIT ${p(limit + 1)}`, params)).rows;
-  return toPage(rows, limit, (r) => [r.displayName as string, r.id as string]);
-}
-
-/** Where a customer sits: the chain of parent customers above it (enterprise → department …) and the groups it belongs to. Both are short lists. */
-export async function customerLineage(q: Queryable, customerId: string): Promise<{ ancestors: Row[]; groups: Row[] }> {
+/** Where a customer sits: the chain of parent customers above it (enterprise → department …). A short list. */
+export async function customerLineage(q: Queryable, customerId: string): Promise<{ ancestors: Row[] }> {
   const c = await getCustomer(q, customerId);
-  const [anc, groups] = await Promise.all([
-    q.query(`SELECT id, display_name, segment FROM customers WHERE hierarchy_path @> $1::ltree AND id <> $2 ORDER BY nlevel(hierarchy_path) LIMIT 12`, [c.hierarchyPath, customerId]),
-    q.query(`SELECT g.id, g.display_name, g.segment, m.role FROM group_memberships m JOIN customers g ON g.id = m.group_customer_id WHERE m.member_customer_id = $1 ORDER BY g.display_name LIMIT 12`, [customerId]),
-  ]);
-  return { ancestors: anc.rows, groups: groups.rows };
+  const anc = await q.query(`SELECT id, display_name, segment FROM customers WHERE hierarchy_path @> $1::ltree AND id <> $2 ORDER BY nlevel(hierarchy_path) LIMIT 12`, [c.hierarchyPath, customerId]);
+  return { ancestors: anc.rows };
 }
