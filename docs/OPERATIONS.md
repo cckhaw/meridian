@@ -73,3 +73,34 @@ The amount must equal the order total; the timestamp must be within 5 minutes; c
 ## 6. Upgrading
 
 Migrations are append-only SQL in `packages/db/migrations`, embedded at build time (`pnpm --filter @meridian/db embed`). They run at start. Deploy the new version; there is no separate migration step. Take a backup first.
+
+## 7. Starting fresh (reset checklist)
+
+Use this to throw away all data, for example to clear a trial or demo system before real use. **Resetting destroys customers, orders, invoices, the ledger and the audit log, and it cannot be undone.** Never run it on a system with real customers unless you have a backup you have tested.
+
+### Preferred: point the app at a new, empty database
+
+1. **Create an empty PostgreSQL database** (for Neon, a new project or database; do not *branch* the old one, a branch copies its data).
+2. **Set the environment** (Vercel → Settings → Environment Variables, or your host's equivalent):
+   - `DATABASE_URL`: the new database's connection string.
+   - `MERIDIAN_SEED`: `none` (empty) or `starter` (a sample catalog and stock to edit). Never `demo` in production.
+   - Keep `MERIDIAN_SUPERUSER_USERNAME` and `MERIDIAN_SUPERUSER_PASSWORD`, `MERIDIAN_ID_PEPPER` and the other secrets in section 1. If you change `MERIDIAN_ID_PEPPER` or the field-encryption key, nothing from the old database can be read with it, which is fine for a true reset.
+3. **Redeploy or restart.** Migrations run automatically at start; the first request takes a few seconds.
+4. **Check it is empty**: sign in as the super user; Customers and Orders show nothing.
+5. **Keep the old database** until you are sure you do not need it, then delete it.
+
+### Only if you must reuse the same database
+
+1. **Back up first** (a snapshot or point-in-time restore point) and confirm you can restore it.
+2. Stop traffic (pause the deployment or put up a maintenance page).
+3. In the database console run `DROP SCHEMA public CASCADE; CREATE SCHEMA public;`.
+4. Set `MERIDIAN_SEED` as above, then redeploy or restart so the migrations recreate everything.
+
+### What is lost and what to set up again
+
+Everything lives in the database, so after a reset you start from section 2:
+
+- **Settings**: currency and number/date format (choose before the first order), logo and theme, payment gateway, store-front API keys, the *require verified identity* option.
+- **Catalog, stock, bundle discounts**, and the **cancellation rules** (the standard policy returns the first time it is needed).
+- **Users and roles** (everyone is signed out), then **dealers and their agents**.
+- **Outside the database**: update the store-front's API key and URL, and the Stripe webhook endpoint and signing secret if the deployment URL or secrets changed. Customers' old store-front orders and receipts no longer exist.

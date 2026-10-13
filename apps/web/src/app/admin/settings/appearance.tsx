@@ -83,7 +83,7 @@ export function AppearanceSettings({ branding, themes, guidance, onSaved }: { br
                 </label>
               ))}
             </div>
-            <p className="mt-2 text-footnote text-label2">All seven keep text readable (WCAG AA contrast) in both light and dark mode.</p>
+            <p className="mt-2 text-footnote text-label2">All eight keep text readable (WCAG AA contrast) in both light and dark mode.</p>
           </fieldset>
           {save.error && <Alert>{save.error}</Alert>}
           {save.ok && <Alert tone="success">{save.ok}</Alert>}

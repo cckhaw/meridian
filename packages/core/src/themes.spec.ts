@@ -4,10 +4,10 @@ import { contrast, THEME_IDS, THEMES, themeCss, type Rgb } from '@meridian/types
 const SURFACES = { light: { bg: [255, 255, 255] as Rgb, surface2: [250, 250, 252] as Rgb }, dark: { bg: [0, 0, 0] as Rgb, surface: [28, 28, 30] as Rgb, surface2: [44, 44, 46] as Rgb } };
 
 describe('themes', () => {
-  it('offers seven distinct colour variances', () => {
-    expect(THEME_IDS).toHaveLength(7);
+  it('offers eight distinct colour variances', () => {
+    expect(THEME_IDS).toHaveLength(8);
     const accents = new Set(THEME_IDS.map((t) => THEMES[t].light.accent.join()));
-    expect(accents.size).toBe(7);
+    expect(accents.size).toBe(8);
   });
 
   for (const id of THEME_IDS) {

@@ -1,5 +1,5 @@
 /**
- * Seven portal colour themes, each a distinct hue family (ocean, teal, forest, sunset, autumn, violet, mocha).
+ * Eight portal colour themes, each a distinct hue family (ocean, teal, forest, sunset, autumn, violet, mocha, sunflower).
  * Every pair is checked for WCAG AA contrast (4.5:1) in themes.spec.ts so a theme can never make text unreadable.
  * Values are space-separated RGB channels, matching tokens.css.
  */
@@ -7,7 +7,7 @@ export type Rgb = [number, number, number];
 export interface ThemeMode { accent: Rgb; accentFg: Rgb; /** page background behind cards */ grouped: Rgb }
 export interface Theme { id: ThemeId; name: string; mood: string; light: ThemeMode; dark: ThemeMode }
 
-export const THEME_IDS = ['ocean', 'teal', 'forest', 'sunset', 'autumn', 'violet', 'mocha'] as const;
+export const THEME_IDS = ['ocean', 'teal', 'forest', 'sunset', 'autumn', 'violet', 'mocha', 'sunflower'] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 export const DEFAULT_THEME: ThemeId = 'ocean';
 
@@ -19,6 +19,8 @@ export const THEMES: Record<ThemeId, Theme> = {
   autumn: { id: 'autumn', name: 'Autumn', mood: 'Energetic and friendly', light: { accent: [176, 68, 0],  accentFg: [255, 255, 255], grouped: [250, 244, 237] }, dark: { accent: [255, 160, 64], accentFg: [0, 0, 0], grouped: [0, 0, 0] } },
   violet: { id: 'violet', name: 'Violet', mood: 'Creative and premium',  light: { accent: [109, 40, 217], accentFg: [255, 255, 255], grouped: [245, 242, 251] }, dark: { accent: [176, 140, 255], accentFg: [0, 0, 0], grouped: [0, 0, 0] } },
   mocha:  { id: 'mocha',  name: 'Mocha',  mood: 'Grounded and refined',  light: { accent: [112, 76, 52],  accentFg: [255, 255, 255], grouped: [246, 243, 240] }, dark: { accent: [214, 170, 130], accentFg: [0, 0, 0], grouped: [0, 0, 0] } },
+  // Yellow cannot carry white text at AA in light mode, so the light accent is a deep gold; dark mode uses the bright yellow with black text.
+  sunflower: { id: 'sunflower', name: 'Sunflower', mood: 'Bright and optimistic', light: { accent: [138, 100, 0], accentFg: [255, 255, 255], grouped: [252, 247, 230] }, dark: { accent: [255, 214, 10], accentFg: [0, 0, 0], grouped: [0, 0, 0] } },
 };
 export const isThemeId = (t: string): t is ThemeId => (THEME_IDS as readonly string[]).includes(t);
 
