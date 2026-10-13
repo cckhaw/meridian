@@ -4,9 +4,11 @@ import Link from 'next/link';
 import { useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { dt, label, money, tone } from '@/lib/format';
+import { useOfferTypes } from '@/lib/offer-types';
 
 /** Overview. The API returns only the sections this role may see, and the page renders exactly what came back. */
 export default function Home() {
+  const types = useOfferTypes();
   const { me, can } = useAuth();
   const { data: d, error, loading } = useApi('/dashboard');
   const has = (k: string) => d && d[k] !== undefined;
@@ -54,7 +56,7 @@ export default function Home() {
                 {d.topOffers.map((o: any) => (
                   <Card key={o.offerId} className="!p-4">
                     <p className="font-medium">{o.name}</p>
-                    <p className="text-footnote text-label2">{label(o.kind)}</p>
+                    <p className="text-footnote text-label2">{types.name(o.kind)}</p>
                     <p className="mt-2 text-title3 font-semibold tabular-nums">{o.services.toLocaleString()} <span className="text-subhead font-normal text-label2">services · {money(o.mrrMinor)}/mo</span></p>
                   </Card>
                 ))}

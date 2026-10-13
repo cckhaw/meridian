@@ -5,6 +5,8 @@ import { conflict, invalid, notFound, rejected } from './errors.js';
 import { quoteEtc } from './etc.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { validateLineItem, validateOffer, validateParent } from './hierarchy.js';
+import { expandKinds, prepareOffer } from './offer-config.js';
+import { getRegional } from './settings.js';
 
 export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
 
@@ -15,7 +17,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
     markets: r.markets, version: r.version, createdAt: r.createdAt, updatedAt: r.updatedAt, sortOrder: r.sortOrder ?? 0,
     ...(r.level === 'NETWORK_TYPE' ? { networkType: d.networkType } : {}),
     ...(r.level === 'OFFER'
-      ? { kind: r.kind, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
+      ? { kind: r.kind, template: d.template ?? r.kind, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
           characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [], variants: d.variants ?? [] }
       : {}),
     ...(r.level === 'LINE_ITEM'
@@ -27,7 +29,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
 const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, description: i.description || undefined, quantity: i.unlimited ? undefined : i.quantity, unit: i.unit || undefined, unlimited: !!i.unlimited, sku: i.sku || undefined });
 
 const offerData = (o: Partial<OfferNode>) => ({
-  description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
+  template: o.template, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
   characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [],
 });
 
@@ -184,6 +186,13 @@ export async function checkDependencies(q: Queryable, customerId: string | null,
 }
 
 // ───────────────────────── writes ─────────────────────────
+/** Every price is in the currency set in Settings → Regional: one deployment, one currency. */
+async function assertCurrency(q: Queryable, prices: PriceComponent[]) {
+  const { currency } = await getRegional(q);
+  const bad = prices.find((p) => p.amount.currency !== currency);
+  if (bad) throw invalid(`prices are in ${currency} (Settings → Regional); this one is in ${bad.amount.currency}`);
+}
+
 /** A SKU is reserved from exactly one place: the offer's fulfilment list, or a single line item of that offer. */
 async function assertSkuFree(q: Queryable, offerId: string, sku: string, exceptItemId: string | null) {
   const offer = (await q.query(`SELECT data->'fulfilment'->'inventorySkus' AS skus FROM catalog_nodes WHERE id=$1`, [offerId])).rows[0];
@@ -200,6 +209,8 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
   if (err) throw invalid(err);
   const path = parent ? `${parent.path}/${input.id}` : input.id;     // the path is always derived, never trusted from the client
   if (input.level === 'OFFER') {
+    Object.assign(input, await prepareOffer(q, input as unknown as OfferNode)); // the type's behaviour template, and the fulfilment flags from the chosen options
+    await assertCurrency(q, (input as unknown as OfferNode).prices ?? []);
     const errs = validateOffer(input as unknown as OfferNode);
     if (errs.length) throw invalid('invalid offer', errs);
     await assertDependenciesValid(q, input.id, path, input.requires ?? [], input.excludes ?? []);
@@ -283,6 +294,9 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
       const u = await nodeUsage(q, id);
       if (u.services + u.orders > 0) throw rejected(`This offer is already sold (${u.services} services, ${u.orders} order lines), so its price, contract or type can’t change in place: existing subscribers would be repriced. Create a new version and retire this one.`);
     }
+    const prepared = await prepareOffer(q, next, { kind: o.kind, options: o.fulfilment?.options });
+    Object.assign(next, prepared);
+    if (patch.prices) await assertCurrency(q, next.prices);
     const errs = validateOffer(next);
     if (errs.length) throw invalid('invalid offer', errs);
     // A SKU is reserved once: either on the offer's fulfilment or on one of its line items.
@@ -462,8 +476,9 @@ export async function pageOffers(q: Queryable, f: { q?: string; status?: string;
   const { params, p } = sqlBuilder();
   const where = [`level = 'OFFER'`];
   if (f.status) where.push(`status = ${p(f.status)}`);
-  if (f.kind) where.push(`kind = ANY(${p(f.kind.split(',').filter(Boolean))})`); // comma-separated kinds
-  if (f.notKind) where.push(`kind <> ALL(${p(f.notKind.split(',').filter(Boolean))})`);
+  // Comma-separated, and each may be a type id or a behaviour template ("every SIM + device type").
+  if (f.kind) where.push(`kind = ANY(${p(await expandKinds(q, f.kind.split(',').filter(Boolean)))})`);
+  if (f.notKind) where.push(`kind <> ALL(${p(await expandKinds(q, f.notKind.split(',').filter(Boolean)))})`);
   if (f.market) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
   if (f.channel) where.push(`(jsonb_array_length(COALESCE(data->'salesChannels','[]'::jsonb)) = 0 OR data->'salesChannels' ? ${p(f.channel)})`);
   const words = (f.q ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 5);

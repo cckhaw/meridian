@@ -5,8 +5,10 @@ import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { label, money, step as moneyStep } from '@/lib/format';
 import { useSegments } from '@/lib/segments';
 import { Row, Section } from './wizard-ui';
+import { StorePicker } from '@/app/stores/store-picker';
 import { SellingPanel } from './selling-panel';
 import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, newItem, type Cust, type Item } from './wizard-types';
+import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
 
@@ -19,7 +21,10 @@ export interface Wizard {
   items: Item[]; setItems: (f: (cur: Item[]) => Item[]) => void;
   quote: any | null; quoting: boolean; quoteError: string | null;
   customer: Cust | null; setCustomer: (c: Cust | null) => void; accountId: string; setAccountId: (id: string) => void; canCreateCustomer: boolean;
-  address: string; setAddress: (s: string) => void; slot: string; setSlot: (s: string) => void;
+  address: string; setAddress: (s: string) => void;
+  /** How the goods reach the customer (what every goods offer allows), the one chosen, and the store for collection. */
+  deliveryMethods: Array<'SHIP' | 'COLLECT'>; method: 'SHIP' | 'COLLECT' | null; setMethod: (m: 'SHIP' | 'COLLECT') => void; pickupStore: string; setPickupStore: (s: string) => void;
+  slot: string; setSlot: (s: string) => void;
   pay: { method: string; reference: string; received: boolean }; setPay: (p: { method: string; reference: string; received: boolean }) => void;
   consent: boolean; setConsent: (b: boolean) => void;
   jumpTo: (id: string, opts?: { kind?: string }) => void; kindHint: string | null; clearKindHint: () => void;
@@ -32,10 +37,11 @@ const priceLine = (o: any) => {
 };
 
 function OfferCard({ o, chosen, onToggle, note }: { o: any; chosen: boolean; onToggle: () => void; note?: string }) {
+  const types = useOfferTypes();
   return (
     <button type="button" onClick={onToggle} aria-pressed={chosen}
       className={`relative rounded-card border p-4 text-left shadow-card transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${chosen ? 'border-accent bg-accent/5' : 'border-transparent bg-surface hover:-translate-y-0.5'}`}>
-      <div className="flex items-start justify-between gap-2"><span className="font-medium">{o.name}</span><Badge>{label(o.kind)}</Badge></div>
+      <div className="flex items-start justify-between gap-2"><span className="font-medium">{o.name}</span><Badge>{types.name(o.kind)}</Badge></div>
       {o.description && <p className="mt-1 line-clamp-2 text-footnote text-label2">{o.description}</p>}
       <p className="mt-2 text-subhead font-medium">{priceLine(o)}</p>
       <p className="text-footnote text-label2">{o.contract?.termMonths > 0 ? `${o.contract.termMonths}-month contract` : o.kind === 'PHYSICAL_GOOD' ? 'Outright purchase' : 'No contract'}{o.variants?.length ? ` · ${new Set(o.variants.map((v: any) => v.colour)).size} colours` : ''}</p>
@@ -311,14 +317,23 @@ export function DeliveryStep({ w }: { w: Wizard }) {
   return (
     <div className="space-y-5">
       {needs.delivery && (
-        <Card><Field label="Delivery address" hint="Where the device and any accessories are sent."><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} autoComplete="street-address" /></Field></Card>
+        <Card className="space-y-4">
+          {w.deliveryMethods.length > 1 && (
+            <Field label="How will the customer get it?">
+              <Segmented label="Delivery method" value={w.method ?? 'SHIP'} options={[{ value: 'SHIP', label: 'Deliver to an address' }, { value: 'COLLECT', label: 'Collect in store' }]} onChange={(m) => w.setMethod(m as 'SHIP' | 'COLLECT')} />
+            </Field>
+          )}
+          {w.method === 'COLLECT'
+            ? <Field label="Collection store" hint="The customer picks it up here. The stock is held at this store, and the order can be cancelled until it is collected."><StorePicker value={w.pickupStore} onChange={w.setPickupStore} /></Field>
+            : <Field label="Delivery address" hint="Where the device and any accessories are sent."><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} autoComplete="street-address" /></Field>}
+        </Card>
       )}
       {needs.installation && (
         <Card>
           <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order.${w.quote.installationSlaDays ? ` Installations not completed within ${w.quote.installationSlaDays} days are cancelled and refunded.` : ''}`}>
             <Input type="datetime-local" min={min} value={w.slot} onChange={(e) => w.setSlot(e.target.value)} />
           </Field>
-          {!needs.delivery && <div className="mt-3"><Field label="Installation address"><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} /></Field></div>}
+          {(!needs.delivery || w.method === 'COLLECT') && <div className="mt-3"><Field label="Installation address"><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} /></Field></div>}
         </Card>
       )}
       <div className="rounded-card bg-surface p-4 shadow-card">
@@ -381,9 +396,10 @@ export function ReviewStep({ w }: { w: Wizard }) {
         </Card>
       ))}
       {q.bundles.length > 0 && <div className="rounded-card bg-success/10 p-4 text-subhead"><p className="font-semibold text-success">Bundle savings</p>{q.bundles.map((b: any, i: number) => <p key={i}>{b.name}: {money(b.discountMinor)} off {b.lineOffer}</p>)}</div>}
-      {(w.address || w.slot) && (
+      {(w.address || w.slot || w.method === 'COLLECT') && (
         <Card><p className="text-footnote font-semibold uppercase tracking-wide text-label2">Delivery and installation</p>
-          {w.address && <p className="text-subhead">{w.address}</p>}{w.slot && <p className="text-subhead text-label2">Installation visit requested for {new Date(w.slot).toLocaleString()}</p>}</Card>
+          {w.method === 'COLLECT' && <p className="text-subhead">Collect in store: <span className="font-mono">{w.pickupStore}</span></p>}
+          {w.method !== 'COLLECT' && w.address && <p className="text-subhead">{w.address}</p>}{w.slot && <p className="text-subhead text-label2">Installation visit requested for {new Date(w.slot).toLocaleString()}</p>}</Card>
       )}
       <Card>
         <dl>

@@ -3,15 +3,8 @@ import type { Auditable, CurrencyCode, Money } from './common.js';
 /** The hierarchy: Network type -> Category -> Group -> Offer -> Offer line item. */
 export type NetworkType = 'mobile' | 'fiber' | 'iot' | 'none';
 
-export type OfferKind =
-  | 'SIM_ONLY'
-  | 'SIM_DEVICE'
-  | 'WEARABLE'
-  | 'VAS'
-  | 'NON_TELCO_SUBSCRIPTION'
-  | 'PHYSICAL_GOOD'
-  | 'FIBER'
-  | 'IOT_CONNECTIVITY';
+/** An offer type id: one of the built-in types, or one the operator added in Settings. Its behaviour comes from its template (see offer-types.ts). */
+export type OfferKind = string;
 
 export type ContractTermMonths = 0 | 12 | 24 | 36;
 
@@ -74,6 +67,10 @@ export interface FulfilmentSpec {
   requiresShipping: boolean;
   requiresInstallation: boolean;
   requiresSimActivation: boolean;
+  /** Collected in a store by the customer (instead of, or as well as, being shipped). */
+  requiresCollection?: boolean;
+  /** The fulfilment options chosen in the catalog configuration. The flags above are derived from them when the offer is saved. */
+  options?: string[];
   inventorySkus: string[];
 }
 
@@ -89,6 +86,8 @@ export interface DeviceVariant {
 export interface OfferNode extends CatalogNodeBase {
   level: 'OFFER';
   kind: OfferKind;
+  /** The behaviour template of `kind`, stored with the offer so it never needs a lookup. Absent on older offers: then `kind` is the template. */
+  template?: string;
   description?: string;
   prices: PriceComponent[];
   contract?: ContractTerms;

@@ -1,4 +1,4 @@
-import { LINE_ITEM_TYPES, type CatalogNode, type CatalogNodeLevel, type LineItemNode, type OfferNode } from '@meridian/types';
+import { behaviourOf, LINE_ITEM_TYPES, type CatalogNode, type CatalogNodeLevel, type LineItemNode, type OfferNode } from '@meridian/types';
 
 /** Network type -> Category -> Group -> Offer -> Line item. A node's parent must be exactly one level above. */
 const PARENT_LEVEL: Record<CatalogNodeLevel, CatalogNodeLevel | null> = {
@@ -22,7 +22,7 @@ export function validateOffer(o: OfferNode): string[] {
   if (o.prices.length === 0) errs.push('offer needs at least one price component');
   const variants = o.variants ?? [];
   if (variants.length) {
-    if (!o.fulfilment?.requiresShipping) errs.push('device variants only make sense for offers that ship a device');
+    if (!o.fulfilment?.requiresShipping && !o.fulfilment?.requiresCollection) errs.push('device variants only make sense for offers that ship or hand over a device');
     const ids = new Set<string>();
     for (const v of variants) {
       if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(v.id ?? '')) errs.push(`variant id “${v.id}” may contain lowercase letters, digits and dashes`);
@@ -34,13 +34,14 @@ export function validateOffer(o: OfferNode): string[] {
     }
     if (variants.length > 40) errs.push('too many variants (40 at most)');
   }
-  const needsContract = o.kind === 'SIM_DEVICE';
-  if (needsContract && !o.contract?.subsidy && (o.contract?.termMonths ?? 0) > 0) errs.push('contract device offers need a subsidy definition');
+  const b = behaviourOf(o);
+  if (b.goods && b.service && !b.serviceNeedsFee && !o.contract?.subsidy && (o.contract?.termMonths ?? 0) > 0) errs.push('contract device offers need a subsidy definition');
   if (o.contract && o.contract.termMonths > 0 && !o.contract.etc) errs.push('fixed-term contracts need an ETC policy');
-  if (o.kind === 'NON_TELCO_SUBSCRIPTION' && !o.partnerCode) errs.push('non-telco subscriptions need a partnerCode');
-  if (o.kind === 'PHYSICAL_GOOD' && !o.fulfilment.requiresShipping) errs.push('physical goods must require shipping');
-  if (o.kind === 'FIBER' && !o.fulfilment.requiresInstallation) errs.push('fiber offers must require installation');
-  if (o.kind === 'SIM_ONLY' && o.contract?.subsidy) errs.push('SIM-only offers cannot carry a device subsidy');
+  if (b.contract === 'none' && (o.contract?.termMonths ?? 0) > 0) errs.push('this type of offer is sold without a contract');
+  if (b.needsPartner && !o.partnerCode) errs.push('partner subscriptions need a partner code');
+  if (b.goods && b.outright && !o.fulfilment.requiresShipping && !o.fulfilment.requiresCollection) errs.push('goods must be delivered or collected in store');
+  if (b.needsInstallation && !o.fulfilment.requiresInstallation) errs.push('this type of offer must have an installation option');
+  if (!b.goods && o.contract?.subsidy) errs.push('only offers with a device can carry a device subsidy');
   const clash = o.requires.filter((r) => o.excludes.includes(r));
   if (clash.length) errs.push(`offers both required and excluded: ${clash.join(', ')}`);
   return errs;

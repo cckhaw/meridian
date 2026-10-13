@@ -19,8 +19,8 @@ describe('hierarchy', () => {
   });
   it('validates kind-specific rules', () => {
     expect(validateOffer(offer({}))).toEqual([]);
-    expect(validateOffer(offer({ kind: 'NON_TELCO_SUBSCRIPTION' }))).toContain('non-telco subscriptions need a partnerCode');
-    expect(validateOffer(offer({ kind: 'PHYSICAL_GOOD' }))).toContain('physical goods must require shipping');
+    expect(validateOffer(offer({ kind: 'NON_TELCO_SUBSCRIPTION' }))).toContain('partner subscriptions need a partner code');
+    expect(validateOffer(offer({ kind: 'PHYSICAL_GOOD' }))).toContain('goods must be delivered or collected in store');
     expect(validateOffer(offer({ contract: { termMonths: 24 } }))).toContain('fixed-term contracts need an ETC policy');
     expect(validateOffer(offer({ requires: ['a'], excludes: ['a'] }))[0]).toMatch(/required and excluded/);
   });

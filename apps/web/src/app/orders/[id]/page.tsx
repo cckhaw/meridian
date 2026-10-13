@@ -9,7 +9,7 @@ import { d, dt, label, money, tone, toMinor } from '@/lib/format';
 const GROUP_TITLE: Record<string, string> = { GOODS: 'Delivery', INSTALL: 'Installation', ACTIVATION: 'Service activation' };
 const gt = (k: string) => GROUP_TITLE[k] ?? k;
 const GROUP_STATUS: Record<string, string> = { PENDING: 'Not started', LOCKED: 'In progress, locked', DONE: 'Done', CANCELLED: 'Cancelled', RETURNED: 'Returned' };
-const ACTION_LABEL: Record<string, string> = { confirm_payment: 'Confirm payment received', schedule_installation: 'Schedule installation', dispatch_technician: 'Dispatch technician', complete_installation: 'Mark installation complete', ship: 'Ship goods', deliver: 'Mark delivered' };
+const ACTION_LABEL: Record<string, string> = { confirm_payment: 'Confirm payment received', schedule_installation: 'Schedule installation', dispatch_technician: 'Dispatch technician', complete_installation: 'Mark installation complete', ship: 'Ship goods', deliver: 'Mark delivered', ready_for_collection: 'Ready for collection', collect: 'Customer has collected' };
 
 export default function OrderDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -86,7 +86,9 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
           {o.appointments.length > 0 && <><SectionTitle>Installation</SectionTitle><TableWrap><thead><tr><Th>Window</Th><Th>Status</Th></tr></thead><tbody>
             {o.appointments.map((a: any, i: number) => <tr key={i}><Td>{dt(a.slotStart)} – {dt(a.slotEnd)}</Td><Td><Badge tone={tone(a.status)}>{label(a.status)}</Badge></Td></tr>)}</tbody></TableWrap></>}
           {o.fulfilment.trackingNumber && <p className="mt-4 text-subhead">Tracking: <span className="font-mono">{o.fulfilment.trackingNumber}</span></p>}
-          {o.fulfilment.address && <p className="text-subhead text-label2">Address: {o.fulfilment.address}</p>}
+          {o.fulfilment.delivery?.method === 'COLLECT'
+            ? <p className="text-subhead text-label2">Collect in store: <span className="font-mono">{o.fulfilment.delivery.pickupStoreId}</span>{o.fulfilment.readyForCollection ? ' · ready for collection' : ''}</p>
+            : o.fulfilment.address && <p className="text-subhead text-label2">Address: {o.fulfilment.address}</p>}
         </div>
 
         <aside className="space-y-4">

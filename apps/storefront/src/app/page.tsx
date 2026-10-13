@@ -6,7 +6,7 @@ import { useConfig } from '@/components/config';
 import { api } from '@/lib/api';
 
 interface Offer {
-  id: string; name: string; kind: string; description?: string; group: string; monthlyMinor: number; upfrontMinor: number; contractMonths: number;
+  id: string; name: string; kind: string; kindName?: string; description?: string; group: string; monthlyMinor: number; upfrontMinor: number; contractMonths: number;
   requiresShipping: boolean; requiresText: string[]; excludes: string[];
   includes: Array<{ name: string; itemType: string; quantity?: number; unit?: string; unlimited?: boolean; description?: string }>;
 }
@@ -101,7 +101,7 @@ export default function Home() {
             <article key={o.id} aria-label={o.name} className={`flex flex-col rounded-card border bg-surface p-5 shadow-card ${chosen ? 'border-accent ring-2 ring-accent' : 'border-transparent'}`}>
               <div className="flex items-start justify-between gap-2">
                 <h2 className="text-title3 font-semibold">{o.name}</h2>
-                <Badge>{KIND_LABEL[o.kind] ?? o.kind}</Badge>
+                <Badge>{KIND_LABEL[o.kind] ?? o.kindName ?? o.kind}</Badge>
               </div>
               {o.description && <p className="mt-1 text-subhead text-label2">{o.description}</p>}
               {o.includes?.length > 0 && (
