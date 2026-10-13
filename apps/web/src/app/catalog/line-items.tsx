@@ -97,7 +97,7 @@ function LineItemModal({ offer, item, onClose, onDone }: { offer: TreeNode; item
           <Field label="Unit"><Input value={unit} disabled={unlimited} onChange={(e) => setUnit(e.target.value)} maxLength={20} placeholder="GB, min, unit…" /></Field>
         </div>
         {(itemType === 'DATA' || itemType === 'VOICE' || itemType === 'SMS') && (
-          <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={unlimited} onChange={(e) => { setUnlimited(e.target.checked); if (e.target.checked) setSku(''); }} />Unlimited</label>
+          <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={unlimited} onChange={(e) => { setUnlimited(e.target.checked); if (e.target.checked) setSku(''); }} />Unlimited</label>
         )}
         <Field label="Description (optional)"><Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={300} /></Field>
         {(meta.value === 'DEVICE' || meta.value === 'ACCESSORY' || meta.value === 'SIM') && !unlimited && (

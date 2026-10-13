@@ -37,7 +37,7 @@ function Rules({ initial, gateways, webhookPath, onSaved }: { initial: StoreSett
             <Select value={f.kycMode} onChange={(e) => set('kycMode', e.target.value as StoreSettings['kycMode'])}><option value="manual">A compliance officer (recommended)</option><option value="auto">Automatic rules only</option></Select>
           </Field>
           <Field label="Minimum age"><Input type="number" min={0} max={100} value={f.minAge} onChange={(e) => set('minAge', Number(e.target.value))} /></Field>
-          <label className="flex min-h-tap items-start gap-3 sm:col-span-2"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={f.requireKycForServices} onChange={(e) => set('requireKycForServices', e.target.checked)} />
+          <label className="flex min-h-tap items-start gap-3 sm:col-span-2"><input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.requireKycForServices} onChange={(e) => set('requireKycForServices', e.target.checked)} />
             <span><span className="block font-medium">Require verified identity before selling any service</span><span className="text-footnote text-label2">Applies to every channel, including staff creating orders in the CRM. Turn on once your existing customers are verified, or they cannot be sold new services.</span></span></label>
         </div>
       </Card>
@@ -58,7 +58,7 @@ function Rules({ initial, gateways, webhookPath, onSaved }: { initial: StoreSett
         <ul className="divide-y divide-separator">
           {gateways.map((g) => (
             <li key={g.id} className="flex flex-wrap items-center gap-3 py-3">
-              <label className="flex min-h-tap flex-1 items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={enabled.has(g.id)} onChange={(e) => toggleGw(g.id, e.target.checked)} /><span className="font-medium">{g.label}</span></label>
+              <label className="flex min-h-tap flex-1 items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={enabled.has(g.id)} onChange={(e) => toggleGw(g.id, e.target.checked)} /><span className="font-medium">{g.label}</span></label>
               <Badge tone={g.configured ? 'success' : 'warning'}>{g.configured ? 'Keys configured' : 'Keys not set'}</Badge>
               <label className="flex items-center gap-2 text-subhead"><input type="radio" name="default-gw" disabled={!enabled.has(g.id)} checked={f.gateways.default === g.id} onChange={() => setF({ ...f, gateways: { ...f.gateways, default: g.id } })} />Default</label>
             </li>

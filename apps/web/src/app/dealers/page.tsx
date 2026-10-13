@@ -62,7 +62,7 @@ function DealerForm({ dealer, onClose, onDone }: { dealer: any; onClose: () => v
         <Field label="Phone"><Input value={f.phone} onChange={set('phone')} /></Field>
         <div className="sm:col-span-2"><Field label="Email"><Input type="email" value={f.email} onChange={set('email')} /></Field></div>
         {!isNew && (
-          <label className="flex min-h-tap items-center gap-3 sm:col-span-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.status === 'ACTIVE'} onChange={(e) => setF({ ...f, status: e.target.checked ? 'ACTIVE' : 'INACTIVE' })} />Active: can be chosen on new orders</label>
+          <label className="flex min-h-tap items-center gap-3 sm:col-span-2"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.status === 'ACTIVE'} onChange={(e) => setF({ ...f, status: e.target.checked ? 'ACTIVE' : 'INACTIVE' })} />Active: can be chosen on new orders</label>
         )}
         {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
         <div className="flex gap-3 sm:col-span-2"><Button type="submit" disabled={busy}>{isNew ? 'Create dealer' : 'Save'}</Button><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button></div>

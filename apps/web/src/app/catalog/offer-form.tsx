@@ -145,7 +145,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
 
           <Field label={`Monthly fee (${currency})`}><Input type="number" min="0" step={step()} value={f.recurring} onChange={set('recurring')} disabled={locked} /></Field>
           <Field label={`Upfront price (${currency})`} hint="Device, SIM kit or installation fee"><Input type="number" min="0" step={step()} value={f.upfront} onChange={set('upfront')} disabled={locked} /></Field>
-          <label className="flex min-h-tap items-center gap-3 text-body sm:col-span-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.taxInclusive} onChange={tick('taxInclusive')} disabled={locked} />Prices include tax{market ? ` (${market.taxName} ${market.taxBps / 100}%)` : ''}</label>
+          <label className="flex min-h-tap items-center gap-3 text-body sm:col-span-2"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.taxInclusive} onChange={tick('taxInclusive')} disabled={locked} />Prices include tax{market ? ` (${market.taxName} ${market.taxBps / 100}%)` : ''}</label>
 
           <Field label="Contract term"><Select value={f.term} onChange={set('term')} disabled={locked}>{[0, 12, 24, 36].map((t) => <option key={t} value={t}>{t === 0 ? 'No contract' : `${t} months`}</option>)}</Select></Field>
           {f.term !== '0' && (
@@ -160,7 +160,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
 
           <fieldset className="sm:col-span-2"><legend className="mb-1 text-subhead font-medium">Fulfilment</legend>
             <div className="flex flex-wrap gap-x-6">
-              {([['shipping', 'Ships to the customer'], ['install', 'Needs an installation visit'], ['sim', 'Needs SIM activation']] as const).map(([k, t]) => <label key={k} className="flex min-h-tap items-center gap-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f[k]} onChange={tick(k)} />{t}</label>)}
+              {([['shipping', 'Ships to the customer'], ['install', 'Needs an installation visit'], ['sim', 'Needs SIM activation']] as const).map(([k, t]) => <label key={k} className="flex min-h-tap items-center gap-2"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f[k]} onChange={tick(k)} />{t}</label>)}
             </div>
           </fieldset>
           <Field label="Stock SKUs" hint="Comma-separated; one unit of each is reserved per item sold. A SKU that is also a colour or storage option below is replaced by the one chosen."><Input value={f.skus} onChange={set('skus')} /></Field>
@@ -193,7 +193,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
             <div className="flex flex-wrap gap-x-6">
               {CHANNELS.map((c) => (
                 <label key={c} className="flex min-h-tap items-center gap-2">
-                  <input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.channels.includes(c)} onChange={(e) => setF({ ...f, channels: e.target.checked ? [...f.channels, c] : f.channels.filter((x) => x !== c) })} />{label(c)}
+                  <input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.channels.includes(c)} onChange={(e) => setF({ ...f, channels: e.target.checked ? [...f.channels, c] : f.channels.filter((x) => x !== c) })} />{label(c)}
                 </label>
               ))}
             </div>

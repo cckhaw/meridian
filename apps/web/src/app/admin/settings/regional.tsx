@@ -47,11 +47,11 @@ export function RegionalSettingsForm({ initial, locked, onSaved }: { initial: Re
             <legend className="mb-1 text-subhead font-medium">Symbol position</legend>
             <div className="flex gap-6">
               {(['before', 'after'] as const).map((p) => (
-                <label key={p} className="flex min-h-tap items-center gap-2"><input type="radio" name="pos" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.symbolPosition === p} onChange={() => set('symbolPosition', p)} />{p === 'before' ? 'In front of the number' : 'Behind the number'}</label>
+                <label key={p} className="flex min-h-tap items-center gap-2"><input type="radio" name="pos" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.symbolPosition === p} onChange={() => set('symbolPosition', p)} />{p === 'before' ? 'In front of the number' : 'Behind the number'}</label>
               ))}
             </div>
           </fieldset>
-          <label className="flex min-h-tap items-center gap-3 self-end"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={f.symbolSpacing} onChange={(e) => set('symbolSpacing', e.target.checked)} />Space between symbol and number</label>
+          <label className="flex min-h-tap items-center gap-3 self-end"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.symbolSpacing} onChange={(e) => set('symbolSpacing', e.target.checked)} />Space between symbol and number</label>
         </div>
       </Card>
 
