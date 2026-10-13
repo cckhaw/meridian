@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { OfferNode, OrderChannel, OrderState, PaymentMethod } from '@meridian/types';
+import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type PaymentMethod } from '@meridian/types';
 import { ruleSatisfied, listBundleRules } from './bundles.js';
 import { decide, deadlineDays, getCancellationSettings, listRules, type CancellationDecision, type Facts } from './cancellation.js';
 import { COMMISSION_BPS, GL, paymentMode } from './config.js';
@@ -40,12 +40,12 @@ export interface OrderInput {
   actor?: string;
 }
 
-const GOODS_KINDS = ['PHYSICAL_GOOD', 'WEARABLE', 'SIM_DEVICE'];
 const TERMINAL: OrderState[] = ['COMPLETED', 'CANCELLED', 'FAILED'];
 const OPEN_GROUP = ['PENDING', 'LOCKED'];
 const DAY = 86_400_000;
 
-const serviceType = (o: OfferNode) => (o.kind === 'FIBER' ? 'FIBER' : o.kind === 'IOT_CONNECTIVITY' ? 'IOT' : o.kind === 'VAS' || o.kind === 'NON_TELCO_SUBSCRIPTION' ? 'SUBSCRIPTION' : 'MOBILE');
+const serviceType = (o: OfferNode) => behaviourOf(o).service ?? 'MOBILE';
+const isGoods = (o: { kind?: string; template?: string }) => behaviourOf(o).goods;
 
 async function setState(q: Queryable, o: Row, to: OrderState, actor: string, reason?: string) {
   await q.query(
@@ -297,7 +297,7 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
   let tax = 0;
   for (const l of lines) {
     const { net, tax: t } = shareOf(l.paidNowMinor, l);
-    const acct = GOODS_KINDS.includes(l.offer.kind) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
+    const acct = isGoods(l.offer) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
     revenue.set(acct, (revenue.get(acct) ?? 0) + net);
     tax += t;
   }
@@ -338,7 +338,7 @@ async function refund(q: Queryable, o: Row, lines: Row[], spec: RefundSpec): Pro
   for (const l of lines) {
     if (!(l.status === 'ACTIVE' || spec.all) || l.paidNowMinor <= 0) continue;
     const { net, tax: t } = shareOf(l.paidNowMinor, l);
-    const acct = GOODS_KINDS.includes(l.offer?.kind ?? l.kind) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
+    const acct = isGoods(l.offer ?? { kind: l.kind }) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
     rev.set(acct, (rev.get(acct) ?? 0) + net); tax += t;
   }
   const keep = taxSplit(retained, mk.taxBps, true);

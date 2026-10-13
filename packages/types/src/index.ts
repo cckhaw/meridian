@@ -5,3 +5,4 @@ export * from './order.js';
 export * from './regional.js';
 export * from './currencies.js';
 export * from './themes.js';
+export * from './offer-types.js';

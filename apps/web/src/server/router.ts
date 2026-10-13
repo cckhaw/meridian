@@ -177,10 +177,12 @@ const contractSchema = z.object({
   etc: z.object({ method: z.enum(['SUBSIDY_AMORTISED', 'REMAINING_RECURRING_PERCENT']), percentOfRemaining: z.number().min(0).max(100).optional(), capSubsidyFraction: z.number().min(0).max(1).optional(), waiveInLastMonths: z.number().int().min(0).max(12).optional() }).optional(),
   subsidy: z.object({ deviceRetailPrice: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }), subsidyAmount: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }) }).optional(),
 });
-const fulfilmentSchema = z.object({ requiresShipping: z.boolean(), requiresInstallation: z.boolean(), requiresSimActivation: z.boolean(), inventorySkus: z.array(z.string().max(50)).max(20) });
+// The flags are derived from `options` when they are given (the offer wizard); older callers may still send only the flags.
+const fulfilmentSchema = z.object({ requiresShipping: z.boolean().default(false), requiresInstallation: z.boolean().default(false), requiresSimActivation: z.boolean().default(false), requiresCollection: z.boolean().optional(),
+  options: z.array(z.string().max(40)).max(12).optional(), inventorySkus: z.array(z.string().max(50)).max(20).default([]) });
 const variantSchema = z.object({ id: z.string().max(40), colour: z.string().min(1).max(40), storage: z.string().max(20).optional(), sku: z.string().max(50), priceDeltaMinor: z.number().int().optional() });
 const offerFields = {
-  kind: z.enum(['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE', 'VAS', 'NON_TELCO_SUBSCRIPTION', 'PHYSICAL_GOOD', 'FIBER', 'IOT_CONNECTIVITY']),
+  kind: z.string().min(1).max(40), // an offer type id (Settings → Catalog → Offer types)
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
   partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
   requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]),
@@ -414,7 +416,8 @@ const cancellationView = async (db: core.Db) => {
   const rules = await core.listRules(db);
   // Rules can be written against any customer segment the operator has defined, so the list comes from Settings → Customers.
   const segments = (await core.listSegments(db)).map((s) => [s.id, s.name.toLowerCase()] as [string, string]);
-  const facts = core.FACTS.map((f) => (f.id === 'segment' ? { ...f, values: segments } : f));
+  const kinds = (await core.listOfferTypes(db)).map((t) => [t.id, t.name.toLowerCase()] as [string, string]);
+  const facts = core.FACTS.map((f) => (f.id === 'segment' ? { ...f, values: segments } : f.id === 'offerKinds' ? { ...f, values: kinds } : f));
   return {
     rules, settings: await core.getCancellationSettings(db), facts, ops: core.OPS.map(([id, label, types]) => ({ id, label, types })), currency,
     descriptions: Object.fromEntries(rules.map((r) => [r.id, core.describeRule(r, currency)])),
@@ -449,6 +452,17 @@ post('/settings/api-clients', 'settings:manage', async ({ db, user, body }) => {
   return Response.json({ client: r.client, key: r.key }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
 });
 route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, user, params }) => { await core.revokeApiClient(db, user.username, params.id!); return { ok: true }; });
+
+// ───────────────────────── catalog configuration (offer types and fulfilment options) ─────────────────────────
+// Read by anyone who works on the catalog (the offer wizard, bundle rules); changed only in Settings by the super user.
+get('/catalog-config', 'catalog:read', async ({ db }) => ({ types: await core.listOfferTypes(db, { activeOnly: true }), options: await core.listFulfilmentOptions(db, { activeOnly: true }) }));
+get('/settings/catalog', 'settings:manage', async ({ db }) => ({ types: await core.listOfferTypes(db, { withUsage: true }), options: await core.listFulfilmentOptions(db, { withUsage: true }) }));
+post('/settings/offer-types', 'settings:manage', ({ db, user, body }) => core.createOfferType(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), template: z.string().max(40) }).parse(body)));
+patch('/settings/offer-types/:id', 'settings:manage', ({ db, user, params, body }) => core.updateOfferType(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
+route('DELETE', '/settings/offer-types/:id', 'settings:manage', async ({ db, user, params }) => { await core.deleteOfferType(db, user.username, params.id!); return { ok: true }; });
+post('/settings/fulfilment-options', 'settings:manage', ({ db, user, body }) => core.createFulfilmentOption(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), mechanic: z.string().max(20), tracksStock: z.boolean().optional() }).parse(body)));
+patch('/settings/fulfilment-options/:id', 'settings:manage', ({ db, user, params, body }) => core.updateFulfilmentOption(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), tracksStock: z.boolean(), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
+route('DELETE', '/settings/fulfilment-options/:id', 'settings:manage', async ({ db, user, params }) => { await core.deleteFulfilmentOption(db, user.username, params.id!); return { ok: true }; });
 
 // ───────────────────────── customers ─────────────────────────
 const newCustomer = z.object({

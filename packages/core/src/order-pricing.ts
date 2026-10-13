@@ -1,4 +1,4 @@
-import type { DeviceVariant, OfferNode, OrderChannel, PaymentMethod } from '@meridian/types';
+import { behaviourOf, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
 import { listBundleRules, matches, ruleSatisfied, type BundleRule } from './bundles.js';
 import { checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
 import { autoCancelDays, termsFor } from './cancellation.js';
@@ -23,12 +23,12 @@ export interface PricingInput {
 
 /** Offers that produce a billable service when the order activates. */
 export function createsService(o: OfferNode): boolean {
-  if (o.kind === 'PHYSICAL_GOOD') return false;
-  if (o.kind === 'WEARABLE') return !!monthlyFee(o);
-  return true;
+  const b = behaviourOf(o);
+  if (!b.service) return false;
+  return b.serviceNeedsFee ? !!monthlyFee(o) : true;
 }
-/** Which part of the order fulfils an offer: a visit, a parcel, or just switching the service on. */
-export const groupOf = (o: OfferNode): GroupKind => (o.fulfilment?.requiresInstallation ? 'INSTALL' : o.fulfilment?.requiresShipping ? 'GOODS' : 'ACTIVATION');
+/** Which part of the order fulfils an offer: a visit, a parcel (shipped or collected in store), or just switching the service on. */
+export const groupOf = (o: OfferNode): GroupKind => (o.fulfilment?.requiresInstallation ? 'INSTALL' : o.fulfilment?.requiresShipping || o.fulfilment?.requiresCollection ? 'GOODS' : 'ACTIVATION');
 
 /** Stock to reserve for an offer: its own SKUs, with the chosen variant's SKU standing in for the device SKUs the variants cover. */
 export function skusFor(o: OfferNode, v?: DeviceVariant): string[] {
@@ -111,7 +111,7 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
   const violations = await checkDependencies(q, input.customerId ?? null, [...offers.keys()]);
   if (violations.length) fail(violations.join(' '));
   for (const of of offers.values()) {
-    if (input.channel === 'QUICK_SALE' && (of.kind !== 'PHYSICAL_GOOD' || of.contract?.termMonths)) throw rejected('quick-sale supports outright goods only');
+    if (input.channel === 'QUICK_SALE' && (!behaviourOf(of).outright || of.contract?.termMonths)) throw rejected('quick-sale supports outright goods only');
     if (of.salesChannels?.length && !of.salesChannels.includes(input.channel)) throw rejected(`${of.name} is not sold through this channel`);
   }
   const hasService = [...offers.values()].some(createsService);
