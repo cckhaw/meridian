@@ -609,6 +609,19 @@ describe('segments, customer creation and groups', () => {
   });
 });
 
+describe('refusing an offer', () => {
+  it('lists the rules it broke, and accepts manufacturer part numbers with a slash as stock SKUs', async () => {
+    const cfg = await staff(['product-configurator']);
+    const base = { level: 'OFFER', parentId: 'grp-electronics', kind: 'PHYSICAL_GOOD', markets: [], prices: [{ type: 'ONE_TIME', amount: { amountMinor: 599900, currency: 'SGD' }, taxInclusive: true }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { options: ['SHIP'], inventorySkus: [] } };
+    const bad = await call('POST', '/catalog', { cookie: cfg.cookie, body: { ...base, id: 'slash-bad', name: 'Bad SKU', variants: [{ id: 'black-256gb', colour: 'Black', storage: '256GB', sku: 'MJW 44*LL' }] } });
+    expect(bad.status).toBe(400);
+    expect(bad.json.error.message).toMatch(/^invalid offer: variant Black 256GB: “MJW 44\*LL” is not a valid stock SKU/);
+    const ok = await call('POST', '/catalog', { cookie: cfg.cookie, body: { ...base, id: 'slash-ok', name: 'Part number SKU', fulfilment: { options: ['SHIP'], inventorySkus: ['MJW44LL/A'] }, variants: [{ id: 'black-256gb', colour: 'Black', storage: '256GB', sku: 'MJW44LL/A' }, { id: 'black-512gb', colour: 'Black', storage: '512GB', sku: 'MJW54LL/A', priceDeltaMinor: 30000 }] } });
+    expect(ok.status).toBe(200);
+    expect(ok.json.variants.map((v: any) => v.sku)).toEqual(['MJW44LL/A', 'MJW54LL/A']);
+  });
+});
+
 describe('catalog configuration', () => {
   it('lets the super user maintain offer types and fulfilment options, and offers use them', async () => {
     const admin = await root();

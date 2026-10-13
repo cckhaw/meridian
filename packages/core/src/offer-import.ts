@@ -108,8 +108,9 @@ function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, exist
   }
 
   const variants = cell('variants') ? list(cell('variants')).map((v) => {
-    const [colour = '', storage = '', sku = '', delta = ''] = v.split('/').map((x) => x.trim());
-    if (!colour || !sku) bad(`colours_storage: “${v}” should look like Colour/Storage/SKU/price difference (storage and difference may be empty).`);
+    // Colour:Storage:SKU:price difference. A SKU may itself contain a slash (MJW44LL/A), so the fields are separated by colons; the older slash form still reads when there is no colon.
+    const [colour = '', storage = '', sku = '', delta = ''] = v.split(v.includes(':') ? ':' : '/').map((x) => x.trim());
+    if (!colour || !sku) bad(`colours_storage: “${v}” should look like Colour:Storage:SKU:price difference (storage and difference may be empty), for example Black:256GB:MJW44LL/A:0.`);
     return { id: slug(`${colour}-${storage}`) || slug(sku), colour, storage: storage || undefined, sku, priceDeltaMinor: delta ? (delta.startsWith('-') ? -amount(delta.slice(1), 'price difference', r) : amount(delta, 'price difference', r)) : undefined };
   }) : undefined;
   const deals = cell('deals') ? list(cell('deals')).map((d) => {
@@ -235,7 +236,7 @@ function offerRow(n: OfferNode, r: Pick<RegionalSettings, 'exponent'>): Record<C
     group: n.parentId ?? '', id: n.id, name: n.name, type: n.kind, description: n.description ?? '', monthly: plain(rec?.amount.amountMinor), upfront: plain(once?.amount.amountMinor), tax: (rec ?? once)?.taxInclusive === false ? 'no' : 'yes',
     term: c?.termMonths ? String(c.termMonths) : '', free: c?.termMonths ? String(c.etc?.waiveInLastMonths ?? '') : '', etc: c?.etc?.method === 'REMAINING_RECURRING_PERCENT' ? String(c.etc.percentOfRemaining ?? '') : '',
     subsidy: plain(c?.subsidy?.subsidyAmount.amountMinor), retail: plain(c?.subsidy?.deviceRetailPrice.amountMinor), fulfilment: optionsOf(n.fulfilment).join('|'), skus: (n.fulfilment?.inventorySkus ?? []).join('|'),
-    variants: (n.variants ?? []).map((v) => `${v.colour}/${v.storage ?? ''}/${v.sku}/${v.priceDeltaMinor ? plain(v.priceDeltaMinor) : ''}`).join('|'),
+    variants: (n.variants ?? []).map((v) => `${v.colour}:${v.storage ?? ''}:${v.sku}:${v.priceDeltaMinor ? plain(v.priceDeltaMinor) : ''}`).join('|'),
     deals: (n.deals ?? []).map((d) => `${d.termMonths}:${plain(d.subsidyMinor)}${d.waiveInLastMonths !== undefined ? `:${d.waiveInLastMonths}` : ''}`).join('|'),
     channels: (n.salesChannels ?? []).join('|'), requires: n.requires.join('|'), excludes: n.excludes.join('|'), partner: n.partnerCode ?? '', market: n.markets[0] ?? '',
     status: n.status === 'RETIRED' ? '' : n.status, golive: '',
@@ -256,7 +257,7 @@ export async function offersTemplate(q: Queryable, o: { withOffers?: boolean } =
     '# type: ' + types.map((t) => `${t.id} = ${t.name}`).join('; '),
     '# fulfilment (optional; a new offer gets its type\'s usual options): ' + options.map((f) => `${f.id} = ${f.name}`).join('; '),
     '# prices_include_tax: yes or no. contract_months: 0, 12, 24 or 36. A contract with a device also needs subsidy and device_retail_price; any other contract uses etc_percent (default 50).',
-    '# stock_skus: SKUs separated by |. colours_storage: Colour/Storage/SKU/price difference, separated by | (for example Black/256GB/IP18-256-BLK/0|Black/512GB/IP18-512-BLK/300).',
+    '# stock_skus: SKUs separated by |. colours_storage: Colour:Storage:SKU:price difference, separated by | (for example Black:256GB:MJW44LL/A:0|Black:512GB:MJW54LL/A:300).',
     '# device_contracts (outright devices): months:subsidy[:free months] separated by | (for example 24:400|12:200). channels: ' + CHANNELS.join(', ') + '. requires and excludes: offer ids separated by |.',
     '# status: DRAFT, SCHEDULED (with go_live_date as YYYY-MM-DD, the start of that day in UTC) or ACTIVE.',
     ORDER.map(([h]) => h).join(','),
