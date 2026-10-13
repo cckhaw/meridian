@@ -14,6 +14,7 @@ export * from './cases.js';
 export * from './catalog.js';
 export * from './config.js';
 export * from './customers.js';
+export * from './customer-config.js';
 export * from './dates.js';
 export * from './db.js';
 export * from './errors.js';

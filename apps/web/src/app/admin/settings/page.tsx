@@ -6,7 +6,7 @@ import { useApi } from '@/lib/api';
 import { AppearanceSettings } from './appearance';
 import { CancellationSettings } from './cancellation';
 import { FulfilmentSettings, OfferTypeSettings } from './catalog-config';
-import { CustomerSettings } from './customers';
+import { BillCycleSettings, CustomerSettings } from './customers';
 import { RegionalSettingsForm } from './regional';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
 import { StorefrontSettings } from './storefront';
@@ -95,6 +95,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'regional': return <RegionalSettingsForm initial={data.regional} locked={data.currencyLocked} onSaved={reload} />;
     case 'appearance': return <AppearanceSettings branding={data.branding} themes={data.themes} guidance={data.logoGuidance} onSaved={reload} />;
     case 'customers': return <CustomerSettings />;
+    case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;
     case 'cancellation': return <CancellationSettings />;

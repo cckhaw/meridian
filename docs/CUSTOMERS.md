@@ -23,6 +23,14 @@ Open the customer and choose **Change segment**. A reason is required; the move,
 
 A customer normally comes into being with their first order, so the order wizard creates one when needed. **Settings → Customers → "Allow creating a customer from the Customers page"** (off by default) controls whether the Customers page also offers **New customer**. When it is off the button is hidden and the server refuses a standalone create.
 
+### The new-customer form (Settings → Customers and segments, Settings → Bill cycles)
+
+Always asked: **Full name / Company name**, **ID document** (NRIC, passport or business registration), the segment and the bill cycle. For every other detail the administrator chooses **Hidden**, **Optional** or **Required**: e-mail, phone, date of birth, gender, address, postcode, city, state or region, and country. A hidden detail is not shown, not asked and not stored; a required one must be filled in, whether the form is used on the Customers page or in the order wizard (the API enforces it too). Everything starts as optional. The details a customer has are shown under their name on the customer page.
+
+**Bill cycles** are a list in Settings: the days of the month (1 to 28) and/or daily that a new customer or account can be given, and the default a new account starts with. Switching a cycle off removes it from the drop-down and from the API; accounts already on it keep it.
+
+The online shop keeps the date of birth and address a shopper gave for identity verification on the customer it creates.
+
 ## Groups
 
 Find them on the account (Customers → customer → account → **Groups**). Staff with `service:manage` can create and change them.

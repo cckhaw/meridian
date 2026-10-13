@@ -51,6 +51,13 @@ export function CustomerView({ id }: { id: string }) {
     <>
       <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{segs.name(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><Badge tone={cust.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{cust.kycStatus === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
 
+      {(cust.dateOfBirth || cust.gender || cust.address) && (
+        <p className="-mt-3 mb-4 px-1 text-subhead text-label2">
+          {[cust.dateOfBirth && `Born ${d(cust.dateOfBirth)}`, cust.gender && ({ FEMALE: 'Female', MALE: 'Male', OTHER: 'Other', UNDISCLOSED: 'Gender not disclosed' } as Record<string, string>)[cust.gender],
+            cust.address && [cust.address.line1, cust.address.line2, [cust.address.postcode, cust.address.city].filter(Boolean).join(' '), cust.address.state, cust.address.country && (() => { try { return new Intl.DisplayNames(undefined, { type: 'region' }).of(cust.address.country); } catch { return cust.address.country; } })()].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}
+        </p>
+      )}
+
       <div className="mb-4 flex items-center justify-between gap-3 lg:hidden">
         <nav aria-label="Where you are" className="min-w-0 flex-1 truncate text-subhead text-label2">{trail.map((t, i) => <span key={i}>{i > 0 && ' › '}{t.label}</span>)}</nav>
         <Button variant="secondary" className="!min-h-[36px] shrink-0 !px-3 !text-subhead" aria-expanded={navOpen} onClick={() => setNavOpen(!navOpen)}>{navOpen ? 'Hide hierarchy' : 'Hierarchy'}</Button>

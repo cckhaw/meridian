@@ -1,3 +1,4 @@
+import { DEFAULT_CUSTOMER_FIELDS, normaliseFields, type CustomerFieldSettings } from './customer-config.js';
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
@@ -113,17 +114,21 @@ export async function listSegmentChanges(q: Queryable, customerId: string): Prom
 export interface CustomerSettings {
   /** Whether the Customers screen may create a customer on its own. Off by default: a customer normally comes into being with their first order. */
   allowCreateWithoutOrder: boolean;
+  /** Which details the customer form asks for: hidden, optional or required. */
+  fields: CustomerFieldSettings;
 }
-export const DEFAULT_CUSTOMER_SETTINGS: CustomerSettings = { allowCreateWithoutOrder: false };
+export const DEFAULT_CUSTOMER_SETTINGS: CustomerSettings = { allowCreateWithoutOrder: false, fields: DEFAULT_CUSTOMER_FIELDS };
 
 export async function getCustomerSettings(q: Queryable): Promise<CustomerSettings> {
   const r = (await q.query(`SELECT value FROM settings WHERE key='customers'`)).rows[0];
-  return { ...DEFAULT_CUSTOMER_SETTINGS, ...(r?.value ?? {}) };
+  const v = (r?.value ?? {}) as Partial<CustomerSettings>;
+  return { allowCreateWithoutOrder: !!v.allowCreateWithoutOrder, fields: normaliseFields(v.fields) };
 }
 
-export async function setCustomerSettings(q: Queryable, actor: string, s: CustomerSettings): Promise<CustomerSettings> {
-  const value = { allowCreateWithoutOrder: !!s.allowCreateWithoutOrder };
+export async function setCustomerSettings(q: Queryable, actor: string, s: { allowCreateWithoutOrder: boolean; fields?: Partial<CustomerFieldSettings> }): Promise<CustomerSettings> {
+  const cur = await getCustomerSettings(q);
+  const value: CustomerSettings = { allowCreateWithoutOrder: !!s.allowCreateWithoutOrder, fields: s.fields ? normaliseFields({ ...cur.fields, ...s.fields }) : cur.fields };
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('customers', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(value), actor]);
-  await audit(q, actor, 'settings', 'customers', 'update', value);
+  await audit(q, actor, 'settings', 'customers', 'update', { ...value });
   return value;
 }

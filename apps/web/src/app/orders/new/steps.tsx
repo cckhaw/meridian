@@ -6,6 +6,7 @@ import { label, money, step as moneyStep } from '@/lib/format';
 import { useSegments } from '@/lib/segments';
 import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
+import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
 import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, isPlan, newItem, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
@@ -272,12 +273,10 @@ export function CustomerStep({ w }: { w: Wizard }) {
   const list = usePaged<any>(term.length >= 3 ? `/customers?limit=6&q=${encodeURIComponent(term)}` : null);
   const full = useApi<any>(w.customer ? `/customers/${w.customer.id}` : null);
   const segs = useSegments();
-  const [f, setF] = useState({ segment: '', displayName: '', idDocument: '', email: '', phone: '' });
+  const [prefill, setPrefill] = useState<{ idDocument?: string; displayName?: string }>({});
   const { run, busy, error } = useAction();
-  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-  const create = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const r = await run(() => post('/customers', { ...f, context: 'order', segment: f.segment || segs.list[0]?.id, email: f.email || undefined, phone: f.phone || undefined, account: { billCycleDay: 1 } }));
+  const create = async (body: Record<string, unknown>) => {
+    const r = await run(() => post('/customers', { ...body, context: 'order' }));
     if (r) w.setCustomer({ id: r.customer.id, displayName: r.customer.displayName, segment: r.customer.segment, kycStatus: r.customer.kycStatus });
   };
 
@@ -309,7 +308,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
           {term.length >= 3 && list.loading && list.items.length === 0 && <div className="mt-4"><Spinner /></div>}
           {term.length >= 3 && !list.loading && list.items.length === 0 && (
             <div className="mt-4 rounded-card bg-surface px-4 py-6 text-center shadow-card"><p className="text-subhead text-label2">No customer matches “{term}”.</p>
-              {w.canCreateCustomer && <Button className="mt-3" variant="secondary" onClick={() => { setMode('new'); setF({ ...f, idDocument: /\d/.test(term) && !term.includes('@') ? term : '', displayName: /^[^\d@]+$/.test(term) ? term : '' }); }}>Create a new customer</Button>}</div>
+              {w.canCreateCustomer && <Button className="mt-3" variant="secondary" onClick={() => { setMode('new'); setPrefill({ idDocument: /\d/.test(term) && !term.includes('@') ? term : '', displayName: /^[^\d@]+$/.test(term) ? term : '' }); }}>Create a new customer</Button>}</div>
           )}
           <ul className="mt-3 divide-y divide-separator overflow-hidden rounded-card bg-surface shadow-card">
             {list.items.map((c: any) => (
@@ -323,15 +322,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
         </>
       ) : (
         <Card>
-          <form onSubmit={create} className="grid gap-4 sm:grid-cols-2">
-            <Field label="Segment"><Select value={f.segment} onChange={set('segment')}>{segs.list.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
-            <Field label="Full name / company"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
-            <Field label="ID document number" hint="NRIC, passport or UEN. Stored masked; used to spot duplicates."><Input required minLength={3} value={f.idDocument} onChange={set('idDocument')} /></Field>
-            <Field label="Mobile number"><Input type="tel" value={f.phone} onChange={set('phone')} /></Field>
-            <Field label="E-mail"><Input type="email" value={f.email} onChange={set('email')} /></Field>
-            {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
-            <div className="sm:col-span-2"><Button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create and continue'}</Button></div>
-          </form>
+          <CustomerForm key={JSON.stringify(prefill)} initial={prefill} submitLabel="Create and continue" busy={busy} error={error} onSubmit={(b) => void create(b)} />
         </Card>
       )}
     </>

@@ -70,8 +70,8 @@ describe('customer segments', () => {
 
 describe('customer settings', () => {
   it('does not allow creating a customer without an order until the operator turns it on', async () => {
-    expect(await getCustomerSettings(db)).toEqual({ allowCreateWithoutOrder: false });
-    expect(await setCustomerSettings(db, 'root', { allowCreateWithoutOrder: true })).toEqual({ allowCreateWithoutOrder: true });
+    expect(await getCustomerSettings(db)).toMatchObject({ allowCreateWithoutOrder: false });
+    expect(await setCustomerSettings(db, 'root', { allowCreateWithoutOrder: true })).toMatchObject({ allowCreateWithoutOrder: true });
     expect((await getCustomerSettings(db)).allowCreateWithoutOrder).toBe(true);
     await setCustomerSettings(db, 'root', { allowCreateWithoutOrder: false });
   });

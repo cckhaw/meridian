@@ -135,7 +135,7 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
 });
 get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
-get('/meta', null, async ({ db, user }) => ({ markets: core.MARKETS, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db) }));
+get('/meta', null, async ({ db, user }) => ({ markets: core.MARKETS, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db), billCycles: await core.getBillCycles(db) }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', () => Object.values(core.ROLES).map(({ id, label, summary, scope, permissions, creditLimitMinor }) => ({ id, label, summary, scope, permissions, creditLimitMinor })));
@@ -466,9 +466,11 @@ patch('/settings/fulfilment-options/:id', 'settings:manage', ({ db, user, params
 route('DELETE', '/settings/fulfilment-options/:id', 'settings:manage', async ({ db, user, params }) => { await core.deleteFulfilmentOption(db, user.username, params.id!); return { ok: true }; });
 
 // ───────────────────────── customers ─────────────────────────
+const addressInput = z.object({ line1: blank(z.string().max(120)), line2: blank(z.string().max(120)), postcode: blank(z.string().max(20)), city: blank(z.string().max(80)), state: blank(z.string().max(80)), country: blank(z.string().max(2)) });
 const newCustomer = z.object({
   segment: z.string().min(1).max(40), displayName: z.string().min(1).max(200), idDocument: z.string().min(3).max(40),
   marketCode: z.string().length(2).optional(), email: blank(z.string().email()), phone: blank(z.string().max(30)),
+  dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional(),
   parentCustomerId: uuid.optional(), account: z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).optional(),
 });
 get('/customers', 'customer:search', ({ db, query }) => core.searchCustomers(db, { q: str(query, 'q'), segment: str(query, 'segment'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
@@ -476,7 +478,11 @@ post('/customers', 'customer:create', async ({ db, user, body }) => {
   // A customer normally comes into being with their first order. The order wizard says so (context: 'order'); the Customers screen needs the setting.
   const viaOrder = z.object({ context: z.literal('order').optional() }).parse(body).context === 'order';
   if (!viaOrder && !(await core.getCustomerSettings(db)).allowCreateWithoutOrder) throw new DomainError('REJECTED', 'Customers are created while placing their first order. Your administrator has not allowed creating one on its own (Settings → Customers).');
-  const r = await core.createCustomer(db, newCustomer.parse(body));
+  const input = newCustomer.parse(body);
+  // The settings decide which details are asked for: hidden ones are dropped, required ones must be filled.
+  const details = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: input.email, phone: input.phone, dateOfBirth: input.dateOfBirth, gender: input.gender, address: input.address });
+  const billCycleDay = await core.resolveBillCycle(db, input.account?.billCycleDay);
+  const r = await core.createCustomer(db, { ...input, email: details.email, phone: details.phone, dateOfBirth: details.dateOfBirth, gender: details.gender, address: details.address, account: { ...input.account, billCycleDay } } as core.NewCustomer);
   await core.audit(db, user.username, 'customer', r.customer.id, 'CREATED');
   return r;
 });
@@ -495,7 +501,9 @@ function redact360(u: SessionUser, c: core.Row) {
 const noBalance = (u: SessionUser, accounts: core.Row[]) => (u.permissions.has('billing:read') ? accounts : accounts.map((a) => ({ ...a, balanceMinor: null })));
 get('/customers/:id', 'customer:read', async ({ db, user, params }) => { assertCustomer(user, params.id!); return redact360(user, await core.customer360(db, params.id!)); });
 patch('/customers/:id', 'customer:write', async ({ db, user, params, body }) => {
-  const r = await core.updateCustomer(db, params.id!, z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional() }).parse(body));
+  const b = z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional(), dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional() }).parse(body);
+  const d = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: b.email, phone: b.phone, dateOfBirth: b.dateOfBirth, gender: b.gender, address: b.address }, { partial: true });
+  const r = await core.updateCustomer(db, params.id!, { displayName: b.displayName, status: b.status, ...d });
   await core.audit(db, user.username, 'customer', params.id!, 'UPDATED');
   return r;
 });
@@ -506,12 +514,14 @@ get('/customers/:id/accounts', 'customer:read', async ({ db, user, params, query
   return { ...page, items: noBalance(user, page.items) };
 });
 get('/accounts/:id', 'customer:read', async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return noBalance(user, [a])[0]; });
-post('/customers/:id/accounts', 'customer:write', ({ db, params, body }) => core.createAccount(db, params.id!, z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).parse(body)));
+post('/customers/:id/accounts', 'customer:write', async ({ db, params, body }) => { const b = z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).parse(body); return core.createAccount(db, params.id!, { ...b, billCycleDay: await core.resolveBillCycle(db, b.billCycleDay) }); });
 
 // ───────────────────────── segments and customer settings ─────────────────────────
 get('/segments', 'customer:search', ({ db }) => core.listSegments(db, { activeOnly: true }));
 get('/settings/customers', 'settings:manage', async ({ db }) => ({ settings: await core.getCustomerSettings(db), segments: await core.listSegments(db, { withCounts: true }) }));
-post('/settings/customers', 'settings:manage', ({ db, user, body }) => core.setCustomerSettings(db, user.username, z.object({ allowCreateWithoutOrder: z.boolean() }).parse(body)));
+post('/settings/customers', 'settings:manage', ({ db, user, body }) => core.setCustomerSettings(db, user.username, z.object({ allowCreateWithoutOrder: z.boolean(), fields: z.record(z.enum(core.FIELD_MODES as [string, ...string[]])).optional() }).parse(body) as never));
+get('/settings/bill-cycles', 'settings:manage', ({ db }) => core.getBillCycles(db));
+post('/settings/bill-cycles', 'settings:manage', ({ db, user, body }) => core.setBillCycles(db, user.username, z.object({ days: z.array(z.number().int().min(1).max(28)).max(28), daily: z.boolean(), defaultCycle: z.union([z.number().int().min(1).max(28), z.literal('daily')]) }).parse(body)));
 post('/settings/segments', 'settings:manage', ({ db, user, body }) => core.createSegment(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), individual: z.boolean().optional() }).parse(body)));
 patch('/settings/segments/:id', 'settings:manage', ({ db, user, params, body }) => core.updateSegment(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), individual: z.boolean(), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
 post('/customers/:id/segment', 'customer:write', async ({ db, user, params, body }) => {
