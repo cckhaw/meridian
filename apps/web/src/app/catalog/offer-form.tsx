@@ -16,14 +16,14 @@ const major = toInput;
 
 interface FormState {
   parentId: string; id: string; name: string; kind: string; description: string; market: string; recurring: string; upfront: string; taxInclusive: boolean;
-  term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; partner: string;
+  term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string;
   requires: string[]; excludes: string[]; channels: string[]; status: string;
   variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
 }
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: '', description: '', market, recurring: '', upfront: '', taxInclusive: true,
-  term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', partner: '',
+  term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '',
   requires: [], excludes: [], channels: [], status: 'DRAFT', variants: [],
 });
 
@@ -37,7 +37,7 @@ function fromOffer(o: any, market: string): FormState {
     recurring: major(rec?.amount.amountMinor), upfront: major(once?.amount.amountMinor), taxInclusive: (rec ?? once)?.taxInclusive ?? true,
     term: String(o.contract?.termMonths ?? 0), etcMethod: o.contract?.etc?.method ?? 'SUBSIDY_AMORTISED', etcPercent: String(o.contract?.etc?.percentOfRemaining ?? 50), waive: String(o.contract?.etc?.waiveInLastMonths ?? 1),
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
-    options: optionsOf(o.fulfilment), skus: (o.fulfilment?.inventorySkus ?? []).join(', '),
+    options: optionsOf(o.fulfilment), skus: (o.fulfilment?.inventorySkus ?? []).join(', '), trackSim: (o.fulfilment?.inventorySkus ?? []).length > 0,
     partner: o.partnerCode ?? '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
     variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
   };
@@ -107,7 +107,9 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const option = (id: string) => options.find((o) => o.id === id);
   const chosenOptions = f.options.map(option).filter(Boolean);
   const has = (m: string) => chosenOptions.some((o: any) => o.mechanic === m);
-  const tracksStock = chosenOptions.some((o: any) => o.tracksStock);
+  // Goods always reserve stock; for a plan the operator chooses whether the SIM card it ships is counted.
+  const canTrack = chosenOptions.some((o: any) => o.tracksStock);
+  const tracksStock = canTrack && (!!b?.goods || f.trackSim);
   const hasDevice = !!b?.goods && (has('SHIP') || has('COLLECT'));
 
   const currency = regional.currency;
@@ -274,6 +276,12 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                 );
               })}
             </ul>
+            {canTrack && !b.goods && (
+              <label className="flex min-h-tap cursor-pointer items-start gap-3 rounded-card border border-separator bg-surface p-4">
+                <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.trackSim} onChange={(e) => setF({ ...f, trackSim: e.target.checked })} />
+                <span><span className="font-medium">Count SIM cards in stock</span><span className="block text-footnote text-label2">Leave off if you do not track SIM card inventory; no stock is reserved and no SKU is asked for.</span></span>
+              </label>
+            )}
             {has('SHIP') && has('COLLECT') && <Alert tone="info">Both are chosen, so the customer picks delivery or collection when they order.</Alert>}
             {has('COLLECT') && !has('SHIP') && <Alert tone="info">Collect-only: customers choose a store to collect from. It is sold in store and through staff channels, not in the online shop.</Alert>}
             {options.length > 0 && <p className="px-1 text-footnote text-label2">Manage this list in Settings → Catalog → Fulfilment options.</p>}
