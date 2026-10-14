@@ -1,5 +1,6 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, SectionTitle, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Field, Input, Spinner } from '@meridian/ui';
+import Link from 'next/link';
 import { useState } from 'react';
 import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -24,8 +25,7 @@ export function TiersPane() {
           {reclass.error && <div className="mt-2"><Alert>{reclass.error}</Alert></div>}{reclass.ok && <div className="mt-2"><Alert tone="success">Re-sorted: {reclass.ok}</Alert></div>}
         </div>
       )}
-      <SectionTitle>Rules</SectionTitle>
-      <RulesCard settings={t.data.settings} onSaved={t.reload} />
+      <p className="mt-5 text-footnote text-label2">Holding time, cooling-off periods and whether a SIM is required are under <Link className="text-accent" href="/admin/settings?section=numbering">Settings → Numbers &amp; SIMs</Link>.</p>
     </>
   );
 }
@@ -66,27 +66,6 @@ function TierCard({ rule, manage, onSaved }: { rule: any; manage: boolean; onSav
         </div>
       )}
       {save.error && <div className="mt-2"><Alert>{save.error}</Alert></div>}{save.ok && <div className="mt-2"><Alert tone="success">{save.ok}</Alert></div>}
-    </Card>
-  );
-}
-
-function RulesCard({ settings, onSaved }: { settings: any; onSaved: () => void }) {
-  const { can } = useAuth();
-  const [s, setS] = useState({ ...settings });
-  const save = useAction(onSaved);
-  const dirty = JSON.stringify(s) !== JSON.stringify(settings);
-  const edit = can('settings:manage');
-  return (
-    <Card>
-      <label className="flex min-h-tap items-start gap-3"><input type="checkbox" disabled={!edit} className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={s.requireSim} onChange={(e) => setS({ ...s, requireSim: e.target.checked })} /><span><span className="font-medium">Every plan needs a SIM</span><span className="block text-footnote text-label2">The order cannot be placed (in the CRM) until a SIM card or an eSIM is chosen for each plan that needs one. Off: the step is offered but may be skipped.</span></span></label>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label="Hold a chosen number for (minutes)"><Input disabled={!edit} type="number" min={1} value={s.reservationMinutes} onChange={(e) => setS({ ...s, reservationMinutes: Number(e.target.value) })} /></Field>
-        <Field label="Rest an identity (IMSI) for (days)"><Input disabled={!edit} type="number" min={0} value={s.imsiQuarantineDays} onChange={(e) => setS({ ...s, imsiQuarantineDays: Number(e.target.value) })} /></Field>
-        <Field label="Auction winner has (hours)"><Input disabled={!edit} type="number" min={1} value={s.auctionSettlementHours} onChange={(e) => setS({ ...s, auctionSettlementHours: Number(e.target.value) })} /></Field>
-      </div>
-      <p className="mt-2 text-footnote text-label2">How long a number rests after a subscriber leaves is set with the other lifecycle rules (90 days by default).</p>
-      {save.error && <div className="mt-2"><Alert>{save.error}</Alert></div>}{save.ok && !dirty && <div className="mt-2"><Alert tone="success">Saved</Alert></div>}
-      {edit ? <div className="mt-3"><Button disabled={!dirty || save.busy} onClick={() => save.run(() => post('/settings/numbering', s), 'Saved')}>Save rules</Button></div> : <p className="mt-3 text-footnote text-label2">Only the super user changes these.</p>}
     </Card>
   );
 }

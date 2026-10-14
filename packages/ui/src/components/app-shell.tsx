@@ -33,7 +33,7 @@ function activeId(nav: NavItem[], path: string): string | undefined {
   return hit?.id;
 }
 
-/** Sidebar sections: what you do, grouped by the job it belongs to. Modules not listed fall under "More". */
+/** Sidebar sections: what you do, grouped by the job it belongs to. Modules not listed fall under "Back office". */
 const GROUPS: Array<{ label: string; ids: string[] }> = [
   { label: '', ids: ['overview'] },
   { label: 'Sell', ids: ['sell', 'dealers', 'stores'] },
@@ -47,7 +47,7 @@ function grouped(nav: NavItem[]): Array<{ label: string; items: NavItem[] }> {
   const out = GROUPS.map((g) => ({ label: g.label, items: g.ids.map((id) => nav.find((n) => n.id === id)).filter(Boolean) as NavItem[] })).filter((g) => g.items.length);
   for (const g of out) for (const i of g.items) used.add(i.id);
   const rest = nav.filter((n) => !used.has(n.id));
-  return rest.length ? [...out, { label: out.length ? 'More' : '', items: rest }] : out;
+  return rest.length ? [...out, { label: out.length ? 'Back office' : '', items: rest }] : out;
 }
 
 const KEY = 'meridian-sidebar';

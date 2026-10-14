@@ -8,6 +8,7 @@ import { CancellationSettings } from './cancellation';
 import { FulfilmentSettings, OfferTypeSettings } from './catalog-config';
 import { BillCycleSettings, CustomerSettings } from './customers';
 import { MarketSettings } from './markets';
+import { NumberingSettings } from './numbering';
 import { RegionalSettingsForm } from './regional';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
 import { StorefrontSettings } from './storefront';
@@ -101,6 +102,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;
     case 'cancellation': return <CancellationSettings />;
+    case 'numbering': return <NumberingSettings />;
     case 'storefront': return <StorefrontSettings />;
     default: return <Empty>This section is not available yet.</Empty>;
   }
