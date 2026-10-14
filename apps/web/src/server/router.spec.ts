@@ -345,6 +345,10 @@ describe('order wizard API, partial cancellation and returns', () => {
 
     const add = await call('GET', `/orders/addons?customerId=${c}&offers=plan-phone-24&channel=TELESALES`, { cookie: agent.cookie });
     expect(add.json.items.map((i: any) => i.offer.id)).toContain('device-care');
+    // devices and plans have their own steps: the add-ons step lists only offers of an add-on type
+    expect(add.json.items.every((i: any) => ['VAS', 'NON_TELCO_SUBSCRIPTION'].includes(i.offer.kind))).toBe(true);
+    expect(add.json.items.map((i: any) => i.offer.kind)).not.toContain('PHYSICAL_GOOD');
+    expect(add.json.items.map((i: any) => i.offer.kind)).not.toContain('WEARABLE');
     const none = await call('GET', `/orders/addons?customerId=${c}&offers=plan-sim-5g&channel=TELESALES`, { cookie: agent.cookie });
     expect(none.json.items.map((i: any) => i.offer.id)).not.toContain('device-care');
     const avail = await call('GET', '/catalog/plan-phone-24/availability', { cookie: agent.cookie });

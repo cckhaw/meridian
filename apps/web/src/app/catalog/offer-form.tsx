@@ -242,7 +242,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                   );
                 })}
               </div>
-              {b && <p className="mt-2 px-1 text-footnote text-label2">{b.summary}</p>}
+              {b && <p className="mt-2 px-1 text-footnote text-label2">{b.summary} <strong className="font-medium text-label">In the order wizard it is chosen in {b.role === 'ADDON' ? 'step 3, Add-ons' : b.role === 'GOODS' ? 'step 2, Device' : b.goods ? 'step 1, Plan or product (a device that comes with a plan or service; it can also be picked in step 2, Device)' : 'step 1, Plan or product'}.</strong></p>}
             </fieldset>
             <Card className="grid gap-4 sm:grid-cols-2">
               <Field label="Display name"><Input required value={f.name} onChange={set('name')} maxLength={100} /></Field>

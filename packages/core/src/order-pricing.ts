@@ -1,4 +1,4 @@
-import { behaviourOf, type DeviceDeal, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
+import { behaviourOf, TEMPLATES, type DeviceDeal, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
 import { listBundleRules, matches, ruleSatisfied, type BundleRule } from './bundles.js';
 import { checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
 import { autoCancelDays, termsFor } from './cancellation.js';
@@ -247,9 +247,12 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
 /** What the customer is told about changing their mind, per part of the order, written from the cancellation rules in force. */
 export const cancellationTerms = (q: Queryable, kinds: GroupKind[], currency: string) => termsFor(q, kinds, currency);
 
+/** What the Add-ons step offers: offers whose type behaves like an add-on (an extra on a plan, a partner subscription). Plans and products are chosen in step 1 and devices in step 2, whatever their type is called. */
+const ADDON_KINDS = Object.entries(TEMPLATES).filter(([, t]) => t.role === 'ADDON').map(([k]) => k).join(',');
+
 /** Add-ons this customer can actually buy with this basket: prerequisites met (by the basket or what they own), no conflicts, sold on this channel. */
 export async function eligibleAddons(q: Queryable, o: { customerId?: string | null; offerIds: string[]; channel: OrderChannel; marketCode: string; q?: string; limit?: number; cursor?: string }) {
-  const page = await pageOffers(q, { status: 'ACTIVE', market: o.marketCode, channel: o.channel, notKind: 'SIM_ONLY,SIM_DEVICE,FIBER,IOT_CONNECTIVITY', q: o.q, limit: o.limit ?? 24, cursor: o.cursor });
+  const page = await pageOffers(q, { status: 'ACTIVE', market: o.marketCode, channel: o.channel, kind: ADDON_KINDS, q: o.q, limit: o.limit ?? 24, cursor: o.cursor });
   const items: Array<{ offer: OfferNode; reason?: string }> = [];
   for (const offer of page.items as OfferNode[]) {
     if (o.offerIds.includes(offer.id)) continue;
