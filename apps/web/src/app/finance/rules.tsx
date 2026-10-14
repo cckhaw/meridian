@@ -40,7 +40,7 @@ export function PostingRules() {
       )}
       <Card>
         <SectionTitle>Try a line</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-[10rem_14rem_auto] sm:items-end">
+        <div className="form-row">
           <Field label="Ledger account"><Input className="font-mono" value={test.accountCode} onChange={(e) => setTest({ ...test, accountCode: e.target.value })} /></Field>
           <Field label="Revenue stream"><Select value={test.stream} onChange={(e) => setTest({ ...test, stream: e.target.value })}><option value="">(none)</option>{meta.data.streams.map((s: string) => <option key={s} value={s}>{label(s)}</option>)}</Select></Field>
           <Button variant="secondary" onClick={async () => setTested((await post('/finance/coa/preview', { accountCode: test.accountCode, stream: test.stream || null })).resolved ?? null)}>Which SAP account?</Button>

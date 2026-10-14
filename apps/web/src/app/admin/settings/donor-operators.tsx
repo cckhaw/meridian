@@ -20,7 +20,7 @@ export function DonorOperatorSettings() {
     <div className="space-y-5">
       <Card>
         <SectionTitle>Add an operator</SectionTitle>
-        <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_auto] sm:items-end" onSubmit={async (e) => { e.preventDefault(); if (await add.run(() => post('/settings/donor-operators', { name, mnpOperatorId: code }), 'Added.')) { setName(''); setCode(''); } }}>
+        <form className="form-row" onSubmit={async (e) => { e.preventDefault(); if (await add.run(() => post('/settings/donor-operators', { name, mnpOperatorId: code }), 'Added.')) { setName(''); setCode(''); } }}>
           <Field label="Operator name"><Input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} required /></Field>
           <Field label="Operator ID (MNP)"><Input value={code} maxLength={20} onChange={(e) => setCode(e.target.value)} required className="font-mono" /></Field>
           <Button type="submit" disabled={add.busy}>{add.busy ? 'Adding…' : 'Add'}</Button>

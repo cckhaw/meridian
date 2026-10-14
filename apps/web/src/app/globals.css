@@ -3,10 +3,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* A row of fields with its buttons: wraps instead of squeezing, so a date or month picker (which has a minimum width of its own) never slides under the button beside it.
+   Fields share the row; buttons keep their size, and fill the width on a phone. --fr-min sets how narrow a field may get before it wraps. */
+.form-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; }
+.form-row > * { min-width: 0; }
+.form-row > div { flex: 1 1 var(--fr-min, 11rem); }
+.form-row > button, .form-row > a { flex: none; }
+@media (max-width: 639px) { .form-row > button, .form-row > a { width: 100%; } }
+input[type='date'], input[type='month'], input[type='time'], input[type='datetime-local'] { min-width: 0; max-width: 100%; }
+
 /* DataList (packages/ui): a table when the space it sits in is wide enough, a stack of cards when it is not. */
 .dl-root { container-type: inline-size; }
 .dl-table { display: none; }
-@container (min-width: 720px) {
-  .dl-table { display: block; }
-  .dl-cards { display: none; }
-}
+/* A table needs room for every column and its action buttons, so the width at which it replaces the cards grows with the columns (data-dl is set by DataList). */
+@container (min-width: 720px) { .dl-root[data-dl='720'] .dl-table { display: block; } .dl-root[data-dl='720'] .dl-cards { display: none; } }
+@container (min-width: 900px) { .dl-root[data-dl='900'] .dl-table { display: block; } .dl-root[data-dl='900'] .dl-cards { display: none; } }
+@container (min-width: 1100px) { .dl-root[data-dl='1100'] .dl-table { display: block; } .dl-root[data-dl='1100'] .dl-cards { display: none; } }
+@container (min-width: 1300px) { .dl-root[data-dl='1300'] .dl-table { display: block; } .dl-root[data-dl='1300'] .dl-cards { display: none; } }
+@container (min-width: 1500px) { .dl-root[data-dl='1500'] .dl-table { display: block; } .dl-root[data-dl='1500'] .dl-cards { display: none; } }

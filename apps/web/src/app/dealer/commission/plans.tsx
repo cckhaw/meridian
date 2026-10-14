@@ -42,7 +42,7 @@ export function Plans() {
     <div className="space-y-6">
       <Card>
         <SectionTitle>Try a sale</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="form-row">
           <Field label="Dealer ID" hint="Blank to use a channel"><Input className="font-mono" value={sim.dealerId} onChange={(e) => setSim({ ...sim, dealerId: e.target.value })} /></Field>
           <Field label="Offer kind"><Input value={sim.offerKind} onChange={(e) => setSim({ ...sim, offerKind: e.target.value })} /></Field>
           <Field label="Contract months"><Input type="number" min={0} value={sim.termMonths} onChange={(e) => setSim({ ...sim, termMonths: e.target.value })} /></Field>
@@ -142,7 +142,7 @@ export function Plans() {
               <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">Volume bands <span className="font-normal text-label2">(activations per month)</span></p>
                 <Select aria-label="How bands apply" className="!w-auto" value={rule.d.slabMode} onChange={(e) => setR('slabMode', e.target.value)}><option value="MARGINAL">Each activation earns its own band’s rate</option><option value="RETROACTIVE">Reaching a band lifts the whole month</option></Select></div>
               {rule.d.slabs.map((s, i) => (
-                <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[5rem_5rem_1fr_1fr_auto] sm:items-end">
+                <div key={i} className="form-row [--fr-min:6rem]">
                   <Field label="From"><Input type="number" min={1} value={s.from} onChange={(e) => setSlab(i, 'from', e.target.value)} /></Field>
                   <Field label="To"><Input type="number" min={1} placeholder="and above" value={s.to} onChange={(e) => setSlab(i, 'to', e.target.value)} /></Field>
                   {rule.d.calc === 'PERCENT' ? <Field label="Rate (%)"><Input inputMode="decimal" value={s.rate} onChange={(e) => setSlab(i, 'rate', e.target.value)} /></Field> : <Field label="Amount"><Input inputMode="decimal" value={s.fixed} onChange={(e) => setSlab(i, 'fixed', e.target.value)} /></Field>}
@@ -168,7 +168,7 @@ export function Plans() {
               <div className="flex flex-wrap gap-4">{meta.data.triggers.map((t: string) => <label key={t} className="inline-flex items-center gap-2"><input type="checkbox" className="h-5 w-5" checked={policy.d.triggers.includes(t)} onChange={(e) => setPolicy({ ...policy, d: { ...policy.d, triggers: e.target.checked ? [...policy.d.triggers, t] : policy.d.triggers.filter((x) => x !== t) } })} />{label(t)}</label>)}</div></div>
             <div className="space-y-2 rounded-card bg-surface2 p-3"><p className="font-medium">Windows</p>
               {policy.d.tiers.map((t, i) => (
-                <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                <div key={i} className="form-row [--fr-min:7rem]">
                   <Field label="Within (days)"><Input type="number" min={1} value={t.days} onChange={(e) => setPolicy({ ...policy, d: { ...policy.d, tiers: policy.d.tiers.map((x, n) => (n === i ? { ...x, days: e.target.value } : x)) } })} /></Field>
                   <Field label="Take back (%)"><Input inputMode="decimal" value={t.pct} onChange={(e) => setPolicy({ ...policy, d: { ...policy.d, tiers: policy.d.tiers.map((x, n) => (n === i ? { ...x, pct: e.target.value } : x)) } })} /></Field>
                   <Button type="button" variant="plain" onClick={() => setPolicy({ ...policy, d: { ...policy.d, tiers: policy.d.tiers.filter((_, n) => n !== i) } })}>Remove</Button>

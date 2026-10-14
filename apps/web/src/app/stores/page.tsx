@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Empty, Field, Input, LargeTitle, LoadMore, Modal, SearchField, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, DataList, Empty, Field, Input, LargeTitle, LoadMore, Modal, SearchField, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { del, patch, post, useAction, useDebounced, usePaged } from '@/lib/api';
 
@@ -20,18 +20,14 @@ export default function Stores() {
       {!list.loading && list.items.length === 0 && !list.error && <Empty>{term ? 'No store matches.' : 'No stores yet. Add the first one.'}</Empty>}
       {list.items.length > 0 && (
         <>
-          <TableWrap><thead><tr><Th>Store id</Th><Th>Name</Th><Th>Address</Th><Th right>Active staff</Th><Th>Status</Th><Th><span className="sr-only">Actions</span></Th></tr></thead><tbody>
-            {list.items.map((s: any) => (
-              <tr key={s.id}>
-                <Td className="font-mono">{s.id}</Td>
-                <Td><span className="font-medium">{s.name}</span>{s.phone && <span className="block text-footnote text-label2">{s.phone}</span>}</Td>
-                <Td className="text-footnote text-label2">{s.address || '—'}</Td>
-                <Td right>{Number(s.staffCount)}</Td>
-                <Td><Badge tone={s.status === 'ACTIVE' ? 'success' : 'neutral'}>{s.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge></Td>
-                <Td right><button className="min-h-tap px-2 text-accent" onClick={() => setEditing(s)}>Edit</button></Td>
-              </tr>
-            ))}
-          </tbody></TableWrap>
+          <DataList label="Stores" rows={list.items} rowKey={(s: any) => s.id}
+            columns={[
+              { key: 'name', label: 'Store', primary: true, render: (s: any) => <><span className="font-medium">{s.name}</span><span className="block font-mono text-footnote text-label2">{s.id}</span>{s.phone && <span className="block text-footnote text-label2">{s.phone}</span>}</> },
+              { key: 'addr', label: 'Address', render: (s: any) => <span className="text-footnote text-label2">{s.address || '—'}</span> },
+              { key: 'staff', label: 'Active staff', right: true, render: (s: any) => Number(s.staffCount) },
+              { key: 'st', label: 'Status', render: (s: any) => <Badge tone={s.status === 'ACTIVE' ? 'success' : 'neutral'}>{s.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge> },
+            ]}
+            actions={(s: any) => <Button variant="secondary" onClick={() => setEditing(s)}>Edit</Button>} />
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="stores" />
         </>
       )}
