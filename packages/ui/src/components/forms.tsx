@@ -47,6 +47,58 @@ export function TableWrap({ children }: { children: ReactNode }) {
 export const Th = ({ children, right }: { children?: ReactNode; right?: boolean }) => <th scope="col" className={cx('whitespace-nowrap border-b border-separator px-4 py-3 text-footnote font-medium text-label2', right && 'text-right')}>{children}</th>;
 export const Td = ({ children, right, className }: { children?: ReactNode; right?: boolean; className?: string }) => <td className={cx('border-b border-separator px-4 py-3 align-top', right && 'text-right tabular-nums', className)}>{children}</td>;
 
+export interface DataColumn<T> {
+  key: string; label: string; render: (row: T) => ReactNode;
+  /** The column that names the row: the card's title on a phone. */
+  primary?: boolean; right?: boolean;
+}
+/**
+ * A list of records that is a table on a desktop and a stack of cards on a phone. A table squeezed to phone width either scrolls sideways (hiding
+ * its actions) or wraps every cell to a sliver; a card gives each record the full width: its name on top, one label and value per line, and the
+ * actions as large buttons underneath.
+ */
+export function DataList<T>({ rows, columns, rowKey, actions, label }: { rows: T[]; columns: Array<DataColumn<T>>; rowKey: (row: T) => string; actions?: (row: T) => ReactNode; label: string }) {
+  const title = columns.find((c) => c.primary) ?? columns[0]!;
+  const rest = columns.filter((c) => c !== title);
+  // Which layout is shown depends on the width of the space the list is in, not of the screen (see .dl-* in globals.css): a settings page beside a
+  // sidebar and a menu is narrow even on a wide monitor.
+  return (
+    <div className="dl-root">
+      <div className="dl-table overflow-x-auto rounded-card bg-surface shadow-card">
+        <table className="w-full text-left text-subhead" aria-label={label}>
+          <thead><tr>{columns.map((c) => <Th key={c.key} right={c.right}>{c.label}</Th>)}{actions && <Th><span className="sr-only">Actions</span></Th>}</tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={rowKey(r)}>
+                {columns.map((c) => <Td key={c.key} right={c.right}>{c.render(r)}</Td>)}
+                {actions && <Td right><span className="flex flex-nowrap justify-end gap-2 whitespace-nowrap">{actions(r)}</span></Td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ul className="dl-cards space-y-3" aria-label={label}>
+        {rows.map((r) => (
+          <li key={rowKey(r)} className="rounded-card border border-separator bg-surface p-4">
+            <div className="min-w-0">{title.render(r)}</div>
+            {rest.length > 0 && (
+              <dl className="mt-3 divide-y divide-separator border-t border-separator">
+                {rest.map((c) => (
+                  <div key={c.key} className="flex items-baseline justify-between gap-4 py-2 text-subhead">
+                    <dt className="shrink-0 text-label2">{c.label}</dt>
+                    <dd className="min-w-0 text-right">{c.render(r)}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {actions && <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(5.5rem,1fr))] gap-2 border-t border-separator pt-3">{actions(r)}</div>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function Spinner({ label = 'Loading' }: { label?: string }) {
   return <div role="status" aria-label={label} className="flex items-center gap-2 py-6 text-label2"><span className="h-4 w-4 animate-spin rounded-full border-2 border-label2 border-t-transparent" />{label}…</div>;
 }

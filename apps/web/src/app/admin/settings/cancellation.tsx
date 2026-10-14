@@ -82,8 +82,8 @@ export function CancellationSettings() {
 
       <Simulator v={v} />
 
-      <div className="flex justify-end">
-        <Button variant="secondary" onClick={() => { if (confirm('Replace every rule with the standard policy? Your own rules are removed.')) void apply(() => post('/settings/cancellation/reset')); }}>Restore the standard policy</Button>
+      <div className="flex sm:justify-end">
+        <Button className="w-full sm:w-auto" variant="secondary" onClick={() => { if (confirm('Replace every rule with the standard policy? Your own rules are removed.')) void apply(() => post('/settings/cancellation/reset')); }}>Restore the standard policy</Button>
       </div>
 
       {editing && <RuleEditor v={v} rule={editing} creating={creating} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void view.reload(); }} />}

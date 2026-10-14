@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, Modal, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, DataList, Field, Input, Modal, SectionTitle, Select, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { patch, post, useAction, useApi } from '@/lib/api';
 
@@ -51,22 +51,19 @@ export function CustomerSettings() {
       </Card>
 
       <Card>
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div><SectionTitle>Customer segments</SectionTitle>
             <p className="-mt-2 mb-3 text-subhead text-label2">Every customer belongs to one segment. A customer is a person or a company; beneath them sit accounts, and beneath each account its services. Switch a segment off to stop using it without losing the customers already in it.</p></div>
-          <Button onClick={() => setEditing({})}>New segment</Button>
+          <Button className="shrink-0 self-start whitespace-nowrap" onClick={() => setEditing({})}>New segment</Button>
         </div>
-        <TableWrap><thead><tr><Th>Segment</Th><Th>Customers are</Th><Th right>Customers</Th><Th>Status</Th><Th><span className="sr-only">Actions</span></Th></tr></thead><tbody>
-          {data.segments.map((s: any) => (
-            <tr key={s.id}>
-              <Td><span className="font-medium">{s.name}</span>{s.description && <span className="block text-footnote text-label2">{s.description}</span>}<span className="block font-mono text-caption text-label2">{s.id}</span></Td>
-              <Td className="text-footnote text-label2">{s.individual ? 'Individuals: one customer per ID document' : 'Companies or fleets: an ID document may be shared'}</Td>
-              <Td right>{s.customersCapped ? `${s.customers.toLocaleString()}+` : (s.customers ?? 0).toLocaleString()}</Td>
-              <Td><Badge tone={s.status === 'ACTIVE' ? 'success' : 'neutral'}>{s.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge></Td>
-              <Td right><button className="min-h-tap px-2 text-accent" onClick={() => setEditing(s)}>Edit</button></Td>
-            </tr>
-          ))}
-        </tbody></TableWrap>
+        <DataList label="Customer segments" rows={data.segments} rowKey={(s: any) => s.id}
+          columns={[
+            { key: 'segment', label: 'Segment', primary: true, render: (s: any) => <><span className="font-medium">{s.name}</span>{s.description && <span className="block text-footnote text-label2">{s.description}</span>}<span className="block font-mono text-caption text-label2">{s.id}</span></> },
+            { key: 'are', label: 'Customers are', render: (s: any) => <span className="text-footnote text-label2">{s.individual ? 'Individuals: one customer per ID document' : 'Companies or fleets: an ID document may be shared'}</span> },
+            { key: 'customers', label: 'Customers', right: true, render: (s: any) => (s.customersCapped ? `${s.customers.toLocaleString()}+` : (s.customers ?? 0).toLocaleString()) },
+            { key: 'status', label: 'Status', render: (s: any) => <Badge tone={s.status === 'ACTIVE' ? 'success' : 'neutral'}>{s.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge> },
+          ]}
+          actions={(s: any) => <Button variant="secondary" onClick={() => setEditing(s)}>Edit</Button>} />
         <p className="mt-3 text-footnote text-label2">To move one customer to another segment, open the customer and choose “Change segment”. The move, who made it and why are recorded.</p>
       </Card>
       {editing && <SegmentForm segment={editing} used={(editing.customers ?? 0) > 0} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void reload(); }} />}

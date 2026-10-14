@@ -69,7 +69,7 @@ function Settings() {
     <>
       <LargeTitle subtitle="Everything that shapes how Meridian behaves for your business. Only the super user can change these; every change is recorded in the audit log.">Settings</LargeTitle>
       {error && <Alert>{error}</Alert>}
-      <div className="grid gap-6 lg:grid-cols-[minmax(260px,320px)_1fr] lg:items-start">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,320px)_1fr] lg:items-start">
         {/* On a phone the menu and the section are separate screens; from lg up they sit side by side. */}
         <div className={`${current ? 'hidden lg:block' : 'block'} lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto`}>{menu}</div>
         <div className={`${current ? 'block' : 'hidden lg:block'} min-w-0`}>

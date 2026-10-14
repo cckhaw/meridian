@@ -57,10 +57,12 @@ function Rules({ initial, gateways, webhookPath, onSaved }: { initial: StoreSett
         <p className="mb-3 text-subhead text-label2">Online payments in the store-front. A gateway is offered only when it is switched on here <em>and</em> its keys are set on the server.</p>
         <ul className="divide-y divide-separator">
           {gateways.map((g) => (
-            <li key={g.id} className="flex flex-wrap items-center gap-3 py-3">
-              <label className="flex min-h-tap flex-1 items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={enabled.has(g.id)} onChange={(e) => toggleGw(g.id, e.target.checked)} /><span className="font-medium">{g.label}</span></label>
+            <li key={g.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:gap-3">
+              <label className="flex min-h-tap items-center gap-3 sm:flex-1"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={enabled.has(g.id)} onChange={(e) => toggleGw(g.id, e.target.checked)} /><span className="font-medium">{g.label}</span></label>
+              <div className="flex flex-wrap items-center gap-3 pl-8 sm:pl-0">
               <Badge tone={g.configured ? 'success' : 'warning'}>{g.configured ? 'Keys configured' : 'Keys not set'}</Badge>
-              <label className="flex items-center gap-2 text-subhead"><input type="radio" name="default-gw" disabled={!enabled.has(g.id)} checked={f.gateways.default === g.id} onChange={() => setF({ ...f, gateways: { ...f.gateways, default: g.id } })} />Default</label>
+              <label className="flex min-h-[32px] items-center gap-2 text-subhead"><input type="radio" name="default-gw" disabled={!enabled.has(g.id)} checked={f.gateways.default === g.id} onChange={() => setF({ ...f, gateways: { ...f.gateways, default: g.id } })} />Default</label>
+              </div>
             </li>
           ))}
         </ul>

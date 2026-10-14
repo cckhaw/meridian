@@ -1,6 +1,6 @@
 'use client';
 import { FULFILMENT_MECHANICS, OFFER_TEMPLATES, TEMPLATES } from '@meridian/types';
-import { Alert, Badge, Button, Card, Field, Input, Modal, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, DataList, Field, Input, Modal, Select, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
 
@@ -12,21 +12,18 @@ export function OfferTypeSettings() {
   if (!data) return <Spinner />;
   return (
     <Card>
-      <div className="flex items-start justify-between gap-3">
-        <p className="mb-3 text-subhead text-label2">An offer type says what kind of thing an offer is. It decides what the offer wizard asks for and what happens when it is sold: whether a service is created, whether something ships, whether a contract is offered. Add your own types, rename them, or switch off the ones you do not use.</p>
-        <Button className="shrink-0" onClick={() => setEditing({})}>New offer type</Button>
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <p className="text-subhead text-label2">An offer type says what kind of thing an offer is. It decides what the offer wizard asks for and what happens when it is sold: whether a service is created, whether something ships, whether a contract is offered. Add your own types, rename them, or switch off the ones you do not use.</p>
+        <Button className="shrink-0 self-start whitespace-nowrap" onClick={() => setEditing({})}>New offer type</Button>
       </div>
-      <TableWrap><thead><tr><Th>Type</Th><Th>Behaves like</Th><Th right>Offers</Th><Th>Status</Th><Th><span className="sr-only">Actions</span></Th></tr></thead><tbody>
-        {data.types.map((t: any) => (
-          <tr key={t.id}>
-            <Td><span className="font-medium">{t.name}</span>{t.description && <span className="block text-footnote text-label2">{t.description}</span>}<span className="block font-mono text-caption text-label2">{t.id}</span></Td>
-            <Td className="text-footnote text-label2">{TEMPLATES[t.template as keyof typeof TEMPLATES]?.label ?? t.template}</Td>
-            <Td right>{t.offers}</Td>
-            <Td><Badge tone={t.status === 'ACTIVE' ? 'success' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge></Td>
-            <Td right><button className="min-h-tap px-2 text-accent" onClick={() => setEditing(t)}>Edit</button></Td>
-          </tr>
-        ))}
-      </tbody></TableWrap>
+      <DataList label="Offer types" rows={data.types} rowKey={(t: any) => t.id}
+        columns={[
+          { key: 'type', label: 'Type', primary: true, render: (t: any) => <><span className="font-medium">{t.name}</span>{t.description && <span className="block text-footnote text-label2">{t.description}</span>}<span className="block font-mono text-caption text-label2">{t.id}</span></> },
+          { key: 'like', label: 'Behaves like', render: (t: any) => <span className="text-footnote text-label2 md:text-label2">{TEMPLATES[t.template as keyof typeof TEMPLATES]?.label ?? t.template}</span> },
+          { key: 'offers', label: 'Offers', right: true, render: (t: any) => t.offers },
+          { key: 'status', label: 'Status', render: (t: any) => <Badge tone={t.status === 'ACTIVE' ? 'success' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge> },
+        ]}
+        actions={(t: any) => <Button variant="secondary" onClick={() => setEditing(t)}>Edit</Button>} />
       <p className="mt-3 text-footnote text-label2">Switching a type off stops it being chosen for new offers; offers already using it keep working.</p>
       {editing && <TypeForm item={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void reload(); }} />}
     </Card>
@@ -70,22 +67,19 @@ export function FulfilmentSettings() {
   const how = (m: string) => FULFILMENT_MECHANICS.find((x) => x.id === m);
   return (
     <Card>
-      <div className="flex items-start justify-between gap-3">
-        <p className="mb-3 text-subhead text-label2">Fulfilment options are what you tick on an offer to say how it reaches the customer. Each one works like a delivery, a collection in store, an installation or a SIM activation, which decides when an order can still be cancelled. Turn on <strong>track stock</strong> for an option if the offers using it reserve stock (for SIM-only plans, turn it on for SIM activation only if you count SIM cards in inventory).</p>
-        <Button className="shrink-0" onClick={() => setEditing({})}>New option</Button>
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <p className="text-subhead text-label2">Fulfilment options are what you tick on an offer to say how it reaches the customer. Each one works like a delivery, a collection in store, an installation or a SIM activation, which decides when an order can still be cancelled. Turn on <strong>track stock</strong> for an option if the offers using it reserve stock (for SIM-only plans, turn it on for SIM activation only if you count SIM cards in inventory).</p>
+        <Button className="shrink-0 self-start whitespace-nowrap" onClick={() => setEditing({})}>New option</Button>
       </div>
-      <TableWrap><thead><tr><Th>Option</Th><Th>Works like</Th><Th>Stock</Th><Th right>Offers</Th><Th>Status</Th><Th><span className="sr-only">Actions</span></Th></tr></thead><tbody>
-        {data.options.map((o: any) => (
-          <tr key={o.id}>
-            <Td><span className="font-medium">{o.name}</span>{o.description && <span className="block text-footnote text-label2">{o.description}</span>}<span className="block font-mono text-caption text-label2">{o.id}</span></Td>
-            <Td className="text-footnote text-label2">{how(o.mechanic)?.label ?? o.mechanic}</Td>
-            <Td className="text-footnote text-label2">{o.tracksStock ? 'Tracked' : 'Not tracked'}</Td>
-            <Td right>{o.offers}</Td>
-            <Td><Badge tone={o.status === 'ACTIVE' ? 'success' : 'neutral'}>{o.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge></Td>
-            <Td right><button className="min-h-tap px-2 text-accent" onClick={() => setEditing(o)}>Edit</button></Td>
-          </tr>
-        ))}
-      </tbody></TableWrap>
+      <DataList label="Fulfilment options" rows={data.options} rowKey={(o: any) => o.id}
+        columns={[
+          { key: 'option', label: 'Option', primary: true, render: (o: any) => <><span className="font-medium">{o.name}</span>{o.description && <span className="block text-footnote text-label2">{o.description}</span>}<span className="block font-mono text-caption text-label2">{o.id}</span></> },
+          { key: 'works', label: 'Works like', render: (o: any) => <span className="text-footnote text-label2">{how(o.mechanic)?.label ?? o.mechanic}</span> },
+          { key: 'stock', label: 'Stock', render: (o: any) => <span className="text-footnote text-label2">{o.tracksStock ? 'Tracked' : 'Not tracked'}</span> },
+          { key: 'offers', label: 'Offers', right: true, render: (o: any) => o.offers },
+          { key: 'status', label: 'Status', render: (o: any) => <Badge tone={o.status === 'ACTIVE' ? 'success' : 'neutral'}>{o.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge> },
+        ]}
+        actions={(o: any) => <Button variant="secondary" onClick={() => setEditing(o)}>Edit</Button>} />
       {editing && <OptionForm item={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void reload(); }} />}
     </Card>
   );
