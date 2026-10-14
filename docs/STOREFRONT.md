@@ -106,3 +106,7 @@ The step-by-step assisted-application API (`/api/assisted/*`: ID sighting, signe
 - Recurring-payment tokenisation (auto-debit of monthly bills) is not set up; the first payment covers the upfront amount, bills are issued normally.
 - KYC documents are stored (encrypted) in the database. For large volumes move them to object storage with a retention policy; the encryption and audit stay the same.
 - No SMS/email notifications; the shopper sees status on the page.
+
+## Markets
+
+With the default *one market* setting the store sells every active offer and works in the deployment's own country. With *several markets* switched on (Settings → Markets), a store sale belongs to the **default market** (or, for an existing customer, that customer's market), only offers sold in that market are shown, and its tax and dial code apply. The deployment still has one currency.

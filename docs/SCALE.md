@@ -27,7 +27,7 @@ Every list in Meridian is built so that opening a screen costs the same whether 
 | Customers | `GET /customers` | name, e-mail, phone, id | segment filter |
 | Customer → departments / accounts / services / groups | `/customers/:id/children`, `/accounts`, `/services?accountId=`, `/accounts/:id/groups` | name, number | loaded when the node is opened |
 | Orders, invoices, cases | `/orders`, `/invoices`, `/cases` | customer, number | status filters |
-| Inventory | `/inventory`, `/inventory/locations` | SKU prefix | locations via skip-scan |
+| Inventory | `/inventory`, `/inventory/locations`, `/inventory/movements` | SKU prefix | locations via skip-scan; the movement history pages newest first by id |
 | Audit, users, KYC, GL | `/audit`, `/users`, `/kyc/cases`, `/gl` | actor / username / — | newest first |
 | Catalog | `/catalog/browse`, `/search`, `/:id/detail`, `/summary` | words in name/code | one level at a time; usage counts capped at 100,000 |
 | Sales screens and the store-front | `/catalog`, `/assisted/catalog`, `/store/catalog` | words | a dozen to two dozen offers per page |

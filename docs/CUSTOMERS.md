@@ -40,6 +40,10 @@ Find them on the account (Customers → customer → account → **Groups**). St
 - The principal cannot leave while supplementary services remain: make another service the principal first, or dissolve the group. A group whose last member leaves closes. Terminating or transferring a supplementary service simply removes it from the group; terminating or transferring a principal that still has supplementary services is refused until it is handed over.
 - **Shared benefits** are set per group: shared data (GB), voice (minutes) and SMS, and a percentage discount on the recurring fee of every supplementary service. The discount is applied as a line on each bill (pro-rated for part periods). The shared allowances are recorded on the group; usage rating is not part of this release, so they are not metered.
 
+## Services over time
+
+A service can be suspended at the customer's request (for example when travelling, for up to six months, keeping its number), restricted for a credit limit or unpaid bills, terminated, or ported out. The rules, who may do what and what it costs are in [LIFECYCLE.md](LIFECYCLE.md). An account can have its own **credit limit** and a **deposit** held for it; both appear in that document.
+
 ## Dealers
 
 Dealer ids are issued by the system (`DLR-00001`, …) and cannot be edited; see [Operations](OPERATIONS.md).
