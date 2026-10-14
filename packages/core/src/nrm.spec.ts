@@ -333,3 +333,20 @@ describe('loading MSISDNs without the plus sign, and the sample files', () => {
     expect([sim.errors, sim.total]).toEqual([[], 3]);
   });
 });
+
+describe('loading a big batch of SIM cards', () => {
+  it('loads thousands of ICCIDs with their IMSIs, and binds pool IMSIs for the rest, in one quick go', async () => {
+    const base = 8_960_999_000_000_000_000n; // 19 digits starting 89
+    const withImsi = Array.from({ length: 2000 }, (_, i) => `${base + BigInt(i)},5250209${String(i).padStart(8, '0')},PHYSICAL,WH-MAIN,`);
+    const without = Array.from({ length: 1500 }, (_, i) => `${base + 5000n + BigInt(i)},,PHYSICAL,WH-MAIN,`);
+    await importImsis(db, { range: { from: '525020800000000', to: '525020800001499' } }, { apply: true, actor: 'ops' });
+    const t0 = Date.now();
+    const r = await importSims(db, { csv: `iccid,imsi,type,location,activation_code\n${[...withImsi, ...without].join('\n')}\n` }, { apply: true, actor: 'ops', batch: 'big' });
+    expect([r.added, r.bound]).toEqual([3500, 3500]);
+    expect(Date.now() - t0).toBeLessThan(20_000);
+    expect((await db.query(`SELECT count(*)::int AS n FROM iccid_inventory WHERE batch='big'`)).rows[0]!.n).toBe(3500);
+    expect((await db.query(`SELECT count(*)::int AS n FROM imsi_inventory m JOIN iccid_inventory c ON c.iccid=m.iccid AND c.imsi=m.imsi WHERE m.state='BOUND_TO_SIM' AND c.batch='big'`)).rows[0]!.n).toBe(3500);
+    expect((await db.query(`SELECT count(*)::int AS n FROM identifier_lifecycle_audit WHERE resource_type='ICCID' AND reason='loaded' AND resource_id LIKE '8960999%'`)).rows[0]!.n).toBe(3500);
+    await expect(importSims(db, { csv: `${base + 9000n},5250209${'0'.repeat(8)},PHYSICAL,WH-MAIN,\n` }, { apply: true, actor: 'ops' })).rejects.toThrow(/IMSI/); // already bound to another card
+  });
+});
