@@ -253,21 +253,22 @@ const regionalSchema = z.object({
   dateFormat: z.enum(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'DD MMM YYYY', 'DD.MM.YYYY']), timeFormat: z.enum(['24h', '12h']), timezone: z.string().min(1).max(60),
   weekStart: z.union([z.literal(0), z.literal(1), z.literal(6)]), country: z.string().length(2), dialCode: z.string().max(5), taxName: z.string().min(1).max(20), taxBps: z.number().int().min(0).max(10_000),
 });
-const brandingView = (b: core.Branding) => ({ name: b.name, theme: b.theme, logoUrl: b.logo ? `/api/branding/logo?v=${b.logo.sha256.slice(0, 12)}` : null, logo: b.logo });
+const brandingView = (b: core.Branding) => ({ name: b.name, theme: b.theme, logoUrl: b.logo ? `/api/branding/logo?v=${b.logo.sha256.slice(0, 12)}` : null, logo: b.logo, faviconUrl: b.favicon ? `/api/branding/favicon?v=${b.favicon.sha256.slice(0, 12)}` : null, favicon: b.favicon });
 
 /** Presentation settings every page needs before sign-in (login screen, store-front): brand, theme, number/date format. Contains nothing sensitive. */
 open('GET', '/branding', async ({ db }) => ({ ...brandingView(await core.getBranding(db)), regional: await core.getRegional(db) }));
-open('GET', '/branding/logo', async ({ db, req }) => {
-  const logo = await core.getLogo(db);
-  if (!logo) throw new DomainError('NOT_FOUND', 'no logo');
-  const etag = `"${logo.sha256}"`;
+const imageResponse = (img: { contentType: string; bytes: Buffer; sha256: string } | null, req: Request, what: string) => {
+  if (!img) throw new DomainError('NOT_FOUND', `no ${what}`);
+  const etag = `"${img.sha256}"`;
   const headers = { etag, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" };
   if (req.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
-  return new Response(new Uint8Array(logo.bytes), { headers: { ...headers, 'content-type': logo.contentType, 'content-length': String(logo.bytes.length) } });
-});
+  return new Response(new Uint8Array(img.bytes), { headers: { ...headers, 'content-type': img.contentType, 'content-length': String(img.bytes.length) } });
+};
+open('GET', '/branding/logo', async ({ db, req }) => imageResponse(await core.getLogo(db), req, 'logo'));
+open('GET', '/branding/favicon', async ({ db, req }) => imageResponse(await core.getFavicon(db), req, 'favicon'));
 get('/settings', 'settings:manage', async ({ db }) => ({
   regional: await core.getRegional(db), currencyLocked: await core.hasTransactions(db), branding: brandingView(await core.getBranding(db)),
-  themes: Object.values(THEMES), logoGuidance: core.LOGO_RECOMMENDATION,
+  themes: Object.values(THEMES), logoGuidance: core.LOGO_RECOMMENDATION, faviconGuidance: core.FAVICON_RECOMMENDATION,
 }));
 post('/settings/regional', 'settings:manage', async ({ db, user, body }) => {
   const r = await core.setRegional(db, user.username, { ...regionalSchema.parse(body), exponent: 2 });
@@ -281,6 +282,9 @@ post('/settings/logo', 'settings:manage', async ({ db, user, body }) => {
   const b = z.object({ dataBase64: z.string().min(1).max(800_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') }).parse(body);
   return brandingView(await core.setLogo(db, user.username, Buffer.from(b.dataBase64, 'base64')));
 });
+const imageBody = z.object({ dataBase64: z.string().min(1).max(800_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') });
+post('/settings/favicon', 'settings:manage', async ({ db, user, body }) => brandingView(await core.setFavicon(db, user.username, Buffer.from(imageBody.parse(body).dataBase64, 'base64'))));
+route('DELETE', '/settings/favicon', 'settings:manage', async ({ db, user }) => brandingView(await core.removeFavicon(db, user.username)));
 route('DELETE', '/settings/logo', 'settings:manage', async ({ db, user }) => brandingView(await core.removeLogo(db, user.username)));
 
 

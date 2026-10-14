@@ -14,6 +14,10 @@ When an offer has SIM activation, the CRM new-order wizard adds a **SIM & number
 
 The order holds the SIM and number until it is activated, and returns both to stock if the order fails or is cancelled before activation. On activation the SIM becomes `ACTIVE`, bound to its IMSI, and the number `ASSIGNED_ACTIVE`. Whether a SIM is mandatory for non-self-serve channels is the `requireSim` setting (off by default).
 
+## Settings
+
+**Settings → Back office → Numbers & SIMs** (super user) holds the cooling-off periods and holds: how long a phone number rests after termination (default 90 days, shared with the lifecycle termination rule), how long an IMSI rests (90), how long a chosen number or SIM is held at checkout (15 minutes), how long an auction winner has (48 hours), and whether every plan needs a SIM. VIP tier patterns and fees stay on the Numbers & SIMs page, under VIP tiers. The sidebar group that holds Numbers & SIMs is called **Back office**.
+
 ## Lifecycles
 
 | Identifier | States |

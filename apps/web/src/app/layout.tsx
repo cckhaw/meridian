@@ -9,8 +9,8 @@ import './globals.css';
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata(): Promise<Metadata> {
-  const { name } = await loadPresentation();
-  return { title: { default: name, template: `%s · ${name}` }, description: 'Telecom CRM & Billing Suite' };
+  const { name, faviconUrl } = await loadPresentation();
+  return { title: { default: name, template: `%s · ${name}` }, description: 'Telecom CRM & Billing Suite', ...(faviconUrl ? { icons: { icon: faviconUrl, apple: faviconUrl } } : {}) };
 }
 // viewport-fit=cover lets the shell use safe-area insets on notched phones.
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };

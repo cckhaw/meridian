@@ -3,64 +3,108 @@ import { Alert, Button, Card, Field, Input, SectionTitle } from '@meridian/ui';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { del, post, useAction } from '@/lib/api';
+import { ImageCropper } from './image-cropper';
 
 interface ThemeView { id: string; name: string; mood: string; light: { accent: number[]; accentFg: number[] }; dark: { accent: number[]; accentFg: number[] } }
 interface Guidance { width: number; height: number; maxBytes: number; formats: string[]; note: string }
-interface BrandingView { name: string; theme: string; logoUrl: string | null; logo: { width: number; height: number } | null }
+interface BrandingView { name: string; theme: string; logoUrl: string | null; logo: { width: number; height: number } | null; faviconUrl: string | null; favicon: { width: number; height: number } | null }
 const rgb = (c: number[]) => `rgb(${c.join(',')})`;
 
-const toBase64 = (buf: ArrayBuffer) => {
-  let s = ''; const b = new Uint8Array(buf);
-  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
-  return btoa(s);
-};
 
-export function AppearanceSettings({ branding, themes, guidance, onSaved }: { branding: BrandingView; themes: ThemeView[]; guidance: Guidance; onSaved: () => void }) {
+const MAX_PICK_BYTES = 15 * 1024 * 1024;
+
+/** A picture the operator sets (logo, favicon): choose a file of any size, crop it to the preset dimensions, save. */
+function BrandImageCard({ title, intro, noun, guidance, url, current, route, previews, onSaved }: {
+  title: string; intro: React.ReactNode; noun: string; guidance: Guidance; url: string | null; current: { width: number; height: number } | null; route: string;
+  previews: React.ReactNode; onSaved: () => void;
+}) {
+  const id = `${noun}-file`;
+  const file = useRef<HTMLInputElement>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const up = useAction();
+  const rm = useAction();
+
+  const pick = (f: File | undefined) => {
+    setLocalError(null);
+    if (file.current) file.current.value = '';
+    if (!f) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(f.type)) return setLocalError('Choose a PNG, JPEG or WebP image.');
+    if (f.size > MAX_PICK_BYTES) return setLocalError(`That file is ${(f.size / 1048576).toFixed(1)} MB; pictures up to ${MAX_PICK_BYTES / 1048576} MB can be cropped.`);
+    const r = new FileReader();
+    r.onload = () => setPicked(String(r.result));
+    r.onerror = () => setLocalError('That file could not be read.');
+    r.readAsDataURL(f);
+  };
+  const save = async (base64: string) => {
+    if (await up.run(() => post(route, { dataBase64: base64 }), `The ${noun} was updated.`)) { setPicked(null); onSaved(); }
+  };
+
+  return (
+    <Card>
+      <SectionTitle>{title}</SectionTitle>
+      <p className="mb-4 text-subhead text-label2">{intro}</p>
+      {picked ? (
+        <ImageCropper src={picked} target={{ width: guidance.width, height: guidance.height }} busy={up.busy} onCancel={() => { setPicked(null); up.clear(); }} onDone={save} />
+      ) : (
+        <>
+          {previews}
+          {current && <p className="mt-2 text-footnote text-label2">Current file: {current.width} × {current.height} px</p>}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <input ref={file} id={id} type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
+            <label htmlFor={id} className="inline-flex min-h-tap cursor-pointer items-center rounded-control bg-accent px-5 text-body font-medium text-accent-fg hover:opacity-90 focus-within:ring-2">{url ? `Replace ${noun}` : `Upload ${noun}`}</label>
+            {url && <Button variant="secondary" disabled={rm.busy} onClick={async () => { if (await rm.run(() => del(route), `The ${noun} was removed.`)) onSaved(); }}>Remove</Button>}
+          </div>
+          <p className="mt-2 text-footnote text-label2">Any picture up to {MAX_PICK_BYTES / 1048576} MB works: you crop it to {guidance.width} × {guidance.height} px next.</p>
+        </>
+      )}
+      {(localError || up.error || rm.error) && <div className="mt-3"><Alert>{localError ?? up.error ?? rm.error}</Alert></div>}
+      {(up.ok || rm.ok) && !picked && <div className="mt-3"><Alert tone="success">{up.ok ?? rm.ok}</Alert></div>}
+    </Card>
+  );
+}
+
+export function AppearanceSettings({ branding, themes, guidance, faviconGuidance, onSaved }: { branding: BrandingView; themes: ThemeView[]; guidance: Guidance; faviconGuidance: Guidance; onSaved: () => void }) {
   const router = useRouter();
   const [name, setName] = useState(branding.name);
   const [theme, setTheme] = useState(branding.theme);
   const save = useAction();
-  const logo = useAction();
-  const file = useRef<HTMLInputElement>(null);
-  const [localError, setLocalError] = useState<string | null>(null);
   const done = () => { onSaved(); router.refresh(); };
-
-  const pick = async (f: File | undefined) => {
-    setLocalError(null);
-    if (!f) return;
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(f.type)) return setLocalError('Choose a PNG, JPEG or WebP image.');
-    if (f.size > guidance.maxBytes) return setLocalError(`That file is ${(f.size / 1024).toFixed(0)} KB; the limit is ${guidance.maxBytes / 1024} KB.`);
-    const r = await logo.run(async () => post('/settings/logo', { dataBase64: toBase64(await f.arrayBuffer()) }), 'Logo updated.');
-    if (r) done();
-    if (file.current) file.current.value = '';
-  };
 
   return (
     <div className="space-y-5">
-      <Card>
-        <SectionTitle>Logo</SectionTitle>
-        <p className="mb-4 text-subhead text-label2">
-          Replaces the product name at the top left and on the sign-in page. Recommended: <strong>{guidance.width} × {guidance.height} px</strong> ({guidance.formats.join(', ')}; under {guidance.maxBytes / 1024} KB). {guidance.note}
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {(['bg-white', 'bg-black'] as const).map((bg) => (
-            <div key={bg} className={`grid min-h-[88px] place-items-center rounded-control border border-separator p-4 ${bg}`}>
-              {branding.logoUrl
-                // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={branding.logoUrl} alt={bg === 'bg-white' ? 'Current logo on a light background' : 'Current logo on a dark background'} className="max-h-10 w-auto max-w-full object-contain" />
-                : <span className={`font-bold ${bg === 'bg-white' ? 'text-black' : 'text-white'}`}>{branding.name}</span>}
+      <BrandImageCard
+        title="Logo" noun="logo" route="/settings/logo" guidance={guidance} url={branding.logoUrl} current={branding.logo} onSaved={done}
+        intro={<>Replaces the product name at the top left and on the sign-in page. Recommended: <strong>{guidance.width} × {guidance.height} px</strong> ({guidance.formats.join(', ')}). {guidance.note}</>}
+        previews={(
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(['bg-white', 'bg-black'] as const).map((bg) => (
+              <div key={bg} className={`grid min-h-[88px] place-items-center rounded-control border border-separator p-4 ${bg}`}>
+                {branding.logoUrl
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ? <img src={branding.logoUrl} alt={bg === 'bg-white' ? 'Current logo on a light background' : 'Current logo on a dark background'} className="max-h-10 w-auto max-w-full object-contain" />
+                  : <span className={`font-bold ${bg === 'bg-white' ? 'text-black' : 'text-white'}`}>{branding.name}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      />
+      <BrandImageCard
+        title="Favicon" noun="favicon" route="/settings/favicon" guidance={faviconGuidance} url={branding.faviconUrl} current={branding.favicon} onSaved={done}
+        intro={<>The small icon in the browser tab and bookmarks, for the CRM and the store-front. Recommended: <strong>{faviconGuidance.width} × {faviconGuidance.height} px</strong> square ({faviconGuidance.formats.join(', ')}). {faviconGuidance.note}</>}
+        previews={(
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2 rounded-t-control border border-separator bg-surface2 px-3 py-2 text-footnote">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {branding.faviconUrl ? <img src={branding.faviconUrl} alt="Current favicon in a browser tab" className="h-4 w-4 object-contain" /> : <span aria-hidden className="grid h-4 w-4 place-items-center rounded-sm bg-accent text-[9px] font-bold text-accent-fg">M</span>}
+              <span>{branding.name}</span>
             </div>
-          ))}
-        </div>
-        {branding.logo && <p className="mt-2 text-footnote text-label2">Current file: {branding.logo.width} × {branding.logo.height} px</p>}
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <input ref={file} id="logo-file" type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => void pick(e.target.files?.[0])} />
-          <label htmlFor="logo-file" className="inline-flex min-h-tap cursor-pointer items-center rounded-control bg-accent px-5 text-body font-medium text-accent-fg hover:opacity-90 focus-within:ring-2">{branding.logoUrl ? 'Replace logo' : 'Upload logo'}</label>
-          {branding.logoUrl && <Button variant="secondary" disabled={logo.busy} onClick={async () => { if (await logo.run(() => del('/settings/logo'), 'Logo removed.')) done(); }}>Remove</Button>}
-        </div>
-        {(localError || logo.error) && <div className="mt-3"><Alert>{localError ?? logo.error}</Alert></div>}
-        {logo.ok && <div className="mt-3"><Alert tone="success">{logo.ok}</Alert></div>}
-      </Card>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {branding.faviconUrl && <img src={branding.faviconUrl} alt="Current favicon, larger" className="h-12 w-12 rounded-control border border-separator object-contain p-1" />}
+            {!branding.faviconUrl && <span className="text-footnote text-label2">No favicon set: the built-in icon is used.</span>}
+          </div>
+        )}
+      />
 
       <Card>
         <SectionTitle>Name and colour</SectionTitle>

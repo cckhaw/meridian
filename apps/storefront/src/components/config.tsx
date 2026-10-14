@@ -3,7 +3,7 @@ import { formatMoney, type RegionalSettings } from '@meridian/types';
 import { createContext, useContext, type ReactNode } from 'react';
 
 export interface StoreConfig {
-  brand: { name: string; theme: string; logo: { sha256: string } | null };
+  brand: { name: string; theme: string; logo: { sha256: string } | null; favicon?: { sha256: string } | null };
   regional: RegionalSettings;
   kyc: { mode: string; minAge: number; idTypes: string[]; requiresBack: string[]; maxDocumentBytes: number };
   terms: { version: string; termsUrl: string | null; privacyUrl: string | null };

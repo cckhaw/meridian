@@ -17,7 +17,7 @@ const load = async (): Promise<{ cfg: StoreConfig; ok: boolean }> => { try { ret
 
 export async function generateMetadata(): Promise<Metadata> {
   const { cfg } = await load();
-  return { title: { default: `${cfg.brand.name} – shop`, template: `%s · ${cfg.brand.name}` }, description: 'Choose a plan, verify your identity and get connected.' };
+  return { title: { default: `${cfg.brand.name} – shop`, template: `%s · ${cfg.brand.name}` }, description: 'Choose a plan, verify your identity and get connected.', ...(cfg.brand.favicon ? { icons: { icon: `/brand/favicon?v=${cfg.brand.favicon.sha256.slice(0, 12)}` } } : {}) };
 }
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
