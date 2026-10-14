@@ -8,7 +8,7 @@ import { conflict, DomainError, invalid, notFound, rejected } from './errors.js'
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
-import { creditLimitOf, homeOf, isRoleId, ROLES, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type RoleOverrides, type Permission, type RoleId, type Scope } from './rbac.js';
+import { creditLimitOf, homeOf, roleDef, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type RoleBook, type Permission, type RoleId, type Scope } from './rbac.js';
 
 // ───────────────────────── configuration ─────────────────────────
 const num = (k: string, d: number) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d; };
@@ -62,15 +62,20 @@ export interface SessionUser {
   permissions: Set<Permission>;
   scope: Scope;
   creditLimitMinor: number | null;
+  roleLabels: string[];
+  home: string;
+  modules: NavModule[];
 }
 
-function toUser(r: Row, ov: RoleOverrides): SessionUser {
-  const roles = (r.roles as string[]).filter(isRoleId);
+function toUser(r: Row, book: RoleBook): SessionUser {
+  const roles = (r.roles as string[]).filter((x) => !!roleDef(x, book)); // a role that no longer exists grants nothing
   const base = { isSuperuser: r.isSuperuser as boolean, roles, customerId: r.customerId, storeId: r.storeId, dealerId: r.dealerId };
+  const permissions = permissionsOf(base, book);
   return {
     id: r.id, username: r.username, displayName: r.displayName, email: r.email, isSuperuser: base.isSuperuser, roles,
     mustChangePassword: r.mustChangePassword, storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: (r.marketCode ?? 'SG').trim(),
-    permissions: permissionsOf(base, ov), scope: scopeOf(base), creditLimitMinor: creditLimitOf(base, ov),
+    permissions, scope: scopeOf(base, book), creditLimitMinor: creditLimitOf(base, book),
+    roleLabels: base.isSuperuser ? ['Super user'] : roles.map((x) => roleDef(x, book)!.label), home: homeOf(base, book), modules: modulesOf(base, permissions, book),
   };
 }
 
@@ -79,10 +84,9 @@ export function publicUser(u: SessionUser): {
   id: string; username: string; displayName: string; isSuperuser: boolean; roles: RoleId[]; roleLabels: string[]; permissions: Permission[]; modules: NavModule[]; home: string;
   mustChangePassword: boolean; storeId: string | null; dealerId: string | null; customerId: string | null; marketCode: string; creditLimitMinor: number | null;
 } {
-  const p = { isSuperuser: u.isSuperuser, roles: u.roles, customerId: u.customerId, storeId: u.storeId, dealerId: u.dealerId };
   return {
-    id: u.id, username: u.username, displayName: u.displayName, isSuperuser: u.isSuperuser, roles: u.roles, roleLabels: u.isSuperuser ? ['Super user'] : u.roles.map((r) => ROLES[r].label), permissions: [...u.permissions], modules: modulesOf(p, u.permissions),
-    home: u.mustChangePassword ? '/change-password' : homeOf(p), mustChangePassword: u.mustChangePassword, storeId: u.storeId, dealerId: u.dealerId,
+    id: u.id, username: u.username, displayName: u.displayName, isSuperuser: u.isSuperuser, roles: u.roles, roleLabels: u.roleLabels, permissions: [...u.permissions], modules: u.modules,
+    home: u.mustChangePassword ? '/change-password' : u.home, mustChangePassword: u.mustChangePassword, storeId: u.storeId, dealerId: u.dealerId,
     customerId: u.customerId, marketCode: u.marketCode, creditLimitMinor: u.creditLimitMinor,
   };
 }
@@ -213,12 +217,12 @@ export interface NewUser { username: string; displayName: string; email?: string
 
 const USERNAME = /^[a-z0-9][a-z0-9._-]{2,49}$/i;
 
-function checkBinding(roles: RoleId[], b: { storeId?: string | null; dealerId?: string | null; customerId?: string | null }) {
-  const m = missingBinding(roles, b);
+function checkBinding(roles: RoleId[], b: { storeId?: string | null; dealerId?: string | null; customerId?: string | null }, book: RoleBook) {
+  const m = missingBinding(roles, b, book);
   if (m) throw invalid(m);
 }
-function parseRoles(roles: string[]): RoleId[] {
-  const bad = roles.filter((r) => !isRoleId(r));
+function parseRoles(roles: string[], book: RoleBook): RoleId[] {
+  const bad = roles.filter((r) => !roleDef(r, book));
   if (bad.length) throw invalid(`unknown role: ${bad.join(', ')}`);
   if (roles.length === 0) throw invalid('assign at least one role');
   return [...new Set(roles)] as RoleId[];
@@ -240,8 +244,9 @@ export async function createUser(db: Db, actor: string, i: NewUser): Promise<{ u
   const su = superuserConfig();
   if (su && su.username.toLowerCase() === i.username.toLowerCase()) throw conflict('that username is reserved');
   if (!i.displayName.trim()) throw invalid('displayName is required');
-  const roles = parseRoles(i.roles);
-  checkBinding(roles, i);
+  const book = await getRoleOverrides(db);
+  const roles = parseRoles(i.roles, book);
+  checkBinding(roles, i, book);
   if (i.storeId) await assertStoreUsable(db, i.storeId); // a store user is bound to a store that exists under Stores and is switched on
   if (i.customerId && !(await db.query('SELECT 1 FROM customers WHERE id=$1', [i.customerId])).rows.length) throw notFound('customer', i.customerId);
   const temp = i.password ? undefined : temporaryPassword();
@@ -279,9 +284,10 @@ export async function updateUser(db: Db, actor: string, id: string, p: { display
   return db.tx(async (q) => {
     const u = (await q.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [id])).rows[0];
     if (!u || u.isSuperuser) throw notFound('user', id);
-    const roles = p.roles ? parseRoles(p.roles) : (u.roles as RoleId[]);
+    const book = await getRoleOverrides(q);
+    const roles = p.roles ? parseRoles(p.roles, book) : (u.roles as RoleId[]);
     const storeId = p.storeId === undefined ? u.storeId : p.storeId, dealerId = p.dealerId === undefined ? u.dealerId : p.dealerId;
-    checkBinding(roles, { storeId, dealerId, customerId: u.customerId });
+    checkBinding(roles, { storeId, dealerId, customerId: u.customerId }, book);
     if (storeId && storeId !== u.storeId) await assertStoreUsable(q, storeId);
     await q.query(
       `UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), roles=$4, status = COALESCE($5, status), store_id=$6, dealer_id=$7, market_code = COALESCE($8, market_code), updated_at=now() WHERE id=$1`,
