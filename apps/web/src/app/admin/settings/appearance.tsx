@@ -112,7 +112,7 @@ export function AppearanceSettings({ branding, themes, guidance, faviconGuidance
           <Field label="Portal name" hint="Shown in the browser tab, on invoices, and in place of the logo when none is uploaded."><Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required className="sm:max-w-sm" /></Field>
           <fieldset>
             <legend className="mb-2 text-subhead font-medium">Colour theme</legend>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               {themes.map((t) => (
                 <label key={t.id} className={`relative flex cursor-pointer flex-col gap-2 rounded-card border p-3 focus-within:ring-2 focus-within:ring-accent ${theme === t.id ? 'border-accent ring-2 ring-accent' : 'border-separator'}`}>
                   <input type="radio" name="theme" value={t.id} checked={theme === t.id} onChange={() => setTheme(t.id)} className="sr-only" />

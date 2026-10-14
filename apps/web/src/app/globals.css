@@ -2,3 +2,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* DataList (packages/ui): a table when the space it sits in is wide enough, a stack of cards when it is not. */
+.dl-root { container-type: inline-size; }
+.dl-table { display: none; }
+@container (min-width: 720px) {
+  .dl-table { display: block; }
+  .dl-cards { display: none; }
+}
