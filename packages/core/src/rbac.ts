@@ -33,6 +33,8 @@ const CORE_PERMISSIONS = [
   'warehouse:manage', // add, rename, switch off and remove warehouse locations
   'case:read', 'case:create', 'case:write',
   'commission:read',
+  'commission:configure', // plans, rules, slabs, claw-back policies, who earns by which plan, the dealer channel
+  'commission:settle', // approve earnings, close the month, issue statements, create and confirm payout files
   'dealer:read', 'dealer:manage', // dealers and their agents are master data kept in the CRM
   'store:manage', // retail stores are master data kept in the CRM; staff are bound to one when created
   'audit:read',
@@ -139,7 +141,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,
     summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables.',
-    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:credit', 'customer:search', 'customer:read', 'commission:read'],
+    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
   },
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',

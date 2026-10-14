@@ -43,6 +43,8 @@ export * from './sap-exporter.js';
 export * from './sub-ledger.js';
 export * from './journal-batches.js';
 export * from './reconciliation.js';
+export * from './commission.js';
+export * from './commission-processor.js';
 export * from './lifecycle.js';
 export * from './orders.js';
 export * from './order-pricing.js';

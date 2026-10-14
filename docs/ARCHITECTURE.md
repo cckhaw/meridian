@@ -51,6 +51,8 @@ The UI builds navigation from the server's module list for the signed-in user. S
 
 The **financial sub-ledger** (`ledger.ts`, `sub-ledger.ts`, `coa.ts`, `sap-exporter.ts`, `journal-batches.ts`, `reconciliation.ts`, migration `0026`) keeps `gl_entries` immutable and partitioned by month, maps lines to SAP accounts through editable posting rules, exports and reconciles. Details in [FINANCE.md](FINANCE.md).
 
+The **commission engine** (`commission-calculator.ts`, `commission.ts`, `commission-processor.ts`, migration `0027`) evaluates plans when an order completes, keeps an append-only earnings ledger, takes commission back on early churn, and settles monthly with GL postings. Details in [COMMISSION.md](COMMISSION.md).
+
 Number Resource Management lives in `packages/core` (`nrm.ts`, `nrm-pools.ts`, `number-reservation.ts`, `vip-pattern-matcher.ts`, `order-numbering.ts`) on migrations `0020` and `0021`. Locks are database row locks with an optional Redis adapter; events go through the lifecycle outbox; IMSI recycling also runs as a Temporal workflow in `services/order-service`. Details in [NUMBERING.md](NUMBERING.md).
 
 ## Payments

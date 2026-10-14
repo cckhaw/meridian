@@ -94,6 +94,8 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `case:create` |  |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |  |  |  |
 | `case:write` |  |  | ✓ |  |  | ✓ |  |  |  |  | ✓ |  | ✓ |  |  |  |
 | `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  |
+| `commission:configure` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `commission:settle` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
 | `dealer:read` |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |
 | `dealer:manage` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
 | `store:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |

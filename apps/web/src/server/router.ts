@@ -922,6 +922,53 @@ post('/finance/reconciliation/run', 'finance:export', ({ db, user, body }) => {
 });
 get('/finance/reconciliation/:id', 'finance:read', ({ db, params }) => core.getReport(db, params.id!));
 
+// ───────────────────────── commission: plans, hierarchy, ledger, statements, payouts ─────────────────────────
+const period_ = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'use YYYY-MM');
+const slabBody = z.object({ from: z.number().int(), to: z.number().int().nullable().default(null), rateBps: z.number().int().optional(), fixedMinor: z.number().int().optional(), bonusMinor: z.number().int().optional() });
+const planBody = z.object({ name: z.string().min(1).max(120), status: z.enum(['ACTIVE', 'INACTIVE']).optional(), holdDays: z.number().int().optional(), overrideBps: z.array(z.number().int()).max(5).optional(), note: z.string().max(500).nullish() });
+const cRuleBody = z.object({
+  name: z.string().min(1).max(120), priority: z.number().int().optional(), matchKinds: z.array(z.string().max(80)).max(30).optional(), matchOfferIds: z.array(z.string().max(80)).max(100).optional(),
+  minTermMonths: z.number().int().nullish(), maxTermMonths: z.number().int().nullish(), matchTiers: z.array(z.string().max(40)).max(8).optional(), calc: z.enum(['PERCENT', 'FIXED']).optional(),
+  rateBps: z.number().int().optional(), fixedMinor: z.number().int().optional(), slabMode: z.enum(['MARGINAL', 'RETROACTIVE']).optional(), slabs: z.array(slabBody).max(12).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
+});
+const policyBody = z.object({ name: z.string().min(1).max(120), minTermMonths: z.number().int().nullish(), triggers: z.array(z.string().max(40)).max(5).optional(), tiers: z.array(z.object({ withinDays: z.number().int(), percentBps: z.number().int() })).max(8), includeOverrides: z.boolean().optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() });
+/** A dealer or store login sees only its own commission: the filter comes from the session, never the request. */
+const commissionScope = (u: SessionUser) => ({ dealerId: u.scope.dealerId, storeId: u.scope.storeId });
+const ownStatement = (u: SessionUser, st: Record<string, any>) => {
+  if (u.scope.dealerId && !(st.beneficiaryKind === 'DEALER' && st.beneficiaryId === u.scope.dealerId)) throw forbidden('That statement is not yours.');
+  if (u.scope.storeId && !(st.beneficiaryKind === 'STORE' && st.beneficiaryId === u.scope.storeId)) throw forbidden('That statement is not yours.');
+};
+get('/commission/meta', 'commission:read', () => ({ tiers: core.DEALER_TIERS, triggers: core.CLAWBACK_TRIGGERS, assignmentKinds: core.ASSIGNMENT_KINDS }));
+get('/commission/ledger', 'commission:read', ({ user, db, query }) => core.listEntries(db, { ...commissionScope(user), beneficiaryId: user.scope.dealerId || user.scope.storeId ? undefined : str(query, 'beneficiaryId'), period: str(query, 'period'), status: str(query, 'status'), entryType: str(query, 'type'), orderId: str(query, 'orderId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/commission/summary', 'commission:read', ({ user, db, query }) => core.periodSummary(db, period_.parse(str(query, 'period') ?? new Date().toISOString().slice(0, 7)), commissionScope(user)).then((items) => ({ items })));
+post('/commission/ledger/approve', 'commission:settle', ({ db, user, body }) => core.approveEntries(db, user.username, z.object({ ids: z.array(z.number().int()).min(1).max(1000) }).parse(body).ids).then((approved) => ({ approved })));
+get('/commission/plans', 'commission:configure', async ({ db }) => ({ items: await core.listPlans(db) }));
+post('/commission/plans', 'commission:configure', ({ db, user, body }) => core.createPlan(db, user.username, planBody.parse(body)));
+patch('/commission/plans/:id', 'commission:configure', ({ db, user, params, body }) => core.updatePlan(db, user.username, params.id!, planBody.parse(body)));
+route('DELETE', '/commission/plans/:id', 'commission:configure', async ({ db, user, params }) => { await core.deletePlan(db, user.username, params.id!); return { ok: true }; });
+post('/commission/plans/:id/rules', 'commission:configure', ({ db, user, params, body }) => core.saveCommissionRule(db, user.username, params.id!, null, cRuleBody.parse(body)));
+patch('/commission/plans/:id/rules/:rid', 'commission:configure', ({ db, user, params, body }) => core.saveCommissionRule(db, user.username, params.id!, params.rid!, cRuleBody.parse(body)));
+route('DELETE', '/commission/plans/:id/rules/:rid', 'commission:configure', async ({ db, user, params }) => { await core.deleteCommissionRule(db, user.username, params.id!, params.rid!); return { ok: true }; });
+post('/commission/plans/:id/policies', 'commission:configure', ({ db, user, params, body }) => core.saveClawbackPolicy(db, user.username, params.id!, null, policyBody.parse(body)));
+patch('/commission/plans/:id/policies/:pid', 'commission:configure', ({ db, user, params, body }) => core.saveClawbackPolicy(db, user.username, params.id!, params.pid!, policyBody.parse(body)));
+route('DELETE', '/commission/plans/:id/policies/:pid', 'commission:configure', async ({ db, user, params }) => { await core.deleteClawbackPolicy(db, user.username, params.id!, params.pid!); return { ok: true }; });
+post('/commission/plans/:id/assign', 'commission:configure', ({ db, user, params, body }) => { const b = z.object({ kind: z.string(), actorId: z.string() }).parse(body); return core.assignPlan(db, user.username, params.id!, b.kind, b.actorId); });
+route('DELETE', '/commission/assignments/:id', 'commission:configure', async ({ db, user, params }) => { await core.unassignPlan(db, user.username, params.id!); return { ok: true }; });
+post('/commission/preview', 'commission:configure', ({ db, body }) => core.previewCommission(db, z.object({ dealerId: z.string().optional(), channel: z.string().optional(), salespersonId: z.string().optional(), storeId: z.string().optional(), offerKind: z.string().min(1), offerId: z.string().optional(), termMonths: z.number().int().min(0), quantity: z.number().int().min(1).max(1000), basisMinor: money.min(0), countBefore: z.number().int().min(0).optional() }).parse(body)));
+get('/commission/hierarchy', 'commission:configure', async ({ db }) => ({ items: await core.dealerTree(db) }));
+patch('/commission/dealers/:id/channel', 'commission:configure', ({ db, user, params, body }) => core.setDealerChannel(db, user.username, params.id!, z.object({ tier: z.string().optional(), parentDealerId: z.string().nullish(), bankAccountName: z.string().max(120).nullish(), bankAccountNo: z.string().max(60).nullish(), bankCode: z.string().max(30).nullish(), sapVendorNo: z.string().max(30).nullish() }).parse(body)));
+get('/commission/settings', 'commission:configure', ({ db }) => core.getCommissionSettings(db));
+post('/commission/settings', 'commission:configure', ({ db, user, body }) => core.setCommissionSettings(db, user.username, z.object({ autoClose: z.boolean() }).parse(body)));
+post('/commission/close', 'commission:settle', async ({ db, user, body }) => core.closePeriod(db, z.object({ period: period_ }).parse(body).period, user.username));
+post('/commission/run', 'commission:settle', ({ db, user, body }) => core.runCommissionDaily(db, { actor: user.username, asOf: z.object({ asOf: date.optional() }).parse(body ?? {}).asOf }));
+get('/commission/statements', 'commission:read', ({ db, user, query }) => core.listStatements(db, { period: str(query, 'period'), status: str(query, 'status'), dealerId: user.scope.dealerId, beneficiaryId: user.scope.storeId }).then((items) => ({ items })));
+get('/commission/statements/:id', 'commission:read', async ({ db, user, params }) => { const st = await core.getStatement(db, params.id!); ownStatement(user, st); return st; });
+get('/commission/statements/:id/csv', 'commission:read', async ({ db, user, params }) => { const st = await core.getStatement(db, params.id!); ownStatement(user, st); return csv(await core.statementCsv(db, params.id!), `${st.statementNo}.csv`); });
+get('/commission/payouts', 'commission:settle', async ({ db }) => ({ items: await core.listPayoutBatches(db) }));
+post('/commission/payouts', 'commission:settle', ({ db, user, body }) => core.createPayoutBatch(db, { period: z.object({ period: period_.optional() }).parse(body ?? {}).period, actor: user.username }));
+get('/commission/payouts/:id/file', 'commission:settle', async ({ db, user, params }) => { const f = await core.getPayoutFile(db, params.id!); await core.audit(db, user.username, 'commission', params.id!, 'PAYOUT_DOWNLOADED'); return csv(f.content, f.fileName); });
+post('/commission/payouts/:id/confirm', 'commission:settle', ({ db, user, params }) => core.confirmPayoutBatch(db, params.id!, user.username));
+
 // ───────────────────────── cases / inventory ─────────────────────────
 get('/cases', 'case:read', ({ db, user, query }) => core.listCases(db, { customerId: user.scope.customerId ?? str(query, 'customerId'), status: str(query, 'status'), type: str(query, 'type'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/cases', 'case:create', async ({ db, user, body }) => {

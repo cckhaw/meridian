@@ -117,7 +117,7 @@ describe('role-based access', () => {
     expect(r360.json.customer.displayName).toMatch(/Cust/);
     expect((await call('GET', '/services?customerId=' + c, { cookie: agent.cookie })).status).toBe(200);
     expect((await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c, type: 'GENERAL', subject: 'Billing question' } })).status).toBe(200);
-    for (const [m, p] of [['GET', '/gl'], ['GET', '/gl/reconcile'], ['POST', '/gl/export'], ['GET', '/finance/coa'], ['POST', '/ledger/events'], ['POST', '/finance/batches/run'], ['GET', '/finance/reconciliation'], ['GET', '/users'], ['POST', '/users'], ['POST', '/billing/run'], ['GET', '/audit'], ['POST', '/catalog'], ['GET', '/commissions'], ['POST', '/inventory/adjust']] as const)
+    for (const [m, p] of [['GET', '/gl'], ['GET', '/gl/reconcile'], ['POST', '/gl/export'], ['GET', '/finance/coa'], ['POST', '/ledger/events'], ['POST', '/finance/batches/run'], ['GET', '/finance/reconciliation'], ['GET', '/commission/plans'], ['POST', '/commission/close'], ['GET', '/commission/payouts'], ['GET', '/users'], ['POST', '/users'], ['POST', '/billing/run'], ['GET', '/audit'], ['POST', '/catalog'], ['GET', '/commissions'], ['POST', '/inventory/adjust']] as const)
       expect((await call(m, p, { cookie: agent.cookie, body: {} })).status, `${m} ${p}`).toBe(403);
     const inv = (await call('GET', '/invoices', { cookie: agent.cookie }));
     expect(inv.status).toBe(200);
@@ -263,7 +263,9 @@ describe('data scope', () => {
     expect((await call('GET', '/inventory?locationId=WH-MAIN', { cookie: s1.cookie })).json.items.every((i: any) => i.locationId === 'STORE-SG-001')).toBe(true);
     expect((await call('POST', '/inventory/adjust', { cookie: s1.cookie, body: { locationId: 'STORE-SG-002', sku: 'PHONE-X1-128', delta: 1 } })).status).toBe(403);
     expect((await call('POST', '/inventory/adjust', { cookie: s1.cookie, body: { locationId: 'STORE-SG-001', sku: 'PHONE-X1-128', delta: 1 } })).status).toBe(200);
-    expect((await call('GET', '/commissions', { cookie: d1.cookie })).json.every((r: any) => r.agent === d1.username || r.agent === '-')).toBe(true);
+    const own = (await call('GET', '/commissions', { cookie: d1.cookie })).json;
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.every((r: any) => r.agent === dealerOne)).toBe(true);        // earned by the dealer, whoever on its team sold
     expect((await call('GET', '/commissions', { cookie: d2.cookie })).json).toEqual([]);
   });
 });
@@ -1240,5 +1242,59 @@ describe('sub-ledger, posting rules and SAP batches', () => {
     await call('POST', '/ledger/events', { cookie: admin, body: ev({ eventType: 'ETC_CHARGED', netMinor: 5000, taxMinor: 450 }) });
     const old = await call('POST', '/gl/export', { cookie: fin.cookie });
     expect([old.status, old.headers.get('content-type')]).toEqual([200, expect.stringContaining('text/csv')]);
+  });
+});
+
+
+describe('commission plans, ledger and payouts', () => {
+  it('finance configures a plan, dealers see only their own earnings and statements, and a payout is created and confirmed', async () => {
+    const admin = await root();
+    const fin = await staff(['finance']);
+    const dealerId = (await call('POST', '/dealers', { cookie: admin, body: { name: 'Volume Partner' } })).json.id as string;
+    const otherId = (await call('POST', '/dealers', { cookie: admin, body: { name: 'Other Partner' } })).json.id as string;
+    const agentId = (await call('POST', `/dealers/${dealerId}/agents`, { cookie: admin, body: { name: 'Rep' } })).json.id as string;
+    const mine = await staff(['dealer'], { dealerId }), other = await staff(['dealer'], { dealerId: otherId });
+    // a dealer cannot read or change the commission set-up
+    expect((await call('GET', '/commission/plans', { cookie: mine.cookie })).status).toBe(403);
+    expect((await call('POST', '/commission/plans', { cookie: mine.cookie, body: { name: 'x' } })).status).toBe(403);
+    const plan = await call('POST', '/commission/plans', { cookie: fin.cookie, body: { name: 'Partner plan', overrideBps: [100] } });
+    expect(plan.status).toBe(200);
+    const bad = await call('POST', `/commission/plans/${plan.json.id}/rules`, { cookie: fin.cookie, body: { name: 'bad', rateBps: 100, slabs: [{ from: 1, to: 50 }, { from: 40, to: 60 }] } });
+    expect([bad.status, bad.json.error.code]).toEqual([400, 'INVALID']);
+    const rule = await call('POST', `/commission/plans/${plan.json.id}/rules`, { cookie: fin.cookie, body: { name: 'Sim only', maxTermMonths: 0, rateBps: 500, slabs: [{ from: 1, to: 50, rateBps: 500 }, { from: 51, to: 100, rateBps: 800 }, { from: 101, rateBps: 1200 }] } });
+    expect(rule.json.slabs).toHaveLength(3);
+    expect((await call('POST', `/commission/plans/${plan.json.id}/policies`, { cookie: fin.cookie, body: { name: 'Churn', tiers: [{ withinDays: 90, percentBps: 10000 }] } })).status).toBe(200);
+    expect((await call('POST', `/commission/plans/${plan.json.id}/assign`, { cookie: fin.cookie, body: { kind: 'DEALER', actorId: dealerId } })).status).toBe(200);
+    expect((await call('PATCH', `/commission/dealers/${dealerId}/channel`, { cookie: fin.cookie, body: { tier: 'DEALER', bankAccountName: 'Volume Partner Pte', bankAccountNo: '8800', bankCode: 'DBS' } })).json.tier).toBe('DEALER');
+    expect((await call('PATCH', `/commission/dealers/${dealerId}/channel`, { cookie: fin.cookie, body: { parentDealerId: dealerId } })).status).toBe(400);
+    expect((await call('POST', '/commission/preview', { cookie: fin.cookie, body: { dealerId, offerKind: 'PLAN', termMonths: 0, quantity: 2, basisMinor: 20000, countBefore: 49 } })).json.entries[0].amountMinor).toBe(500 + 800);
+
+    const c = await customer(admin);
+    const order = await call('POST', '/orders', { cookie: mine.cookie, body: { channel: 'DEALER', customerId: c, dealerAgentId: agentId, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true, reference: 'T-1' } } });
+    expect(order.status).toBe(200);
+    const ledger = (await call('GET', '/commission/ledger', { cookie: mine.cookie })).json;
+    expect(ledger.items.length).toBeGreaterThan(0);
+    expect(ledger.items.every((e: any) => e.dealerId === dealerId)).toBe(true);
+    expect((await call('GET', '/commission/ledger', { cookie: other.cookie })).json.items).toEqual([]);
+    expect((await call('GET', `/commission/ledger?beneficiaryId=${dealerId}`, { cookie: other.cookie })).json.items).toEqual([]);   // a dealer cannot ask for someone else's
+
+    const per = new Date().toISOString().slice(0, 7);
+    expect((await call('POST', '/commission/close', { cookie: mine.cookie, body: { period: per } })).status).toBe(403);
+    const closed = await call('POST', '/commission/close', { cookie: fin.cookie, body: { period: per } });
+    expect(closed.status).toBe(200);
+    expect(closed.json.issued).toBeGreaterThan(0);
+    const st = (await call('GET', '/commission/statements', { cookie: mine.cookie })).json.items;
+    expect(st).toHaveLength(1);
+    expect(st[0].beneficiaryId).toBe(dealerId);
+    expect((await call('GET', `/commission/statements/${st[0].id}`, { cookie: other.cookie })).status).toBe(403);
+    expect((await call('GET', `/commission/statements/${st[0].id}/csv`, { cookie: mine.cookie })).text).toContain(st[0].statementNo);
+
+    const payout = await call('POST', '/commission/payouts', { cookie: fin.cookie, body: { period: per } });
+    expect(payout.json.batch.statementCount).toBeGreaterThan(0);
+    expect((await call('GET', `/commission/payouts/${payout.json.batch.id}/file`, { cookie: fin.cookie })).text).toContain('Volume Partner Pte');
+    expect((await call('GET', `/commission/payouts/${payout.json.batch.id}/file`, { cookie: mine.cookie })).status).toBe(403);
+    expect((await call('POST', `/commission/payouts/${payout.json.batch.id}/confirm`, { cookie: fin.cookie })).json.status).toBe('PAID');
+    expect((await call('GET', '/commission/statements', { cookie: mine.cookie })).json.items[0].status).toBe('PAID');
+    const rc = (await call('GET', '/gl/reconcile', { cookie: fin.cookie })).json; expect(rc.checks.filter((x: any) => !x.ok && /balances/.test(x.name))).toEqual([]);   // the AR control check is not asserted here: an earlier test posts invoice events straight to the ledger
   });
 });

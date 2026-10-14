@@ -30,17 +30,19 @@ export const GL = {
   SERVICE_REVENUE: '4000',
   GOODS_REVENUE: '4100',
   CREDIT_NOTES: '4900', // contra-revenue
+  DISBURSEMENT: '1150', // commission payouts sent to the bank, until the bank confirms
+  COMMISSION_PAYABLE: '2300', // commission earned and not yet paid
+  COMMISSION_EXPENSE: '6200', // dealer and sales-agent commission
 } as const;
 
 export const GL_NAMES: Record<string, string> = {
   '1100': 'Cash and bank', '1200': 'Accounts receivable', '2100': 'Indirect tax payable', '2200': 'Customer deposits', '6100': 'Bad debt expense',
   '4000': 'Service revenue', '4100': 'Goods revenue', '4900': 'Credit notes and refunds',
+  '1150': 'Commission disbursement clearing', '2300': 'Commission payable', '6200': 'Sales commission expense',
 };
 
 export const INVOICE_TERMS_DAYS = 14;
 export const DUNNING = { overdueAfterDays: 0, suspendAfterDays: 15, reviewAfterDays: 45 } as const;
-/** Commission paid on net order value, by channel (basis points). */
-export const COMMISSION_BPS: Record<string, number> = { RETAIL_ASSISTED: 300, DEALER: 500, TELESALES: 400 };
 export const LOGICAL_SHARDS = Number(process.env.MERIDIAN_LOGICAL_SHARDS ?? 16); // dev DB creates 16 of 1024 partitions
 
 /** Misconfigurations that must stop a production deployment from serving traffic. Empty = fine. */

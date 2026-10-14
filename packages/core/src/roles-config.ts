@@ -74,6 +74,8 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'case:create': ['Cases', 'Open cases', 'Raise a case'],
   'case:write': ['Cases', 'Work cases', 'Update and close cases'],
   'commission:read': ['Dealers and stores', 'See commission', 'Commission earned'],
+  'commission:configure': ['Dealers and stores', 'Configure commission', 'Plans, rules, volume bands, claw-back policies, the dealer channel and who earns by which plan'],
+  'commission:settle': ['Dealers and stores', 'Settle commission', 'Approve earnings, close the month, issue statements, create and confirm payout files'],
   'dealer:read': ['Dealers and stores', 'See dealers', 'Dealers and their agents'],
   'dealer:manage': ['Dealers and stores', 'Maintain dealers', 'Create and edit dealers and agents'],
   'store:manage': ['Dealers and stores', 'Maintain stores', 'Create and edit retail stores'],
