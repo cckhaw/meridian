@@ -16,6 +16,7 @@ const CORE_PERMISSIONS = [
   'dashboard:read',
   'customer:search', 'customer:read', 'customer:create', 'customer:write',
   'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer',
+  'service:self', // a customer suspending and resuming their own service in the portal
   'mnp:manage',
   'order:read', 'order:payment', 'order:fulfil', 'order:cancel',
   'order:override', // approve a cancellation or return the policy would only allow with a supervisor's say-so
@@ -94,7 +95,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'self-serve': {
     id: 'self-serve', label: 'Customer (self-serve portal)', scope: 'customer', home: '/account',
     summary: 'An end customer. Sees and acts only on their own account: shop, orders, bills, cases. Online payments are confirmed by the payment provider webhook, never by the customer.',
-    permissions: ['customer:read', 'service:read', 'catalog:read', 'order:read', 'order:cancel', ...ch('SELF_SERVE'), 'billing:read', 'case:read', 'case:create'],
+    permissions: ['customer:read', 'service:read', 'service:self', 'catalog:read', 'order:read', 'order:cancel', ...ch('SELF_SERVE'), 'billing:read', 'case:read', 'case:create'],
   },
   'call-center': {
     id: 'call-center', label: 'Call Center Agent', scope: 'staff', home: '/customers',

@@ -44,6 +44,7 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'service:read': ['Services', 'See services', 'Lines and subscriptions of a customer'],
   'service:manage': ['Services', 'Change a service', 'Swap SIM or number, change plan'],
   'service:suspend': ['Services', 'Suspend and resume', 'Barring and un-barring a line'],
+  'service:self': ['Services', 'Suspend and resume own service', 'A customer pausing their own line in the portal (travel) and bringing it back'],
   'service:terminate': ['Services', 'Terminate', 'Close a service for good'],
   'service:transfer': ['Services', 'Transfer ownership', 'Move a service to another customer'],
   'mnp:manage': ['Services', 'Number porting', 'Port numbers in and out'],

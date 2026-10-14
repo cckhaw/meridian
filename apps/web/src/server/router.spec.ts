@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { createUser, getDb, type Db, type NewUser } from '@meridian/core';
+import { createUser, getDb, placeOrder, requestPortOut, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -1018,3 +1018,71 @@ describe('operations support: warehouses and write-offs', () => {
     expect((await call('DELETE', `/warehouses/${id}`, { cookie: ops.cookie })).status).toBe(200);
   });
 });
+
+describe('service lifecycle API', () => {
+  it('lets a customer pause and resume their own line, keeps imposed suspensions for staff, and gates exceptions', async () => {
+    const root_ = await root();
+    const A = await customer(root_, 'Traveller A'), B = await customer(root_, 'Traveller B');
+    const portal = async (cid: string, username: string) => {
+      const password = `Portal-Passphrase-${++n}-Zq`; const { user } = await createUser(db, 't', { username, displayName: username, roles: ['self-serve'], customerId: cid, password });
+      await db.query('UPDATE users SET must_change_password=false WHERE id=$1', [user.id]); return (await signIn(username, password, `10.7.${++n}.1`)).cookie!;
+    };
+    const a = await portal(A, 'traveller.a'), b = await portal(B, 'traveller.b');
+    const sold = await placeOrder(db, { customerId: A, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'x' }, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-sim-5g' }] });
+    const id = sold.services[0].id as string;
+    const act = (cookie: string, body: object) => call('POST', `/services/${id}/actions`, { cookie, body });
+
+    expect((await act(b, { action: 'suspend-voluntary', months: 1 })).status).toBe(404); // someone else's line
+    expect((await act(a, { action: 'suspend-voluntary', months: 7 })).status).toBe(422);   // over the cap
+    const paused = await act(a, { action: 'suspend-voluntary', months: 3 });
+    expect([paused.status, paused.json.status, paused.json.suspensionKind]).toEqual([200, 'SUSPENDED', 'VOLUNTARY']);
+    const how = (await call('GET', `/services/${id}/restoration`, { cookie: a })).json;
+    expect([how.customerCanResume, how.reason]).toEqual([true, 'VOLUNTARY']);
+    expect((await act(a, { action: 'terminate' })).status).toBe(403); // a customer cannot end a contract this way
+    expect((await act(a, { action: 'resume' })).json.status).toBe('ACTIVE');
+
+    const agent = await staff(['call-center']);
+    expect((await act(agent.cookie, { action: 'suspend', reason: 'FRAUD' })).json.suspensionKind).toBe('FRAUD');
+    const refused = await act(a, { action: 'resume' });
+    expect(refused.status).toBe(422);
+    expect(refused.json.error.message).toMatch(/only be lifted by our staff/);
+    expect((await act(agent.cookie, { action: 'resume' })).json.status).toBe('ACTIVE');
+    expect((await act(agent.cookie, { action: 'terminate' })).status).toBe(403); // escalate to customer service
+
+    const cs = await staff(['customer-service']);
+    expect((await act(cs.cookie, { action: 'terminate', reason: 'cancel', etcAdjust: { waive: true, reason: 'retention' } })).json.waived).toBeDefined();
+    const log = (await call('GET', `/services/${id}/lifecycle`, { cookie: cs.cookie })).json.items.map((e: any) => e.action);
+    expect(log).toEqual(expect.arrayContaining(['SUSPEND', 'RESUME', 'TERMINATE']));
+  });
+
+  it('takes credit-limit readings, shows the dunning ladder, confirms a port-out once, and keeps the rules in Settings', async () => {
+    const root_ = await root();
+    const A = await customer(root_, 'Ladder A');
+    const sold = await placeOrder(db, { customerId: A, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'x' }, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-sim-5g' }] });
+    const id = sold.services[0].id as string;
+    const acct = (await db.query('SELECT id FROM accounts WHERE customer_id=$1', [A])).rows[0]!.id as string;
+    expect((await call('PATCH', `/accounts/${acct}/credit-limit`, { cookie: root_, body: { creditLimitMinor: 10000 } })).status).toBe(200);
+    const warn = await call('POST', `/accounts/${acct}/credit-check`, { cookie: root_, body: { unbilledUsageMinor: 8500 } });
+    expect([warn.json.state, warn.json.actions.warned]).toEqual(['WARNED', true]);
+    const block = await call('POST', `/accounts/${acct}/credit-check`, { cookie: root_, body: { unbilledUsageMinor: 10000 } });
+    expect([block.json.state, block.json.actions.barred]).toEqual(['BLOCKED', 1]);
+    expect((await call('GET', `/services/${id}`, { cookie: root_ })).json.barLevel).toBe('SOFT');
+    expect((await call('GET', '/lifecycle/outbox?pending=1&kind=NETWORK', { cookie: root_ })).json.items.some((m: any) => m.instruction === 'BAR_OUTGOING')).toBe(true);
+    expect((await call('GET', `/accounts/${acct}/dunning`, { cookie: root_ })).json.ladder.map((s: any) => [s.action, s.day])).toEqual([['REMIND', 1], ['SOFT_BAR', 7], ['HARD_BAR', 14], ['FINAL_NOTICE', 30], ['TERMINATE', 45]]);
+
+    await requestPortOut(db, id, { recipientOperator: 'OtherTel' }, 'agent');
+    const first = await call('POST', '/mnp/port-out/confirmation', { cookie: root_, body: { serviceId: id, reference: 'NCH-1' } });
+    expect([first.status, first.json.alreadyDone]).toEqual([200, false]);
+    expect((await call('POST', '/mnp/port-out/confirmation', { cookie: root_, body: { serviceId: id, reference: 'NCH-1' } })).json.alreadyDone).toBe(true);
+
+    const cfg = (await call('GET', '/settings/lifecycle', { cookie: root_ })).json;
+    expect(cfg.voluntary.maxMonths).toBe(6);
+    const bad = await call('POST', '/settings/lifecycle', { cookie: root_, body: { ...cfg, dunning: [{ action: 'HARD_BAR', day: 14 }, { action: 'SOFT_BAR', day: 20 }] } });
+    expect(bad.status).toBe(400);
+    expect((await call('POST', '/settings/lifecycle', { cookie: root_, body: { ...cfg, voluntary: { ...cfg.voluntary, maxMonths: 12 } } })).json.voluntary.maxMonths).toBe(12);
+    await call('POST', '/settings/lifecycle', { cookie: root_, body: cfg });
+    const ops = await staff(['call-center']);
+    expect((await call('POST', `/accounts/${acct}/credit-check`, { cookie: ops.cookie, body: { unbilledUsageMinor: 1 } })).status).toBe(403);
+  });
+});
+

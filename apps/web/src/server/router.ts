@@ -180,7 +180,7 @@ const CHANNEL_ENUM = z.enum(core.CHANNELS);
 const priceSchema = z.object({ type: z.enum(['ONE_TIME', 'RECURRING', 'USAGE']), amount: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }), periodMonths: z.number().int().min(1).max(60).optional(), taxInclusive: z.boolean() });
 const contractSchema = z.object({
   termMonths: z.union([z.literal(0), z.literal(12), z.literal(24), z.literal(36)]),
-  etc: z.object({ method: z.enum(['SUBSIDY_AMORTISED', 'REMAINING_RECURRING_PERCENT']), percentOfRemaining: z.number().min(0).max(100).optional(), capSubsidyFraction: z.number().min(0).max(1).optional(), waiveInLastMonths: z.number().int().min(0).max(12).optional() }).optional(),
+  etc: z.object({ method: z.enum(['SUBSIDY_AMORTISED', 'REMAINING_RECURRING_PERCENT', 'RECURRING_PLUS_SUBSIDY']), percentOfRemaining: z.number().min(0).max(100).optional(), capSubsidyFraction: z.number().min(0).max(1).optional(), waiveInLastMonths: z.number().int().min(0).max(12).optional() }).optional(),
   subsidy: z.object({ deviceRetailPrice: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }), subsidyAmount: z.object({ amountMinor: z.number().int().min(0), currency: z.string().length(3) }) }).optional(),
 });
 // The flags are derived from `options` when they are given (the offer wizard); older callers may still send only the flags.
@@ -192,7 +192,7 @@ const offerFields = {
   kind: z.string().min(1).max(40), // an offer type id (Settings → Catalog → Offer types)
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
   partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
-  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]),
+  requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]), suspension: z.object({ mode: z.enum(['PAUSE', 'MAINTENANCE_FEE']), monthlyFeeMinor: z.number().int().min(0).max(100_000_000).optional() }).optional(),
 };
 const lineItemFields = {
   itemType: z.enum(LINE_ITEM_TYPES), description: z.string().max(300).optional(), quantity: z.number().int().min(1).max(1_000_000).optional(),
@@ -209,7 +209,7 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(),
+  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension,
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
@@ -576,34 +576,113 @@ post('/groups/:id/principal', 'service:manage', async ({ db, user, params, body 
 get('/services', 'service:read', ({ db, user, query }) => core.listServices(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'), groupable: query.get('groupable') === '1',
 }));
+const etcAdjust = z.object({ waive: z.boolean().optional(), percent: z.number().min(0).max(100).optional(), reason: z.string().min(1).max(300) });
 const svcAction = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('suspend'), reason: z.string().optional() }), z.object({ action: z.literal('resume') }),
+  z.object({ action: z.literal('suspend'), reason: z.string().max(60).optional() }),
+  z.object({ action: z.literal('suspend-voluntary'), months: z.number().int().min(1).max(24).optional(), until: date.optional() }),
+  z.object({ action: z.literal('resume') }),
   z.object({ action: z.literal('change-sim'), iccid: z.string() }), z.object({ action: z.literal('change-msisdn'), msisdn: z.string().optional() }),
   z.object({ action: z.literal('transfer'), toCustomerId: uuid, toAccountId: uuid.optional() }),
-  z.object({ action: z.literal('terminate'), reason: z.string().optional() }),
+  z.object({ action: z.literal('terminate'), reason: z.string().optional(), unbilledUsageMinor: z.number().int().min(0).optional(), refundDeposit: z.boolean().optional(), etcAdjust: etcAdjust.optional() }),
   z.object({ action: z.literal('port-out'), recipientOperator: z.string(), portingCode: z.string().optional() }),
-  z.object({ action: z.literal('complete-port-out') }), z.object({ action: z.literal('cancel-port-out') }),
+  z.object({ action: z.literal('complete-port-out'), reference: z.string().max(60).optional(), unbilledUsageMinor: z.number().int().min(0).optional() }), z.object({ action: z.literal('cancel-port-out') }),
 ]);
-const ACTION_PERM: Record<string, Permission> = {
-  suspend: 'service:suspend', resume: 'service:manage', 'change-sim': 'service:manage', 'change-msisdn': 'service:manage',
-  transfer: 'service:transfer', terminate: 'service:terminate', 'port-out': 'mnp:manage', 'complete-port-out': 'mnp:manage', 'cancel-port-out': 'mnp:manage',
+// A customer can suspend and resume their own service in the portal ('service:self'); everything else is for staff.
+const ACTION_PERM: Record<string, Permission[]> = {
+  suspend: ['service:suspend'], 'suspend-voluntary': ['service:suspend', 'service:self'], resume: ['service:manage', 'service:self'], 'change-sim': ['service:manage'], 'change-msisdn': ['service:manage'],
+  transfer: ['service:transfer'], terminate: ['service:terminate'], 'port-out': ['mnp:manage'], 'complete-port-out': ['mnp:manage'], 'cancel-port-out': ['mnp:manage'],
 };
+const channelOf = (u: SessionUser): core.LifecycleChannel => (u.scope.customerId ? 'SELF_SERVE' : 'STAFF');
 post('/services/:id/actions', null, async ({ db, user, params, body }) => {
   const a = svcAction.parse(body); const id = params.id!;
-  need(user, ACTION_PERM[a.action]!);
+  const allowed = ACTION_PERM[a.action]!;
+  if (!allowed.some((p) => user.permissions.has(p))) throw forbidden(`Your role does not allow this (${allowed[0]}).`);
+  const svc = (await db.query('SELECT customer_id FROM services WHERE id=$1', [id])).rows[0];
+  if (!svc) throw new DomainError('NOT_FOUND', 'service not found');
+  assertCustomer(user, svc.customerId);
   const actor = user.username;
+  const life = new core.LifecycleService(db);
   switch (a.action) {
-    case 'suspend': return core.suspendService(db, id, a.reason, actor);
-    case 'resume': return core.resumeService(db, id, actor);
+    case 'suspend': return life.suspendService(id, a.reason === 'CUSTOMER_REQUEST' ? { kind: 'VOLUNTARY' } : { kind: a.reason === 'FRAUD' ? 'FRAUD' : 'ADMIN', reason: a.reason }, actor, channelOf(user));
+    case 'suspend-voluntary': return life.suspendService(id, { kind: 'VOLUNTARY', months: a.months, until: a.until }, actor, channelOf(user));
+    case 'resume': return life.resumeService(id, actor, channelOf(user));
     case 'change-sim': return core.changeSim(db, id, a.iccid, actor);
     case 'change-msisdn': return core.changeMsisdn(db, id, a.msisdn, actor);
     case 'transfer': return core.transferOwnership(db, id, a.toCustomerId, a.toAccountId, actor);
-    case 'terminate': return core.terminateService(db, id, { reason: a.reason }, actor);
+    case 'terminate': {
+      if (a.etcAdjust) need(user, 'order:override'); // waiving or reducing a charge is an exception a supervisor approves
+      return life.terminateService(id, { reason: a.reason, unbilledUsageMinor: a.unbilledUsageMinor, refundDeposit: a.refundDeposit, etcAdjust: a.etcAdjust }, actor);
+    }
     case 'port-out': return core.requestPortOut(db, id, a, actor);
-    case 'complete-port-out': return core.completePortOut(db, id, actor);
+    case 'complete-port-out': return core.completePortOut(db, id, actor, { reference: a.reference, unbilledUsageMinor: a.unbilledUsageMinor });
     case 'cancel-port-out': return core.cancelPortOut(db, id, actor);
   }
 });
+/** What it takes to get a restricted service back: why it is restricted, what is owed, and whether the customer can lift it themselves. */
+get('/services/:id/restoration', ['service:read'], async ({ db, user, params }) => {
+  const s = (await db.query('SELECT * FROM services WHERE id=$1', [params.id])).rows[0];
+  if (!s) throw new DomainError('NOT_FOUND', 'service not found');
+  assertCustomer(user, s.customerId);
+  const kind = core.restrictionOf(s);
+  const owed = (await db.query(`SELECT id, number, due_date, total_minor - paid_minor - credited_minor AS balance_minor FROM invoices WHERE account_id=$1 AND status IN ('ISSUED','OVERDUE') AND due_date < current_date AND total_minor - paid_minor - credited_minor > 0 ORDER BY due_date`, [s.accountId])).rows;
+  return {
+    status: s.status, barLevel: s.barLevel, reason: kind, since: s.suspendedAt, until: s.suspendUntil,
+    customerCanResume: s.status === 'SUSPENDED' && (kind === 'VOLUNTARY' || (kind === 'DUNNING' && owed.length === 0)),
+    overdue: owed, overdueMinor: owed.reduce((t, i) => t + Number(i.balanceMinor), 0),
+    how: kind === 'DUNNING' ? 'Pay the overdue balance and service comes back at once.' : kind === 'VOLUNTARY' ? 'Resume from the portal, or it resumes by itself on the end date.' : kind === 'CREDIT' ? 'Pay your bill or ask us to raise the limit.' : kind ? 'Contact us.' : null,
+  };
+});
+/** Pay-to-resume for a call-centre agent or a store: takes payment for everything overdue; the service is restored by the payment itself. */
+post('/services/:id/pay-to-resume', ['billing:pay'], async ({ db, user, params, body }) => {
+  const b = z.object({ method: z.enum(['CASH', 'CREDIT_CARD', 'QR']), reference: z.string().max(80).optional() }).parse(body);
+  const s = (await db.query('SELECT * FROM services WHERE id=$1', [params.id])).rows[0];
+  if (!s) throw new DomainError('NOT_FOUND', 'service not found');
+  assertCustomer(user, s.customerId);
+  const owed = (await db.query(`SELECT id FROM invoices WHERE account_id=$1 AND status IN ('ISSUED','OVERDUE') AND due_date < current_date AND total_minor - paid_minor - credited_minor > 0 ORDER BY due_date`, [s.accountId])).rows;
+  for (const i of owed) await core.payInvoice(db, i.id, { method: b.method, reference: b.reference }, user.username);
+  const now = (await db.query('SELECT * FROM services WHERE id=$1', [params.id])).rows[0]!;
+  return { paidInvoices: owed.length, service: now };
+});
+get('/services/:id/lifecycle', ['service:read'], async ({ db, user, params, query }) => {
+  const s = (await db.query('SELECT customer_id FROM services WHERE id=$1', [params.id])).rows[0];
+  if (!s) throw new DomainError('NOT_FOUND', 'service not found');
+  assertCustomer(user, s.customerId);
+  return { items: await new core.LifecycleService(db).history(params.id!, num(query, 'limit') ?? 100) };
+});
+// Charging system (OCS) and the clearinghouse call these with an API client or a back-office login.
+post('/accounts/:id/credit-check', ['billing:run'], ({ db, user, params, body }) => core.evaluateCreditLimit(db, params.id!, { unbilledUsageMinor: z.object({ unbilledUsageMinor: z.number().int().min(0) }).parse(body).unbilledUsageMinor, actor: user.username }));
+patch('/accounts/:id/credit-limit', ['billing:credit'], async ({ db, user, params, body }) => {
+  const b = z.object({ creditLimitMinor: z.number().int().min(0).nullable() }).parse(body);
+  await db.query('UPDATE accounts SET credit_limit_minor=$2 WHERE id=$1', [params.id, b.creditLimitMinor]);
+  await core.audit(db, user.username, 'account', params.id!, 'CREDIT_LIMIT_SET', { creditLimitMinor: b.creditLimitMinor });
+  return { ok: true };
+});
+post('/accounts/:id/deposit', ['billing:pay'], ({ db, user, params, body }) => core.receiveDeposit(db, params.id!, z.object({ amountMinor: z.number().int().min(1), method: z.enum(['CASH', 'CREDIT_CARD', 'QR']).optional(), reference: z.string().max(80).optional() }).parse(body), user.username));
+post('/accounts/:id/dunning', ['billing:run'], ({ db, user, params, body }) => {
+  const b = z.object({ asOf: date.optional(), only: z.enum(core.DUNNING_ACTIONS).optional() }).parse(body ?? {});
+  return core.evaluateDunningLadder(db, params.id!, b.asOf, { only: b.only, actor: user.username });
+});
+get('/accounts/:id/dunning', ['billing:read'], async ({ db, user, params }) => {
+  const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId);
+  const runs = (await db.query(`SELECT * FROM dunning_runs WHERE account_id=$1 ORDER BY id DESC LIMIT 10`, [params.id])).rows;
+  const steps = runs.length ? (await db.query(`SELECT run_id, step, day_offset, applied_on, outcome FROM dunning_steps WHERE run_id = ANY($1::bigint[]) ORDER BY id`, [runs.map((r) => r.id)])).rows : [];
+  return { stage: a.dunningStage, ladder: (await core.getLifecycleSettings(db)).dunning, runs: runs.map((r) => ({ ...r, steps: steps.filter((x) => x.runId === r.id) })) };
+});
+post('/lifecycle/run', ['billing:run'], ({ db, body }) => new core.LifecycleService(db).runDailyJobs(z.object({ asOf: date.optional() }).parse(body ?? {}).asOf));
+get('/lifecycle/outbox', ['billing:run'], async ({ db, query }) => ({ items: (await db.query(`SELECT id::text, created_at, kind, service_id, account_id, instruction, payload, delivered_at FROM lifecycle_outbox WHERE ($1::boolean IS NOT TRUE OR delivered_at IS NULL) AND ($2::text IS NULL OR kind = $2) ORDER BY id DESC LIMIT $3`, [query.get('pending') === '1', str(query, 'kind') ?? null, Math.min(num(query, 'limit') ?? 100, 500)])).rows }));
+post('/lifecycle/outbox/ack', ['billing:run'], async ({ db, body }) => { const ids = z.object({ ids: z.array(z.string().regex(/^\d+$/)).min(1).max(500) }).parse(body).ids; await db.query(`UPDATE lifecycle_outbox SET delivered_at = now() WHERE id = ANY($1::bigint[]) AND delivered_at IS NULL`, [ids]); return { ok: true }; });
+/** The national clearinghouse confirmed a port-out: the service ends, the closing invoice goes out, the resources are released. Idempotent. */
+post('/mnp/port-out/confirmation', ['mnp:manage'], ({ db, user, body }) => {
+  const b = z.object({ serviceId: uuid.optional(), identifier: z.string().max(20).optional(), reference: z.string().max(60).optional(), unbilledUsageMinor: z.number().int().min(0).optional() }).parse(body);
+  return new core.LifecycleService(db).confirmPortOut(b, user.username);
+});
+get('/settings/lifecycle', ['settings:manage'], ({ db }) => core.getLifecycleSettings(db));
+post('/settings/lifecycle', ['settings:manage'], ({ db, user, body }) => core.setLifecycleSettings(db, user.username, z.object({
+  voluntary: z.object({ maxMonths: z.number().int(), selfServe: z.boolean() }),
+  credit: z.object({ defaultLimitMinor: z.number().int(), warnPercent: z.number(), blockPercent: z.number(), blockAction: z.enum(['THROTTLE', 'SOFT_BAR']) }),
+  dunning: z.array(z.object({ action: z.enum(core.DUNNING_ACTIONS), day: z.number().int() })).max(10),
+  termination: z.object({ quarantineDays: z.number().int(), debtAction: z.enum(['COLLECTIONS', 'WRITE_OFF']), waiveEtcSegments: z.array(z.string().max(60)).max(50).default([]) }),
+}).parse(body)));
 get('/services/:id', 'service:read', async ({ db, user, params }) => {
   const s = (await db.query('SELECT s.*, c.name AS offer_name FROM services s LEFT JOIN catalog_nodes c ON c.id = s.offer_id WHERE s.id=$1', [params.id])).rows[0];
   if (!s) throw new DomainError('NOT_FOUND', 'service not found');

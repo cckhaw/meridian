@@ -42,6 +42,13 @@ export function quoteEtc(input: EtcInput): EtcQuote {
     const subsidy = contract.subsidy.subsidyAmount.amountMinor;
     charge = Math.round((subsidy * remaining) / term);
     charge = Math.min(charge, Math.round(subsidy * (policy.capSubsidyFraction ?? 1)));
+  } else if (policy.method === 'RECURRING_PLUS_SUBSIDY') {
+    // ETC = (remaining months x monthly recurring fee) + the device subsidy not yet earned back.
+    if (!input.monthlyRecurring) throw new Error('RECURRING_PLUS_SUBSIDY ETC requires monthlyRecurring');
+    const recurring = Math.round((input.monthlyRecurring.amountMinor * remaining * (policy.percentOfRemaining ?? 100)) / 100);
+    const subsidy = contract.subsidy?.subsidyAmount.amountMinor ?? 0;
+    const clawback = Math.min(Math.round((subsidy * remaining) / term), Math.round(subsidy * (policy.capSubsidyFraction ?? 1)));
+    return { ...base, chargeMinor: recurring + clawback, waived: false, recurringMinor: recurring, clawbackMinor: clawback };
   } else {
     if (!input.monthlyRecurring) throw new Error('REMAINING_RECURRING_PERCENT ETC requires monthlyRecurring');
     charge = Math.round((input.monthlyRecurring.amountMinor * remaining * (policy.percentOfRemaining ?? 100)) / 100);

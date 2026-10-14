@@ -2,10 +2,11 @@ import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { Client, Connection } from '@temporalio/client';
+import { DunningController } from './api/dunning.controller.js';
 import { OrdersController, TEMPORAL } from './api/orders.controller.js';
 
 @Module({
-  controllers: [OrdersController],
+  controllers: [OrdersController, DunningController],
   providers: [{
     provide: TEMPORAL,
     useFactory: async () => new Client({ connection: await Connection.connect({ address: process.env.TEMPORAL_ADDRESS ?? 'localhost:7233' }) }),
