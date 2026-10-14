@@ -30,7 +30,7 @@ const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, desc
 
 const offerData = (o: Partial<OfferNode>) => ({
   template: o.template, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
-  characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [], deals: o.deals ?? [],
+  characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [], deals: o.deals ?? [], suspension: o.suspension,
 });
 
 // ───────────────────────── reads ─────────────────────────
@@ -240,7 +240,7 @@ export interface NodePatch {
   itemType?: string; quantity?: number | null; unit?: string; unlimited?: boolean; sku?: string;
   name?: string; networkType?: string; markets?: string[];
   kind?: string; description?: string; prices?: PriceComponent[]; contract?: ContractTerms; fulfilment?: OfferNode['fulfilment'];
-  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals'];
+  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals']; suspension?: OfferNode['suspension'];
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -287,7 +287,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
       ...o, name, markets,
       kind: (patch.kind ?? o.kind) as OfferNode['kind'], description: patch.description ?? o.description, prices: patch.prices ?? o.prices,
       contract: patch.contract ?? o.contract, fulfilment: patch.fulfilment ?? o.fulfilment, partnerCode: patch.partnerCode ?? o.partnerCode,
-      characteristics: patch.characteristics ?? o.characteristics, requires: patch.requires ?? o.requires, excludes: patch.excludes ?? o.excludes, salesChannels: patch.salesChannels ?? o.salesChannels ?? [], variants: patch.variants ?? o.variants ?? [], deals: patch.deals ?? o.deals ?? [],
+      characteristics: patch.characteristics ?? o.characteristics, requires: patch.requires ?? o.requires, excludes: patch.excludes ?? o.excludes, salesChannels: patch.salesChannels ?? o.salesChannels ?? [], variants: patch.variants ?? o.variants ?? [], deals: patch.deals ?? o.deals ?? [], suspension: patch.suspension ?? o.suspension,
     } as OfferNode;
     const commercialChange = !same(next.prices, o.prices) || !same(next.contract, o.contract) || next.kind !== o.kind;
     if (commercialChange) {

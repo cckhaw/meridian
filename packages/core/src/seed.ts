@@ -1,6 +1,7 @@
 import type { OfferNode } from '@meridian/types';
 import { createNode } from './catalog.js';
-import { runBillCycle, payInvoice, runDunning } from './billing.js';
+import { runBillCycle, payInvoice } from './billing.js';
+import { runDunning } from './lifecycle-service.js';
 import { createCustomer } from './customers.js';
 import { createGroup } from './groups.js';
 import type { Db } from './db.js';

@@ -65,6 +65,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `service:suspend` |  |  |  |  |  | ✓ |  |  |  |  | ✓ |  | ✓ |  |  |  |
 | `service:terminate` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
 | `service:transfer` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
+| `service:self` |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |
 | `mnp:manage` |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
 | `order:read` | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  | ✓ |
 | `order:payment` |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  |  |  |

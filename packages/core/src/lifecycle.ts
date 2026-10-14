@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import type { EtcQuote } from '@meridian/types';
 import { audit } from './audit.js';
 import { etcQuoteForOffer } from './catalog.js';
 import { quoteEtc } from './etc.js';
-import { issueInvoice, invoiceBalance } from './billing.js';
+import { issueInvoice, invoiceBalance, settle, type DraftLine } from './billing.js';
+import { postJournal } from './ledger.js';
+import { monthlyFee } from './catalog.js';
 import { getRegional, marketFor } from './settings.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
@@ -12,6 +15,9 @@ import { GL } from './config.js';
 import { today } from './dates.js';
 import { createAccount } from './customers.js';
 import { releaseFromGroup } from './groups.js';
+import { getLifecycleSettings } from './lifecycle-config.js';
+import { assertTransition, logLifecycle, queueOutbox, restrictionOf, setBarLevel, voluntarySuspendedDays, type RestrictionKind } from './lifecycle-state.js';
+import { addMonths, addDays, diffDays, fmt } from './dates.js';
 
 async function lockService(q: Queryable, id: string): Promise<Row> {
   const s = (await q.query('SELECT * FROM services WHERE id=$1 FOR UPDATE', [id])).rows[0];
@@ -21,25 +27,99 @@ async function lockService(q: Queryable, id: string): Promise<Row> {
 const overdueFor = async (q: Queryable, accountId: string) =>
   (await q.query(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS d FROM invoices WHERE account_id=$1 AND status='OVERDUE'`, [accountId])).rows[0]!.d as number;
 
-export async function suspendService(db: Db, id: string, reason = 'CUSTOMER_REQUEST', actor = 'system') {
+export type LifecycleChannel = 'STAFF' | 'SELF_SERVE';
+
+/**
+ * Suspends a service on the operator's side (fraud, an administrator, a hard bar). The service stays on the books with its number and SIM;
+ * the network is told to bar everything but emergency calls. A customer's own request goes through `suspendVoluntary`, which has a time cap.
+ */
+export async function suspendService(db: Db, id: string, reason = 'ADMIN', actor = 'system', o: { kind?: RestrictionKind } = {}) {
+  const kind: RestrictionKind = o.kind ?? (reason === 'FRAUD' ? 'FRAUD' : reason === 'DUNNING' ? 'DUNNING' : reason === 'CREDIT' ? 'CREDIT' : reason === 'CUSTOMER_REQUEST' || reason === 'VOLUNTARY' ? 'VOLUNTARY' : 'ADMIN');
+  if (kind === 'VOLUNTARY') return suspendVoluntary(db, id, {}, actor);
   return db.tx(async (q) => {
     const s = await lockService(q, id);
-    if (s.status !== 'ACTIVE') throw rejected(`only ACTIVE services can be suspended (this one is ${s.status})`);
-    await q.query(`UPDATE services SET status='SUSPENDED', suspended_reason=$2, version=version+1, updated_at=now() WHERE id=$1`, [id, reason]);
-    await audit(q, actor, 'service', id, 'SUSPEND', { reason });
+    assertTransition(s.status, 'SUSPENDED', kind);
+    await q.query(`UPDATE services SET status='SUSPENDED', suspended_reason=$2, suspension_kind=$2, suspended_at=now(), suspend_until=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id, kind]);
+    await setBarLevel(q, s, 'HARD', { kind, actor });
+    await logLifecycle(q, { serviceId: id, accountId: s.accountId, action: 'SUSPEND', from: s.status, to: 'SUSPENDED', kind, actor, detail: { reason } });
     return (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!;
   });
 }
 
-export async function resumeService(db: Db, id: string, actor = 'system') {
+export interface VoluntaryRequest {
+  /** How long, in months. Default: the longest allowed. */
+  months?: number;
+  /** Or the day service comes back (automatically). */
+  until?: string;
+  channel?: LifecycleChannel;
+}
+
+/**
+ * A customer-requested suspension (travelling abroad, say). Rules: the service must be ACTIVE and unrestricted, the account must owe nothing
+ * overdue, and the time is capped (Settings → Lifecycle, 6 months by default). The number and SIM stay; recurring charges are paused or reduced
+ * to the offer's maintenance fee, and prorated when service comes back (on the bill after).
+ */
+export async function suspendVoluntary(db: Db, id: string, r: VoluntaryRequest = {}, actor = 'system') {
+  return db.tx(async (q) => {
+    const cfg = await getLifecycleSettings(q);
+    const channel = r.channel ?? 'STAFF';
+    if (channel === 'SELF_SERVE' && !cfg.voluntary.selfServe) throw rejected('Suspending your own service online is switched off. Please contact us.');
+    const s = await lockService(q, id);
+    assertTransition(s.status, 'SUSPENDED', 'voluntary suspension');
+    const why = restrictionOf(s);
+    if (why) throw rejected(`This service is restricted (${why.toLowerCase()}), so a suspension cannot be requested for it.`);
+    if (s.type !== 'MOBILE' && s.type !== 'IOT') throw rejected('Only mobile and IoT services can be suspended on request.');
+    if ((await overdueFor(q, s.accountId)) > 0) throw rejected('A suspension cannot be requested while the account has an overdue balance. Settle it first.');
+    const start = today();
+    const cap = addMonths(start, cfg.voluntary.maxMonths);
+    let end = r.until ?? (r.months ? addMonths(start, r.months) : cap);
+    if (r.until && !/^\d{4}-\d{2}-\d{2}$/.test(r.until)) throw invalid('until is a date such as 2026-12-31');
+    if (r.months !== undefined && (!Number.isInteger(r.months) || r.months < 1)) throw invalid('months is a whole number, at least 1');
+    if (end <= start) throw invalid('The suspension has to end after today.');
+    if (end > cap) throw rejected(`A suspension can last at most ${cfg.voluntary.maxMonths} months (until ${cap}). You asked for until ${end}.`);
+    end = end > cap ? cap : end;
+    await q.query(`INSERT INTO service_suspensions (service_id, account_id, started_on, ends_on, requested_by, channel) VALUES ($1,$2,$3,$4,$5,$6)`, [id, s.accountId, start, end, actor, channel]);
+    await q.query(`UPDATE services SET status='SUSPENDED', suspended_reason='VOLUNTARY', suspension_kind='VOLUNTARY', suspended_at=now(), suspend_until=$2, version=version+1, updated_at=now() WHERE id=$1`, [id, end]);
+    await setBarLevel(q, s, 'HARD', { kind: 'VOLUNTARY', actor, retainIdentity: true });
+    await logLifecycle(q, { serviceId: id, accountId: s.accountId, action: 'SUSPEND', from: s.status, to: 'SUSPENDED', kind: 'VOLUNTARY', actor, detail: { until: end, channel, maxMonths: cfg.voluntary.maxMonths } });
+    await queueOutbox(q, { kind: 'NOTIFY', instruction: 'SUSPENSION_CONFIRMED', serviceId: id, accountId: s.accountId, payload: { until: end } });
+    return (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!;
+  });
+}
+
+/**
+ * Brings a service back. What is allowed depends on why it was restricted: the customer can lift their own suspension; a dunning bar lifts
+ * when the overdue balance is paid (see payInvoice); a credit-limit, fraud or administrative restriction can only be lifted by staff.
+ * Service returns instantly; the recurring charge is prorated on the next bill.
+ */
+export async function resumeService(db: Db, id: string, actor = 'system', o: { channel?: LifecycleChannel; auto?: boolean } = {}) {
   return db.tx(async (q) => {
     const s = await lockService(q, id);
     if (s.status !== 'SUSPENDED') throw rejected(`only SUSPENDED services can be resumed (this one is ${s.status})`);
-    if (s.suspendedReason === 'DUNNING' && (await overdueFor(q, s.accountId)) > 0) throw rejected('service is suspended for non-payment; settle the overdue balance first');
-    await q.query(`UPDATE services SET status='ACTIVE', suspended_reason=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id]);
-    await audit(q, actor, 'service', id, 'RESUME');
+    const kind = restrictionOf(s);
+    const self = o.channel === 'SELF_SERVE';
+    if (kind === 'DUNNING' && (await overdueFor(q, s.accountId)) > 0) throw rejected('service is suspended for non-payment; settle the overdue balance first');
+    if (kind === 'CREDIT' && self) throw rejected('This service is restricted because the credit limit was reached. Pay your bill, or contact us.');
+    if ((kind === 'FRAUD' || kind === 'ADMIN') && self) throw rejected('This suspension can only be lifted by our staff. Please contact us.');
+    if (kind === 'VOLUNTARY' || !kind) {
+      await q.query(`UPDATE service_suspensions SET ended_on=$2, end_reason=$3 WHERE service_id=$1 AND ended_on IS NULL`, [id, today(), o.auto ? 'AUTO_RESUMED' : 'RESUMED']);
+    }
+    await q.query(`UPDATE services SET status='ACTIVE', suspended_reason=NULL, suspension_kind=NULL, suspended_at=NULL, suspend_until=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id]);
+    await setBarLevel(q, s, 'NONE', { kind: null, actor });
+    await logLifecycle(q, { serviceId: id, accountId: s.accountId, action: o.auto ? 'AUTO_RESUME' : 'RESUME', from: 'SUSPENDED', to: 'ACTIVE', kind, actor, detail: { channel: o.channel ?? 'STAFF' } });
+    await queueOutbox(q, { kind: 'NOTIFY', instruction: 'SERVICE_RESTORED', serviceId: id, accountId: s.accountId, payload: { was: kind } });
     return (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!;
   });
+}
+
+/** Resumes every voluntary suspension whose end date has come. Run daily (and safe to run again). */
+export async function autoResumeDue(db: Db, asOf: string = today()): Promise<{ resumed: number; failed: string[] }> {
+  const due = (await db.query(`SELECT id FROM services WHERE status='SUSPENDED' AND suspension_kind='VOLUNTARY' AND suspend_until IS NOT NULL AND suspend_until <= $1::date ORDER BY suspend_until LIMIT 1000`, [asOf])).rows;
+  const out = { resumed: 0, failed: [] as string[] };
+  for (const r of due) {
+    try { await resumeService(db, r.id as string, 'system', { auto: true }); out.resumed++; } catch (e) { out.failed.push(`${r.id}: ${(e as Error).message}`); }
+  }
+  return out;
 }
 
 export async function changeSim(db: Db, id: string, iccid: string, actor = 'system') {
@@ -113,30 +193,134 @@ export async function etcQuoteForService(q: Queryable, s: Row, when: Date): Prom
     contract: { termMonths: d.termMonths as 12 | 24 | 36, etc: { method: 'SUBSIDY_AMORTISED', waiveInLastMonths: d.waiveInLastMonths ?? 1 }, subsidy: { subsidyAmount: money, deviceRetailPrice: money } } });
 }
 
-export interface TerminationResult { service: Row; etcMinor: number; waived: boolean; invoice: Row | null }
+export interface TerminationOptions {
+  reason?: string;
+  date?: Date;
+  /** Retention and VIP cases: waive the early-termination charge, or charge only a percentage of it. Needs a reason; audited. */
+  etcAdjust?: { waive?: boolean; percent?: number; reason: string };
+  /** Usage not billed yet (from the charging system), added to the closing invoice. */
+  unbilledUsageMinor?: number;
+  /** Give the account's deposit back (after what is owed on the closing invoice) when this was its last service. */
+  refundDeposit?: boolean;
+  /** The number now belongs to another operator: it is not recycled. */
+  ported?: boolean;
+}
+export interface TerminationResult {
+  service: Row; etcMinor: number; waived: boolean; invoice: Row | null;
+  /** The ETC before any waiver or adjustment, and how it was made up. */
+  etc: { quotedMinor: number; recurringMinor: number | null; clawbackMinor: number | null; adjustedBy: string | null };
+  unbilledRecurringMinor: number; unbilledUsageMinor: number; depositAppliedMinor: number; depositRefundedMinor: number;
+}
 
-/** Terminates a service. A fixed-term contract still running triggers an Early Termination Charge on a final invoice. */
-export async function terminateService(db: Db, id: string, o: { reason?: string; date?: Date } = {}, actor = 'system'): Promise<TerminationResult> {
+/**
+ * Terminates a service and closes it out:
+ *   - the closing invoice: recurring charges since the last bill (prorated to today), usage not billed yet, and the early-termination charge
+ *     when a fixed-term contract is still running. ETC = remaining months x monthly fee (+ the device subsidy not earned back, for plans that
+ *     claw it back), with the waiver window, retention/VIP waivers and percentage adjustments applied;
+ *   - the number rests in quarantine (Settings → Lifecycle, 90 days by default) unless it was ported to another operator;
+ *   - the SIM is released and the HLR/HSS is told to de-provision it;
+ *   - the account's deposit is applied and refunded when this was its last service.
+ */
+export async function terminateService(db: Db, id: string, o: TerminationOptions = {}, actor = 'system'): Promise<TerminationResult> {
   return db.tx(async (q) => {
     const s = await lockService(q, id);
     if (s.status === 'TERMINATED') throw rejected('service is already terminated');
+    assertTransition(s.status, 'TERMINATED', o.reason ?? 'termination');
+    const cfg = await getLifecycleSettings(q);
     const when = o.date ?? new Date();
+    const dayOfEnd = fmt(when);
     await releaseFromGroup(q, actor, id); // a principal with supplementary services must be handed over first
-    let etc = 0, waived = false, invoice: Row | null = null;
+    await q.query(`UPDATE service_suspensions SET ended_on=$2, end_reason='TERMINATED' WHERE service_id=$1 AND ended_on IS NULL`, [id, dayOfEnd]);
+
+    // Early termination charge
+    let quoted = 0, waived = false, recurringPart: number | null = null, clawbackPart: number | null = null, adjustedBy: string | null = null;
     if (s.contractTermMonths > 0 && s.contractStart) {
       const quote = await etcQuoteForService(q, s, when);
-      etc = quote.chargeMinor; waived = quote.waived;
+      quoted = quote.chargeMinor; waived = quote.waived; recurringPart = quote.recurringMinor ?? null; clawbackPart = quote.clawbackMinor ?? null;
     }
-    await q.query(`UPDATE services SET status='TERMINATED', terminated_at=$2, version=version+1, updated_at=now() WHERE id=$1`, [id, when.toISOString()]);
-    await q.query('UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1', [id]); // outstanding instalments fall due in the ETC
+    let etc = quoted;
     if (etc > 0) {
-      const acct = (await q.query('SELECT * FROM accounts WHERE id=$1', [s.accountId])).rows[0]!;
-      const d = today();
-      invoice = await issueInvoice(q, acct, { kind: 'FINAL', periodStart: d, periodEnd: d, issueDate: d,
-        lines: [{ serviceId: id, kind: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc }] });
+      const seg = (await q.query('SELECT segment FROM customers WHERE id=$1', [s.customerId])).rows[0]?.segment as string | undefined;
+      if (o.etcAdjust) {
+        if (!o.etcAdjust.reason?.trim()) throw invalid('A reason is needed to waive or reduce the early termination charge.');
+        const pct = o.etcAdjust.waive ? 0 : o.etcAdjust.percent;
+        if (pct === undefined || !Number.isFinite(pct) || pct < 0 || pct > 100) throw invalid('The percentage of the charge to collect is 0 to 100.');
+        etc = Math.round((etc * pct) / 100); adjustedBy = `${actor}: ${o.etcAdjust.reason.trim()}`;
+      } else if (seg && cfg.termination.waiveEtcSegments.includes(seg)) {
+        etc = 0; adjustedBy = `segment ${seg} is exempt from early termination charges`;
+      }
+      if (etc === 0) waived = true;
     }
+
+    // Closing invoice: what has not been billed yet, then the ETC
+    const lines: DraftLine[] = [];
+    let unbilledRecurring = 0;
+    if (s.activatedAt) {
+      const lastEnd = (await q.query(`SELECT max(period_end)::text AS d FROM invoices WHERE account_id=$1 AND kind='CYCLE'`, [s.accountId])).rows[0]?.d as string | null;
+      const activated = fmt(new Date(s.activatedAt));
+      const from = lastEnd && addDays(lastEnd, 1) > activated ? addDays(lastEnd, 1) : activated;
+      if (dayOfEnd >= from) {
+        const offerRow = (await q.query('SELECT name, data FROM catalog_nodes WHERE id=$1', [s.offerId])).rows[0];
+        const fee = offerRow ? monthlyFee({ id: s.offerId, name: offerRow.name, ...offerRow.data } as never) : null;
+        if (fee) {
+          const days = diffDays(dayOfEnd, from) + 1;
+          const off = (await voluntarySuspendedDays(q, { serviceId: id }, from, dayOfEnd)).get(id) ?? 0;
+          const monthly = fee.amount.amountMinor / (fee.periodMonths ?? 1);
+          unbilledRecurring = Math.min(Math.round(monthly), Math.round((monthly * Math.max(0, days - off)) / 30));
+          if (unbilledRecurring > 0) lines.push({ serviceId: id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: fee.taxInclusive, description: `${offerRow!.name} ${s.identifier} until termination (${from} to ${dayOfEnd})`, amountMinor: unbilledRecurring });
+        }
+      }
+    }
+    const usage = o.unbilledUsageMinor ?? 0;
+    if (usage < 0 || !Number.isInteger(usage)) throw invalid('unbilledUsageMinor is a whole amount, zero or more');
+    if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
+    if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
+
+    await q.query(`UPDATE services SET status='TERMINATED', terminated_at=$2, terminated_reason=$3, suspended_reason=NULL, suspension_kind=NULL, suspend_until=NULL, bar_level='HARD', iccid=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id, when.toISOString(), o.reason ?? 'unspecified']);
+    await q.query('UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1', [id]); // outstanding instalments fall due in the ETC
+    let invoice: Row | null = null;
+    const acct = (await q.query('SELECT * FROM accounts WHERE id=$1', [s.accountId])).rows[0]!;
+    if (lines.length) {
+      const d = today();
+      invoice = await issueInvoice(q, acct, { kind: 'FINAL', periodStart: d, periodEnd: d, issueDate: d, lines });
+    }
+
+    // Release the number and the SIM
+    if (s.type === 'MOBILE') {
+      const hold = o.ported ? '9999-12-31' : addDays(dayOfEnd, cfg.termination.quarantineDays);
+      await q.query(`INSERT INTO msisdn_quarantine (identifier, service_id, reason, since, release_on) VALUES ($1,$2,$3,$4,$5)
+                     ON CONFLICT (identifier) DO UPDATE SET service_id=EXCLUDED.service_id, reason=EXCLUDED.reason, since=EXCLUDED.since, release_on=EXCLUDED.release_on`,
+        [s.identifier, id, o.ported ? 'PORTED_OUT' : (o.reason ?? 'TERMINATED'), dayOfEnd, hold]);
+    }
+    await queueOutbox(q, { kind: 'NETWORK', instruction: 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: ['HLR', 'HSS', 'PCRF'], ported: !!o.ported } });
+
+    // The deposit
+    let applied = 0, refunded = 0;
+    if (o.refundDeposit && Number(acct.depositMinor) > 0) {
+      const others = (await q.query(`SELECT 1 FROM services WHERE account_id=$1 AND id<>$2 AND status <> 'TERMINATED' LIMIT 1`, [s.accountId, id])).rows.length;
+      if (!others) {
+        const deposit = Number(acct.depositMinor);
+        const owed = invoice ? invoiceBalance(invoice) : 0;
+        applied = Math.min(deposit, Math.max(owed, 0)); refunded = deposit - applied;
+        const jl = [
+          ...(applied ? [{ account: GL.DEPOSITS, debit: applied, description: 'Deposit applied to the closing invoice' }, { account: GL.AR, credit: applied, description: 'Deposit applied to the closing invoice' }] : []),
+          ...(refunded ? [{ account: GL.DEPOSITS, debit: refunded, description: 'Deposit refunded' }, { account: GL.CASH, credit: refunded, description: 'Deposit refunded' }] : []),
+        ];
+        if (refunded) await q.query(`INSERT INTO payments (shard_id, account_id, method, status, amount_minor, currency, reference, idempotency_key) VALUES ($1,$2,'CASH','REFUNDED',$3,$4,'deposit refund',$5)`, [acct.shardId, s.accountId, -refunded, acct.currency, `deposit-refund-${randomUUID()}`]);
+        if (jl.length) await postJournal(q, { date: today(), sourceType: 'DEPOSIT', sourceId: String(s.accountId), currency: acct.currency, lines: jl });
+        if (applied && invoice) { await q.query('UPDATE invoices SET paid_minor = paid_minor + $2 WHERE id=$1', [invoice.id, applied]); await settle(q, invoice.id as string); invoice = (await q.query('SELECT * FROM invoices WHERE id=$1', [invoice.id])).rows[0]!; }
+        await q.query('UPDATE accounts SET deposit_minor = 0 WHERE id=$1', [s.accountId]);
+      }
+    }
+
+    await logLifecycle(q, { serviceId: id, accountId: s.accountId, action: 'TERMINATE', from: s.status, to: 'TERMINATED', kind: s.suspensionKind ?? null, actor, detail: { reason: o.reason ?? 'unspecified', etcMinor: etc, quotedEtcMinor: quoted, adjustedBy, unbilledRecurringMinor: unbilledRecurring, unbilledUsageMinor: usage, depositApplied: applied, depositRefunded: refunded, releasedIccid: s.iccid ?? null, ported: !!o.ported } });
     await audit(q, actor, 'service', id, 'TERMINATE', { reason: o.reason ?? 'unspecified', etcMinor: etc, waived });
-    return { service: (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!, etcMinor: etc, waived, invoice };
+    await queueOutbox(q, { kind: 'NOTIFY', instruction: 'TERMINATION_CONFIRMED', serviceId: id, accountId: s.accountId, payload: { etcMinor: etc, invoice: invoice?.number ?? null } });
+    return {
+      service: (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!, etcMinor: etc, waived, invoice,
+      etc: { quotedMinor: quoted, recurringMinor: recurringPart, clawbackMinor: clawbackPart, adjustedBy },
+      unbilledRecurringMinor: unbilledRecurring, unbilledUsageMinor: usage, depositAppliedMinor: applied, depositRefundedMinor: refunded,
+    };
   });
 }
 
@@ -158,13 +342,20 @@ export async function requestPortOut(db: Db, id: string, o: { recipientOperator:
   });
 }
 
-export async function completePortOut(db: Db, id: string, actor = 'system') {
+/**
+ * The national clearinghouse confirmed the number has moved. The service ends at once on this network: final bill (recurring until today,
+ * usage not billed yet, early termination charge), deposit refund if this was the account's last service, and the SIM and network resources
+ * released. The number is not recycled: it now belongs to the other operator. Safe to call again for the same confirmation.
+ */
+export async function completePortOut(db: Db, id: string, actor = 'system', o: { reference?: string; unbilledUsageMinor?: number; etcAdjust?: TerminationOptions['etcAdjust'] } = {}) {
   const s = (await db.query('SELECT * FROM services WHERE id=$1', [id])).rows[0];
   if (!s) throw notFound('service', id);
+  if (s.status === 'TERMINATED' && s.terminatedReason === 'PORTED_OUT') return { alreadyDone: true, service: s };
   if (s.status !== 'PORTING_OUT') throw rejected(`service is ${s.status}, not PORTING_OUT`);
-  const r = await terminateService(db, id, { reason: 'PORTED_OUT' }, actor);
-  await db.query(`UPDATE cases SET status='RESOLVED', updated_at=now() WHERE service_id=$1 AND type='MNP_PORT_OUT' AND status IN ('OPEN','IN_PROGRESS')`, [id]);
-  return r;
+  const r = await terminateService(db, id, { reason: 'PORTED_OUT', ported: true, refundDeposit: true, unbilledUsageMinor: o.unbilledUsageMinor, etcAdjust: o.etcAdjust }, actor);
+  await db.query(`UPDATE cases SET status='RESOLVED', notes = notes || $2::jsonb, updated_at=now() WHERE service_id=$1 AND type='MNP_PORT_OUT' AND status IN ('OPEN','IN_PROGRESS')`,
+    [id, JSON.stringify([{ at: new Date().toISOString(), by: actor, text: `Port-out confirmed${o.reference ? ` (clearinghouse ref ${o.reference})` : ''}. Service terminated, closing invoice ${r.invoice?.number ?? 'none (nothing owed)'}.` }])]);
+  return { alreadyDone: false, ...r };
 }
 
 export async function cancelPortOut(db: Db, id: string, actor = 'system') {

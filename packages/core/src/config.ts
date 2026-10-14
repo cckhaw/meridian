@@ -25,13 +25,15 @@ export const GL = {
   CASH: '1100',
   AR: '1200',
   TAX_PAYABLE: '2100',
+  DEPOSITS: '2200', // customer deposits held
+  BAD_DEBT: '6100', // receivables written off when a service is terminated for non-payment
   SERVICE_REVENUE: '4000',
   GOODS_REVENUE: '4100',
   CREDIT_NOTES: '4900', // contra-revenue
 } as const;
 
 export const GL_NAMES: Record<string, string> = {
-  '1100': 'Cash and bank', '1200': 'Accounts receivable', '2100': 'Indirect tax payable',
+  '1100': 'Cash and bank', '1200': 'Accounts receivable', '2100': 'Indirect tax payable', '2200': 'Customer deposits', '6100': 'Bad debt expense',
   '4000': 'Service revenue', '4100': 'Goods revenue', '4900': 'Credit notes and refunds',
 };
 

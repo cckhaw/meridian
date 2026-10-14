@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { monthlyFee } from './catalog.js';
-import { DUNNING, GL, INVOICE_TERMS_DAYS, paymentMode } from './config.js';
+import { GL, INVOICE_TERMS_DAYS, paymentMode } from './config.js';
 import { marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { addDays, addMonths, dayOf, diffDays, fmt, today, toDate, type DateStr } from './dates.js';
@@ -11,6 +11,7 @@ import { postJournal } from './ledger.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { customerIdsMatching, likePrefix, parseQuery } from './search.js';
 import { taxSplit } from './tax.js';
+import { liftCreditRestrictions, restoreAfterPayment, voluntarySuspendedDays } from './lifecycle-state.js';
 
 export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; description: string; amountMinor: number; taxInclusive: boolean }
 
@@ -89,12 +90,16 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
   const days = diffDays(periodEnd, periodStart) + 1;
   const lines: DraftLine[] = [];
 
+  // Services the customer asked to suspend during this period are billed on their own lines below: recurring charge prorated for the days
+  // in service, and the offer's maintenance fee (if it has one) for the days suspended.
+  const suspended = await voluntarySuspendedDays(q, { accountId: a.id as string }, periodStart, periodEnd);
+  const skip = [...suspended.keys()];
   // Recurring: group fully-active services per offer (one line, scales to IoT fleets); list part-period ones individually.
   const full = (await q.query(
-    `SELECT s.offer_id, count(*) AS n FROM services s WHERE s.account_id=$1 AND s.status='ACTIVE' AND s.activated_at::date <= $2::date GROUP BY s.offer_id`, [a.id, periodStart])).rows;
+    `SELECT s.offer_id, count(*) AS n FROM services s WHERE s.account_id=$1 AND s.status='ACTIVE' AND s.activated_at::date <= $2::date AND s.id <> ALL($3::uuid[]) GROUP BY s.offer_id`, [a.id, periodStart, skip])).rows;
   const partial = (await q.query(
     `SELECT s.id, s.identifier, s.offer_id, s.activated_at::date::text AS activated FROM services s
-     WHERE s.account_id=$1 AND s.status='ACTIVE' AND s.activated_at::date > $2::date AND s.activated_at::date <= $3::date ORDER BY s.identifier LIMIT 5000`, [a.id, periodStart, periodEnd])).rows;
+     WHERE s.account_id=$1 AND s.status='ACTIVE' AND s.activated_at::date > $2::date AND s.activated_at::date <= $3::date AND s.id <> ALL($4::uuid[]) ORDER BY s.identifier LIMIT 5000`, [a.id, periodStart, periodEnd, skip])).rows;
   const offers = new Map<string, OfferNode>();
   const offer = async (id: string) => {
     if (!offers.has(id)) {
@@ -124,6 +129,25 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
     lines.push({ serviceId: s.id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
       description: `${p.o.name} ${s.identifier} (pro-rated ${active}/${days} days)`, amountMinor: daily ? p.amount : Math.round((p.monthly * active) / days) });
   }
+  if (skip.length) {
+    const rows = (await q.query(`SELECT id, identifier, offer_id, activated_at::date::text AS activated FROM services WHERE id = ANY($1::uuid[]) AND status <> 'TERMINATED' AND activated_at IS NOT NULL AND activated_at::date <= $2::date ORDER BY identifier`, [skip, periodEnd])).rows;
+    for (const s of rows) {
+      const p = await periodFee(s.offerId);
+      if (!p) continue;
+      const off = suspended.get(s.id as string) ?? 0;
+      const from = s.activated > periodStart ? (s.activated as string) : periodStart;
+      const inService = Math.max(0, diffDays(periodEnd, from) + 1 - off);
+      const base = daily ? p.amount : p.monthly;
+      if (inService > 0) lines.push({ serviceId: s.id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
+        description: `${p.o.name} ${s.identifier} (pro-rated ${inService}/${days} days, suspended ${off})`, amountMinor: Math.round((base * inService) / days) });
+      const sus = p.o.suspension;
+      if (sus?.mode === 'MAINTENANCE_FEE' && (sus.monthlyFeeMinor ?? 0) > 0 && off > 0) {
+        const feeBase = daily ? (sus.monthlyFeeMinor! / 30) : sus.monthlyFeeMinor!;
+        lines.push({ serviceId: s.id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
+          description: `Maintenance fee while suspended ${s.identifier} (${off} days)`, amountMinor: Math.round((feeBase * off) / days) });
+      }
+    }
+  }
   // Group benefit: a percentage off the recurring fee of each supplementary service in a group of this account.
   const discounted = (await q.query(
     `SELECT s.id, s.identifier, s.offer_id, s.activated_at::date::text AS activated, (g.benefits->>'discountBps')::int AS bps, g.name AS group_name
@@ -146,6 +170,7 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
     await q.query('UPDATE service_charges SET remaining_cycles = remaining_cycles - 1 WHERE id=$1', [c.id]);
   }
   const inv = await issueInvoice(q, a, { kind: 'CYCLE', periodStart, periodEnd, issueDate: asOf, lines });
+  await liftCreditRestrictions(q, a.id as string); // a new bill starts the unbilled usage from zero
   if (inv) await audit(q, 'billing', 'invoice', inv.id, 'ISSUED', { number: inv.number, total: inv.totalMinor });
   return inv;
 }
@@ -214,15 +239,12 @@ export async function payInvoice(db: Db, invoiceId: string, o: { amountMinor?: n
 }
 
 /** Re-derives status from balance, and lifts a dunning suspension once the account has nothing overdue. */
-async function settle(q: Queryable, invoiceId: string) {
+export async function settle(q: Queryable, invoiceId: string) {
   const inv = (await q.query('SELECT * FROM invoices WHERE id=$1', [invoiceId])).rows[0]!;
   if (inv.status === 'VOID') return;
   if (invoiceBalance(inv) === 0) await q.query(`UPDATE invoices SET status='PAID' WHERE id=$1`, [invoiceId]);
   const stillOverdue = (await q.query(`SELECT 1 FROM invoices WHERE account_id=$1 AND status='OVERDUE' LIMIT 1`, [inv.accountId])).rows.length;
-  if (!stillOverdue) {
-    await q.query(`UPDATE services SET status='ACTIVE', suspended_reason=NULL WHERE account_id=$1 AND status='SUSPENDED' AND suspended_reason='DUNNING'`, [inv.accountId]);
-    await q.query(`UPDATE accounts SET dunning_stage=0 WHERE id=$1 AND dunning_stage>0`, [inv.accountId]);
-  }
+  if (!stillOverdue) await restoreAfterPayment(q, inv.accountId as string); // lifts the dunning bars and closes the ladder
 }
 
 /** Credit note. If the invoice was already (over)paid, the excess is refunded to the customer. */
@@ -256,32 +278,6 @@ export async function creditInvoice(db: Db, invoiceId: string, amountMinor: numb
     await audit(q, actor, 'invoice', invoiceId, 'CREDIT_NOTE', { amountMinor, reason, refunded: Math.max(excess, 0) });
     if (caseId) await q.query(`UPDATE cases SET notes = notes || $2::jsonb, updated_at = now() WHERE id=$1`, [caseId, JSON.stringify([{ at: new Date().toISOString(), by: actor, text: `Credit note ${amountMinor} issued on ${inv.number}: ${reason}` }])]);
     return getInvoice(q, invoiceId);
-  });
-}
-
-export interface DunningResult { asOf: DateStr; markedOverdue: number; suspendedAccounts: number; flaggedForReview: number }
-
-/** Day 1 past due: invoice OVERDUE + reminder (stage 1). Day 15: services suspended (stage 2). Day 45: flagged for write-off review (stage 3). */
-export async function runDunning(db: Db, asOf: DateStr = today()): Promise<DunningResult> {
-  const out: DunningResult = { asOf, markedOverdue: 0, suspendedAccounts: 0, flaggedForReview: 0 };
-  return db.tx(async (q) => {
-    const marked = await q.query(`UPDATE invoices SET status='OVERDUE' WHERE status='ISSUED' AND due_date < $1::date AND total_minor - paid_minor - credited_minor > 0`, [asOf]);
-    out.markedOverdue = marked.rowCount;
-    const rows = (await q.query(
-      `SELECT i.account_id, max($1::date - i.due_date) AS days FROM invoices i WHERE i.status='OVERDUE' AND i.total_minor - i.paid_minor - i.credited_minor > 0 GROUP BY i.account_id`, [asOf])).rows;
-    for (const r of rows) {
-      const stage = r.days >= DUNNING.reviewAfterDays ? 3 : r.days >= DUNNING.suspendAfterDays ? 2 : 1;
-      const cur = (await q.query('SELECT dunning_stage FROM accounts WHERE id=$1', [r.accountId])).rows[0]!.dunningStage as number;
-      if (stage <= cur) continue;
-      await q.query('UPDATE accounts SET dunning_stage=$2 WHERE id=$1', [r.accountId, stage]);
-      if (stage >= 2) {
-        await q.query(`UPDATE services SET status='SUSPENDED', suspended_reason='DUNNING' WHERE account_id=$1 AND status='ACTIVE'`, [r.accountId]);
-        if (cur < 2) out.suspendedAccounts++;
-      }
-      if (stage === 3) out.flaggedForReview++;
-      await audit(q, 'dunning', 'account', r.accountId, `STAGE_${stage}`, { overdueDays: r.days });
-    }
-    return out;
   });
 }
 

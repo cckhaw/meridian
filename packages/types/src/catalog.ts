@@ -51,8 +51,9 @@ export interface DeviceSubsidy {
 }
 
 export interface EarlyTerminationPolicy {
-  method: 'SUBSIDY_AMORTISED' | 'REMAINING_RECURRING_PERCENT';
-  /** Used by REMAINING_RECURRING_PERCENT, 0..100. */
+  /** RECURRING_PLUS_SUBSIDY: remaining months x monthly fee, plus the unamortised device subsidy (clawback). */
+  method: 'SUBSIDY_AMORTISED' | 'REMAINING_RECURRING_PERCENT' | 'RECURRING_PLUS_SUBSIDY';
+  /** Used by REMAINING_RECURRING_PERCENT and RECURRING_PLUS_SUBSIDY, 0..100. */
   percentOfRemaining?: number;
   /** Cap as a fraction of subsidy for SUBSIDY_AMORTISED, default 1. */
   capSubsidyFraction?: number;
@@ -123,6 +124,14 @@ export interface OfferNode extends CatalogNodeBase {
   variants?: DeviceVariant[];
   /** Contracts this device can be bought on with a plan (outright devices only). Empty/absent = sold outright only. */
   deals?: DeviceDeal[];
+  /** What a customer-requested suspension costs: recurring charges paused (default), or reduced to a monthly maintenance fee. */
+  suspension?: SuspensionTerms;
+}
+
+export interface SuspensionTerms {
+  mode: 'PAUSE' | 'MAINTENANCE_FEE';
+  /** Monthly fee while suspended, in the minor units of the deployment currency (MAINTENANCE_FEE only). */
+  monthlyFeeMinor?: number;
 }
 
 /**
@@ -152,4 +161,7 @@ export interface EtcQuote {
   monthsRemaining: number;
   chargeMinor: number;
   waived: boolean;
+  /** For RECURRING_PLUS_SUBSIDY: the two parts that make up chargeMinor. */
+  recurringMinor?: number;
+  clawbackMinor?: number;
 }

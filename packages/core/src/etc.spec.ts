@@ -17,6 +17,16 @@ describe('quoteEtc', () => {
     expect(q.chargeMinor).toBe(54000); // 72000 * 18/24
   });
 
+  it('adds the remaining recurring fees to the unearned subsidy (RECURRING_PLUS_SUBSIDY)', () => {
+    const c = { ...contract(24), etc: { method: 'RECURRING_PLUS_SUBSIDY' as const, waiveInLastMonths: 1 } };
+    const q = quoteEtc({ offerId: 'o', contract: c, contractStart: new Date('2026-01-15'), terminationDate: new Date('2026-07-20'), monthlyRecurring: { amountMinor: 5000, currency: 'SGD' } });
+    // 18 months left: 18 x 50.00 + 72000 x 18/24
+    expect([q.recurringMinor, q.clawbackMinor, q.chargeMinor]).toEqual([90000, 54000, 144000]);
+    const half = quoteEtc({ offerId: 'o', contract: { ...c, etc: { ...c.etc, percentOfRemaining: 50 } }, contractStart: new Date('2026-01-15'), terminationDate: new Date('2026-07-20'), monthlyRecurring: { amountMinor: 5000, currency: 'SGD' } });
+    expect(half.chargeMinor).toBe(45000 + 54000); // pro-ration applies to the recurring part
+    expect(() => quoteEtc({ offerId: 'o', contract: c, contractStart: new Date('2026-01-15'), terminationDate: new Date('2026-07-20') })).toThrow(/monthlyRecurring/);
+  });
+
   it('does not count a partial month', () => {
     expect(monthsElapsed(new Date('2026-01-15'), new Date('2026-02-14'), 12)).toBe(0);
     expect(monthsElapsed(new Date('2026-01-15'), new Date('2026-02-15'), 12)).toBe(1);

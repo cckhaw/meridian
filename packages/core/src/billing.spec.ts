@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { creditInvoice, getInvoice, payInvoice, runBillCycle, runDunning } from './billing.js';
+import { creditInvoice, getInvoice, payInvoice, runBillCycle } from './billing.js';
+import { runDunning } from './lifecycle-service.js';
 import { addDays, dayOf, today } from './dates.js';
 import type { Db } from './db.js';
 import { exportGl, glCsv, reconcile } from './reports.js';

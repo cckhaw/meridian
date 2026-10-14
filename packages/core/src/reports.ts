@@ -157,7 +157,7 @@ export async function reconcile(q: Queryable): Promise<{ ok: boolean; checks: Re
   const dr = await sum('SELECT COALESCE(sum(debit_minor),0) AS v FROM gl_entries');
   const cr = await sum('SELECT COALESCE(sum(credit_minor),0) AS v FROM gl_entries');
   const glAr = await sum(`SELECT COALESCE(sum(debit_minor - credit_minor),0) AS v FROM gl_entries WHERE account_code='${GL.AR}'`);
-  const subAr = await sum(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS v FROM invoices WHERE status <> 'VOID'`);
+  const subAr = await sum(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS v FROM invoices WHERE status NOT IN ('VOID','WRITTEN_OFF')`);
   const glCash = await sum(`SELECT COALESCE(sum(debit_minor - credit_minor),0) AS v FROM gl_entries WHERE account_code='${GL.CASH}'`);
   const subCash = await sum(`SELECT COALESCE(sum(amount_minor - refunded_minor),0) AS v FROM payments WHERE status IN ('CAPTURED','REFUNDED')`);
   const unbalanced = await sum(`SELECT count(*) AS v FROM (SELECT journal_id FROM gl_entries GROUP BY journal_id HAVING sum(debit_minor) <> sum(credit_minor)) t`);
