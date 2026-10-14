@@ -169,17 +169,22 @@ export interface Branding {
   theme: ThemeId;
   /** sha256 of the uploaded logo (cache-busting), or null when none is set. */
   logo: { sha256: string; width: number; height: number } | null;
+  /** The browser-tab icon, same shape; null when none is set (the built-in icon is used). */
+  favicon: { sha256: string; width: number; height: number } | null;
 }
 export const DEFAULT_BRAND_NAME = 'Meridian';
+export const FAVICON_RECOMMENDATION = { width: 256, height: 256, maxBytes: 256 * 1024, formats: ['PNG', 'JPEG', 'WebP'], note: 'Square, simple and bold. Shown at 16 to 64px in the browser tab.' } as const;
 export const LOGO_RECOMMENDATION = { width: 480, height: 120, maxBytes: 512 * 1024, formats: ['PNG', 'JPEG', 'WebP'], note: 'Transparent PNG, about 4:1 wide. Shown at up to 40px tall.' } as const;
 
 export async function getBranding(q: Queryable): Promise<Branding> {
   const v = (await q.query(`SELECT value FROM settings WHERE key='branding'`)).rows[0]?.value ?? {};
-  const logo = (await q.query(`SELECT sha256, width, height FROM assets WHERE name='logo'`)).rows[0];
+  const imgs = (await q.query(`SELECT name, sha256, width, height FROM assets WHERE name IN ('logo','favicon')`)).rows;
+  const pick = (n: string) => { const r = imgs.find((x) => x.name === n); return r ? { sha256: r.sha256 as string, width: r.width as number, height: r.height as number } : null; };
   return {
     name: typeof v.name === 'string' && v.name.trim() ? v.name : DEFAULT_BRAND_NAME,
     theme: isThemeId(v.theme) ? v.theme : DEFAULT_THEME,
-    logo: logo ? { sha256: logo.sha256, width: logo.width, height: logo.height } : null,
+    logo: pick('logo'),
+    favicon: pick('favicon'),
   };
 }
 
@@ -227,27 +232,40 @@ export function inspectImage(b: Buffer): ImageInfo | null {
   return null;
 }
 
-export async function setLogo(q: Queryable, actor: string, bytes: Buffer): Promise<Branding> {
-  if (bytes.length === 0) throw invalid('The logo file is empty.');
-  if (bytes.length > LOGO_RECOMMENDATION.maxBytes) throw invalid(`The logo is larger than ${LOGO_RECOMMENDATION.maxBytes / 1024} KB.`);
+type BrandImage = 'logo' | 'favicon';
+const IMAGE_RULES = {
+  logo: { label: 'logo', max: LOGO_RECOMMENDATION.maxBytes, minW: 32, minH: 16 },
+  favicon: { label: 'favicon', max: FAVICON_RECOMMENDATION.maxBytes, minW: 16, minH: 16 },
+} as const;
+async function setBrandImage(q: Queryable, kind: BrandImage, actor: string, bytes: Buffer): Promise<Branding> {
+  const r = IMAGE_RULES[kind];
+  if (bytes.length === 0) throw invalid(`The ${r.label} file is empty.`);
+  if (bytes.length > r.max) throw invalid(`The ${r.label} is larger than ${r.max / 1024} KB.`);
   const info = inspectImage(bytes);
-  if (!info) throw invalid('The logo must be a PNG, JPEG or WebP image (SVG is not accepted).');
-  if (info.width < 32 || info.height < 16 || info.width > 4096 || info.height > 4096) throw invalid(`The logo is ${info.width}×${info.height}px; it must be between 32×16 and 4096×4096.`);
+  if (!info) throw invalid(`The ${r.label} must be a PNG, JPEG or WebP image (SVG is not accepted).`);
+  if (info.width < r.minW || info.height < r.minH || info.width > 4096 || info.height > 4096) throw invalid(`The ${r.label} is ${info.width}×${info.height}px; it must be between ${r.minW}×${r.minH} and 4096×4096.`);
+  if (kind === 'favicon' && info.width !== info.height) throw invalid(`The favicon must be square; this one is ${info.width}×${info.height}px.`);
   const sha = createHash('sha256').update(bytes).digest('hex');
   await q.query(
-    `INSERT INTO assets (name, content_type, bytes, sha256, width, height, updated_by) VALUES ('logo',$1,$2,$3,$4,$5,$6)
+    `INSERT INTO assets (name, content_type, bytes, sha256, width, height, updated_by) VALUES ($7,$1,$2,$3,$4,$5,$6)
      ON CONFLICT (name) DO UPDATE SET content_type=EXCLUDED.content_type, bytes=EXCLUDED.bytes, sha256=EXCLUDED.sha256, width=EXCLUDED.width, height=EXCLUDED.height, updated_by=EXCLUDED.updated_by, updated_at=now()`,
-    [info.contentType, bytes, sha, info.width, info.height, actor],
+    [info.contentType, bytes, sha, info.width, info.height, actor, kind],
   );
-  await audit(q, actor, 'settings', 'logo', 'update', { sha256: sha, width: info.width, height: info.height, bytes: bytes.length });
+  await audit(q, actor, 'settings', kind, 'update', { sha256: sha, width: info.width, height: info.height, bytes: bytes.length });
   return getBranding(q);
 }
-export async function removeLogo(q: Queryable, actor: string): Promise<Branding> {
-  await q.query(`DELETE FROM assets WHERE name='logo'`);
-  await audit(q, actor, 'settings', 'logo', 'remove');
+async function removeBrandImage(q: Queryable, kind: BrandImage, actor: string): Promise<Branding> {
+  await q.query(`DELETE FROM assets WHERE name=$1`, [kind]);
+  await audit(q, actor, 'settings', kind, 'remove');
   return getBranding(q);
 }
-export async function getLogo(q: Queryable): Promise<{ contentType: string; bytes: Buffer; sha256: string } | null> {
-  const r = (await q.query(`SELECT content_type, bytes, sha256 FROM assets WHERE name='logo'`)).rows[0];
+async function getBrandImage(q: Queryable, kind: BrandImage): Promise<{ contentType: string; bytes: Buffer; sha256: string } | null> {
+  const r = (await q.query(`SELECT content_type, bytes, sha256 FROM assets WHERE name=$1`, [kind])).rows[0];
   return r ? { contentType: r.contentType, bytes: Buffer.from(r.bytes), sha256: r.sha256 } : null;
 }
+export const setLogo = (q: Queryable, actor: string, bytes: Buffer) => setBrandImage(q, 'logo', actor, bytes);
+export const removeLogo = (q: Queryable, actor: string) => removeBrandImage(q, 'logo', actor);
+export const getLogo = (q: Queryable) => getBrandImage(q, 'logo');
+export const setFavicon = (q: Queryable, actor: string, bytes: Buffer) => setBrandImage(q, 'favicon', actor, bytes);
+export const removeFavicon = (q: Queryable, actor: string) => removeBrandImage(q, 'favicon', actor);
+export const getFavicon = (q: Queryable) => getBrandImage(q, 'favicon');

@@ -485,8 +485,8 @@ describe('catalog hierarchy and dependencies', () => {
 
 describe('settings and branding', () => {
   // Smallest valid PNG header with a 480x120 IHDR.
-  const png = () => {
-    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(480, 0); ihdr.writeUInt32BE(120, 4); ihdr[8] = 8; ihdr[9] = 6;
+  const png = (w = 480, h = 120) => {
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
     const len = Buffer.alloc(4); len.writeUInt32BE(13);
     return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), len, Buffer.from('IHDR'), ihdr, Buffer.alloc(16)]);
   };
@@ -501,7 +501,7 @@ describe('settings and branding', () => {
 
   it('only the super user reaches settings; administrators and everyone else are refused', async () => {
     const admin = await staff(['admin']);
-    for (const [m, p] of [['GET', '/settings'], ['POST', '/settings/regional'], ['POST', '/settings/branding'], ['POST', '/settings/logo'], ['DELETE', '/settings/logo']] as const) {
+    for (const [m, p] of [['GET', '/settings'], ['POST', '/settings/regional'], ['POST', '/settings/branding'], ['POST', '/settings/logo'], ['DELETE', '/settings/logo'], ['POST', '/settings/favicon'], ['DELETE', '/settings/favicon']] as const) {
       expect((await call(m, p, { cookie: admin.cookie, body: {} })).status, `admin ${m} ${p}`).toBe(403);
       expect((await call(m, p, { body: {} })).status, `anon ${m} ${p}`).toBe(401);
     }
@@ -531,6 +531,21 @@ describe('settings and branding', () => {
     expect(img.headers.get('content-security-policy')).toContain('sandbox');
     expect((await call('DELETE', '/settings/logo', { cookie: su })).json.logoUrl).toBeNull();
     expect((await call('GET', '/branding/logo', { origin: null })).status).toBe(404);
+  });
+
+  it('keeps a favicon beside the logo: square only, served safely, public, and removable', async () => {
+    const su = await root();
+    expect((await call('POST', '/settings/favicon', { cookie: su, body: { dataBase64: png().toString('base64') } })).status).toBe(400); // the test picture is not square
+    const sq = png(64, 64).toString('base64');
+    const up = await call('POST', '/settings/favicon', { cookie: su, body: { dataBase64: sq } });
+    expect([up.status, up.json.favicon.width, up.json.favicon.height]).toEqual([200, 64, 64]);
+    expect((await call('POST', '/settings/favicon', { cookie: await staff(['call-center']).then((u) => u.cookie), body: { dataBase64: sq } })).status).toBe(403);
+    expect((await call('GET', '/branding', { origin: null })).json.faviconUrl).toMatch(/^\/api\/branding\/favicon\?v=/);
+    const img = await call('GET', '/branding/favicon', { origin: null });
+    expect([img.headers.get('content-type'), img.headers.get('x-content-type-options')]).toEqual(['image/png', 'nosniff']);
+    expect((await call('GET', '/settings', { cookie: su })).json.faviconGuidance).toMatchObject({ width: 256, height: 256 });
+    expect((await call('DELETE', '/settings/favicon', { cookie: su })).json.faviconUrl).toBeNull();
+    expect((await call('GET', '/branding/favicon', { origin: null })).status).toBe(404);
   });
 
   it('saves regional settings, validates them, and records the change in the audit log', async () => {

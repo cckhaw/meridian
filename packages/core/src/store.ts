@@ -416,7 +416,7 @@ export async function expireApplications(db: Db, paymentGraceHours = 24): Promis
 export async function storeConfig(q: Queryable) {
   const [brand, regional, st, gw] = await Promise.all([getBranding(q), getRegional(q), getStoreSettings(q), activeGateways(q)]);
   return {
-    brand: { name: brand.name, theme: brand.theme, logo: brand.logo ? { sha256: brand.logo.sha256, width: brand.logo.width, height: brand.logo.height } : null },
+    brand: { name: brand.name, theme: brand.theme, logo: brand.logo ? { sha256: brand.logo.sha256, width: brand.logo.width, height: brand.logo.height } : null, favicon: brand.favicon ? { sha256: brand.favicon.sha256 } : null },
     regional, kyc: { mode: st.kycMode, minAge: st.minAge, requiresBack: ['NATIONAL_ID', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'], maxDocumentBytes: 2_500_000, idTypes: ['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'] },
     terms: { version: st.termsVersion, termsUrl: st.termsUrl || null, privacyUrl: st.privacyUrl || null },
     payment: { gateways: gw.list.map((g) => ({ id: g.id, label: g.label, ...g.publicConfig() })), default: gw.default?.id ?? null },

@@ -95,7 +95,7 @@ function Settings() {
 function Section({ id, data, reload }: { id: string; data: any; reload: () => void | Promise<void> }) {
   switch (id) {
     case 'regional': return <RegionalSettingsForm initial={data.regional} locked={data.currencyLocked} onSaved={reload} />;
-    case 'appearance': return <AppearanceSettings branding={data.branding} themes={data.themes} guidance={data.logoGuidance} onSaved={reload} />;
+    case 'appearance': return <AppearanceSettings branding={data.branding} themes={data.themes} guidance={data.logoGuidance} faviconGuidance={data.faviconGuidance} onSaved={reload} />;
     case 'customers': return <CustomerSettings />;
     case 'markets': return <MarketSettings />;
     case 'bill-cycles': return <BillCycleSettings />;
