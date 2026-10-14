@@ -3,7 +3,7 @@ import type { Db, Queryable } from './db.js';
 import { audit } from './audit.js';
 import { invalid, rejected } from './errors.js';
 import { csvCell, parseCsv } from './csv.js';
-import { adjustStock, MAIN_WAREHOUSE } from './inventory.js';
+import { adjustStock, MAIN_WAREHOUSE, recordMovement } from './inventory.js';
 import { SKU_RE, SKU_RULE } from './sku.js';
 
 export { parseCsv };
@@ -79,10 +79,11 @@ export async function importStock(db: Db, text: string, o: { apply: boolean; act
 
   // Which locations exist: the warehouse, every store, and anywhere that already holds stock.
   const locs = [...new Set(rows.map((r) => r.locationId).filter(Boolean))];
-  const known = new Set<string>([MAIN_WAREHOUSE]);
+  const known = new Set<string>();
+  const off = new Set<string>();
   if (locs.length) {
+    for (const r of (await db.query('SELECT id, status FROM warehouses WHERE id = ANY($1)', [locs])).rows) (r.status === 'ACTIVE' ? known : off).add(r.id as string);
     for (const r of (await db.query('SELECT id FROM stores WHERE id = ANY($1)', [locs])).rows) known.add(r.id as string);
-    for (const r of (await db.query('SELECT DISTINCT location_id FROM inventory_stock WHERE location_id = ANY($1)', [locs])).rows) known.add(r.locationId as string);
   }
   const seen = new Map<string, number>();
   body.forEach((src, i) => {
@@ -92,7 +93,8 @@ export async function importStock(db: Db, text: string, o: { apply: boolean; act
     if (!qtyText) { r.status = 'SKIPPED'; r.message = 'No quantity: skipped.'; return; } // the template lists every SKU; only filled-in rows load
     if (!r.locationId) return fail(r, 'Enter the location (WH-MAIN or a store id).');
     if (o.storeId && r.locationId !== o.storeId) return fail(r, `You can only load stock for your own store (${o.storeId}).`);
-    if (!known.has(r.locationId)) return fail(r, `Unknown location “${r.locationId}”. Use WH-MAIN or a store id from Stores.`);
+    if (off.has(r.locationId)) return fail(r, `Warehouse ${r.locationId} is switched off.`);
+    if (!known.has(r.locationId)) return fail(r, `Unknown location “${r.locationId}”. Use a warehouse id (WH-MAIN) or a store id from Stores.`);
     if (!SKU_RE.test(r.sku)) return fail(r, r.sku ? `“${r.sku}” is not a valid SKU (${SKU_RULE}).` : 'Enter the SKU.');
     const action = ACTIONS[r.action];
     if (!action) return fail(r, `Unknown action “${r.action}”. Use RECEIVE, REMOVE or SET.`);
@@ -145,7 +147,10 @@ export async function importStock(db: Db, text: string, o: { apply: boolean; act
       const cur = (await q.query('SELECT on_hand FROM inventory_stock WHERE location_id=$1 AND sku=$2 FOR UPDATE', [r.locationId, r.sku])).rows[0];
       const onHand = cur ? Number(cur.onHand) : 0;
       const delta = r.action === 'RECEIVE' ? r.quantity! : r.action === 'REMOVE' ? -r.quantity! : r.quantity! - onHand;
-      if (delta !== 0) await adjustStock(q, r.locationId, r.sku, delta);
+      if (delta !== 0) {
+        const after = await adjustStock(q, r.locationId, r.sku, delta);
+        await recordMovement(q, { locationId: r.locationId, sku: r.sku, delta, onHand: Number(after?.onHand), kind: r.action === 'SET' ? 'COUNT' : 'IMPORT', note: 'CSV import', actor: o.actor });
+      }
       else if (!cur) await q.query('INSERT INTO inventory_stock (location_id, sku, on_hand) VALUES ($1,$2,0) ON CONFLICT DO NOTHING', [r.locationId, r.sku]);
     }
     await audit(q, o.actor, 'inventory', 'import', 'STOCK_IMPORTED', { fileHash, repeated: !!repeat, rows: applicable.length, unitsAdded: summary.unitsAdded, unitsRemoved: summary.unitsRemoved, locations: [...new Set(applicable.map((r) => r.locationId))].slice(0, 20) });

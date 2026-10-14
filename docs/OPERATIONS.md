@@ -116,3 +116,13 @@ Inventory → **Import from CSV** (needs the stock-write permission; a store use
 4. **Load.** Stock is keyed by **location + SKU**: a row updates that one record (or creates it the first time), so a SKU can never appear twice at a location, and the import never changes the catalog. Because `RECEIVE` and `REMOVE` add and subtract, loading the **same file again** would count it twice, so the check warns "already loaded" and the load needs an explicit confirmation (a stock count with `SET` is safe to repeat and never warns). The file loads only if no row is a problem, and then all rows load together: a file is never half loaded. Reserved stock is never taken away, and the load is recorded in the audit log.
 
 API: `GET /api/inventory/import-template[?skus=1&locationId=…]` and `POST /api/inventory/import` with `{ "csv": "...", "apply": false }` (check) or `true` (load).
+
+## Inventory: warehouses, receipts and write-offs
+
+Inventory has three views. **Stock** shows on-hand, reserved and available by location. **Warehouses** (Operations Support) lists the warehouse locations: add one, rename it, switch it off, or remove it. The main warehouse (`WH-MAIN`) is where online orders are fulfilled from and cannot be switched off or removed; any other warehouse can be removed once it holds nothing (write the stock off first). **History** lists every receipt, CSV load and write-off: who, when, how many, the reason, and what was on hand afterwards.
+
+- **Load in batch (CSV)**: download the template, fill it in, check it, then load it (every row or none). Locations must be a switched-on warehouse or a store.
+- **Receive stock**: one SKU at a time, with an optional note (a delivery note or PO number).
+- **Write off**: needs the `inventory:writeoff` permission and a reason (damaged, lost, expired, stolen, a stock count that came up short, or other with an explanation). Stock reserved for orders cannot be written off. Reducing stock is only possible this way, so every reduction has a reason in the history.
+
+The **Operations Support** role (`inventory-ops`) holds `inventory:write`, `inventory:writeoff` and `warehouse:manage`. Retail Store keeps `inventory:write` for its own store but not write-offs; grant `inventory:writeoff` to it under Users & roles if stores should write off their own stock. Stock movements made by orders (reserving, shipping, returns) are not part of this history.

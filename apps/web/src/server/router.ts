@@ -761,14 +761,24 @@ post('/cases', 'case:create', async ({ db, user, body }) => {
 get('/cases/:id', 'case:read', async ({ db, user, params }) => { const c = await core.getCase(db, params.id!); assertCustomer(user, c.customerId); return c; });
 patch('/cases/:id', 'case:write', ({ db, user, params, body }) => core.updateCase(db, params.id!, z.object({ status: z.string().optional(), priority: z.string().optional(), note: z.string().max(2000).optional() }).parse(body), user.username));
 get('/inventory', 'inventory:read', ({ db, user, query }) => core.listStock(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
-get('/inventory/locations', 'inventory:read', async ({ db, user }) => ({ items: user.scope.storeId ? [user.scope.storeId] : await core.listStockLocations(db) }));
+get('/inventory/locations', 'inventory:read', async ({ db, user }) => ({ items: user.scope.storeId ? [user.scope.storeId] : await core.listStockLocations(db), warehouses: user.scope.storeId ? [] : (await core.listWarehouses(db)).filter((w) => w.status === 'ACTIVE').map((w) => ({ id: w.id, name: w.name })) }));
+const ownStore = (user: SessionUser, locationId: string) => { if (user.scope.storeId && locationId !== user.scope.storeId) throw forbidden('You can only work on your own store’s stock.'); };
+/** Goods receipt of one SKU. (Reducing stock is a write-off, which needs a reason and its own permission.) */
 post('/inventory/adjust', 'inventory:write', async ({ db, user, body }) => {
-  const b = z.object({ locationId: z.string().min(1).max(50), sku: z.string().min(1).max(50), delta: z.number().int() }).parse(body);
-  if (user.scope.storeId && b.locationId !== user.scope.storeId) throw forbidden('You can only adjust your own store’s stock.');
-  const r = await core.adjustStock(db, b.locationId, b.sku, b.delta);
-  await core.audit(db, user.username, 'inventory', `${b.locationId}/${b.sku}`, 'ADJUSTED', { delta: b.delta });
-  return r;
+  const b = z.object({ locationId: z.string().min(1).max(50), sku: z.string().min(1).max(50), delta: z.number().int().min(1), note: z.string().max(300).optional() }).parse(body);
+  ownStore(user, b.locationId);
+  return core.receiveStock(db, user.username, { locationId: b.locationId, sku: b.sku, quantity: b.delta, note: b.note });
 });
+post('/inventory/write-off', 'inventory:writeoff', async ({ db, user, body }) => {
+  const b = z.object({ locationId: z.string().min(1).max(50), sku: z.string().min(1).max(50), quantity: z.number().int().min(1), reason: z.string().max(20), note: z.string().max(300).optional() }).parse(body);
+  ownStore(user, b.locationId);
+  return core.writeOffStock(db, user.username, b);
+});
+get('/inventory/movements', 'inventory:read', ({ db, user, query }) => core.listMovements(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), kind: str(query, 'kind'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/warehouses', 'inventory:read', async ({ db }) => ({ items: await core.listWarehouses(db) }));
+post('/warehouses', 'warehouse:manage', ({ db, user, body }) => core.createWarehouse(db, user.username, z.object({ name: z.string().min(1).max(80), address: blank(z.string().max(300)) }).parse(body)));
+patch('/warehouses/:id', 'warehouse:manage', ({ db, user, params, body }) => core.updateWarehouse(db, user.username, params.id!, z.object({ name: z.string().min(1).max(80), address: z.string().max(300), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
+route('DELETE', '/warehouses/:id', 'warehouse:manage', ({ db, user, params }) => core.deleteWarehouse(db, user.username, params.id!));
 
 /** Bulk offers from a CSV file: a template (optionally with every current offer, to edit in bulk), a check that changes nothing, then the load (all rows or none). */
 get('/catalog-import/template', 'catalog:write', async ({ db, query }) => csv(await core.offersTemplate(db, { withOffers: query.get('offers') === '1' }), query.get('offers') === '1' ? 'meridian-offers-export.csv' : 'meridian-offers-import-template.csv'));
