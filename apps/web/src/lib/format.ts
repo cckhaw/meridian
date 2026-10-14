@@ -1,7 +1,7 @@
 import { currencyInfo, DEFAULT_REGIONAL, formatDate, formatDateTime, formatMoney, fromPlain, toPlain, type RegionalSettings } from '@meridian/types';
 
 /**
- * The deployment's regional settings (Settings > Regional). The server renders the root layout with the current values and
+ * The deployment's regional settings (Settings > Regional format). The server renders the root layout with the current values and
  * SettingsProvider installs them before any page renders, so every `money()` / `d()` call below follows the operator's format.
  */
 let regional: RegionalSettings = DEFAULT_REGIONAL;

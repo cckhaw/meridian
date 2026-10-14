@@ -32,7 +32,7 @@ It is an ordinary Next.js app. Required **server-side** environment variables (n
 
 On Vercel: create a second project from the same repository, set *Root Directory* to `apps/storefront`, add the two variables, deploy. Locally: `pnpm --filter @meridian/storefront dev` (port 3100) with the two variables set; the CRM runs on 3000.
 
-The storefront reads brand name, logo, favicon, theme colours, currency and number format from the CRM (Settings → Appearance / Regional), so it always matches the operator’s portal. It needs no database.
+The storefront reads brand name, logo, favicon, theme colours, currency and number format from the CRM (Settings → Appearance / Regional format), so it always matches the operator’s portal. It needs no database.
 
 ### Setting up the CRM side
 
