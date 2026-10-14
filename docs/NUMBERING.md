@@ -46,7 +46,7 @@ Patterns are validated (no nested quantifiers, bounded length) before they are s
 
 ## Loading pools
 
-**Numbers & SIMs → Load** takes a CSV or a range for numbers (up to 200,000 per load), IMSIs, and SIM cards (ICCID `89…`, 19–20 digits; a SIM can be bound to a free IMSI on load). Each load has a *check* step before *apply*. `GET /api/numbering/sim-template` downloads a SIM template.
+**Numbers & SIMs → Load** takes a CSV or a range for MSISDNs (up to 200,000 per load), IMSIs, and ICCIDs (SIM cards and eSIMs, `89…`, 19–20 digits; a SIM can be bound to a free IMSI on load). Each load has a *check* step before *apply*. `GET /api/numbering/sim-template` downloads a SIM template.
 
 ## Reservations and concurrency
 

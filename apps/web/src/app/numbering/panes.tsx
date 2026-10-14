@@ -33,9 +33,9 @@ export function OverviewPane({ go }: { go: (t: 'numbers' | 'sims' | 'imsis' | 't
   return (
     <>
       <div className="grid gap-4 md:grid-cols-3">
-        <Counts title="Phone numbers" rows={group(s.data.msisdn, 'state')} onOpen={() => go('numbers')} />
-        <Counts title="SIM cards and eSIMs" rows={group(s.data.iccid, 'state')} onOpen={() => go('sims')} />
-        <Counts title="Subscriber identities (IMSI)" rows={group(s.data.imsi, 'state')} onOpen={() => go('imsis')} />
+        <Counts title="MSISDN · phone numbers" rows={group(s.data.msisdn, 'state')} onOpen={() => go('numbers')} />
+        <Counts title="ICCID · SIM cards and eSIMs" rows={group(s.data.iccid, 'state')} onOpen={() => go('sims')} />
+        <Counts title="IMSI · subscriber identities" rows={group(s.data.imsi, 'state')} onOpen={() => go('imsis')} />
       </div>
       <SectionTitle>Numbers ready to sell, by tier</SectionTitle>
       <div className="flex flex-wrap gap-2">
@@ -44,7 +44,7 @@ export function OverviewPane({ go }: { go: (t: 'numbers' | 'sims' | 'imsis' | 't
       {can('numbering:manage') && (
         <div className="mt-6">
           <Button variant="secondary" disabled={recycle.busy} onClick={() => recycle.run(() => post('/numbering/recycle', {}), 'Done')}>{recycle.busy ? 'Working…' : 'Recycle what has finished cooling off now'}</Button>
-          <p className="mt-2 text-footnote text-label2">Identities and numbers return to their pools by themselves when the cooling-off ends (the daily job, or the recycling workflow). This does it right away.</p>
+          <p className="mt-2 text-footnote text-label2">IMSIs and MSISDNs return to their pools by themselves when the cooling-off ends (the daily job, or the recycling workflow). This does it right away.</p>
           {recycle.error && <div className="mt-2"><Alert>{recycle.error}</Alert></div>}{recycle.ok && <div className="mt-2"><Alert tone="success">Recycled: {recycle.ok}</Alert></div>}
         </div>
       )}
@@ -70,7 +70,7 @@ export function IdentityPanes({ kind }: { kind: 'numbers' | 'sims' | 'imsis' }) 
   return (
     <>
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
-        <SearchField label="Search" placeholder={kind === 'numbers' ? 'Number starts with…' : kind === 'sims' ? 'ICCID starts with…' : 'IMSI starts with…'} value={q} onChange={setQ} className="md:max-w-md md:flex-1" />
+        <SearchField label="Search" placeholder={kind === 'numbers' ? 'MSISDN starts with…' : kind === 'sims' ? 'ICCID starts with…' : 'IMSI starts with…'} value={q} onChange={setQ} className="md:max-w-md md:flex-1" />
         <Select aria-label="State" value={state} onChange={(e) => setState(e.target.value)} className="md:max-w-[220px]"><option value="">Any state</option>{states.map((s) => <option key={s} value={s}>{label(s)}</option>)}</Select>
         {kind === 'numbers' && <Select aria-label="Tier" value={tier} onChange={(e) => setTier(e.target.value)} className="md:max-w-[180px]"><option value="">Any tier</option>{['DIAMOND', 'GOLD', 'SILVER', 'STANDARD', 'AUCTION'].map((t) => <option key={t} value={t}>{label(t)}</option>)}</Select>}
         {kind === 'sims' && <Select aria-label="Type" value={type} onChange={(e) => setType(e.target.value)} className="md:max-w-[160px]"><option value="">Cards and eSIMs</option><option value="PHYSICAL">Cards</option><option value="ESIM">eSIMs</option></Select>}
@@ -81,9 +81,9 @@ export function IdentityPanes({ kind }: { kind: 'numbers' | 'sims' | 'imsis' }) 
         <>
           <TableWrap>
             <thead><tr>
-              {kind === 'numbers' && <><Th>Number</Th><Th>Tier</Th><Th>State</Th><Th>Until</Th></>}
+              {kind === 'numbers' && <><Th>MSISDN</Th><Th>Tier</Th><Th>State</Th><Th>Until</Th></>}
               {kind === 'sims' && <><Th>ICCID</Th><Th>Type</Th><Th>State</Th><Th>Location</Th><Th>IMSI</Th></>}
-              {kind === 'imsis' && <><Th>IMSI</Th><Th>State</Th><Th>SIM</Th><Th>Until</Th></>}
+              {kind === 'imsis' && <><Th>IMSI</Th><Th>State</Th><Th>ICCID</Th><Th>Until</Th></>}
               <Th />
             </tr></thead>
             <tbody>

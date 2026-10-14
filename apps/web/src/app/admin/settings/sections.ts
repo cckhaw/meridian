@@ -17,7 +17,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: 'fulfilment', group: 'Catalog', label: 'Fulfilment options', description: 'How an offer is delivered: ship, collect in store, install', keywords: 'catalog fulfilment fulfillment delivery ship shipping collect pickup store install installation sim stock sku inventory' },
   { id: 'cancellation', group: 'Sales and orders', label: 'Cancellation', description: 'When an order can be cancelled or returned, and what it costs', keywords: 'cancel cancellation return refund fee rule policy' },
   { id: 'storefront', group: 'Sales and orders', label: 'Store-front', description: 'Online shop: API keys, payments, which offers are sold', keywords: 'store front storefront online shop api key stripe payment gateway' },
-  { id: 'numbering', group: 'Back office', label: 'Numbers & SIMs', description: 'Cooling-off periods, number holds, SIM rules and the number lifecycle', keywords: 'number numbers msisdn iccid imsi sim esim cooling quarantine rest recycle reservation hold lifecycle auction vip' },
+  { id: 'numbering', group: 'Back office', label: 'Numbers & SIMs', description: 'Cooling-off periods, MSISDN holds, SIM rules and the MSISDN, ICCID and IMSI lifecycles', keywords: 'number numbers msisdn iccid imsi sim esim cooling quarantine rest recycle reservation hold lifecycle auction vip' },
 ];
 
 export const sectionById = (id: string | null | undefined) => SECTIONS.find((s) => s.id === id);

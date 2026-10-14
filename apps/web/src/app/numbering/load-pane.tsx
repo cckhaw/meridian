@@ -7,8 +7,8 @@ import { useLocations } from '../inventory/locations';
 
 type Kind = 'msisdn' | 'imsi' | 'sim';
 const HELP: Record<Kind, string> = {
-  msisdn: 'One number per line, with the country code (+60128001234). Each is put in its tier by the patterns. Numbers already in the pool are skipped.',
-  imsi: 'One 15-digit IMSI per line. They join the pool, ready to be written onto SIM cards or issued on eSIM profiles.',
+  msisdn: 'One MSISDN per line, with the country code (+60128001234). Each is put in its tier by the patterns. MSISDNs already in the pool are skipped.',
+  imsi: 'One 15-digit IMSI per line. They join the pool, ready to be bound to ICCIDs (SIM cards) or issued on eSIM profiles.',
   sim: 'Columns: iccid, imsi (optional), type (PHYSICAL or ESIM, optional), location (optional), activation_code (optional). A card without an IMSI gets the next free one from the pool.',
 };
 
@@ -34,7 +34,7 @@ export function LoadPane() {
   return (
     <Card>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="What are you loading?"><Select value={kind} onChange={(e) => { setKind(e.target.value as Kind); setResult(null); setMode('file'); }}><option value="msisdn">Phone numbers</option><option value="sim">SIM cards or eSIMs</option><option value="imsi">Subscriber identities (IMSI)</option></Select></Field>
+        <Field label="What are you loading?"><Select value={kind} onChange={(e) => { setKind(e.target.value as Kind); setResult(null); setMode('file'); }}><option value="msisdn">MSISDN (phone numbers)</option><option value="sim">ICCID (SIM cards or eSIMs)</option><option value="imsi">IMSI (subscriber identities)</option></Select></Field>
         {kind !== 'sim' && <Field label="From"><Select value={mode} onChange={(e) => { setMode(e.target.value as 'file' | 'range'); setResult(null); }}><option value="file">A list or file</option><option value="range">A range</option></Select></Field>}
         <Field label="Batch name" hint="Optional, to find them later"><Input value={batch} maxLength={60} onChange={(e) => setBatch(e.target.value)} /></Field>
       </div>
@@ -43,7 +43,7 @@ export function LoadPane() {
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <Field label="Type"><Select value={simKind} onChange={(e) => setSimKind(e.target.value as 'PHYSICAL' | 'ESIM')}><option value="PHYSICAL">Physical cards</option><option value="ESIM">eSIM profiles</option></Select></Field>
           <Field label="Received at"><Select value={location} onChange={(e) => setLocation(e.target.value)}>{locations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}</Select></Field>
-          <label className="flex min-h-tap items-end gap-2 pb-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={autoBind} onChange={(e) => setAutoBind(e.target.checked)} />Write a free IMSI onto cards without one</label>
+          <label className="flex min-h-tap items-end gap-2 pb-2"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={autoBind} onChange={(e) => setAutoBind(e.target.checked)} />Bind a free IMSI to ICCIDs without one</label>
         </div>
       )}
       {kind !== 'sim' && mode === 'range' ? (
