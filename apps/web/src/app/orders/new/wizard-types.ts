@@ -12,9 +12,9 @@ export const STEP_HINT: Record<StepId, string> = {
 };
 
 /** A number brought from another operator: the donor's details, and whether to give a temporary number from our pool meanwhile. */
-export interface PortInForm { donorOperator: string; donorMsisdn: string; holderName: string; holderIdType: string; holderIdNumber: string; temporaryNumber: boolean }
-export const emptyPortIn = (): PortInForm => ({ donorOperator: '', donorMsisdn: '', holderName: '', holderIdType: 'NATIONAL_ID', holderIdNumber: '', temporaryNumber: true });
-export const portInReady = (p?: PortInForm | null) => !p || (!!p.donorOperator.trim() && p.donorMsisdn.replace(/\D/g, '').length >= 8 && !!p.holderName.trim() && !!p.holderIdNumber.trim());
+export interface PortInForm { donorOperatorId: string; donorMsisdn: string; holderName: string; holderIdType: string; holderIdNumber: string; temporaryNumber: boolean }
+export const emptyPortIn = (): PortInForm => ({ donorOperatorId: '', donorMsisdn: '', holderName: '', holderIdType: 'NATIONAL_ID', holderIdNumber: '', temporaryNumber: true });
+export const portInReady = (p?: PortInForm | null) => !p || (!!p.donorOperatorId && p.donorMsisdn.replace(/\D/g, '').length >= 8 && !!p.holderName.trim() && !!p.holderIdNumber.trim());
 const portInBody = (p?: PortInForm | null) => (p ? { ...p, donorMsisdn: p.donorMsisdn.replace(/[^\d+]/g, '') } : undefined);
 
 /** The number a line holds while it is being sold: held for the customer (a chosen number), or left to the pool. */

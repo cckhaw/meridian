@@ -27,7 +27,7 @@ In the data model: `service_groups` is the customer group (linked to the account
 
 ## Number portability into the operator (port-in)
 
-Any line, on a single plan or a family plan, can bring a number from another operator. The line carries `portIn { donorOperator, donorMsisdn, holderName, holderIdType, holderIdNumber, temporaryNumber }`. The donor number starts with the country code and needs no `+`.
+Any line, on a single plan or a family plan, can bring a number from another operator. The line carries `portIn { donorOperatorId, donorMsisdn, holderName, holderIdType, holderIdNumber, temporaryNumber }`. The donor number starts with the country code and needs no `+`. The donor operator is chosen from a **drop-down**, not typed: the list, with each operator's **routing code** (the code the clearinghouse routes the request by), is kept by the super user in **Settings → Back office → Donor operators** (`GET/POST/PATCH/DELETE /api/settings/donor-operators`; sellers read the active ones). A request keeps the operator's name and routing code as they were when it was raised, and both go to the clearinghouse with it. An operator that was used is switched off rather than deleted. The demo data has five sample operators with placeholder codes: replace them with the codes the clearinghouse assigns.
 
 - **With a temporary number** (the usual choice): the NRM gives the line a Standard number from the pool at once, so it works while the port is processed. The member and the group link to that number first.
 - **Without one**: the service waits `PENDING` (it is already in the group) and starts when the number arrives.
@@ -49,7 +49,7 @@ The clearinghouse's answer arrives at `POST /api/mnp/port-in/:id/decision { appr
 { "offerId": "plan-family-100", "simType": "ESIM",
   "members": [
     { "offerId": "plan-family-member", "simType": "ESIM" },
-    { "offerId": "plan-family-member", "portIn": { "donorOperator": "OtherTel", "donorMsisdn": "60128123456", "holderName": "A. Rahman", "holderIdType": "NATIONAL_ID", "holderIdNumber": "S1234567D", "temporaryNumber": true } } ] }
+    { "offerId": "plan-family-member", "portIn": { "donorOperatorId": "<operator id>", "donorMsisdn": "60128123456", "holderName": "A. Rahman", "holderIdType": "NATIONAL_ID", "holderIdNumber": "S1234567D", "temporaryNumber": true } } ] }
 ```
 
 plus `joinGroupId` on a line to join an existing group, and `portIn` on any line. The quote lists the head and then its members (`groupPlan`, `memberOf`, `portIn`).

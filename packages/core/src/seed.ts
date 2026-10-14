@@ -12,6 +12,7 @@ import { adjustStock } from './inventory.js';
 import { placeOrder } from './orders.js';
 import { createCase } from './cases.js';
 import { createAgent, createDealer } from './dealers.js';
+import { createDonorOperator } from './donor-operators.js';
 
 const sgd = (amountMinor: number) => ({ amountMinor, currency: 'SGD' as const });
 const base = { status: 'ACTIVE' as const, markets: ['SG'], parentId: null };
@@ -123,6 +124,12 @@ export async function seedReference(db: Db): Promise<void> {
 }
 
 /** Sample pools so the Numbers & SIMs screens and the order wizard have something to show: numbers (some memorable), identities, SIMs and eSIMs. */
+/** Sample donor operators for the demo. The routing codes are placeholders: replace them with the ones the national clearinghouse assigns. */
+async function seedDonorOperators(db: Db): Promise<void> {
+  if ((await db.query('SELECT 1 FROM donor_operators LIMIT 1')).rows.length) return;
+  for (const [name, routingCode] of [['Maxis', 'OP01'], ['CelcomDigi', 'OP02'], ['U Mobile', 'OP03'], ['Unifi Mobile', 'OP04'], ['Yes', 'OP05']] as const) await createDonorOperator(db, 'seed', { name, routingCode });
+}
+
 async function seedNumbering(db: Db): Promise<void> {
   const num = (n: number) => `+6592${String(n).padStart(6, '0')}`;
   const pool: string[] = Array.from({ length: 500 }, (_, i) => num(10000 + i * 7));
@@ -139,6 +146,7 @@ async function seedNumbering(db: Db): Promise<void> {
 /** Demo tenants created through the real order/billing code paths, with history backdated so bills, an overdue account and a suspension exist. */
 export async function seedDemo(db: Db): Promise<void> {
   await seedNumbering(db);
+  await seedDonorOperators(db);
   if ((await db.query(`SELECT 1 FROM customers WHERE display_name='Tan Wei Ming' LIMIT 1`)).rows.length) return;
   const orbitDealer = await createDealer(db, 'seed', { name: 'Orbit Mobile Partners', contactName: 'Priya Nair', email: 'partners@orbit.example.com' });
   const orbitAgent = await createAgent(db, 'seed', orbitDealer.id as string, { name: 'Marcus Teo', phone: '+6591110000' });

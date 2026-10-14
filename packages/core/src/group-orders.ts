@@ -50,7 +50,7 @@ export async function prepareLines(q: Queryable, input: { customerId?: string; a
       const b = behaviourOf(offer);
       if (b.service !== 'MOBILE' || b.goods) throw invalid(`${offer.name} is not a mobile plan, so a number cannot be ported in to it.`);
       if ((line.quantity ?? 1) !== 1) throw invalid('A port-in is for one line: order one plan per line.');
-      const clean = cleanPortIn(line.portIn);
+      const clean = await cleanPortIn(q, line.portIn);
       if (donors.has(clean.donorMsisdn)) throw invalid(`${clean.donorMsisdn} is on this order twice.`);
       donors.add(clean.donorMsisdn);
       await assertPortableNumber(q, clean.donorMsisdn);

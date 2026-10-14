@@ -581,6 +581,11 @@ post('/groups/:id/principal', 'service:manage', async ({ db, user, params, body 
 post('/services/:id/upgrade-to-group', 'service:manage', async ({ db, user, params, body }) => new core.GroupOrderService(db).upgrade(params.id!, z.object({ offerId: z.string().max(70) }).parse(body).offerId, user.username));
 
 // ───────────────────────── number portability into the operator (port-in) ─────────────────────────
+/** The operators numbers can come from, with their routing codes. Everyone who sells reads the active ones for the drop-down; the super user keeps the list. */
+get('/settings/donor-operators', ['numbering:select', 'mnp:manage', 'settings:manage'], ({ db, query }) => core.listDonorOperators(db, { activeOnly: query.get('active') === '1' }).then((items) => ({ items })));
+post('/settings/donor-operators', ['settings:manage'], ({ db, user, body }) => core.createDonorOperator(db, user.username, z.object({ name: z.string().max(80), routingCode: z.string().max(30) }).parse(body)));
+patch('/settings/donor-operators/:id', ['settings:manage'], ({ db, user, params, body }) => core.updateDonorOperator(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), routingCode: z.string().max(30).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
+route('DELETE', '/settings/donor-operators/:id', ['settings:manage'], ({ db, user, params }) => core.deleteDonorOperator(db, user.username, params.id!));
 get('/mnp/port-in', ['mnp:manage'], ({ db, query }) => core.listPortIns(db, { status: str(query, 'status'), customerId: str(query, 'customerId'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/mnp/port-in/:id', ['mnp:manage'], ({ db, params }) => core.getPortIn(db, params.id!));
 /** The clearinghouse's callback: the donor approved or refused. `complete` also does the switch-over at once. Repeating an answer changes nothing. */
@@ -717,7 +722,7 @@ get('/services/:id/etc', 'service:read', async ({ db, user, params }) => {
 
 // ───────────────────────── orders ─────────────────────────
 const portInBody = z.object({
-  donorOperator: z.string().min(1).max(60), donorMsisdn: z.string().min(8).max(20), holderName: z.string().min(1).max(100),
+  donorOperatorId: uuid, donorMsisdn: z.string().min(8).max(20), holderName: z.string().min(1).max(100),
   holderIdType: z.string().min(1).max(20), holderIdNumber: z.string().min(1).max(40), temporaryNumber: z.boolean().optional(),
 });
 /** A member line of a group plan: a new number, a chosen number, or a number ported in, each with its own SIM and plan. */

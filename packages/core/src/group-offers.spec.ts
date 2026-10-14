@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createNode, setStatus } from './catalog.js';
 import type { Db } from './db.js';
+import { createDonorOperator, deleteDonorOperator, listDonorOperators, updateDonorOperator } from './donor-operators.js';
 import { getGroup, addGroupMember } from './groups.js';
 import { GroupOrderService } from './group-orders.js';
 import { importImsis, importMsisdns, importSims } from './nrm-pools.js';
@@ -9,8 +10,10 @@ import { cancelPortIn, completePortIn, decidePortIn, expireStalePortIns, getPort
 import { freshDb, newCustomer } from './test-helpers.js';
 
 let db: Db;
+let OTHERTEL = '';
 beforeAll(async () => {
   db = await freshDb();
+  OTHERTEL = (await createDonorOperator(db, 'admin', { name: 'OtherTel', routingCode: 'ot-01' })).id as string;
   await importMsisdns(db, { range: { from: '60125000001', to: '60125000060' } }, { apply: true, actor: 'ops' });
   await importImsis(db, { range: { from: '525010000009000', to: '525010000009040' } }, { apply: true, actor: 'ops' });
   const esims = Array.from({ length: 12 }, (_, i) => `8960777${String(1_000_000_000_000 + i).slice(1)},,ESIM`);
@@ -22,7 +25,7 @@ const retail = { storeId: 'STORE-SG-001', salespersonId: 'a1' };
 const order = (customerId: string, lines: object[], accountId?: string) =>
   placeOrder(db, { customerId, accountId, channel: 'RETAIL_ASSISTED', attribution: retail, payment: { method: 'CASH' }, lines: lines as never });
 const servicesOf = async (orderId: string) => (await db.query('SELECT * FROM services WHERE order_id=$1 ORDER BY identifier', [orderId])).rows;
-const donor = (n: number) => ({ donorOperator: 'OtherTel', donorMsisdn: `6012${String(8000000 + n)}`, holderName: 'Aisha Rahman', holderIdType: 'NATIONAL_ID', holderIdNumber: 'S1234567D' });
+const donor = (n: number) => ({ donorOperatorId: OTHERTEL, donorMsisdn: `6012${String(8000000 + n)}`, holderName: 'Aisha Rahman', holderIdType: 'NATIONAL_ID', holderIdNumber: 'S1234567D' });
 
 describe('group plans in the catalog', () => {
   it('keeps the group terms on the offer and refuses nonsense', async () => {
@@ -172,5 +175,36 @@ describe('Vector B: an existing single line moves to a group plan', () => {
     // staff adding a line by hand obeys the same limit and the same allowed plans
     const extra = (await servicesOf((await order(c.customer.id, [{ offerId: 'plan-family-member' }], single.accountId)).id))[0]!;
     await expect(addGroupMember(db, 'agent', g.id, extra.id)).rejects.toThrow(/slot/);
+  });
+});
+
+describe('donor operators', () => {
+  it('are kept in a list with a routing code, and a port-in must choose one from it', async () => {
+    const op = (await listDonorOperators(db)).find((o) => o.id === OTHERTEL)!;
+    expect([op.name, op.routingCode, op.status]).toEqual(['OtherTel', 'OT-01', 'ACTIVE']); // codes are kept in capitals
+    await expect(createDonorOperator(db, 'admin', { name: 'othertel', routingCode: 'X1' })).rejects.toThrow(/already an operator/);
+    await expect(createDonorOperator(db, 'admin', { name: 'Another', routingCode: 'ot-01' })).rejects.toThrow(/belongs to another/);
+    await expect(createDonorOperator(db, 'admin', { name: 'Bad', routingCode: 'no spaces' })).rejects.toThrow(/routing code/);
+
+    const c = await newCustomer(db);
+    await expect(order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: { ...donor(20), donorOperatorId: undefined } }])).rejects.toThrow(/Choose the donor operator/);
+    await expect(order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: { ...donor(20), donorOperatorId: '00000000-0000-4000-8000-000000000000' } }])).rejects.toThrow(/not in the list/);
+    const o = await order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: { ...donor(20), temporaryNumber: true } }]);
+    const svc = (await servicesOf(o.id))[0]!;
+    const req = await getPortIn(db, svc.portInId);
+    expect([req.donorOperator, req.donorRoutingCode, req.donorOperatorId]).toEqual(['OtherTel', 'OT-01', OTHERTEL]);
+    expect((await db.query(`SELECT payload FROM lifecycle_outbox WHERE service_id=$1 AND instruction='PORT_IN_REQUEST'`, [svc.id])).rows[0]!.payload).toMatchObject({ donorRoutingCode: 'OT-01' });
+
+    // renaming later does not rewrite what a request was raised with; switching off stops new requests
+    await updateDonorOperator(db, 'admin', OTHERTEL, { name: 'OtherTel Berhad' });
+    expect((await getPortIn(db, svc.portInId)).donorOperator).toBe('OtherTel');
+    await updateDonorOperator(db, 'admin', OTHERTEL, { status: 'INACTIVE' });
+    expect((await listDonorOperators(db, { activeOnly: true })).some((o) => o.id === OTHERTEL)).toBe(false);
+    await expect(order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: donor(21) }])).rejects.toThrow(/switched off/);
+    // one that was used is switched off, not deleted; an unused one is removed
+    expect(await deleteDonorOperator(db, 'admin', OTHERTEL)).toEqual({ deleted: false, deactivated: true });
+    const spare = await createDonorOperator(db, 'admin', { name: 'Spare Telco', routingCode: 'SP-9' });
+    expect(await deleteDonorOperator(db, 'admin', spare.id as string)).toEqual({ deleted: true, deactivated: false });
+    await updateDonorOperator(db, 'admin', OTHERTEL, { status: 'ACTIVE' });
   });
 });
