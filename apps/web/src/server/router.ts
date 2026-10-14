@@ -135,7 +135,7 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
 });
 get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
-get('/meta', null, async ({ db, user }) => ({ markets: core.MARKETS, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db), billCycles: await core.getBillCycles(db) }));
+get('/meta', null, async ({ db, user }) => ({ markets: core.MARKETS, multiMarket: (await core.getMarketSettings(db)).multiple, glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db), billCycles: await core.getBillCycles(db) }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', () => Object.values(core.ROLES).map(({ id, label, summary, scope, permissions, creditLimitMinor }) => ({ id, label, summary, scope, permissions, creditLimitMinor })));
@@ -520,6 +520,8 @@ post('/customers/:id/accounts', 'customer:write', async ({ db, params, body }) =
 get('/segments', 'customer:search', ({ db }) => core.listSegments(db, { activeOnly: true }));
 get('/settings/customers', 'settings:manage', async ({ db }) => ({ settings: await core.getCustomerSettings(db), segments: await core.listSegments(db, { withCounts: true }) }));
 post('/settings/customers', 'settings:manage', ({ db, user, body }) => core.setCustomerSettings(db, user.username, z.object({ allowCreateWithoutOrder: z.boolean(), fields: z.record(z.enum(core.FIELD_MODES as [string, ...string[]])).optional() }).parse(body) as never));
+get('/settings/markets', 'settings:manage', async ({ db }) => ({ ...(await core.getMarketSettings(db)), home: (await core.getRegional(db)).country, markets: core.MARKETS }));
+post('/settings/markets', 'settings:manage', ({ db, user, body }) => core.setMarketSettings(db, user.username, z.object({ multiple: z.boolean() }).parse(body)));
 get('/settings/bill-cycles', 'settings:manage', ({ db }) => core.getBillCycles(db));
 post('/settings/bill-cycles', 'settings:manage', ({ db, user, body }) => core.setBillCycles(db, user.username, z.object({ days: z.array(z.number().int().min(1).max(28)).max(28), daily: z.boolean(), defaultCycle: z.union([z.number().int().min(1).max(28), z.literal('daily')]) }).parse(body)));
 post('/settings/segments', 'settings:manage', ({ db, user, body }) => core.createSegment(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), individual: z.boolean().optional() }).parse(body)));

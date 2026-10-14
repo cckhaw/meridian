@@ -4,6 +4,7 @@ import { Alert, Badge, Button, Card, Field, Input, Select, Spinner } from '@meri
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMultiMarket } from '@/lib/markets';
 import { useRegional } from '@/components/settings-provider';
 import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -89,6 +90,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const { me } = useAuth();
   const router = useRouter();
   const regional = useRegional();
+  const multi = useMultiMarket();
   const editing = !!offerId;
   const locked = editing && sold > 0; // price, contract and type of a sold offer are immutable: new version instead
   const defaultMarket = markets[regional.country] ? regional.country : me?.marketCode ?? 'SG';
@@ -176,10 +178,10 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const submit = async () => {
     const ok = await run(async () => {
       if (editing) {
-        await patch(`/catalog/${offerId}`, { ...common, markets: [f.market], ...(locked ? {} : { kind: f.kind, prices, contract }), ...(f.status !== source.status || (f.status === 'SCHEDULED' && f.activeFrom !== (source.activeFrom ? localDate(new Date(source.activeFrom)) : '')) ? { status: f.status, ...(f.status === 'SCHEDULED' ? { activeFrom: goLive(f.activeFrom) } : {}) } : {}) });
+        await patch(`/catalog/${offerId}`, { ...common, ...(multi ? { markets: [f.market] } : {}), ...(locked ? {} : { kind: f.kind, prices, contract }), ...(f.status !== source.status || (f.status === 'SCHEDULED' && f.activeFrom !== (source.activeFrom ? localDate(new Date(source.activeFrom)) : '')) ? { status: f.status, ...(f.status === 'SCHEDULED' ? { activeFrom: goLive(f.activeFrom) } : {}) } : {}) });
         if (f.parentId && f.parentId !== source.parentId) await post(`/catalog/${offerId}/move`, { parentId: f.parentId });
       } else {
-        const node = await post('/catalog', { level: 'OFFER', id: f.id || slug(f.name), parentId: f.parentId, markets: [f.market], kind: f.kind, prices, contract, characteristics: {}, ...common, status: 'DRAFT' });
+        const node = await post('/catalog', { level: 'OFFER', id: f.id || slug(f.name), parentId: f.parentId, markets: multi ? [f.market] : [], kind: f.kind, prices, contract, characteristics: {}, ...common, status: 'DRAFT' });
         createdId.current = node.id;
         if (fromId) await post(`/catalog/${node.id}/line-items/copy-from`, { fromId }); // a new version keeps what the old one included
         if (f.status === 'ACTIVE') await patch(`/catalog/${node.id}`, { status: 'ACTIVE' });
@@ -351,7 +353,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
         {stepId === 'availability' && b && (
           <div className="space-y-5">
             <Card className="grid gap-4 sm:grid-cols-2">
-              <Field label="Market" hint={`Prices are in ${currency}`}><Select value={f.market} onChange={set('market')}>{Object.values(markets).map((m: any) => <option key={m.code} value={m.code}>{m.name}</option>)}</Select></Field>
+              {multi && <Field label="Market" hint={`Prices are in ${currency}`}><Select value={f.market} onChange={set('market')}>{Object.values(markets).map((m: any) => <option key={m.code} value={m.code}>{m.name}</option>)}</Select></Field>}
               {b.needsPartner && <Field label="Partner code" hint="e.g. netflix"><Input required value={f.partner} onChange={set('partner')} /></Field>}
             </Card>
             <Card>

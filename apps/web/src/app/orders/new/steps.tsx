@@ -1,4 +1,5 @@
 'use client';
+import { useMultiMarket } from '@/lib/markets';
 import { Alert, Badge, Button, Card, Field, Input, LoadMore, SearchField, Segmented, Select, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
@@ -53,12 +54,13 @@ function OfferCard({ o, chosen, onToggle, note }: { o: any; chosen: boolean; onT
 }
 
 function OfferPicker({ w, kind, placeholder, noteFor }: { w: Wizard; kind: string; placeholder: string; noteFor?: (o: any) => string | undefined }) {
+  const multi = useMultiMarket();
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
   const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}&kind=${kind}&q=${encodeURIComponent(term)}`);
   const toggle = (o: any) => w.setItems((cur) => (cur.some((i) => i.offer.id === o.id) ? cur.filter((i) => i.offer.id !== o.id) : [...cur, newItem(o)]));
   // When nothing is listed, find out whether offers exist in some other market, so the message can say why instead of pretending there are none.
-  const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term ? `/catalog?limit=1&status=ACTIVE&kind=${kind}` : null);
+  const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term && multi ? `/catalog?limit=1&status=ACTIVE&kind=${kind}` : null);
   return (
     <>
       <SearchField label={placeholder} placeholder={placeholder} value={q} onChange={setQ} className="mb-3 sm:max-w-md" />

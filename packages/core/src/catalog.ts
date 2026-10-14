@@ -6,7 +6,7 @@ import { quoteEtc } from './etc.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { validateLineItem, validateOffer, validateParent } from './hierarchy.js';
 import { expandKinds, prepareOffer } from './offer-config.js';
-import { getRegional } from './settings.js';
+import { getRegional, marketMode } from './settings.js';
 
 export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
 
@@ -55,7 +55,7 @@ export async function listNodes(q: Queryable, f: { status?: string; level?: stri
   if (f.kind) where.push(`kind = ${p(f.kind)}`);
   if (f.pathPrefix) where.push(`(path = ${p(f.pathPrefix)} OR path LIKE ${p(f.pathPrefix + '/%')})`);
   if (f.q) where.push(`(name ILIKE ${p(`%${f.q}%`)} OR code ILIKE $${params.length})`);
-  if (f.market) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
+  if (f.market && (await marketMode(q)).multiple) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
   // An offer with no channel list is sold everywhere; otherwise the channel must be listed.
   if (f.channel) where.push(`(level <> 'OFFER' OR jsonb_array_length(COALESCE(data->'salesChannels','[]'::jsonb)) = 0 OR data->'salesChannels' ? ${p(f.channel)})`);
   const sql = `SELECT * FROM catalog_nodes ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY path`;
@@ -495,7 +495,7 @@ export async function pageOffers(q: Queryable, f: { q?: string; status?: string;
   // Comma-separated, and each may be a type id or a behaviour template ("every SIM + device type").
   if (f.kind) where.push(`kind = ANY(${p(await expandKinds(q, f.kind.split(',').filter(Boolean)))})`);
   if (f.notKind) where.push(`kind <> ALL(${p(await expandKinds(q, f.notKind.split(',').filter(Boolean)))})`);
-  if (f.market) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
+  if (f.market && (await marketMode(q)).multiple) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
   if (f.channel) where.push(`(jsonb_array_length(COALESCE(data->'salesChannels','[]'::jsonb)) = 0 OR data->'salesChannels' ? ${p(f.channel)})`);
   const words = (f.q ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 5);
   if (words.length) where.push(`to_tsvector('simple', name || ' ' || code) @@ to_tsquery('simple', ${p(words.map((w) => `${w}:*`).join(' & '))})`);

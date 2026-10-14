@@ -13,11 +13,52 @@ export async function getRegional(q: Queryable): Promise<RegionalSettings> {
   return { ...DEFAULT_REGIONAL, ...(r?.value ?? {}) };
 }
 
-/** A market with the deployment's regional settings applied (currency, tax, dial code). Use this, not the static table, for money. */
+// ───────────────────────── markets ─────────────────────────
+export interface MarketSettings { multiple: boolean }
+export const DEFAULT_MARKET_SETTINGS: MarketSettings = { multiple: false };
+
+export async function getMarketSettings(q: Queryable): Promise<MarketSettings> {
+  const r = (await q.query(`SELECT value FROM settings WHERE key='markets'`)).rows[0];
+  return { multiple: r?.value?.multiple === true };
+}
+
+export async function setMarketSettings(q: Queryable, actor: string, s: MarketSettings): Promise<MarketSettings> {
+  const value: MarketSettings = { multiple: !!s.multiple };
+  await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('markets', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(value), actor]);
+  await audit(q, actor, 'settings', 'markets', 'update', { ...value });
+  return value;
+}
+
+/**
+ * How markets apply right now. With one market (the default) everything belongs to the deployment's own country from Settings → Regional:
+ * no market is asked for, none filters an offer, a customer or a login. With several, `home` is still the country the currency and tax
+ * settings describe, and every offer, login, customer and order carries a market.
+ */
+export async function marketMode(q: Queryable): Promise<{ multiple: boolean; home: string }> {
+  const [m, r] = await Promise.all([getMarketSettings(q), getRegional(q)]);
+  return { multiple: m.multiple, home: r.country };
+}
+
+/** The market to use for something: the one asked for when several markets are on, otherwise the deployment's own. */
+export async function effectiveMarket(q: Queryable, asked?: string | null): Promise<string> {
+  const m = await marketMode(q);
+  return m.multiple && asked ? asked.trim().toUpperCase() : m.home;
+}
+
+/** The market to match when looking for a duplicate ID document: any market when there is only one. */
+export async function marketDuplicates(q: Queryable, code: string): Promise<string | null> {
+  return (await marketMode(q)).multiple ? code : null;
+}
+
+/**
+ * A market with the deployment's regional settings applied. The deployment keeps one currency (offer prices and the ledger are in it), so every
+ * market uses it; the home country also takes the tax and dial code set in Regional, other markets keep their own.
+ */
 export async function marketFor(q: Queryable, code: string): Promise<Market> {
-  const base = market(code);
-  const r = await getRegional(q);
-  return { ...base, currency: r.currency, taxBps: r.taxBps, taxName: r.taxName, dialCode: base.code === r.country ? r.dialCode : base.dialCode };
+  const [mode, r] = await Promise.all([marketMode(q), getRegional(q)]);
+  const base = market(mode.multiple ? code : mode.home);
+  const home = base.code === r.country;
+  return { ...base, currency: r.currency, taxBps: home || !mode.multiple ? r.taxBps : base.taxBps, taxName: home || !mode.multiple ? r.taxName : base.taxName, dialCode: home || !mode.multiple ? r.dialCode : base.dialCode };
 }
 
 const TRANSACTION_TABLES = ['orders', 'invoices', 'payments', 'gl_entries', 'commissions'] as const;

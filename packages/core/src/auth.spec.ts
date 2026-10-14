@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { changePassword, createUser, listUsers, login, logout, publicUser, RateLimited, resetPassword, unlockUser, updateUser, validateSession } from './auth.js';
 import type { Db } from './db.js';
 import { passwordProblem } from './passwords.js';
+import { getRegional, setMarketSettings } from './settings.js';
 import { ALL_PERMISSIONS, creditLimitOf, homeOf, MODULES, modulesOf, permissionsOf, ROLES, ROLE_IDS, scopeOf } from './rbac.js';
 import { freshDb, newCustomer } from './test-helpers.js';
 
@@ -197,7 +198,13 @@ describe('documentation', () => {
 });
 
 describe('the market a login sells in', () => {
-  it('starts as the deployment\'s own country, can be chosen, and can be changed later', async () => {
+  it('is the deployment\'s own country whatever is asked while there is one market', async () => {
+    await setMarketSettings(db, 'root', { multiple: false });
+    const u = await createUser(db, 'root', { username: 'market.single', displayName: 'Single Market', roles: ['call-center'], marketCode: 'TH' });
+    expect(u.user.marketCode).toBe((await getRegional(db)).country);
+  });
+  it('starts as the deployment\'s own country, can be chosen, and can be changed later (several markets)', async () => {
+    await setMarketSettings(db, 'root', { multiple: true });
     const regional = (await db.query(`SELECT value FROM settings WHERE key='regional'`)).rows[0]?.value ?? {};
     await db.query(`INSERT INTO settings (key, value, updated_by) VALUES ('regional', $1, 'test') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, [JSON.stringify({ ...regional, country: 'MY' })]);
     const a = await createUser(db, 'root', { username: 'market.default', displayName: 'Default Market', roles: ['call-center'] });

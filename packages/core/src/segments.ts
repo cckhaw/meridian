@@ -1,6 +1,7 @@
 import { DEFAULT_CUSTOMER_FIELDS, normaliseFields, type CustomerFieldSettings } from './customer-config.js';
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
+import { marketDuplicates } from './settings.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 
 /**
@@ -94,7 +95,7 @@ export async function moveCustomerSegment(q: Queryable, actor: string, customerI
   if (to.individual) {
     const kids = (await q.query('SELECT 1 FROM customers WHERE parent_customer_id=$1 LIMIT 1', [customerId])).rows.length;
     if (kids || c.parentCustomerId) throw rejected('a customer with departments, or a department of another customer, cannot become an individual customer');
-    const dup = (await q.query('SELECT id FROM customers WHERE id_document_hash=$1 AND market_code=$2 AND id<>$3 LIMIT 1', [c.idDocumentHash, c.marketCode, customerId])).rows[0];
+    const dup = (await q.query('SELECT id FROM customers WHERE id_document_hash=$1 AND ($2::text IS NULL OR market_code=$2) AND id<>$3 LIMIT 1', [c.idDocumentHash, await marketDuplicates(q, c.marketCode), customerId])).rows[0];
     if (dup) throw rejected(`another customer already holds this ID document (${dup.id}), so this customer cannot become an individual customer`);
   }
   await q.query('UPDATE customers SET segment=$2, version=version+1, updated_at=now() WHERE id=$1', [customerId, toSegment]);

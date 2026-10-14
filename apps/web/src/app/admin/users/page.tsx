@@ -4,11 +4,13 @@ import { useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { StorePicker } from '@/app/stores/store-picker';
 import { useRegional } from '@/components/settings-provider';
+import { useMultiMarket } from '@/lib/markets';
 import { dt, label, money } from '@/lib/format';
 
 interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null }
 
 export default function Users() {
+  const multi = useMultiMarket();
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
   const users = usePaged(`/users?limit=25&q=${encodeURIComponent(term)}`);
@@ -44,7 +46,7 @@ export default function Users() {
             <tr key={u.id}>
               <Td><span className="font-medium">{u.displayName}</span><div className="font-mono text-caption text-label2">{u.username}</div></Td>
               <Td><span className="flex flex-wrap gap-1">{u.roles.map((r: string) => <Badge key={r}>{roleLabel(r)}</Badge>)}</span></Td>
-              <Td className="text-footnote text-label2">{[u.storeId && `store ${u.storeId}`, u.dealerId && `dealer ${u.dealerId}`, u.customerId && 'portal customer', u.marketCode && `sells in ${u.marketCode}`].filter(Boolean).join(' · ')}</Td>
+              <Td className="text-footnote text-label2">{[u.storeId && `store ${u.storeId}`, u.dealerId && `dealer ${u.dealerId}`, u.customerId && 'portal customer', multi && u.marketCode && `sells in ${u.marketCode}`].filter(Boolean).join(' · ')}</Td>
               <Td><Badge tone={u.status === 'ACTIVE' ? 'success' : 'neutral'}>{label(u.status)}</Badge>{u.locked && <Badge tone="danger">Locked</Badge>}{u.mustChangePassword && <Badge tone="warning">Temp password</Badge>}</Td>
               <Td>{u.lastLoginAt ? dt(u.lastLoginAt) : 'Never'}</Td>
               <Td right><span className="flex justify-end gap-1">
@@ -80,6 +82,7 @@ function MarketField({ value, onChange }: { value: string; onChange: (v: string)
   const meta = useApi<any>('/meta');
   const regional = useRegional();
   const markets: Record<string, { name: string }> = meta.data?.markets ?? {};
+  if (!meta.data?.multiMarket) return null; // one market for the whole CRM: nothing to choose
   return (
     <Field label="Market" hint="The offers they can sell: those sold in this market. New logins start with your own country (Settings → Regional).">
       <Select value={value || regional?.country || ''} onChange={(e) => onChange(e.target.value)}>{Object.entries(markets).map(([code, m]) => <option key={code} value={code}>{m.name} ({code})</option>)}</Select>

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { audit } from './audit.js';
 import { MARKETS } from './config.js';
-import { getRegional } from './settings.js';
+import { marketMode } from './settings.js';
 import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
@@ -231,9 +231,10 @@ const adminView = (r: Row) => ({
 
 /** A login's market decides which offers it can sell: the one given, else the deployment's own country (Settings → Regional), else Singapore. */
 async function userMarket(q: Queryable, given?: string): Promise<string> {
+  const mode = await marketMode(q);
+  if (!mode.multiple) return mode.home; // one market: every login belongs to it
   if (given) { const m = given.toUpperCase(); if (!MARKETS[m]) throw invalid(`unknown market ${given}`); return m; }
-  const r = await getRegional(q);
-  return MARKETS[r.country] ? r.country : 'SG';
+  return mode.home;
 }
 
 /** Creates a user. Without a password a one-time temporary password is generated and returned; the user must change it at first sign-in. */

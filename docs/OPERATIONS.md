@@ -41,7 +41,7 @@ See `.env.example`.
 - **Logs**: one JSON line per request (`method`, `path`, `status`, `ms`, `user`). No bodies, no personal data. Configuration problems and unexpected errors are logged with context.
 - **Audit**: Users & roles changes, sign-ins and failures, denied attempts, payments, credit notes, bill runs, exports and service changes are in **Audit log** (`audit:read`).
 - **Reconciliation**: Finance → Reconciliation checks the ledger against invoices and payments. Investigate before exporting if a check fails.
-- **A seller sees "There are live offers, but none is sold in …" or no offers at all**: the order screen lists only the offers sold in the seller's **market**. An offer is sold in one market (Catalog → offer → Availability, which starts as the country in Settings → Regional), and a login has a market too (Users & roles → Edit → Market; new logins start with the Settings → Regional country). Make the two match. Changing a user signs them out, so they sign in again.
+- **A seller sees "There are live offers, but none is sold in …" or no offers at all**: this only happens when **several markets** are switched on (Settings → Markets). The order screen then lists only the offers sold in the seller's market. An offer is sold in one market (Catalog → offer → Availability) and a login has a market too (Users & roles → Edit → Market). Make the two match, or switch Settings → Markets back to **one market**, where nothing is filtered by market. Changing a user signs them out, so they sign in again.
 - **Locked user**: Users & roles → Unlock. **Lost password**: Reset password issues a new one-time password and signs the user out everywhere.
 - **Leaver**: set the user to Disabled; their sessions end immediately.
 

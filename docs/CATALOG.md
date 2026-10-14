@@ -28,7 +28,7 @@ Search is on the server and covers the whole catalog by words in the name or cod
 2. **Pricing.** Monthly fee (not for outright goods), upfront price, whether prices include tax, and the contract term (not offered for outright goods). A subsidy only appears for offers that include a device. **Currency and the tax name and rate come from Settings → Regional**, so they always match what is set there.
 3. **Fulfilment.** How the customer gets it, from the list in Settings: delivered, **collect in store**, installation, SIM activation. Add-ons skip this step.
 4. **Stock.** Only if a chosen fulfilment option tracks stock: the SKUs reserved when it is sold, and (for devices) colours and storage. A SIM-only plan shows no stock step unless you have turned on stock tracking for SIM activation.
-5. **Availability.** Channels and market, and the partner code for partner subscriptions.
+5. **Availability.** Channels, and the partner code for partner subscriptions. The market appears here only when several markets are switched on (see below).
 6. **Rules.** Optional prerequisites and exclusions.
 7. **Review.** A summary with Edit links, then choose **Draft** (not sellable), **Scheduled** (goes live on a date) or **Active** (sellable now) and create. A scheduled offer needs a go-live date after today; it is hidden from every sales channel until the start of that day, then becomes Active by itself (the server notices a due offer within about 15 seconds). Moving it back to Draft clears the date. Editing an existing offer uses the same steps and lets you jump to any of them.
 
@@ -105,3 +105,12 @@ Catalog → **Import or export offers (CSV)…** (needs the catalog-write permis
 API: `GET /api/catalog-import/template[?offers=1]` and `POST /api/catalog-import` with `{ "csv": "...", "apply": false }` (check) or `true` (load).
 
 A stock SKU may contain letters, digits, dash, dot, underscore and slash (manufacturer part numbers such as `MJW44LL/A`), up to 50 characters. When an offer is refused, the message lists every rule it broke.
+
+## Markets
+
+Settings → Markets chooses how the CRM treats countries.
+
+- **One market (default).** The whole CRM works in the country set under Settings → Regional. No screen asks for a market; offers, logins, stores and customers are not tied to one; nothing is filtered or refused by market. The CSV `market` column is ignored.
+- **Several markets.** An offer lists the markets it is sold in (blank means all), a login and a store belong to a market, and a customer's market decides which offers they can buy, the tax that applies and the dial code for new numbers. The deployment still has one currency (offer prices and the ledger are in it); the home country uses the tax and dial code from Regional and other markets use their own.
+
+Switching never deletes data: offers, logins and customers keep the market they have, and the limits apply again when several markets are switched back on.

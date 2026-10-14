@@ -640,6 +640,7 @@ describe('the customer form follows the settings', () => {
 describe('which offers a login can sell', () => {
   it('is decided by its market, which an administrator can see and change', async () => {
     const admin = await root();
+    expect((await call('POST', '/settings/markets', { cookie: admin, body: { multiple: true } })).status).toBe(200);
     const made = await call('POST', '/users', { cookie: admin, body: { username: 'market.seller', displayName: 'Market Seller', roles: ['call-center'] } });
     expect(made.status).toBe(200);
     const id = made.json.user.id as string;
@@ -653,6 +654,15 @@ describe('which offers a login can sell', () => {
     expect(changed.status).toBe(200);
     expect(changed.json.marketCode).toBe('MY');
     expect((await call('PATCH', `/users/${id}`, { cookie: admin, body: { marketCode: 'ZZ' } })).status).toBe(400);
+
+    // Switched back to one market: the same offer is sold to everyone and no market is asked for.
+    expect((await call('POST', '/settings/markets', { cookie: admin, body: { multiple: false } })).status).toBe(200);
+    expect((await call('GET', '/meta', { cookie: admin })).json.multiMarket).toBe(false);
+    expect(await sees('SG')).toContain('only-my-plan');
+    expect(await sees('MY')).toContain('only-my-plan');
+    const another = await call('POST', '/users', { cookie: admin, body: { username: 'market.single', displayName: 'Single Seller', roles: ['call-center'], marketCode: 'TH' } });
+    expect(another.json.user.marketCode).toBe('SG');
+    expect((await call('POST', '/settings/markets', { cookie: await staff(['call-center']).then((s) => s.cookie), body: { multiple: true } })).status).toBe(403);
   });
 });
 
