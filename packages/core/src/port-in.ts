@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { audit } from './audit.js';
 import { addDays, today } from './dates.js';
 import type { Db, Queryable, Row } from './db.js';
+import { getDonorOperator } from './donor-operators.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { getLifecycleSettings } from './lifecycle-config.js';
 import { assertMsisdnTransition, auditIdentifier } from './nrm.js';
@@ -17,7 +18,8 @@ import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.
  * (and tells the network to swap it). Without a temporary number the service waits PENDING and starts when the number arrives.
  */
 export interface PortInInput {
-  donorOperator: string;
+  /** The donor operator, chosen from the list kept in Settings. */
+  donorOperatorId: string;
   /** The number being brought in, with its country code (a + is optional). */
   donorMsisdn: string;
   /** The account holder at the donor operator, as the donor has them. */
@@ -39,14 +41,20 @@ const text = (v: unknown, what: string, max: number) => {
   return t;
 };
 
-/** Checks the donor details of a port-in line and returns them in the form that is stored. */
-export function cleanPortIn(i: PortInInput): Required<Omit<PortInInput, 'temporaryNumber'>> & { temporaryNumber: boolean } {
+export interface CleanPortIn extends Omit<PortInInput, 'temporaryNumber'> { donorOperator: string; donorRoutingCode: string; temporaryNumber: boolean }
+
+/** Checks the donor details of a port-in line and returns them as they are stored: the operator's name and routing code as they are now. */
+export async function cleanPortIn(q: Queryable, i: PortInInput): Promise<CleanPortIn> {
+  if (!i.donorOperatorId) throw invalid('Choose the donor operator the number is coming from.');
+  const op = await getDonorOperator(q, i.donorOperatorId).catch(() => null);
+  if (!op) throw invalid('That donor operator is not in the list. Choose one from the list.');
+  if (op.status !== 'ACTIVE') throw rejected(`${op.name} is switched off as a donor operator.`);
   const n = normalizeMsisdn(i.donorMsisdn ?? '');
   if ('error' in n) throw invalid(`The number to port in: ${n.error}`);
   const idType = text(i.holderIdType, 'The ID type of the account holder', 20).toUpperCase();
   if (!(PORT_IN_ID_TYPES as readonly string[]).includes(idType)) throw invalid(`The ID type is one of ${PORT_IN_ID_TYPES.join(', ')}.`);
   return {
-    donorOperator: text(i.donorOperator, 'The donor operator', 60), donorMsisdn: n.value, holderName: text(i.holderName, 'The account holder’s name', 100),
+    donorOperatorId: op.id as string, donorOperator: op.name as string, donorRoutingCode: op.routingCode as string, donorMsisdn: n.value, holderName: text(i.holderName, 'The account holder’s name', 100),
     holderIdType: idType, holderIdNumber: text(i.holderIdNumber, 'The account holder’s ID number', 40), temporaryNumber: !!i.temporaryNumber,
   };
 }
@@ -59,16 +67,16 @@ export async function assertPortableNumber(q: Queryable, msisdn: string): Promis
 }
 
 /** Records the request for a port-in line (inside the order's transaction) and points the service at it. */
-export async function createPortInTx(q: Queryable, r: { customerId: string; orderId?: string; orderLineId?: string; serviceId: string; input: ReturnType<typeof cleanPortIn>; temporaryMsisdn?: string | null; actor: string }): Promise<Row> {
+export async function createPortInTx(q: Queryable, r: { customerId: string; orderId?: string; orderLineId?: string; serviceId: string; input: CleanPortIn; temporaryMsisdn?: string | null; actor: string }): Promise<Row> {
   const id = randomUUID();
   await q.query(
-    `INSERT INTO port_in_requests (id, customer_id, order_id, order_line_id, service_id, donor_operator, donor_msisdn, holder_name, holder_id_type, holder_id_number, temporary_msisdn, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-    [id, r.customerId, r.orderId ?? null, r.orderLineId ?? null, r.serviceId, r.input.donorOperator, r.input.donorMsisdn, r.input.holderName, r.input.holderIdType, r.input.holderIdNumber, r.temporaryMsisdn ?? null, r.actor]);
+    `INSERT INTO port_in_requests (id, customer_id, order_id, order_line_id, service_id, donor_operator, donor_msisdn, holder_name, holder_id_type, holder_id_number, temporary_msisdn, created_by, donor_operator_id, donor_routing_code)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    [id, r.customerId, r.orderId ?? null, r.orderLineId ?? null, r.serviceId, r.input.donorOperator, r.input.donorMsisdn, r.input.holderName, r.input.holderIdType, r.input.holderIdNumber, r.temporaryMsisdn ?? null, r.actor, r.input.donorOperatorId, r.input.donorRoutingCode]);
   await q.query(`UPDATE services SET port_in_id=$2, number_status=$3 WHERE id=$1`, [r.serviceId, id, r.temporaryMsisdn ? 'TEMPORARY' : null]);
   await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, instruction, payload) VALUES ('NETWORK', $1, 'PORT_IN_REQUEST', $2)`,
-    [r.serviceId, JSON.stringify({ portInId: id, donorOperator: r.input.donorOperator, donorMsisdn: r.input.donorMsisdn, temporaryMsisdn: r.temporaryMsisdn ?? null })]);
-  await audit(q, r.actor, 'port_in', id, 'REQUESTED', { donorMsisdn: r.input.donorMsisdn, donorOperator: r.input.donorOperator, temporary: !!r.temporaryMsisdn });
+    [r.serviceId, JSON.stringify({ portInId: id, donorOperator: r.input.donorOperator, donorRoutingCode: r.input.donorRoutingCode, donorMsisdn: r.input.donorMsisdn, temporaryMsisdn: r.temporaryMsisdn ?? null })]);
+  await audit(q, r.actor, 'port_in', id, 'REQUESTED', { donorMsisdn: r.input.donorMsisdn, donorOperator: r.input.donorOperator, routingCode: r.input.donorRoutingCode, temporary: !!r.temporaryMsisdn });
   return getPortIn(q, id);
 }
 

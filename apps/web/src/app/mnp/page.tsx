@@ -36,7 +36,7 @@ function PortIn() {
         <TableWrap><thead><tr><Th>Number</Th><Th>From</Th><Th>Holder</Th><Th>Line now</Th><Th>Status</Th><Th>Raised</Th><Th /></tr></thead><tbody>
           {list.data.items.map((r) => (
             <tr key={r.id}>
-              <Td className="font-mono">{r.donorMsisdn}</Td><Td>{r.donorOperator}</Td><Td>{r.holderName}<span className="block text-caption text-label2">{r.holderIdType.toLowerCase().replace(/_/g, ' ')} {r.holderIdNumber}</span></Td>
+              <Td className="font-mono">{r.donorMsisdn}</Td><Td>{r.donorOperator}<span className="block font-mono text-caption text-label2">{r.donorRoutingCode}</span></Td><Td>{r.holderName}<span className="block text-caption text-label2">{r.holderIdType.toLowerCase().replace(/_/g, ' ')} {r.holderIdNumber}</span></Td>
               <Td><span className="font-mono">{r.serviceIdentifier}</span>{r.temporaryMsisdn && r.status !== 'COMPLETED' && <span className="block text-caption text-label2">temporary number</span>}<Link className="block text-caption text-accent" href={`/customers/${r.customerId}`}>{r.customerName ?? 'Open customer'}</Link></Td>
               <Td><Badge tone={STATUS_TONE[r.status] ?? 'neutral'}>{label(r.status)}</Badge>{r.failureReason && <span className="block text-caption text-label2">{r.failureReason}</span>}</Td>
               <Td className="text-footnote text-label2">{dt(r.createdAt)}</Td>
