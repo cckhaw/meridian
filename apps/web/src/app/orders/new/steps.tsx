@@ -9,7 +9,7 @@ import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
-import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, flatLines, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
+import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, flatLines, isMobilePlan, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
@@ -38,11 +38,11 @@ const priceLine = (o: any) => {
   return [rec && `${money(rec.amount.amountMinor, rec.amount.currency)}/mo`, once && (once.amount.amountMinor ? `${money(once.amount.amountMinor, once.amount.currency)} upfront` : 'nothing upfront')].filter(Boolean).join(' · ') || 'Free';
 };
 
-function OfferCard({ o, chosen, onToggle, note }: { o: any; chosen: boolean; onToggle: () => void; note?: string }) {
+function OfferCard({ o, chosen, onToggle, note, disabled }: { o: any; chosen: boolean; onToggle: () => void; note?: string; disabled?: boolean }) {
   const types = useOfferTypes();
   return (
-    <button type="button" onClick={onToggle} aria-pressed={chosen}
-      className={`relative rounded-card border p-4 text-left shadow-card transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${chosen ? 'border-accent bg-accent/5' : 'border-transparent bg-surface hover:-translate-y-0.5'}`}>
+    <button type="button" onClick={onToggle} aria-pressed={chosen} disabled={disabled}
+      className={`relative rounded-card border p-4 text-left shadow-card transition disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${chosen ? 'border-accent bg-accent/5' : 'border-transparent bg-surface hover:-translate-y-0.5'}`}>
       <div className="flex items-start justify-between gap-2"><span className="font-medium">{o.name}</span><Badge>{types.name(o.kind)}</Badge></div>
       {o.description && <p className="mt-1 line-clamp-2 text-footnote text-label2">{o.description}</p>}
       <p className="mt-2 text-subhead font-medium">{priceLine(o)}</p>
@@ -58,7 +58,10 @@ function OfferPicker({ w, kind, placeholder, noteFor }: { w: Wizard; kind: strin
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
   const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}&kind=${kind}&q=${encodeURIComponent(term)}`);
-  const toggle = (o: any) => w.setItems((cur) => (cur.some((i) => i.offer.id === o.id) ? cur.filter((i) => i.offer.id !== o.id) : [...cur, newItem(o)]));
+  // An order carries one mobile plan (a family plan brings its other lines as members), so once a plan is chosen the other plans wait until it is removed.
+  const planChosen = w.items.find((i) => isMobilePlan(i.offer));
+  const waits = (o: any) => isMobilePlan(o) && !!planChosen && planChosen.offer.id !== o.id;
+  const toggle = (o: any) => { if (!waits(o)) w.setItems((cur) => (cur.some((i) => i.offer.id === o.id) ? cur.filter((i) => i.offer.id !== o.id) : [...cur, newItem(o)])); };
   // When nothing is listed, find out whether offers exist in some other market, so the message can say why instead of pretending there are none.
   const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term && multi ? `/catalog?limit=1&status=ACTIVE&kind=${kind}` : null);
   return (
@@ -73,7 +76,7 @@ function OfferPicker({ w, kind, placeholder, noteFor }: { w: Wizard; kind: strin
         </Alert>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
-        {list.items.map((o) => <OfferCard key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} note={noteFor?.(o)} />)}
+        {list.items.map((o) => <OfferCard key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} disabled={waits(o)} note={waits(o) ? `One plan per order: remove ${planChosen!.offer.name} to choose this one` : noteFor?.(o)} />)}
       </div>
       {list.items.length > 0 && <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="offers" />}
     </>

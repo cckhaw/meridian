@@ -13,7 +13,7 @@ export interface LineNumbering {
   tier: VipTier | null; tierLabel: string | null; oneTimeFeeMinor: number; etcMultiplierBps: number;
 }
 
-interface Ask { offerId: string; quantity?: number; msisdn?: string; iccid?: string; simType?: 'PHYSICAL' | 'ESIM'; numberToken?: string }
+interface Ask { offerId: string; quantity?: number; msisdn?: string; iccid?: string; simType?: 'PHYSICAL' | 'ESIM'; numberToken?: string; portIn?: { donorMsisdn?: string } }
 
 /**
  * What the SIM and number chosen for each order line mean for the order: the VIP connection fee, the minimum plan and contract a VIP number
@@ -24,6 +24,13 @@ export async function resolveNumbering(
 ): Promise<Map<number, LineNumbering>> {
   const out = new Map<number, LineNumbering>();
   const cfg = await getNumberingSettings(q);
+  // Every line of an order (a plan, and each member line of a family plan) has its own SIM card and its own number.
+  const simsSeen = new Set<string>(), numbersSeen = new Set<string>();
+  for (const l of lines) {
+    if (l.iccid) { if (simsSeen.has(l.iccid)) throw invalid(`The SIM card ${l.iccid} is chosen for more than one line of this order. Each line needs its own card.`); simsSeen.add(l.iccid); }
+    const n = (l.portIn?.donorMsisdn ?? l.msisdn ?? '').replace(/\D/g, '');
+    if (n) { if (numbersSeen.has(n)) throw invalid(`The number ${n} is chosen for more than one line of this order. Each line needs its own number.`); numbersSeen.add(n); }
+  }
   for (let pos = 0; pos < lines.length; pos++) {
     const l = lines[pos]!;
     const offer = offers.get(l.offerId)!;
