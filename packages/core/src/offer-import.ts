@@ -7,7 +7,7 @@ import type { Db, Queryable } from './db.js';
 import { invalid } from './errors.js';
 import { listFulfilmentOptions, listOfferTypes } from './offer-config.js';
 import { CHANNELS } from './rbac.js';
-import { getRegional } from './settings.js';
+import { getMarketSettings, getRegional } from './settings.js';
 
 export const OFFER_IMPORT_MAX_ROWS = 1000;
 type Col = 'group' | 'id' | 'name' | 'type' | 'description' | 'monthly' | 'upfront' | 'tax' | 'term' | 'free' | 'etc' | 'subsidy' | 'retail' | 'fulfilment' | 'skus' | 'variants' | 'deals' | 'channels' | 'requires' | 'excludes' | 'partner' | 'market' | 'status' | 'golive';
@@ -47,7 +47,7 @@ const whole = (v: string, what: string, min: number, max: number): number => {
   return Number(v);
 };
 
-interface Ctx { regional: RegionalSettings; types: Map<string, { template: OfferTemplate; active: boolean }>; options: Map<string, { mechanic: string; active: boolean }>; groups: Set<string> }
+interface Ctx { multiple: boolean; regional: RegionalSettings; types: Map<string, { template: OfferTemplate; active: boolean }>; options: Map<string, { mechanic: string; active: boolean }>; groups: Set<string> }
 
 /** What one CSV row asks for, as a new offer or as changes to an existing one. A blank cell on an existing offer means "leave as it is". */
 function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, existing: OfferNode | null, id: string): { input?: NodeInput; patch?: NodePatch; group?: string; status?: string; goLive?: string } {
@@ -134,10 +134,11 @@ function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, exist
     ...(cell('partner') ? { partnerCode: cell('partner') } : {}), ...(cell('requires') ? { requires: list(cell('requires')) } : {}), ...(cell('excludes') ? { excludes: list(cell('excludes')) } : {}),
     ...(channels ? { salesChannels: channels } : {}), ...(variants ? { variants } : {}), ...(deals ? { deals } : {}),
   };
-  if (existing) return { patch: { ...(cell('name') ? { name: cell('name') } : {}), ...(typeId ? { kind: typeId } : {}), ...(market ? { markets: [market] } : {}), ...common } as NodePatch, group: group || undefined, status: status || undefined, goLive };
+  if (existing) return { patch: { ...(cell('name') ? { name: cell('name') } : {}), ...(typeId ? { kind: typeId } : {}), ...(market && ctx.multiple ? { markets: [market] } : {}), ...common } as NodePatch, group: group || undefined, status: status || undefined, goLive };
   if (!group) bad('Choose the group the offer belongs to (group_id).');
   if (!cell('name')) bad('Give the offer a name.');
-  const country = market || (MARKETS[ctx.regional.country] ? ctx.regional.country : '');
+  // With one market the offer is simply sold; a market is only recorded when several are switched on.
+  const country = !ctx.multiple ? '' : market || (MARKETS[ctx.regional.country] ? ctx.regional.country : '');
   return {
     input: { id, level: 'OFFER', code: id, name: cell('name'), path: '', parentId: group, status: 'DRAFT', kind: typeId, markets: country ? [country] : [], characteristics: {}, requires: [], excludes: [], ...common } as unknown as NodeInput,
     status: status || undefined, goLive,
@@ -165,7 +166,7 @@ export async function importOffers(db: Db, text: string, o: { apply: boolean; ac
 
   const regional = await getRegional(db);
   const ctx: Ctx = {
-    regional,
+    regional, multiple: (await getMarketSettings(db)).multiple,
     types: new Map((await listOfferTypes(db)).map((t) => [t.id, { template: t.template, active: t.status === 'ACTIVE' }])),
     options: new Map((await listFulfilmentOptions(db)).map((f) => [f.id, { mechanic: f.mechanic, active: f.status === 'ACTIVE' }])),
     groups: new Set((await db.query(`SELECT id FROM catalog_nodes WHERE level='GROUP'`)).rows.map((r) => r.id as string)),

@@ -2,7 +2,6 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import type { LineItemNode, OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { ancestorsFor, checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
-import { MARKETS } from './config.js';
 import { createAccount, createCustomer, getCustomer } from './customers.js';
 import type { Db, Queryable, Row } from './db.js';
 import { DomainError, invalid, notFound, rejected } from './errors.js';
@@ -11,7 +10,7 @@ import { addDocument, attestInPerson, personalProblems, submitRemote, syncCase, 
 import { advanceOrder, cancelOrder, getOrder, placeOrderTx, type OrderInput } from './orders.js';
 import { createsService, priceBasket } from './order-pricing.js';
 import { behaviourOf } from '@meridian/types';
-import { getBranding, getRegional, marketFor } from './settings.js';
+import { getBranding, getRegional, marketFor, marketMode } from './settings.js';
 import { activeGateways, getStoreSettings } from './store-settings.js';
 import { taxSplit } from './tax.js';
 
@@ -33,9 +32,9 @@ const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
 /** The market a store sale belongs to: the deployment's own country when we know it. */
 async function storeMarket(q: Queryable, customerId?: string | null): Promise<string> {
-  if (customerId) return ((await getCustomer(q, customerId)).marketCode as string).trim();
-  const r = await getRegional(q);
-  return MARKETS[r.country] ? r.country : 'SG';
+  const mode = await marketMode(q);
+  if (mode.multiple && customerId) return ((await getCustomer(q, customerId)).marketCode as string).trim();
+  return mode.home;
 }
 
 // ───────────────────────── catalog and pricing (always computed here, never taken from the client) ─────────────────────────
@@ -125,7 +124,7 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
     seen.add(l.offerId);
     const off = await getOffer(q, l.offerId).catch(() => null);
     if (!off || off.status !== 'ACTIVE') throw rejected('One of the products is no longer available.');
-    if (off.markets.length && !off.markets.includes(marketCode)) throw rejected(`${off.name} is not available in your country.`);
+    if ((await marketMode(q)).multiple && off.markets.length && !off.markets.includes(marketCode)) throw rejected(`${off.name} is not available in your country.`);
     if (off.salesChannels?.length && !off.salesChannels.includes(o.channel)) throw rejected(`${off.name} is not sold through this channel.`);
     if (off.prices.some((p) => p.amount.currency !== mk.currency)) throw rejected(`${off.name} is not priced in ${mk.currency}.`);
     if (o.channel !== 'RETAIL_ASSISTED' && collectOnly(off)) throw rejected(`${off.name} can only be collected in a store, so it cannot be ordered online.`);

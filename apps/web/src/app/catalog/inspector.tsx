@@ -1,4 +1,5 @@
 'use client';
+import { useMultiMarket } from '@/lib/markets';
 import { Badge, Button, MenuButton, Segmented } from '@meridian/ui';
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
@@ -91,6 +92,7 @@ type Tab = 'included' | 'pricing' | 'rules' | 'sales';
 
 /** An offer opened for reading: header, then one section at a time so nothing is below the fold. */
 export function OfferInspector({ d, a }: { d: Detail; a: Actions }) {
+  const multi = useMultiMarket();
   const types = useOfferTypes();
   const offer = d.node;
   const sold = (d.usage?.services ?? 0) + (d.usage?.orders ?? 0);
@@ -138,7 +140,7 @@ export function OfferInspector({ d, a }: { d: Detail; a: Actions }) {
             ['Customer must first have', chips(d.requires)],
             ['Cannot be bought with', chips(d.excludes)],
             ['Sold through', (offer.salesChannels?.length ?? 0) ? offer.salesChannels!.map(label).join(', ') : <span className="text-label2">All channels</span>],
-            ['Markets', (offer.markets?.length ?? 0) ? offer.markets!.join(', ') : <span className="text-label2">All</span>],
+            ...(multi ? [['Markets', (offer.markets?.length ?? 0) ? offer.markets!.join(', ') : <span className="text-label2">All</span>] as [string, React.ReactNode]] : []),
             ['Fulfilment', fulfil.length ? fulfil.join(' · ') : <span className="text-label2">Digital, nothing to ship</span>],
           ]} />
         )}

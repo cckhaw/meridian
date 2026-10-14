@@ -7,6 +7,7 @@ import { AppearanceSettings } from './appearance';
 import { CancellationSettings } from './cancellation';
 import { FulfilmentSettings, OfferTypeSettings } from './catalog-config';
 import { BillCycleSettings, CustomerSettings } from './customers';
+import { MarketSettings } from './markets';
 import { RegionalSettingsForm } from './regional';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
 import { StorefrontSettings } from './storefront';
@@ -95,6 +96,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'regional': return <RegionalSettingsForm initial={data.regional} locked={data.currencyLocked} onSaved={reload} />;
     case 'appearance': return <AppearanceSettings branding={data.branding} themes={data.themes} guidance={data.logoGuidance} onSaved={reload} />;
     case 'customers': return <CustomerSettings />;
+    case 'markets': return <MarketSettings />;
     case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;

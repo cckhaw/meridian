@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Account, Customer, CustomerSegment } from '@meridian/types';
-import { marketFor } from './settings.js';
+import { effectiveMarket, marketDuplicates, marketFor } from './settings.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, tsPage, type Page } from './paging.js';
@@ -36,12 +36,12 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
   if (!input.displayName.trim()) throw invalid('displayName is required');
   const id = randomUUID();
   const shardId = shardFor(id);
-  const marketCode = input.marketCode ?? 'SG';
+  const marketCode = await effectiveMarket(q, input.marketCode);
   const hash = hashIdDocument(input.idDocument);
   // Individuals must be unique by ID document; companies and fleets (non-individual segments) may legitimately share one.
   const segment = await assertSegmentUsable(q, input.segment);
   if (segment.individual) {
-    const dup = (await q.query('SELECT id FROM customers WHERE id_document_hash=$1 AND market_code=$2 LIMIT 1', [hash, marketCode])).rows[0];
+    const dup = (await q.query('SELECT id FROM customers WHERE id_document_hash=$1 AND ($2::text IS NULL OR market_code=$2) LIMIT 1', [hash, await marketDuplicates(q, marketCode)])).rows[0];
     if (dup) throw conflict(`a customer with this ID document already exists (${dup.id})`);
   }
   let path = label(id);

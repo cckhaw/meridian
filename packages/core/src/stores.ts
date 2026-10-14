@@ -1,5 +1,6 @@
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
+import { marketMode } from './settings.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
@@ -38,7 +39,7 @@ export async function createStore(q: Queryable, actor: string, i: StoreInput): P
   if ((await q.query('SELECT 1 FROM stores WHERE lower(name)=lower($1)', [name])).rows.length) throw conflict(`there is already a store called ${name}`);
   const r = await q.query(
     `INSERT INTO stores (id, name, market_code, address, phone, created_by) VALUES ('STORE-' || lpad(nextval('store_id_seq')::text, 5, '0'), $1,$2,$3,$4,$5) RETURNING *`,
-    [name, i.marketCode?.trim().toUpperCase().slice(0, 2) || null, text(i.address, 300, 'the address'), text(i.phone, 40, 'the phone number'), actor]);
+    [name, (await marketMode(q)).multiple ? i.marketCode?.trim().toUpperCase().slice(0, 2) || null : null, text(i.address, 300, 'the address'), text(i.phone, 40, 'the phone number'), actor]);
   const s = r.rows[0]!;
   await audit(q, actor, 'store', s.id as string, 'create', { name });
   return s;
@@ -52,7 +53,7 @@ export async function updateStore(q: Queryable, actor: string, id: string, p: Pa
   const r = await q.query(
     `UPDATE stores SET name=$2, status=$3, address=$4, phone=$5, market_code=$6, updated_at=now() WHERE id=$1 RETURNING *`,
     [id, name, p.status ?? cur.status, p.address === undefined ? cur.address : text(p.address, 300, 'the address'), p.phone === undefined ? cur.phone : text(p.phone, 40, 'the phone number'),
-     p.marketCode === undefined ? cur.marketCode : (p.marketCode.trim().toUpperCase().slice(0, 2) || null)]);
+     p.marketCode === undefined || !(await marketMode(q)).multiple ? cur.marketCode : (p.marketCode.trim().toUpperCase().slice(0, 2) || null)]);
   await audit(q, actor, 'store', id, 'update', { ...p });
   return r.rows[0]!;
 }

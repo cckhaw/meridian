@@ -5,7 +5,7 @@ import { autoCancelDays, termsFor } from './cancellation.js';
 import { getCustomer } from './customers.js';
 import type { Queryable, Row } from './db.js';
 import { invalid, rejected } from './errors.js';
-import { marketFor } from './settings.js';
+import { effectiveMarket, marketFor, marketMode } from './settings.js';
 import { getStoreSettings } from './store-settings.js';
 import { taxSplit } from './tax.js';
 
@@ -97,10 +97,11 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
   const fail = (m: string) => { if (!o.soft) throw rejected(m); problems.push(m); };
 
   let customer: Row | null = null;
-  let marketCode = input.marketCode ?? 'SG';
+  const mode = await marketMode(q);
+  let marketCode = await effectiveMarket(q, input.marketCode);
   if (input.customerId) {
     customer = await getCustomer(q, input.customerId);
-    marketCode = (customer.marketCode as string).trim(); // the customer's own market decides currency, tax and what is sellable
+    if (mode.multiple) marketCode = (customer.marketCode as string).trim(); // the customer's own market decides currency, tax and what is sellable
     if (customer.status !== 'ACTIVE') throw rejected(`customer is ${customer.status}`);
     if (input.accountId) {
       const a = (await q.query('SELECT customer_id FROM accounts WHERE id=$1', [input.accountId])).rows[0];
@@ -117,7 +118,7 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
     if (!offers.has(l.offerId)) {
       const of = await getOffer(q, l.offerId);
       if (of.status !== 'ACTIVE') throw rejected(`offer ${of.name} is not active`);
-      if (of.markets.length && !of.markets.includes(marketCode)) throw rejected(`offer ${of.name} is not sold in ${marketCode}`);
+      if (mode.multiple && of.markets.length && !of.markets.includes(marketCode)) throw rejected(`offer ${of.name} is not sold in ${marketCode}`);
       if (of.prices.some((p) => p.amount.currency !== mk.currency)) throw rejected(`offer ${of.name} is not priced in ${mk.currency}`);
       offers.set(of.id, of);
     }

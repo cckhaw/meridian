@@ -3,7 +3,7 @@ import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type P
 import { ruleSatisfied, listBundleRules } from './bundles.js';
 import { decide, deadlineDays, getCancellationSettings, listRules, type CancellationDecision, type Facts } from './cancellation.js';
 import { COMMISSION_BPS, GL, paymentMode } from './config.js';
-import { marketFor } from './settings.js';
+import { effectiveMarket, marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { monthlyFee } from './catalog.js';
 import { DomainError, invalid, notFound, rejected } from './errors.js';
@@ -85,7 +85,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
   if (!customerId) {
     if (!input.lines.length) throw invalid('an order needs at least one line');
     if (input.channel !== 'QUICK_SALE') throw invalid('customerId is required (only QUICK_SALE may be anonymous)');
-    customerId = await walkInCustomer(q, input.marketCode ?? 'SG');
+    customerId = await walkInCustomer(q, await effectiveMarket(q, input.marketCode));
   }
   // Everything about price, eligibility and payment structure is decided in one place, shared with the quote the order wizard shows.
   const priced = await priceBasket(q, { ...input, customerId });
