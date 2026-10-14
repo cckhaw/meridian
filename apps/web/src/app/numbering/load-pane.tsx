@@ -7,7 +7,7 @@ import { useLocations } from '../inventory/locations';
 
 type Kind = 'msisdn' | 'imsi' | 'sim';
 const HELP: Record<Kind, string> = {
-  msisdn: 'One MSISDN per line, with the country code (+60128001234). Each is put in its tier by the patterns. MSISDNs already in the pool are skipped.',
+  msisdn: 'One MSISDN per line, starting with the country code and no + sign (60128001234). Spaces and dashes are fine; a + is accepted too. Each is put in its tier by the patterns. MSISDNs already in the pool are skipped.',
   imsi: 'One 15-digit IMSI per line. They join the pool, ready to be bound to ICCIDs (SIM cards) or issued on eSIM profiles.',
   sim: 'Columns: iccid, imsi (optional), type (PHYSICAL or ESIM, optional), location (optional), activation_code (optional). A card without an IMSI gets the next free one from the pool.',
 };
@@ -48,15 +48,15 @@ export function LoadPane() {
       )}
       {kind !== 'sim' && mode === 'range' ? (
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Field label="From"><Input className="font-mono" value={range.from} onChange={(e) => { setRange({ ...range, from: e.target.value }); setResult(null); }} placeholder={kind === 'msisdn' ? '+60128000000' : '525010100000000'} /></Field>
-          <Field label="To"><Input className="font-mono" value={range.to} onChange={(e) => { setRange({ ...range, to: e.target.value }); setResult(null); }} placeholder={kind === 'msisdn' ? '+60128009999' : '525010100000999'} /></Field>
+          <Field label="From"><Input className="font-mono" value={range.from} onChange={(e) => { setRange({ ...range, from: e.target.value }); setResult(null); }} placeholder={kind === 'msisdn' ? '60128000000' : '525010100000000'} /></Field>
+          <Field label="To"><Input className="font-mono" value={range.to} onChange={(e) => { setRange({ ...range, to: e.target.value }); setResult(null); }} placeholder={kind === 'msisdn' ? '60128009999' : '525010100000999'} /></Field>
         </div>
       ) : (
         <div className="mt-3 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <input ref={file} type="file" accept=".csv,.txt,text/csv,text/plain" className="sr-only" onChange={(e) => void pick(e.target.files?.[0])} />
             <Button type="button" variant="secondary" onClick={() => file.current?.click()}>Choose a file…</Button>
-            {kind === 'sim' && <a className="text-accent" href="/api/numbering/sim-template">Download the SIM template</a>}
+            <a className="text-accent" href={`/api/numbering/template/${kind}`}>Download the {kind === 'sim' ? 'ICCID' : kind.toUpperCase()} template</a>
           </div>
           <textarea aria-label="Contents" className="min-h-40 w-full rounded-control border border-separator bg-surface p-3 font-mono text-subhead" value={text} onChange={(e) => { setText(e.target.value); setResult(null); }} placeholder="Paste here" />
         </div>

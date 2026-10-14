@@ -1111,6 +1111,11 @@ describe('numbers, SIM cards and order numbers', () => {
     expect((await call('POST', '/numbering/import/msisdn', { cookie: root_, body: { range: { from: '+6591110001', to: '+6591110020' }, apply: true } })).status).toBe(200);
     const found = await call('GET', '/numbers/search', { cookie: seller.cookie });
     expect(found.status).toBe(200);
+    for (const kind of ['msisdn', 'imsi', 'sim']) {
+      expect((await call('GET', `/numbering/template/${kind}`, { cookie: seller.cookie })).status).toBe(403);
+      const t = await call('GET', `/numbering/template/${kind}`, { cookie: root_ });
+      expect([t.status, t.headers.get('content-type')]).toEqual([200, expect.stringContaining('text/csv')]);
+    }
     const first = (found.json.items ?? found.json.numbers ?? [])[0];
     expect(first).toBeDefined();
     const msisdn = first.msisdn as string;
