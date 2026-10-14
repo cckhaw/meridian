@@ -1,4 +1,5 @@
 'use client';
+import { createPortal } from 'react-dom';
 import { cloneElement, isValidElement, useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 
 const cx = (...p: Array<string | false | undefined>) => p.filter(Boolean).join(' ');
@@ -131,17 +132,21 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; previous?.focus(); };
   }, [onClose]);
-  return (
+  if (typeof document === 'undefined') return null;
+  // Rendered at the end of <body>: inside a page section that is animating (it has a transform) a fixed element is placed against that section, not the
+  // screen, and sat under the phone's tab bar with its buttons out of reach.
+  return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/40 p-0 sm:place-items-center sm:p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}
-        className={cx('max-h-[92dvh] w-full overflow-y-auto rounded-t-card bg-surface p-5 shadow-card sm:rounded-card sm:p-6', wide ? 'sm:max-w-2xl' : 'sm:max-w-md')}>
+        className={cx('max-h-[92dvh] w-full overflow-y-auto rounded-t-card bg-surface p-5 pb-[max(1.25rem,var(--sab,0px))] shadow-card sm:rounded-card sm:p-6', wide ? 'sm:max-w-2xl' : 'sm:max-w-md')}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <h2 id={titleId} className="text-title3 font-semibold">{title}</h2>
           <button data-close aria-label="Close" onClick={onClose} className="-mr-2 -mt-2 min-h-tap min-w-tap rounded-full text-title3 text-label2 hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">×</button>
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
