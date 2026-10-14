@@ -1141,9 +1141,10 @@ describe('group plans and port-in through the API', () => {
     expect((await call('POST', '/settings/donor-operators', { cookie: agent.cookie, body: { name: 'OtherTel', mnpOperatorId: 'OT-01' } })).status).toBe(403); // sellers read the list, the super user keeps it
     const made = await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'OtherTel', mnpOperatorId: 'ot-01' } });
     expect([made.status, made.json.mnpOperatorId]).toEqual([200, 'OT-01']);
-    expect((await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'Dupe', mnpOperatorId: 'OT-01' } })).status).toBe(409);
+    expect((await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'OtherTel', mnpOperatorId: 'OT-02' } })).status).toBe(409); // names are unique
+    expect((await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'Sister Telco', mnpOperatorId: 'OT-01' } })).status).toBe(200); // operator IDs are not
     const ops = (await call('GET', '/settings/donor-operators?active=1', { cookie: agent.cookie })).json.items;
-    expect(ops.map((o: any) => o.name)).toEqual(['OtherTel']);
+    expect(ops.map((o: any) => o.name)).toEqual(['OtherTel', 'Sister Telco']);
     const otherTel = ops[0].id;
     const lines = [{ offerId: 'plan-family-100', members: [
       { offerId: 'plan-family-member' },

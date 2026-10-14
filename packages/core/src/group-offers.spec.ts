@@ -183,7 +183,9 @@ describe('donor operators', () => {
     const op = (await listDonorOperators(db)).find((o) => o.id === OTHERTEL)!;
     expect([op.name, op.mnpOperatorId, op.status]).toEqual(['OtherTel', 'OT-01', 'ACTIVE']); // codes are kept in capitals
     await expect(createDonorOperator(db, 'admin', { name: 'othertel', mnpOperatorId: 'X1' })).rejects.toThrow(/already an operator/);
-    await expect(createDonorOperator(db, 'admin', { name: 'Another', mnpOperatorId: 'ot-01' })).rejects.toThrow(/belongs to another/);
+    const twin = await createDonorOperator(db, 'admin', { name: 'Twin Telco', mnpOperatorId: 'ot-01' }); // operators may share an operator ID
+    expect(twin.mnpOperatorId).toBe('OT-01');
+    expect(await deleteDonorOperator(db, 'admin', twin.id as string)).toEqual({ deleted: true, deactivated: false });
     await expect(createDonorOperator(db, 'admin', { name: 'Bad', mnpOperatorId: 'no spaces' })).rejects.toThrow(/operator ID/);
 
     const c = await newCustomer(db);

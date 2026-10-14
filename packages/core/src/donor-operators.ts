@@ -15,9 +15,8 @@ const cleanCode = (v: unknown) => {
   if (!/^[A-Z0-9][A-Z0-9._-]{0,19}$/.test(t)) throw invalid('The operator ID is 1 to 20 letters, digits, dots, dashes or underscores.');
   return t;
 };
-const dupe = (e: unknown, name: string, code: string) => {
+const dupe = (e: unknown, name: string) => {
   if (/donor_operators_name_uq/.test((e as Error).message)) throw conflict(`There is already an operator called “${name}”.`);
-  if (/donor_operators_mnp_id_uq/.test((e as Error).message)) throw conflict(`The operator ID ${code} belongs to another operator.`);
   throw e;
 };
 
@@ -40,7 +39,7 @@ export async function createDonorOperator(q: Queryable, actor: string, i: { name
     const r = (await q.query(`INSERT INTO donor_operators (name, mnp_operator_id, updated_by) VALUES ($1,$2,$3) RETURNING *`, [name, code, actor])).rows[0]!;
     await audit(q, actor, 'donor_operator', r.id, 'CREATED', { name, mnpOperatorId: code });
     return r;
-  } catch (e) { return dupe(e, name, code); }
+  } catch (e) { return dupe(e, name); }
 }
 
 export async function updateDonorOperator(q: Queryable, actor: string, id: string, p: { name?: string; mnpOperatorId?: string; status?: 'ACTIVE' | 'INACTIVE' }): Promise<Row> {
@@ -51,7 +50,7 @@ export async function updateDonorOperator(q: Queryable, actor: string, id: strin
     const r = (await q.query(`UPDATE donor_operators SET name=$2, mnp_operator_id=$3, status=$4, updated_at=now(), updated_by=$5 WHERE id=$1 RETURNING *`, [id, name, code, p.status ?? cur.status, actor])).rows[0]!;
     await audit(q, actor, 'donor_operator', id, 'UPDATED', { ...p });
     return r;
-  } catch (e) { return dupe(e, name, code); }
+  } catch (e) { return dupe(e, name); }
 }
 
 /** An operator no request ever used can be removed; one that was used is switched off instead, so the history keeps its name. */
