@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { StorePicker } from '@/app/stores/store-picker';
 import { useRegional } from '@/components/settings-provider';
+import { RolesEditor } from './roles-editor';
 import { useMultiMarket } from '@/lib/markets';
 import { dt, label, money } from '@/lib/format';
 
@@ -61,16 +62,9 @@ export default function Users() {
         </>
       )}
 
-      <SectionTitle>What each role can do</SectionTitle>
-      <div className="grid gap-3 md:grid-cols-2">
-        {roleList.map((r) => (
-          <Card key={r.id} className="!p-4">
-            <div className="flex items-start justify-between gap-2"><h3 className="font-semibold">{r.label}</h3><Badge>{r.scope === 'staff' ? 'All records' : `Own ${r.scope}`}</Badge></div>
-            <p className="mt-1 text-subhead text-label2">{r.summary}</p>
-            <p className="mt-2 text-caption text-label2">{r.permissions.length} permissions{r.creditLimitMinor === null ? ' · unlimited credit notes' : r.creditLimitMinor ? ` · credit notes up to ${money(r.creditLimitMinor)}` : ''}</p>
-          </Card>
-        ))}
-      </div>
+      <SectionTitle>Roles and permissions</SectionTitle>
+      <p className="-mt-2 mb-3 text-subhead text-label2">Choose what each role can do. A user can hold several roles and gets everything they allow.</p>
+      <RolesEditor roles={roleList as never} onChanged={() => { void roles.reload(); }} />
     </>
   );
 }
@@ -84,8 +78,8 @@ function MarketField({ value, onChange }: { value: string; onChange: (v: string)
   const markets: Record<string, { name: string }> = meta.data?.markets ?? {};
   if (!meta.data?.multiMarket) return null; // one market for the whole CRM: nothing to choose
   return (
-    <Field label="Market" hint="The offers they can sell: those sold in this market. New logins start with your own country (Settings → Regional).">
-      <Select value={value || regional?.country || ''} onChange={(e) => onChange(e.target.value)}>{Object.entries(markets).map(([code, m]) => <option key={code} value={code}>{m.name} ({code})</option>)}</Select>
+    <Field label="Market" hint="The offers they can sell: those sold in this market. New logins start in the default market (Settings → Markets).">
+      <Select value={value || meta.data?.defaultMarket || regional?.country || ''} onChange={(e) => onChange(e.target.value)}>{Object.entries(markets).map(([code, m]) => <option key={code} value={code}>{m.name} ({code})</option>)}</Select>
     </Field>
   );
 }

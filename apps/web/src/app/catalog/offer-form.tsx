@@ -93,7 +93,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const multi = useMultiMarket();
   const editing = !!offerId;
   const locked = editing && sold > 0; // price, contract and type of a sold offer are immutable: new version instead
-  const defaultMarket = markets[regional.country] ? regional.country : me?.marketCode ?? 'SG';
+  const metaD = useApi<any>('/meta').data;
+  const defaultMarket: string = metaD?.defaultMarket ?? (markets[regional.country] ? regional.country : me?.marketCode ?? 'SG');
   const [f, setF] = useState<FormState>(() => {
     if (source) { const s = fromOffer(source, defaultMarket); return fromId ? { ...s, id: `${source.id}-v2`, status: 'DRAFT' } : s; }
     return { ...blank(defaultMarket), parentId: parentId ?? '' };

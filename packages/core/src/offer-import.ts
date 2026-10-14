@@ -1,7 +1,6 @@
 import { fromPlain, toPlain, TEMPLATES, type OfferNode, type OfferTemplate, type RegionalSettings } from '@meridian/types';
 import { audit } from './audit.js';
 import { createNode, getOffer, moveNode, setStatus, updateNode, type NodeInput, type NodePatch } from './catalog.js';
-import { MARKETS } from './config.js';
 import { csvCell, parseCsv } from './csv.js';
 import type { Db, Queryable } from './db.js';
 import { invalid } from './errors.js';
@@ -47,7 +46,7 @@ const whole = (v: string, what: string, min: number, max: number): number => {
   return Number(v);
 };
 
-interface Ctx { multiple: boolean; regional: RegionalSettings; types: Map<string, { template: OfferTemplate; active: boolean }>; options: Map<string, { mechanic: string; active: boolean }>; groups: Set<string> }
+interface Ctx { multiple: boolean; defaultMarket: string; marketCodes: string[]; regional: RegionalSettings; types: Map<string, { template: OfferTemplate; active: boolean }>; options: Map<string, { mechanic: string; active: boolean }>; groups: Set<string> }
 
 /** What one CSV row asks for, as a new offer or as changes to an existing one. A blank cell on an existing offer means "leave as it is". */
 function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, existing: OfferNode | null, id: string): { input?: NodeInput; patch?: NodePatch; group?: string; status?: string; goLive?: string } {
@@ -122,6 +121,7 @@ function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, exist
   for (const c of channels ?? []) if (!(CHANNELS as readonly string[]).includes(c)) bad(`Unknown channel “${c}”. Use ${CHANNELS.join(', ')}.`);
   const market = cell('market').toUpperCase();
   if (market && !/^[A-Z]{2}$/.test(market)) bad('market: use a two-letter country code such as SG.');
+  if (market && ctx.multiple && !ctx.marketCodes.includes(market)) bad(`market: ${market} is not one of your markets (${ctx.marketCodes.join(', ')}). Add it under Settings → Markets.`);
   const status = cell('status').toUpperCase();
   if (status && !['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED'].includes(status)) bad('status: use DRAFT, SCHEDULED or ACTIVE.');
   if (status === 'RETIRED' && !existing) bad('A new offer cannot start retired.');
@@ -138,7 +138,7 @@ function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, exist
   if (!group) bad('Choose the group the offer belongs to (group_id).');
   if (!cell('name')) bad('Give the offer a name.');
   // With one market the offer is simply sold; a market is only recorded when several are switched on.
-  const country = !ctx.multiple ? '' : market || (MARKETS[ctx.regional.country] ? ctx.regional.country : '');
+  const country = !ctx.multiple ? '' : market || ctx.defaultMarket;
   return {
     input: { id, level: 'OFFER', code: id, name: cell('name'), path: '', parentId: group, status: 'DRAFT', kind: typeId, markets: country ? [country] : [], characteristics: {}, requires: [], excludes: [], ...common } as unknown as NodeInput,
     status: status || undefined, goLive,
@@ -165,8 +165,9 @@ export async function importOffers(db: Db, text: string, o: { apply: boolean; ac
   if (body.length > OFFER_IMPORT_MAX_ROWS) throw invalid(`A file can have at most ${OFFER_IMPORT_MAX_ROWS} offers (this one has ${body.length}). Split it into several files.`);
 
   const regional = await getRegional(db);
+  const mset = await getMarketSettings(db);
   const ctx: Ctx = {
-    regional, multiple: (await getMarketSettings(db)).multiple,
+    regional, multiple: mset.multiple, defaultMarket: mset.defaultMarket, marketCodes: mset.markets.map((m) => m.code),
     types: new Map((await listOfferTypes(db)).map((t) => [t.id, { template: t.template, active: t.status === 'ACTIVE' }])),
     options: new Map((await listFulfilmentOptions(db)).map((f) => [f.id, { mechanic: f.mechanic, active: f.status === 'ACTIVE' }])),
     groups: new Set((await db.query(`SELECT id FROM catalog_nodes WHERE level='GROUP'`)).rows.map((r) => r.id as string)),

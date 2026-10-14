@@ -1,14 +1,14 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { audit } from './audit.js';
-import { MARKETS } from './config.js';
-import { marketMode } from './settings.js';
+import { effectiveMarket } from './settings.js';
+import { getRoleOverrides } from './roles-config.js';
 import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
-import { creditLimitOf, homeOf, isRoleId, ROLES, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type Permission, type RoleId, type Scope } from './rbac.js';
+import { creditLimitOf, homeOf, isRoleId, ROLES, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type RoleOverrides, type Permission, type RoleId, type Scope } from './rbac.js';
 
 // ───────────────────────── configuration ─────────────────────────
 const num = (k: string, d: number) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d; };
@@ -64,13 +64,13 @@ export interface SessionUser {
   creditLimitMinor: number | null;
 }
 
-function toUser(r: Row): SessionUser {
+function toUser(r: Row, ov: RoleOverrides): SessionUser {
   const roles = (r.roles as string[]).filter(isRoleId);
   const base = { isSuperuser: r.isSuperuser as boolean, roles, customerId: r.customerId, storeId: r.storeId, dealerId: r.dealerId };
   return {
     id: r.id, username: r.username, displayName: r.displayName, email: r.email, isSuperuser: base.isSuperuser, roles,
     mustChangePassword: r.mustChangePassword, storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: (r.marketCode ?? 'SG').trim(),
-    permissions: permissionsOf(base), scope: scopeOf(base), creditLimitMinor: creditLimitOf(base),
+    permissions: permissionsOf(base, ov), scope: scopeOf(base), creditLimitMinor: creditLimitOf(base, ov),
   };
 }
 
@@ -81,7 +81,7 @@ export function publicUser(u: SessionUser): {
 } {
   const p = { isSuperuser: u.isSuperuser, roles: u.roles, customerId: u.customerId, storeId: u.storeId, dealerId: u.dealerId };
   return {
-    id: u.id, username: u.username, displayName: u.displayName, isSuperuser: u.isSuperuser, roles: u.roles, roleLabels: u.isSuperuser ? ['Super user'] : u.roles.map((r) => ROLES[r].label), permissions: [...u.permissions], modules: modulesOf(p),
+    id: u.id, username: u.username, displayName: u.displayName, isSuperuser: u.isSuperuser, roles: u.roles, roleLabels: u.isSuperuser ? ['Super user'] : u.roles.map((r) => ROLES[r].label), permissions: [...u.permissions], modules: modulesOf(p, u.permissions),
     home: u.mustChangePassword ? '/change-password' : homeOf(p), mustChangePassword: u.mustChangePassword, storeId: u.storeId, dealerId: u.dealerId,
     customerId: u.customerId, marketCode: u.marketCode, creditLimitMinor: u.creditLimitMinor,
   };
@@ -147,7 +147,7 @@ export async function login(db: Db, i: { username: string; password: string; ip?
       await q.query('UPDATE users SET last_login_at = now() WHERE id=$1', [row.id]);
       const { token, expiresAt } = await openSession(q, row.id, epochOf(su), i.ip, i.userAgent);
       await audit(q, row.username, 'auth', row.id, 'LOGIN', { ip: i.ip, superuser: true });
-      return { token, user: toUser({ ...row, mustChangePassword: false }), expiresAt };
+      return { token, user: toUser({ ...row, mustChangePassword: false }, await getRoleOverrides(q)), expiresAt };
     });
   }
 
@@ -168,7 +168,7 @@ export async function login(db: Db, i: { username: string; password: string; ip?
     await q.query('UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1', [row.id]);
     const { token, expiresAt } = await openSession(q, row.id, '', i.ip, i.userAgent);
     await audit(q, row.username, 'auth', row.id, 'LOGIN', { ip: i.ip });
-    return { token, user: toUser(row), expiresAt };
+    return { token, user: toUser(row, await getRoleOverrides(q)), expiresAt };
   });
 }
 
@@ -202,7 +202,7 @@ export async function validateSession(db: Db, token: string | undefined): Promis
     }
   }
   if (now - new Date(s.lastSeenAt).getTime() > 60_000) await db.query('UPDATE sessions SET last_seen_at = now() WHERE id=$1', [id]);
-  return toUser({ ...s, id: s.userId });
+  return toUser({ ...s, id: s.userId }, await getRoleOverrides(db));
 }
 
 export const logout = (db: Db, token: string | undefined) => token ? db.query('UPDATE sessions SET revoked_at = now() WHERE id=$1 AND revoked_at IS NULL', [sha256(token)]) : Promise.resolve();
@@ -231,10 +231,7 @@ const adminView = (r: Row) => ({
 
 /** A login's market decides which offers it can sell: the one given, else the deployment's own country (Settings → Regional), else Singapore. */
 async function userMarket(q: Queryable, given?: string): Promise<string> {
-  const mode = await marketMode(q);
-  if (!mode.multiple) return mode.home; // one market: every login belongs to it
-  if (given) { const m = given.toUpperCase(); if (!MARKETS[m]) throw invalid(`unknown market ${given}`); return m; }
-  return mode.home;
+  return effectiveMarket(q, given); // one market: the deployment's; several: the one chosen, else the default market
 }
 
 /** Creates a user. Without a password a one-time temporary password is generated and returned; the user must change it at first sign-in. */

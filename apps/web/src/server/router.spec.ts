@@ -662,6 +662,15 @@ describe('which offers a login can sell', () => {
     expect(await sees('MY')).toContain('only-my-plan');
     const another = await call('POST', '/users', { cookie: admin, body: { username: 'market.single', displayName: 'Single Seller', roles: ['call-center'], marketCode: 'TH' } });
     expect(another.json.user.marketCode).toBe('SG');
+    // Add a market, make it the default, and see it in /meta.
+    const cfg = (await call('GET', '/settings/markets', { cookie: admin })).json;
+    expect(cfg.markets.map((m: any) => m.code)).toContain('SG');
+    const added = await call('POST', '/settings/markets', { cookie: admin, body: { multiple: true, defaultMarket: 'JP', markets: [...cfg.markets, { code: 'JP', name: 'Japan', dialCode: '+81', taxName: 'Consumption tax', taxBps: 1000 }] } });
+    expect(added.status).toBe(200);
+    const meta = (await call('GET', '/meta', { cookie: admin })).json;
+    expect([meta.defaultMarket, meta.markets.JP.name]).toEqual(['JP', 'Japan']);
+    expect((await call('POST', '/settings/markets', { cookie: admin, body: { multiple: true, markets: cfg.markets.filter((m: any) => m.code !== 'SG') } })).status).toBe(400);
+    expect((await call('POST', '/settings/markets', { cookie: admin, body: { multiple: false } })).status).toBe(200);
     expect((await call('POST', '/settings/markets', { cookie: await staff(['call-center']).then((s) => s.cookie), body: { multiple: true } })).status).toBe(403);
   });
 });
@@ -945,5 +954,24 @@ describe('offer line items API', () => {
     const copied = await call('POST', '/catalog/copy-target/line-items/copy-from', { cookie: c, body: { fromId: 'plan-sim-5g' } });
     expect(copied.json.copied).toBeGreaterThan(0);
     expect((await call('DELETE', '/catalog/plan-sim-5g-bonus', { cookie: c })).status).toBe(200);
+  });
+});
+
+describe('maintaining roles and permissions', () => {
+  it('lets an administrator change what a role can do, enforced on the next request, and reset it', async () => {
+    const admin = await root();
+    const seller = await staff(['call-center']);
+    const roles = (await call('GET', '/roles', { cookie: admin })).json;
+    const cc = roles.find((r: any) => r.id === 'call-center');
+    expect(cc.permissions).toContain('billing:pay');
+    expect((await call('GET', '/invoices?limit=1', { cookie: seller.cookie })).status).toBe(200);
+    const changed = await call('PATCH', '/roles/call-center', { cookie: admin, body: { permissions: cc.permissions.filter((p: string) => p !== 'billing:read') } });
+    expect(changed.status).toBe(200);
+    expect(changed.json.customised).toBe(true);
+    expect((await call('GET', '/invoices?limit=1', { cookie: seller.cookie })).status).toBe(403);
+    expect((await call('PATCH', '/roles/call-center', { cookie: seller.cookie, body: { permissions: [] } })).status).toBe(403);
+    expect((await call('PATCH', '/roles/call-center', { cookie: admin, body: { permissions: ['settings:manage'] } })).status).toBe(400);
+    expect((await call('POST', '/roles/call-center/reset', { cookie: admin })).json.customised).toBe(false);
+    expect((await call('GET', '/invoices?limit=1', { cookie: seller.cookie })).status).toBe(200);
   });
 });

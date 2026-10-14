@@ -11,7 +11,7 @@ afterAll(async () => { await db.close?.(); });
 
 describe('one market or several', () => {
   it('starts with one market, which is the deployment\'s own country', async () => {
-    expect(await getMarketSettings(db)).toEqual({ multiple: false });
+    expect(await getMarketSettings(db)).toMatchObject({ multiple: false, defaultMarket: 'SG' });
     expect(await effectiveMarket(db, 'MY')).toBe('SG');
     expect((await marketFor(db, 'MY')).code).toBe('SG');
   });
@@ -34,5 +34,31 @@ describe('one market or several', () => {
     expect(my.customer.marketCode.trim()).toBe('MY');
     const th = await marketFor(db, 'TH');
     expect([th.code, th.taxName, th.dialCode, th.currency]).toEqual(['TH', 'VAT', '+66', 'SGD']); // its own tax and dial code, the deployment's one currency
+  });
+
+  it('adds a market with its own tax and dial code, and makes it the default', async () => {
+    const cur = await getMarketSettings(db);
+    const jp = { code: 'jp', name: 'Japan', dialCode: '+81', taxName: 'Consumption tax', taxBps: 1000, currency: '' };
+    const next = await setMarketSettings(db, 'test', { multiple: true, defaultMarket: 'JP', markets: [...cur.markets, jp] });
+    expect(next.defaultMarket).toBe('JP');
+    expect(next.markets.map((m) => m.code)).toContain('JP');
+    const m = await marketFor(db, 'JP');
+    expect([m.taxName, m.taxBps, m.dialCode]).toEqual(['Consumption tax', 1000, '+81']);
+    expect(await effectiveMarket(db)).toBe('JP'); // nobody picked one: the default
+    expect((await newCustomer(db)).customer.marketCode.trim()).toBe('JP');
+    await expect(effectiveMarket(db, 'ZZ')).rejects.toThrow(/unknown market/);
+  });
+
+  it('refuses bad input and removing a market that is still used or is the home country', async () => {
+    const cur = await getMarketSettings(db);
+    const without = (code: string) => cur.markets.filter((m) => m.code !== code);
+    await expect(setMarketSettings(db, 'test', { multiple: true, markets: without('SG') })).rejects.toThrow(/own country/);
+    await expect(setMarketSettings(db, 'test', { multiple: true, defaultMarket: 'ZZ' })).rejects.toThrow(/default market/);
+    await expect(setMarketSettings(db, 'test', { multiple: true, markets: [...cur.markets, { ...cur.markets[0]! }] })).rejects.toThrow(/twice/);
+    await expect(setMarketSettings(db, 'test', { multiple: true, markets: cur.markets.map((m) => (m.code === 'TH' ? { ...m, dialCode: '66' } : m)) })).rejects.toThrow(/dial code/);
+    await expect(setMarketSettings(db, 'test', { multiple: true, defaultMarket: 'SG', markets: without('MY') })).rejects.toThrow(/cannot be removed: .*offer/); // plan-sim-5g is sold in MY
+    await updateNode(db, 'plan-sim-5g', { markets: [] }, 'test');
+    const ok = await setMarketSettings(db, 'test', { multiple: true, defaultMarket: 'SG', markets: without('VN') });
+    expect(ok.markets.map((m) => m.code)).not.toContain('VN');
   });
 });
