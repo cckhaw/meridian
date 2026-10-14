@@ -20,11 +20,12 @@ export function DonorOperatorSettings() {
     <div className="space-y-5">
       <Card>
         <SectionTitle>Add an operator</SectionTitle>
-        <form className="grid gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end" onSubmit={async (e) => { e.preventDefault(); if (await add.run(() => post('/settings/donor-operators', { name, mnpOperatorId: code }), 'Added.')) { setName(''); setCode(''); } }}>
+        <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_auto] sm:items-end" onSubmit={async (e) => { e.preventDefault(); if (await add.run(() => post('/settings/donor-operators', { name, mnpOperatorId: code }), 'Added.')) { setName(''); setCode(''); } }}>
           <Field label="Operator name"><Input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} required /></Field>
-          <Field label="Operator ID" hint="Its ID in mobile number portability (MNP)"><Input value={code} maxLength={20} onChange={(e) => setCode(e.target.value)} required className="font-mono" /></Field>
+          <Field label="Operator ID (MNP)"><Input value={code} maxLength={20} onChange={(e) => setCode(e.target.value)} required className="font-mono" /></Field>
           <Button type="submit" disabled={add.busy}>{add.busy ? 'Adding…' : 'Add'}</Button>
         </form>
+        <p className="mt-2 text-footnote text-label2">The operator ID is the operator’s identifier in mobile number portability (MNP). Two operators may share one.</p>
         {add.error && <div className="mt-3"><Alert>{add.error}</Alert></div>}
       </Card>
       {act.error && <Alert>{act.error}</Alert>}
@@ -37,14 +38,14 @@ export function DonorOperatorSettings() {
                   <Td><Input aria-label="Operator name" value={draft.name} maxLength={60} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Td>
                   <Td><Input aria-label="Operator ID" className="font-mono" value={draft.code} maxLength={20} onChange={(e) => setDraft({ ...draft, code: e.target.value })} /></Td>
                   <Td /><Td />
-                  <Td right><span className="flex justify-end gap-2"><Button disabled={act.busy} onClick={async () => { if (await act.run(() => patch(`/settings/donor-operators/${o.id}`, { name: draft.name, mnpOperatorId: draft.code }))) setEditing(null); }}>Save</Button><Button variant="plain" onClick={() => setEditing(null)}>Cancel</Button></span></Td>
+                  <Td right><span className="flex flex-wrap justify-end gap-2"><Button disabled={act.busy} onClick={async () => { if (await act.run(() => patch(`/settings/donor-operators/${o.id}`, { name: draft.name, mnpOperatorId: draft.code }))) setEditing(null); }}>Save</Button><Button variant="plain" onClick={() => setEditing(null)}>Cancel</Button></span></Td>
                 </>
               ) : (
                 <>
                   <Td>{o.name}</Td><Td className="font-mono">{o.mnpOperatorId}</Td>
                   <Td><Badge tone={o.status === 'ACTIVE' ? 'success' : 'neutral'}>{o.status === 'ACTIVE' ? 'Offered in orders' : 'Switched off'}</Badge></Td>
                   <Td className="tabular-nums">{o.inUse}</Td>
-                  <Td right><span className="flex justify-end gap-2">
+                  <Td right><span className="flex flex-wrap justify-end gap-2">
                     <Button variant="secondary" disabled={act.busy} onClick={() => { setEditing(o.id); setDraft({ name: o.name, code: o.mnpOperatorId }); }}>Edit</Button>
                     <Button variant="plain" disabled={act.busy} onClick={() => act.run(() => patch(`/settings/donor-operators/${o.id}`, { status: o.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }))}>{o.status === 'ACTIVE' ? 'Switch off' : 'Switch on'}</Button>
                     <Button variant="plain" disabled={act.busy} onClick={() => { if (window.confirm(o.inUse ? `${o.name} has port-in requests, so it will be switched off, not removed.` : `Remove ${o.name}?`)) void act.run(() => del(`/settings/donor-operators/${o.id}`)); }}>Remove</Button>
