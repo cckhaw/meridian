@@ -61,10 +61,13 @@ export interface DataColumn<T> {
 export function DataList<T>({ rows, columns, rowKey, actions, label }: { rows: T[]; columns: Array<DataColumn<T>>; rowKey: (row: T) => string; actions?: (row: T) => ReactNode; label: string }) {
   const title = columns.find((c) => c.primary) ?? columns[0]!;
   const rest = columns.filter((c) => c !== title);
+  // Room a table needs: about 7.5rem a column and 13rem for the action buttons, rounded up to one of the widths globals.css knows.
+  const need = columns.length * 120 + (actions ? 210 : 0);
+  const needed = [720, 900, 1100, 1300, 1500].find((w) => need <= w) ?? 1500;
   // Which layout is shown depends on the width of the space the list is in, not of the screen (see .dl-* in globals.css): a settings page beside a
   // sidebar and a menu is narrow even on a wide monitor.
   return (
-    <div className="dl-root">
+    <div className="dl-root" data-dl={needed}>
       <div className="dl-table overflow-x-auto rounded-card bg-surface shadow-card">
         <table className="w-full text-left text-subhead" aria-label={label}>
           <thead><tr>{columns.map((c) => <Th key={c.key} right={c.right}>{c.label}</Th>)}{actions && <Th><span className="sr-only">Actions</span></Th>}</tr></thead>

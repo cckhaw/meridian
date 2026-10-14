@@ -24,7 +24,7 @@ export function Earnings() {
           <Card key={l as string} className="!p-4"><p className="text-footnote text-label2">{l}</p><p className="mt-1 text-title3 font-semibold tabular-nums">{v == null ? '—' : money(v as number)}</p></Card>
         ))}
       </div>
-      <div className="grid gap-3 sm:grid-cols-[12rem_12rem_auto] sm:items-end">
+      <div className="form-row">
         <Field label="Month"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
         <Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All</option><option value="PENDING">Pending</option><option value="APPROVED">Approved</option><option value="PAID">Paid</option><option value="CLAWED_BACK">Clawed back</option></Select></Field>
         {can('commission:settle') && <Button variant="secondary" disabled={act.busy || !pending.length} onClick={() => act.run(() => post('/commission/ledger/approve', { ids: pending }))}>Approve the {pending.length} pending shown</Button>}

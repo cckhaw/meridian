@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, DataList, Empty, Field, Input, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
 
@@ -18,21 +18,19 @@ export function WarehousesTab({ canManage }: { canManage: boolean }) {
       {editing && <WarehouseForm warehouse={editing} onDone={() => { setEditing(null); void reload(); }} />}
       {act.error && <Alert>{act.error}</Alert>}
       {data.items.length === 0 ? <Empty>No warehouses yet.</Empty> : (
-        <TableWrap><thead><tr><Th>Warehouse</Th><Th>Address</Th><Th right>SKUs</Th><Th right>Units</Th><Th>Status</Th>{canManage && <Th />}</tr></thead><tbody>
-          {data.items.map((w) => (
-            <tr key={w.id}>
-              <Td><span className="font-medium">{w.name}</span><div className="font-mono text-caption text-label2">{w.id}</div></Td>
-              <Td className="text-footnote text-label2">{w.address ?? ''}</Td>
-              <Td right>{w.stockLines}</Td><Td right>{w.units}</Td>
-              <Td><Badge tone={w.status === 'ACTIVE' ? 'success' : 'neutral'}>{w.status === 'ACTIVE' ? 'On' : 'Switched off'}</Badge></Td>
-              {canManage && <Td right><span className="flex justify-end gap-1">
-                <Button variant="plain" className="!min-h-[36px] !px-3" onClick={() => { setEditing(w); setAdding(false); }}>Edit</Button>
-                {w.id !== 'WH-MAIN' && <Button variant="plain" className="!min-h-[36px] !px-3" disabled={act.busy} onClick={() => act.run(() => patch(`/warehouses/${w.id}`, { status: w.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }))}>{w.status === 'ACTIVE' ? 'Switch off' : 'Switch on'}</Button>}
-                {w.id !== 'WH-MAIN' && <Button variant="plain" className="!min-h-[36px] !px-3 text-danger" disabled={act.busy} onClick={() => { if (confirm(`Remove ${w.name}? This only works when it holds no stock.`)) void act.run(() => del(`/warehouses/${w.id}`)); }}>Remove</Button>}
-              </span></Td>}
-            </tr>
-          ))}
-        </tbody></TableWrap>
+        <DataList label="Warehouses" rows={data.items} rowKey={(w: any) => w.id}
+          columns={[
+            { key: 'name', label: 'Warehouse', primary: true, render: (w: any) => <><span className="font-medium">{w.name}</span><div className="font-mono text-caption text-label2">{w.id}</div></> },
+            { key: 'addr', label: 'Address', render: (w: any) => <span className="text-footnote text-label2">{w.address ?? ''}</span> },
+            { key: 'skus', label: 'SKUs', right: true, render: (w: any) => w.stockLines },
+            { key: 'units', label: 'Units', right: true, render: (w: any) => w.units },
+            { key: 'st', label: 'Status', render: (w: any) => <Badge tone={w.status === 'ACTIVE' ? 'success' : 'neutral'}>{w.status === 'ACTIVE' ? 'On' : 'Switched off'}</Badge> },
+          ]}
+          actions={canManage ? (w: any) => (<>
+                <Button variant="secondary" onClick={() => { setEditing(w); setAdding(false); }}>Edit</Button>
+                {w.id !== 'WH-MAIN' && <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => patch(`/warehouses/${w.id}`, { status: w.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }))}>{w.status === 'ACTIVE' ? 'Switch off' : 'Switch on'}</Button>}
+                {w.id !== 'WH-MAIN' && <Button variant="secondary" disabled={act.busy} onClick={() => { if (confirm(`Remove ${w.name}? This only works when it holds no stock.`)) void act.run(() => del(`/warehouses/${w.id}`)); }}>Remove</Button>}
+              </>) : undefined} />
       )}
       <p className="mt-3 text-footnote text-label2">The main warehouse is where online orders are fulfilled from, so it stays. A warehouse that holds stock cannot be removed: write the stock off first, or switch it off.</p>
     </>

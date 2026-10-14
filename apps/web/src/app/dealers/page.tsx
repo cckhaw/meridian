@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, Modal, SearchField, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, DataList, Empty, Field, Input, LargeTitle, LoadMore, Modal, SearchField, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { patch, post, useAction, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -24,17 +24,14 @@ export default function Dealers() {
       {!list.loading && list.items.length === 0 && !list.error && <Empty>{term ? 'No dealer matches.' : 'No dealers yet.'}</Empty>}
       {list.items.length > 0 && (
         <>
-          <TableWrap><thead><tr><Th>Dealer id</Th><Th>Name</Th><Th>Contact</Th><Th right>Active agents</Th><Th>Status</Th><Th><span className="sr-only">Actions</span></Th></tr></thead><tbody>
-            {list.items.map((d: any) => (
-              <tr key={d.id}>
-                <Td className="font-mono">{d.id}</Td><Td>{d.name}</Td>
-                <Td className="text-footnote text-label2">{[d.contactName, d.email, d.phone].filter(Boolean).join(' · ') || '—'}</Td>
-                <Td right>{d.activeAgents}</Td>
-                <Td><Badge tone={d.status === 'ACTIVE' ? 'success' : 'neutral'}>{d.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Badge></Td>
-                <Td right><button className="min-h-tap px-2 text-accent" onClick={() => setOpen(d)}>Agents</button>{manage && <button className="min-h-tap px-2 text-accent" onClick={() => setEditing(d)}>Edit</button>}</Td>
-              </tr>
-            ))}
-          </tbody></TableWrap>
+          <DataList label="Dealers" rows={list.items} rowKey={(d: any) => d.id}
+            columns={[
+              { key: 'name', label: 'Dealer', primary: true, render: (d: any) => <><span className="font-medium">{d.name}</span><span className="block font-mono text-footnote text-label2">{d.id}</span></> },
+              { key: 'contact', label: 'Contact', render: (d: any) => <span className="text-footnote text-label2">{[d.contactName, d.email, d.phone].filter(Boolean).join(' · ') || '—'}</span> },
+              { key: 'agents', label: 'Active agents', right: true, render: (d: any) => d.activeAgents },
+              { key: 'st', label: 'Status', render: (d: any) => <Badge tone={d.status === 'ACTIVE' ? 'success' : 'neutral'}>{d.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Badge> },
+            ]}
+            actions={(d: any) => (<><Button variant="secondary" onClick={() => setOpen(d)}>Agents</Button>{manage && <Button variant="secondary" onClick={() => setEditing(d)}>Edit</Button>}</>)} />
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="dealers" />
         </>
       )}
@@ -81,16 +78,13 @@ function Agents({ dealer, manage, onClose }: { dealer: any; manage: boolean; onC
       {!list.loading && list.items.length === 0 && !list.error && <Empty>No agents yet.{manage ? ' Add the first one below.' : ''}</Empty>}
       {list.items.length > 0 && (
         <>
-          <TableWrap><thead><tr><Th>Agent id</Th><Th>Name</Th><Th>Contact</Th><Th>Status</Th>{manage && <Th><span className="sr-only">Actions</span></Th>}</tr></thead><tbody>
-            {list.items.map((a: any) => (
-              <tr key={a.id}>
-                <Td className="font-mono">{a.id}</Td><Td>{a.name}</Td>
-                <Td className="text-footnote text-label2">{[a.phone, a.email].filter(Boolean).join(' · ') || '—'}</Td>
-                <Td><Badge tone={a.status === 'ACTIVE' ? 'success' : 'neutral'}>{a.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Badge></Td>
-                {manage && <Td right><button className="min-h-tap px-2 text-accent" onClick={() => void act.run(() => patch(`/dealer-agents/${a.id}`, { status: a.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }))}>{a.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</button></Td>}
-              </tr>
-            ))}
-          </tbody></TableWrap>
+          <DataList label="Agents" rows={list.items} rowKey={(a: any) => a.id}
+            columns={[
+              { key: 'name', label: 'Agent', primary: true, render: (a: any) => <><span className="font-medium">{a.name}</span><span className="block font-mono text-footnote text-label2">{a.id}</span></> },
+              { key: 'contact', label: 'Contact', render: (a: any) => <span className="text-footnote text-label2">{[a.phone, a.email].filter(Boolean).join(' · ') || '—'}</span> },
+              { key: 'st', label: 'Status', render: (a: any) => <Badge tone={a.status === 'ACTIVE' ? 'success' : 'neutral'}>{a.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Badge> },
+            ]}
+            actions={manage ? (a: any) => (<Button variant="secondary" onClick={() => void act.run(() => patch(`/dealer-agents/${a.id}`, { status: a.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }))}>{a.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</Button>) : undefined} />
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="agents" />
         </>
       )}

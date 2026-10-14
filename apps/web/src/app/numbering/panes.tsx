@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, LoadMore, SearchField, Select, SectionTitle, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, DataList, Empty, LoadMore, SearchField, Select, SectionTitle, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -65,6 +65,8 @@ export function IdentityPanes({ kind }: { kind: 'numbers' | 'sims' | 'imsis' }) 
     : kind === 'sims' ? `/numbering/sims?limit=50&state=${state}&kind=${type}&q=${encodeURIComponent(term)}` : `/numbering/imsis?limit=50&state=${state}&q=${encodeURIComponent(term)}`;
   const list = usePaged(path);
   const act = useAction(list.reload);
+  const typeOf = kind === 'numbers' ? 'MSISDN' : kind === 'sims' ? 'ICCID' : 'IMSI';
+  const idOf = (r: any): string => r.msisdn ?? r.iccid ?? r.imsi;
   const manage = can('numbering:manage');
   const states = kind === 'numbers' ? NUMBER_STATES : kind === 'sims' ? SIM_STATES : IMSI_STATES;
   return (
@@ -79,34 +81,35 @@ export function IdentityPanes({ kind }: { kind: 'numbers' | 'sims' | 'imsis' }) 
       {!list.loading && list.items.length === 0 && !list.error && <Empty>Nothing matches.</Empty>}
       {list.items.length > 0 && (
         <>
-          <TableWrap>
-            <thead><tr>
-              {kind === 'numbers' && <><Th>MSISDN</Th><Th>Tier</Th><Th>State</Th><Th>Until</Th></>}
-              {kind === 'sims' && <><Th>ICCID</Th><Th>Type</Th><Th>State</Th><Th>Location</Th><Th>IMSI</Th></>}
-              {kind === 'imsis' && <><Th>IMSI</Th><Th>State</Th><Th>ICCID</Th><Th>Until</Th></>}
-              <Th />
-            </tr></thead>
-            <tbody>
-              {list.items.map((r: any) => {
-                const id = r.msisdn ?? r.iccid ?? r.imsi;
-                const type = kind === 'numbers' ? 'MSISDN' : kind === 'sims' ? 'ICCID' : 'IMSI';
-                return (
-                  <tr key={id}>
-                    {kind === 'numbers' && <><Td className="font-mono">{r.msisdn}</Td><Td><Badge tone={TIER_TONE[r.tier] ?? 'neutral'}>{label(r.tier)}</Badge>{r.patternCode && <span className="ml-2 text-caption text-label2">{r.patternCode}</span>}</Td><Td><StateBadge s={r.state} /></Td><Td className="text-footnote text-label2">{r.reservedUntil ? dt(r.reservedUntil) : r.quarantineUntil ?? ''}</Td></>}
-                    {kind === 'sims' && <><Td className="font-mono">{r.iccid}</Td><Td>{r.kind === 'ESIM' ? 'eSIM' : 'Card'}</Td><Td><StateBadge s={r.state} /></Td><Td>{r.locationId ?? ''}</Td><Td className="font-mono text-footnote">{r.imsi ?? ''}</Td></>}
-                    {kind === 'imsis' && <><Td className="font-mono">{r.imsi}</Td><Td><StateBadge s={r.state} /></Td><Td className="font-mono text-footnote">{r.iccid ?? ''}</Td><Td className="text-footnote text-label2">{r.quarantineUntil ?? ''}</Td></>}
-                    <Td right><span className="flex justify-end gap-1">
-                      <Button variant="plain" className="!min-h-[36px] !px-3" onClick={() => setOpen(open?.id === id ? null : { type, id })}>History</Button>
-                      {manage && kind === 'numbers' && r.state === 'AVAILABLE' && <Button variant="plain" className="!min-h-[36px] !px-3" disabled={act.busy} onClick={() => act.run(() => post('/numbering/auction/hold', { msisdns: [r.msisdn] }))}>Hold for auction</Button>}
-                      {manage && kind === 'numbers' && r.state === 'AUCTION_HOLD' && <Button variant="plain" className="!min-h-[36px] !px-3" disabled={act.busy} onClick={() => act.run(() => post('/numbering/auction/release', { msisdns: [r.msisdn] }))}>Back on sale</Button>}
-                      {manage && kind === 'sims' && ['WAREHOUSE_INVENTORY', 'DISTRIBUTED_DEALER'].includes(r.state) && <Button variant="plain" className="!min-h-[36px] !px-3 text-danger" disabled={act.busy} onClick={() => { const reason = prompt('Why is this SIM scrapped?'); if (reason) void act.run(() => post(`/numbering/sims/${r.iccid}/transition`, { to: 'DAMAGED_SCRAPPED', reason })); }}>Scrap</Button>}
-                      {manage && kind === 'sims' && r.state === 'DAMAGED_SCRAPPED' && <Button variant="plain" className="!min-h-[36px] !px-3" disabled={act.busy} onClick={() => act.run(() => post(`/numbering/sims/${r.iccid}/transition`, { to: 'DECOMMISSIONED', reason: 'written off' }))}>Decommission</Button>}
-                    </span></Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </TableWrap>
+          <DataList label="Resources" rows={list.items} rowKey={(r: any) => idOf(r)}
+            columns={[
+              ...(kind === 'numbers' ? [
+                { key: 'id', label: 'MSISDN', primary: true, render: (r: any) => <span className="font-mono">{r.msisdn}</span> },
+                { key: 'tier', label: 'Tier', render: (r: any) => <><Badge tone={TIER_TONE[r.tier] ?? 'neutral'}>{label(r.tier)}</Badge>{r.patternCode && <span className="ml-2 text-caption text-label2">{r.patternCode}</span>}</> },
+                { key: 'state', label: 'State', render: (r: any) => <StateBadge s={r.state} /> },
+                { key: 'until', label: 'Until', render: (r: any) => <span className="text-footnote text-label2">{r.reservedUntil ? dt(r.reservedUntil) : r.quarantineUntil ?? ''}</span> },
+              ] : []),
+              ...(kind === 'sims' ? [
+                { key: 'id', label: 'ICCID', primary: true, render: (r: any) => <span className="font-mono">{r.iccid}</span> },
+                { key: 'type', label: 'Type', render: (r: any) => (r.kind === 'ESIM' ? 'eSIM' : 'Card') },
+                { key: 'state', label: 'State', render: (r: any) => <StateBadge s={r.state} /> },
+                { key: 'loc', label: 'Location', render: (r: any) => r.locationId ?? '' },
+                { key: 'imsi', label: 'IMSI', render: (r: any) => <span className="font-mono text-footnote">{r.imsi ?? ''}</span> },
+              ] : []),
+              ...(kind === 'imsis' ? [
+                { key: 'id', label: 'IMSI', primary: true, render: (r: any) => <span className="font-mono">{r.imsi}</span> },
+                { key: 'state', label: 'State', render: (r: any) => <StateBadge s={r.state} /> },
+                { key: 'iccid', label: 'ICCID', render: (r: any) => <span className="font-mono text-footnote">{r.iccid ?? ''}</span> },
+                { key: 'until', label: 'Until', render: (r: any) => <span className="text-footnote text-label2">{r.quarantineUntil ?? ''}</span> },
+              ] : []),
+            ]}
+            actions={(r: any) => (<>
+                      <Button variant="secondary" onClick={() => setOpen(open?.id === idOf(r) ? null : { type: typeOf, id: idOf(r) })}>History</Button>
+                      {manage && kind === 'numbers' && r.state === 'AVAILABLE' && <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => post('/numbering/auction/hold', { msisdns: [r.msisdn] }))}>Hold for auction</Button>}
+                      {manage && kind === 'numbers' && r.state === 'AUCTION_HOLD' && <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => post('/numbering/auction/release', { msisdns: [r.msisdn] }))}>Back on sale</Button>}
+                      {manage && kind === 'sims' && ['WAREHOUSE_INVENTORY', 'DISTRIBUTED_DEALER'].includes(r.state) && <Button variant="secondary" disabled={act.busy} onClick={() => { const reason = prompt('Why is this SIM scrapped?'); if (reason) void act.run(() => post(`/numbering/sims/${r.iccid}/transition`, { to: 'DAMAGED_SCRAPPED', reason })); }}>Scrap</Button>}
+                      {manage && kind === 'sims' && r.state === 'DAMAGED_SCRAPPED' && <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => post(`/numbering/sims/${r.iccid}/transition`, { to: 'DECOMMISSIONED', reason: 'written off' }))}>Decommission</Button>}
+                    </>)} />
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun={kind === 'numbers' ? 'numbers' : kind === 'sims' ? 'SIMs' : 'identities'} />
         </>
       )}

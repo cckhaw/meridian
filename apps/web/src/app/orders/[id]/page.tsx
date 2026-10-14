@@ -63,7 +63,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
                     {g.kind === 'GOODS' && g.details?.trackingNumber && <span> Tracking <span className="font-mono">{g.details.trackingNumber}</span>.</span>}
                   </p>
                   {can('order:cancel') && g.returnable && (!g.needsOverride || can('order:override')) && (
-                    <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_150px_150px_auto] sm:items-end">
+                    <div className="form-row mt-3">
                       <Field label="Reason for the return"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
                       <Field label="Condition"><Select value={condition} onChange={(e) => setCondition(e.target.value)}><option value="GOOD">As new</option><option value="DAMAGED">Damaged</option><option value="INCOMPLETE">Missing parts</option></Select></Field>
                       <Field label="Damage deduction"><Input type="number" min="0" value={deduction} onChange={(e) => setDeduction(e.target.value)} placeholder="0.00" /></Field>

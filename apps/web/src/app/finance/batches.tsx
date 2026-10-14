@@ -46,7 +46,7 @@ export function Batches() {
         <Card>
           <SectionTitle>Send journals to SAP</SectionTitle>
           <p className="mb-3 text-subhead text-label2">{waiting ? `${waiting.n.toLocaleString()} ledger lines (${money(waiting.debit)} debits) are waiting.` : 'Nothing is waiting.'} Each run turns them into balanced SAP documents using the posting rules, keeps the exact file, and checks it against the ledger.</p>
-          <div className="grid gap-3 sm:grid-cols-[12rem_12rem_auto_auto] sm:items-end">
+          <div className="form-row">
             <Field label="File format"><Select value={format} onChange={(e) => setFormat(e.target.value)}>{FORMATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
             <Field label="Up to date (optional)"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
             <Button disabled={act.busy || !waiting?.n} onClick={runNow}>{act.busy ? 'Working…' : 'Run export now'}</Button>

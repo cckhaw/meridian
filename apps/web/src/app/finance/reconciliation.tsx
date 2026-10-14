@@ -24,7 +24,7 @@ export function Reconciliation() {
       {can('finance:export') && (
         <Card>
           <SectionTitle>Check a period</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-[12rem_12rem_auto] sm:items-end">
+          <div className="form-row">
             <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
             <Field label="To"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
             <Button disabled={act.busy || !from || !to} onClick={() => act.run(async () => { const r = await post('/finance/reconciliation/run', { from, to }); setOpen(r.id); })}>Run reconciliation</Button>

@@ -23,7 +23,7 @@ export function Payouts() {
       <Card>
         <SectionTitle>Close a month</SectionTitle>
         <p className="mb-3 text-subhead text-label2">Approves what is due, pays volume accelerators and bonuses, and issues one statement per payee. A payee whose claw-backs exceed their earnings gets no statement: the balance carries to the next month.</p>
-        <div className="grid gap-3 sm:grid-cols-[12rem_auto_auto_auto] sm:items-end">
+        <div className="form-row">
           <Field label="Month"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
           <Button disabled={act.busy || !period} onClick={() => act.run(async () => { const r = await post('/commission/close', { period }); setNote(`${r.period}: ${r.issued} statement(s) issued, ${r.accelerators} accelerator(s), ${r.bonuses} bonus(es)${r.carriedForward?.length ? `, ${r.carriedForward.length} balance(s) carried forward` : ''}.`); })}>Close month</Button>
           <Button variant="secondary" disabled={act.busy} onClick={() => act.run(async () => { const r = await post('/commission/payouts', {}); setNote(r.batch ? `Payout file ${r.batch.batchNo}: ${r.batch.statementCount} payment(s), ${money(r.batch.totalMinor, r.batch.currency)}.${r.skipped.length ? ` Left out: ${r.skipped.map((s: any) => `${s.statementNo} (${s.reason})`).join('; ')}.` : ''}` : `No payout file: ${r.skipped.length ? r.skipped.map((s: any) => s.reason).join('; ') : 'nothing is waiting'}.`); })}>Create payout file</Button>
