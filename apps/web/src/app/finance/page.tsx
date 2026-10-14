@@ -1,33 +1,18 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, LargeTitle, LoadMore, SectionTitle, Spinner, Stat, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Card, Empty, LargeTitle, LoadMore, Segmented, SectionTitle, Spinner, TableWrap, Td, Th } from '@meridian/ui';
 import { useState } from 'react';
-import { useAction, useApi, usePaged } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { useApi, usePaged } from '@/lib/api';
+import { Batches } from './batches';
+import { Reconciliation } from './reconciliation';
+import { PostingRules } from './rules';
+import { SapSettings } from './sap-settings';
 import { d, dt, money } from '@/lib/format';
 
-export default function Finance() {
-  const { can } = useAuth();
+function Ledger() {
   const recon = useApi('/gl/reconcile');
   const gl = usePaged('/gl?limit=30');
-  const batches = useApi('/gl/batches');
-  const [msg, setMsg] = useState<string | null>(null);
-  const { run, busy, error } = useAction(async () => { await Promise.all([recon.reload(), gl.reload(), batches.reload()]); });
-
-  const exportNow = () => run(async () => {
-    const res = await fetch('/api/gl/export', { method: 'POST' });
-    if (!res.ok) throw new Error((await res.json()).error?.message ?? 'Export failed');
-    if (res.headers.get('content-type')?.includes('json')) { setMsg('Nothing new to export.'); return; }
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'meridian-gl.csv';
-    a.click(); URL.revokeObjectURL(a.href);
-    setMsg(`Exported ${res.headers.get('x-entry-count')} journal lines. They are now marked as posted.`);
-  });
-
   return (
     <>
-      <LargeTitle subtitle="SAP general-ledger export and sub-ledger reconciliation">Finance</LargeTitle>
       {recon.loading && !recon.data && <Spinner />}
       {recon.data && (
         <>
@@ -45,15 +30,6 @@ export default function Finance() {
         </>
       )}
 
-      <SectionTitle action={can('finance:export') ? <Button disabled={busy || !gl.extra?.unexported.n} onClick={exportNow}>{busy ? 'Exporting…' : 'Export to SAP (CSV)'}</Button> : undefined}>Journal export</SectionTitle>
-      {gl.extra && <p className="mb-3 text-subhead text-label2">{gl.extra.unexported.n.toLocaleString()} journal lines waiting to be exported ({money(gl.extra.unexported.debit)} debits).</p>}
-      {error && <Alert>{error}</Alert>}{msg && <Alert tone="info">{msg}</Alert>}
-      {batches.data && batches.data.items.length > 0 && (
-        <TableWrap><thead><tr><Th>Batch</Th><Th>Created</Th><Th right>Lines</Th><Th right>Debits = credits</Th><Th /></tr></thead><tbody>
-          {batches.data.items.map((b: any) => <tr key={b.id}><Td className="font-mono">{b.id.slice(0, 8)}</Td><Td>{dt(b.createdAt)}</Td><Td right>{b.entryCount}</Td><Td right>{money(b.debitMinor)}</Td><Td right>{can('finance:export') && <a className="text-accent" href={`/api/gl/batches/${b.id}/csv`}>Download</a>}</Td></tr>)}
-        </tbody></TableWrap>
-      )}
-
       <SectionTitle>Latest journal lines</SectionTitle>
       {!gl.loading && gl.items.length === 0 && <Empty>No journal entries yet.</Empty>}
       {gl.items.length > 0 && (
@@ -64,6 +40,24 @@ export default function Finance() {
         <LoadMore shown={gl.items.length} hasMore={gl.hasMore} loading={gl.loadingMore} onMore={gl.loadMore} noun="journal lines" />
         </>
       )}
+    </>
+  );
+}
+
+const TABS = [['ledger', 'Ledger'], ['batches', 'SAP export'], ['recon', 'Reconciliation'], ['rules', 'Posting rules'], ['sap', 'SAP settings']] as const;
+type Tab = (typeof TABS)[number][0];
+
+export default function Finance() {
+  const [tab, setTab] = useState<Tab>('ledger');
+  return (
+    <>
+      <LargeTitle subtitle="Sub-ledger, SAP journal export and reconciliation">Finance</LargeTitle>
+      <div className="mb-5"><Segmented label="Finance sections" value={tab} onChange={setTab} options={TABS.map(([value, label]) => ({ value, label }))} /></div>
+      {tab === 'ledger' && <Ledger />}
+      {tab === 'batches' && <Batches />}
+      {tab === 'recon' && <Reconciliation />}
+      {tab === 'rules' && <PostingRules />}
+      {tab === 'sap' && <SapSettings />}
     </>
   );
 }

@@ -59,6 +59,8 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'billing:run': ['Billing', 'Run billing', 'Run bill cycles and dunning'],
   'finance:read': ['Finance', 'See the ledger', 'Ledger, reconciliation and receivables'],
   'finance:export': ['Finance', 'Export journals', 'SAP journal export'],
+  'finance:configure': ['Finance', 'Configure posting rules and SAP', 'Map revenue streams to SAP accounts, cost centres and profit centres; SAP connection and daily close'],
+  'ledger:ingest': ['Finance', 'Send events to the sub-ledger', 'Post payment, invoice, adjustment and early-termination events'],
   'catalog:read': ['Catalog', 'See the catalog', 'Offers and prices'],
   'catalog:write': ['Catalog', 'Maintain the catalog', 'Create and change offers, import offers'],
   'inventory:read': ['Inventory', 'See stock', 'Stock levels and movements'],

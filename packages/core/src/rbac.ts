@@ -22,6 +22,8 @@ const CORE_PERMISSIONS = [
   'order:override', // approve a cancellation or return the policy would only allow with a supervisor's say-so
   'billing:read', 'billing:pay', 'billing:credit', 'billing:run',
   'finance:read', 'finance:export',
+  'finance:configure', // posting rules (SAP accounts, cost centres, profit centres) and the SAP connection settings
+  'ledger:ingest', // send financial events to the sub-ledger
   'catalog:read', 'catalog:write',
   'inventory:read', 'inventory:write',
   'numbering:read', // see the pools of numbers, SIMs and identities
@@ -137,7 +139,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,
     summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables.',
-    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'billing:read', 'billing:credit', 'customer:search', 'customer:read', 'commission:read'],
+    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:credit', 'customer:search', 'customer:read', 'commission:read'],
   },
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',

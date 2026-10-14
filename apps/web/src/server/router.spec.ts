@@ -117,7 +117,7 @@ describe('role-based access', () => {
     expect(r360.json.customer.displayName).toMatch(/Cust/);
     expect((await call('GET', '/services?customerId=' + c, { cookie: agent.cookie })).status).toBe(200);
     expect((await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c, type: 'GENERAL', subject: 'Billing question' } })).status).toBe(200);
-    for (const [m, p] of [['GET', '/gl'], ['GET', '/gl/reconcile'], ['POST', '/gl/export'], ['GET', '/users'], ['POST', '/users'], ['POST', '/billing/run'], ['GET', '/audit'], ['POST', '/catalog'], ['GET', '/commissions'], ['POST', '/inventory/adjust']] as const)
+    for (const [m, p] of [['GET', '/gl'], ['GET', '/gl/reconcile'], ['POST', '/gl/export'], ['GET', '/finance/coa'], ['POST', '/ledger/events'], ['POST', '/finance/batches/run'], ['GET', '/finance/reconciliation'], ['GET', '/users'], ['POST', '/users'], ['POST', '/billing/run'], ['GET', '/audit'], ['POST', '/catalog'], ['GET', '/commissions'], ['POST', '/inventory/adjust']] as const)
       expect((await call(m, p, { cookie: agent.cookie, body: {} })).status, `${m} ${p}`).toBe(403);
     const inv = (await call('GET', '/invoices', { cookie: agent.cookie }));
     expect(inv.status).toBe(200);
@@ -1187,5 +1187,58 @@ describe('group plans and port-in through the API', () => {
     const up = await call('POST', `/services/${svc.id}/upgrade-to-group`, { cookie: root_, body: { offerId: 'plan-family-100' } });
     expect([up.status, up.json.origin, up.json.slots.remaining]).toEqual([200, 'PLAN_CHANGE', 3]);
     expect((await call('POST', `/services/${svc.id}/upgrade-to-group`, { body: { offerId: 'plan-family-100' } })).status).toBe(401);
+  });
+});
+
+
+describe('sub-ledger, posting rules and SAP batches', () => {
+  it('ingests events, maps them, exports a batch, reconciles, and keeps each permission separate', async () => {
+    const admin = await root();
+    const fin = await staff(['finance']);
+    const audit_ = await staff(['revenue-assurance']);
+    const ev = (o: object) => ({ eventId: `rt-${++n}`, occurredAt: '2026-03-10T04:00:00Z', currency: 'SGD', ...o });
+    // only roles with ledger:ingest may send events
+    expect((await call('POST', '/ledger/events', { cookie: fin.cookie, body: ev({ eventType: 'PAYMENT_SUCCESS', amountMinor: 100 }) })).status).toBe(403);
+    const inv = ev({ eventType: 'INVOICE_GENERATED', reference: 'INV-RT', taxMinor: 90, lines: [{ stream: 'THIRD_PARTY', netMinor: 1000 }] });
+    const sent = await call('POST', '/ledger/events', { cookie: admin, body: { events: [inv, inv, ev({ eventType: 'PAYMENT_SUCCESS', amountMinor: -5 })] } });
+    expect([sent.status, sent.json.accepted, sent.json.duplicates, sent.json.deadLettered]).toEqual([200, 1, 1, 1]);
+    expect((await call('GET', '/ledger/dead-letters', { cookie: fin.cookie })).json.items.length).toBe(1);
+
+    // posting rules: finance reads and edits, revenue assurance only reads
+    const coa = await call('GET', '/finance/coa', { cookie: audit_.cookie });
+    expect(coa.status).toBe(200);
+    expect(coa.json.items.some((r: any) => r.sapAccount === '420100')).toBe(true);
+    expect((await call('POST', '/finance/coa', { cookie: audit_.cookie, body: { name: 'x', matchAccount: '8000', sapAccount: '800000' } })).status).toBe(403);
+    const rule = await call('POST', '/finance/coa', { cookie: fin.cookie, body: { name: 'Roaming', matchAccount: '8000', sapAccount: '800000', costCenter: 'CC-ROAM' } });
+    expect(rule.status).toBe(200);
+    expect((await call('POST', '/finance/coa/preview', { cookie: fin.cookie, body: { accountCode: '8000' } })).json.resolved).toMatchObject({ sapAccount: '800000', costCenter: 'CC-ROAM' });
+    expect((await call('PATCH', `/finance/coa/${rule.json.id}`, { cookie: fin.cookie, body: { name: 'Roaming', matchAccount: '8000', sapAccount: '800001' } })).json.sapAccount).toBe('800001');
+    expect((await call('DELETE', `/finance/coa/${rule.json.id}`, { cookie: fin.cookie })).status).toBe(200);
+
+    // SAP settings
+    expect((await call('POST', '/finance/sap-settings', { cookie: fin.cookie, body: { format: 'IDOC', companyCode: '2000' } })).json).toMatchObject({ format: 'IDOC', companyCode: '2000' });
+    expect((await call('POST', '/finance/sap-settings', { cookie: fin.cookie, body: { transport: 'REST', endpoint: 'http://insecure' } })).status).toBe(400);
+
+    // a batch run, its file and the reconciliation
+    expect((await call('POST', '/finance/batches/run', { cookie: audit_.cookie, body: {} })).status).toBe(403);
+    const run = await call('POST', '/finance/batches/run', { cookie: fin.cookie, body: { format: 'JSON' } });
+    expect([run.status, run.json.batch.status, run.json.reconciliation.status]).toEqual([200, 'COMPLETED', 'OK']);
+    const file = await call('GET', `/finance/batches/${run.json.batch.id}/file`, { cookie: fin.cookie });
+    expect([file.status, file.headers.get('content-disposition')]).toEqual([200, expect.stringContaining(run.json.batch.fileName)]);
+    expect((await call('GET', `/finance/batches/${run.json.batch.id}/file`, { cookie: audit_.cookie })).status).toBe(403);
+    expect((await call('POST', '/finance/batches/run', { cookie: fin.cookie, body: {} })).json.batch).toBeNull();
+
+    // SAP says it posted less: the report flags it
+    const ack = await call('POST', `/finance/batches/${run.json.batch.id}/ack`, { cookie: fin.cookie, body: { reference: 'SAP-1', debitMinor: run.json.batch.debitMinor - 1, creditMinor: run.json.batch.creditMinor } });
+    expect(ack.json.status).toBe('MISMATCH');
+    const reports = await call('GET', '/finance/reconciliation?status=MISMATCH', { cookie: audit_.cookie });
+    expect(reports.json.items.length).toBeGreaterThan(0);
+    const detail = await call('GET', `/finance/reconciliation/${ack.json.id}`, { cookie: audit_.cookie });
+    expect(detail.json.exceptions.some((e: any) => e.code === 'RECONCILIATION_MISMATCH')).toBe(true);
+
+    // the old export endpoint still works
+    await call('POST', '/ledger/events', { cookie: admin, body: ev({ eventType: 'ETC_CHARGED', netMinor: 5000, taxMinor: 450 }) });
+    const old = await call('POST', '/gl/export', { cookie: fin.cookie });
+    expect([old.status, old.headers.get('content-type')]).toEqual([200, expect.stringContaining('text/csv')]);
   });
 });

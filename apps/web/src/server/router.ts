@@ -863,6 +863,65 @@ post('/gl/export', 'finance:export', async ({ db, user }) => {
   return csv(body, `meridian-gl-${batch.id.slice(0, 8)}.csv`, { 'x-batch-id': batch.id, 'x-entry-count': String(batch.entryCount) });
 });
 
+// ───────────────────────── sub-ledger, SAP posting rules, journal batches, reconciliation ─────────────────────────
+const coaRuleBody = z.object({
+  name: z.string().min(1).max(120), priority: z.number().int().min(0).max(100000).optional(),
+  matchAccount: z.string().max(40).nullish(), matchStream: z.string().max(40).nullish(), matchEvent: z.string().max(40).nullish(), matchSource: z.string().max(40).nullish(),
+  sapAccount: z.string().min(1).max(40), costCenter: z.string().max(40).nullish(), profitCenter: z.string().max(40).nullish(), taxCode: z.string().max(20).nullish(),
+  status: z.enum(['ACTIVE', 'INACTIVE']).optional(), validFrom: date.nullish(), validTo: date.nullish(), note: z.string().max(500).nullish(),
+});
+get('/finance/meta', 'finance:read', () => ({ streams: core.REVENUE_STREAMS, eventTypes: core.LEDGER_EVENT_TYPES, formats: core.SAP_FORMATS, transports: core.SAP_TRANSPORTS, glNames: core.GL_NAMES }));
+get('/finance/coa', 'finance:read', async ({ db }) => ({ items: await core.listCoaRules(db), unmapped: await core.unmappedLines(db) }));
+post('/finance/coa', 'finance:configure', ({ db, user, body }) => core.createCoaRule(db, user.username, coaRuleBody.parse(body)));
+post('/finance/coa/preview', 'finance:read', ({ db, body }) => core.previewCoaRule(db, z.object({ accountCode: z.string().min(1), stream: z.string().nullish(), eventType: z.string().nullish(), sourceType: z.string().optional(), entryDate: date.optional() }).parse(body)).then((resolved) => ({ resolved })));
+patch('/finance/coa/:id', 'finance:configure', ({ db, user, params, body }) => core.updateCoaRule(db, user.username, params.id!, coaRuleBody.parse(body)));
+route('DELETE', '/finance/coa/:id', 'finance:configure', async ({ db, user, params }) => { await core.deleteCoaRule(db, user.username, params.id!); return { ok: true }; });
+get('/finance/sap-settings', 'finance:read', ({ db }) => core.getSapSettings(db));
+post('/finance/sap-settings', 'finance:configure', ({ db, user, body }) => core.setSapSettings(db, user.username, z.object({
+  companyCode: z.string().max(10), documentType: z.string().max(4), ledgerGroup: z.string().max(10), format: z.enum(core.SAP_FORMATS), aggregate: z.enum(['DAILY_SUMMARY', 'DETAIL']),
+  transport: z.enum(core.SAP_TRANSPORTS), endpoint: z.string().max(500), autoClose: z.boolean(), realtime: z.boolean(),
+}).partial().parse(body)));
+
+/** The Kafka-style entry: one event or a batch of up to 500. A message that cannot be posted is dead-lettered and reported, never dropped. */
+post('/ledger/events', 'ledger:ingest', async ({ db, user, body }) => {
+  const b = z.object({ topic: z.string().max(200).optional(), events: z.array(z.unknown()).min(1).max(500) }).parse(Array.isArray(body) ? { events: body } : (body as { events?: unknown })?.events ? body : { events: [body] });
+  const engine = new core.SubLedgerEngine(db);
+  const results = [];
+  for (const e of b.events) results.push(await engine.ingest({ topic: b.topic ?? 'meridian.finance.events', key: (e as { eventId?: string })?.eventId, value: e }, user.username));
+  return { accepted: results.filter((r) => r.ok && !r.result!.duplicate).length, duplicates: results.filter((r) => r.ok && r.result!.duplicate).length, deadLettered: results.filter((r) => !r.ok).length, results };
+});
+get('/ledger/dead-letters', 'finance:read', async ({ db }) => ({ items: await new core.SubLedgerEngine(db).deadLetters() }));
+post('/ledger/dead-letters/:id/retry', 'ledger:ingest', ({ db, user, params }) => new core.SubLedgerEngine(db).retryDeadLetter(Number(params.id), user.username));
+
+post('/finance/batches/run', 'finance:export', async ({ db, user, body }) => {
+  const b = z.object({ format: z.enum(core.SAP_FORMATS).optional(), asOf: date.optional() }).parse(body ?? {});
+  const r = await core.runJournalBatch(db, { runType: 'MANUAL', actor: user.username, format: b.format, asOf: b.asOf });
+  return r.batch ? { batch: r.batch, delivery: r.delivery, reconciliation: r.reconciliation } : { batch: null, message: 'nothing to export' };
+});
+post('/finance/close', 'finance:export', async ({ db, user, body }) => {
+  const b = z.object({ asOf: date.optional() }).parse(body ?? {});
+  const r = await core.runDailyClose(db, { actor: user.username, asOf: b.asOf, force: true });
+  return { ran: r.ran, asOf: r.asOf, batch: r.batch, reconciliation: r.reconciliation, delivery: r.delivery };
+});
+get('/finance/batches', 'finance:read', async ({ db }) => ({ items: await core.listBatches(db) }));
+get('/finance/batches/:id', 'finance:read', ({ db, params }) => core.getBatch(db, params.id!));
+get('/finance/batches/:id/file', 'finance:export', async ({ db, user, params }) => {
+  const f = await core.getBatchFile(db, params.id!);
+  await core.audit(db, user.username, 'gl', params.id!, 'BATCH_DOWNLOADED');
+  return new Response(f.content, { headers: { 'content-type': `${f.contentType}; charset=utf-8`, 'content-disposition': `attachment; filename="${f.fileName}"`, 'cache-control': 'no-store' } });
+});
+post('/finance/batches/:id/redeliver', 'finance:export', ({ db, user, params }) => core.redeliverBatch(db, params.id!, user.username));
+post('/finance/batches/:id/ack', 'finance:export', ({ db, user, params, body }) => {
+  const b = z.object({ reference: z.string().max(100).optional(), debitMinor: money.min(0), creditMinor: money.min(0), byAccount: z.record(z.object({ debitMinor: money, creditMinor: money })).optional() }).parse(body);
+  return core.acknowledgeBatch(db, params.id!, b, user.username);
+});
+get('/finance/reconciliation', 'finance:read', ({ db, query }) => core.listReports(db, { status: str(query, 'status'), batchId: str(query, 'batchId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/finance/reconciliation/run', 'finance:export', ({ db, user, body }) => {
+  const b = z.object({ from: date, to: date }).parse(body);
+  return core.reconcilePeriod(db, { ...b, actor: user.username });
+});
+get('/finance/reconciliation/:id', 'finance:read', ({ db, params }) => core.getReport(db, params.id!));
+
 // ───────────────────────── cases / inventory ─────────────────────────
 get('/cases', 'case:read', ({ db, user, query }) => core.listCases(db, { customerId: user.scope.customerId ?? str(query, 'customerId'), status: str(query, 'status'), type: str(query, 'type'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/cases', 'case:create', async ({ db, user, body }) => {

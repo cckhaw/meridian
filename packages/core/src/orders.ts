@@ -8,7 +8,7 @@ import type { Db, Queryable, Row } from './db.js';
 import { monthlyFee } from './catalog.js';
 import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve, restockConsumed } from './inventory.js';
-import { postJournal } from './ledger.js';
+import { postJournal, type RevenueStream } from './ledger.js';
 import { today } from './dates.js';
 import { createsService, deliveryMethods, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type GroupKind, type LineInput } from './order-pricing.js';
 import { assertStoreUsable } from './stores.js';
@@ -376,15 +376,15 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
   let tax = 0;
   for (const l of lines) {
     const { net, tax: t } = shareOf(l.paidNowMinor, l);
-    const acct = isGoods(l.offer) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
-    revenue.set(acct, (revenue.get(acct) ?? 0) + net);
+    const key = isGoods(l.offer) ? `${GL.GOODS_REVENUE}|GOODS` : `${GL.SERVICE_REVENUE}|ONE_TIME`; // the stream tells the posting rules which SAP account it goes to
+    revenue.set(key, (revenue.get(key) ?? 0) + net);
     tax += t;
   }
   await postJournal(q, {
     date: today(), sourceType: 'ORDER', sourceId: o.id, currency: o.currency,
     lines: [
       { account: GL.CASH, debit: o.totalMinor, description: `Order ${o.number ?? o.id.slice(0, 8)} receipt (${o.paymentMethod})` },
-      ...[...revenue].map(([account, credit]) => ({ account, credit, description: `Order ${o.number ?? o.id.slice(0, 8)} revenue` })),
+      ...[...revenue].map(([key, credit]) => { const [account, stream] = key.split('|') as [string, RevenueStream]; return { account, stream, credit, description: `Order ${o.number ?? o.id.slice(0, 8)} revenue` }; }),
       { account: GL.TAX_PAYABLE, credit: tax, description: `Order ${o.number ?? o.id.slice(0, 8)} ${(await marketFor(q, o.marketCode)).taxName}` },
     ],
   });
@@ -418,18 +418,18 @@ async function refund(q: Queryable, o: Row, lines: Row[], spec: RefundSpec): Pro
   for (const l of lines) {
     if (!(l.status === 'ACTIVE' || spec.all) || l.paidNowMinor <= 0) continue;
     const { net, tax: t } = shareOf(l.paidNowMinor, l);
-    const acct = isGoods(l.offer ?? { kind: l.kind }) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
-    rev.set(acct, (rev.get(acct) ?? 0) + net); tax += t;
+    const key = isGoods(l.offer ?? { kind: l.kind }) ? `${GL.GOODS_REVENUE}|GOODS` : `${GL.SERVICE_REVENUE}|ONE_TIME`;
+    rev.set(key, (rev.get(key) ?? 0) + net); tax += t;
   }
   const keep = taxSplit(retained, mk.taxBps, true);
   await postJournal(q, {
     date: today(), sourceType: 'REFUND', sourceId: o.id, currency: o.currency,
     lines: [
-      ...[...rev].map(([account, debit]) => ({ account, debit, description: `${spec.label}: revenue reversed` })),
+      ...[...rev].map(([key, debit]) => { const [account, stream] = key.split('|') as [string, RevenueStream]; return { account, stream, debit, description: `${spec.label}: revenue reversed` }; }),
       { account: GL.TAX_PAYABLE, debit: tax, description: `${spec.label}: ${mk.taxName} reversed` },
       { account: GL.CASH, credit: paid, description: `${spec.label}: paid ${paid} (refund ${cash})` },
       { account: GL.CASH, debit: retained, description: `${spec.label}: amount kept` },
-      { account: GL.SERVICE_REVENUE, credit: keep.net, description: `${spec.label}: kept as revenue` },
+      { account: GL.SERVICE_REVENUE, stream: 'ONE_TIME', credit: keep.net, description: `${spec.label}: kept as revenue` },
       { account: GL.TAX_PAYABLE, credit: keep.tax, description: `${spec.label}: ${mk.taxName} on amount kept` },
     ],
   });

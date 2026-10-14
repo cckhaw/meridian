@@ -2,7 +2,7 @@ import { audit } from './audit.js';
 import { invoiceBalance, runBillCycle } from './billing.js';
 import { GL } from './config.js';
 import type { Db, Queryable, Row } from './db.js';
-import { diffDays, toDate, today, type DateStr } from './dates.js';
+import { addDays, diffDays, toDate, today, type DateStr } from './dates.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { getLifecycleSettings, type DunningAction, type LifecycleSettings } from './lifecycle-config.js';
 import { autoResumeDue, completePortOut, etcQuoteForService, resumeService, suspendService, suspendVoluntary, terminateService, type LifecycleChannel, type TerminationOptions, type VoluntaryRequest } from './lifecycle.js';
@@ -11,6 +11,7 @@ import { postJournal } from './ledger.js';
 import { getNumberingSettings, recycleExpired } from './nrm.js';
 import { NumberReservationService } from './number-reservation.js';
 import { expireStalePortIns } from './port-in.js';
+import { runDailyClose } from './journal-batches.js';
 
 // ───────────────────────── B. credit limit and threshold breach ─────────────────────────
 export interface CreditEvaluation {
@@ -285,7 +286,8 @@ export class LifecycleService {
     const nrm = await recycleExpired(this.db, asOf); // IMSIs and numbers whose cooling-off ended go back to their pools
     const holds = await new NumberReservationService(this.db).expireStale();
     const portInsExpired = await expireStalePortIns(this.db, (await getNumberingSettings(this.db)).portInExpiryDays); // donors that never answered
-    return { asOf, resumed, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds, portInsExpired };
+    const close = await runDailyClose(this.db, { asOf: addDays(asOf, -1) }); // only when Finance switched the automatic SAP close on
+    return { asOf, resumed, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds, portInsExpired, ledgerClose: close.ran ? { batch: close.batch?.batchNo ?? null } : null };
   }
 
   async history(serviceId: string, limit = 100) {

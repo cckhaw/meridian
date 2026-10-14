@@ -79,6 +79,8 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `finance:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:export` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `finance:configure` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `ledger:ingest` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `catalog:read` | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  | ✓ |
 | `catalog:write` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `inventory:read` | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |  | ✓ |
