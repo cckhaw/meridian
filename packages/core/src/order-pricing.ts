@@ -33,7 +33,7 @@ export interface LineInput {
   /** The line joins a group that already exists (more members for a family plan). */
   joinGroupId?: string;
   /** The line brings a number from another operator (port-in). `temporaryNumber` gives the customer a number from our pool meanwhile. */
-  portIn?: PortInInput & { donorOperator?: string; donorRoutingCode?: string };
+  portIn?: PortInInput & { donorOperator?: string; donorMnpOperatorId?: string };
 }
 export interface PricingInput {
   customerId?: string; accountId?: string; channel: OrderChannel; marketCode?: string; lines: LineInput[];
@@ -279,7 +279,7 @@ export interface OrderQuoteLine {
   /** A member line: the position of the group plan line it belongs to, or the existing group it joins. */
   memberOf?: number; joinGroupId?: string;
   /** A number brought from another operator, and whether a temporary number is given meanwhile. */
-  portIn?: { donorMsisdn: string; donorOperator: string; routingCode: string; temporaryNumber: boolean };
+  portIn?: { donorMsisdn: string; donorOperator: string; mnpOperatorId: string; temporaryNumber: boolean };
 }
 export interface OrderQuote {
   currency: string; taxName: string; taxBps: number;
@@ -312,7 +312,7 @@ export async function quoteOrder(q: Queryable, input: PricingInput): Promise<Ord
       vip: l.vipTier ? { tier: l.vipTier, feeMinor: l.vipFeeMinor, etcMultiplierBps: l.vipEtcBps ?? 10000 } : undefined,
       groupPlan: l.offer.group?.isGroupOffer ? { maxMembers: l.offer.group.maxGroupMembers, sharedPoolQuotaGb: l.offer.group.sharedPoolQuotaGb ?? null } : undefined,
       memberOf: l.input.memberOf, joinGroupId: l.input.joinGroupId,
-      portIn: l.input.portIn ? { donorMsisdn: l.input.portIn.donorMsisdn, donorOperator: l.input.portIn.donorOperator ?? '', routingCode: l.input.portIn.donorRoutingCode ?? '', temporaryNumber: !!l.input.portIn.temporaryNumber } : undefined,
+      portIn: l.input.portIn ? { donorMsisdn: l.input.portIn.donorMsisdn, donorOperator: l.input.portIn.donorOperator ?? '', mnpOperatorId: l.input.portIn.donorMnpOperatorId ?? '', temporaryNumber: !!l.input.portIn.temporaryNumber } : undefined,
     })),
     dueNowMinor: p.dueNow, monthlyPlanMinor: p.monthlyPlanMinor, monthlyInstalmentMinor: p.monthlyInstalmentMinor, monthlyTotalMinor: p.monthlyPlanMinor + p.monthlyInstalmentMinor, discountMinor: p.discountMinor,
     groups: terms.map((t) => ({ ...t, items: p.lines.filter((l) => l.group === t.group).map((l) => l.offer.name) })),

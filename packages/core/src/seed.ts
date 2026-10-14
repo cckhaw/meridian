@@ -124,10 +124,10 @@ export async function seedReference(db: Db): Promise<void> {
 }
 
 /** Sample pools so the Numbers & SIMs screens and the order wizard have something to show: numbers (some memorable), identities, SIMs and eSIMs. */
-/** Sample donor operators for the demo. The routing codes are placeholders: replace them with the ones the national clearinghouse assigns. */
+/** Sample donor operators for the demo. The operator IDs are placeholders: replace them with the real MNP operator IDs of your market. */
 async function seedDonorOperators(db: Db): Promise<void> {
   if ((await db.query('SELECT 1 FROM donor_operators LIMIT 1')).rows.length) return;
-  for (const [name, routingCode] of [['Maxis', 'OP01'], ['CelcomDigi', 'OP02'], ['U Mobile', 'OP03'], ['Unifi Mobile', 'OP04'], ['Yes', 'OP05']] as const) await createDonorOperator(db, 'seed', { name, routingCode });
+  for (const [name, mnpOperatorId] of [['Maxis', 'OP01'], ['CelcomDigi', 'OP02'], ['U Mobile', 'OP03'], ['Unifi Mobile', 'OP04'], ['Yes', 'OP05']] as const) await createDonorOperator(db, 'seed', { name, mnpOperatorId });
 }
 
 async function seedNumbering(db: Db): Promise<void> {

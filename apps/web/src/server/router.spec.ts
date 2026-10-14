@@ -1138,10 +1138,10 @@ describe('group plans and port-in through the API', () => {
     const agent = await staff(['telesales']);
     const c = await customer(root_, 'Family buyer');
     expect((await call('POST', '/numbering/import/msisdn', { cookie: root_, body: { range: { from: '60126000001', to: '60126000030' }, apply: true } })).status).toBe(200);
-    expect((await call('POST', '/settings/donor-operators', { cookie: agent.cookie, body: { name: 'OtherTel', routingCode: 'OT-01' } })).status).toBe(403); // sellers read the list, the super user keeps it
-    const made = await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'OtherTel', routingCode: 'ot-01' } });
-    expect([made.status, made.json.routingCode]).toEqual([200, 'OT-01']);
-    expect((await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'Dupe', routingCode: 'OT-01' } })).status).toBe(409);
+    expect((await call('POST', '/settings/donor-operators', { cookie: agent.cookie, body: { name: 'OtherTel', mnpOperatorId: 'OT-01' } })).status).toBe(403); // sellers read the list, the super user keeps it
+    const made = await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'OtherTel', mnpOperatorId: 'ot-01' } });
+    expect([made.status, made.json.mnpOperatorId]).toEqual([200, 'OT-01']);
+    expect((await call('POST', '/settings/donor-operators', { cookie: root_, body: { name: 'Dupe', mnpOperatorId: 'OT-01' } })).status).toBe(409);
     const ops = (await call('GET', '/settings/donor-operators?active=1', { cookie: agent.cookie })).json.items;
     expect(ops.map((o: any) => o.name)).toEqual(['OtherTel']);
     const otherTel = ops[0].id;
@@ -1155,7 +1155,7 @@ describe('group plans and port-in through the API', () => {
     expect(q.json.lines).toHaveLength(3);
     expect(q.json.lines[0].groupPlan).toMatchObject({ maxMembers: 3, sharedPoolQuotaGb: 100 });
     expect([q.json.lines[1].memberOf, q.json.lines[2].memberOf]).toEqual([0, 0]);
-    expect(q.json.lines[2].portIn).toMatchObject({ donorMsisdn: '+60128123456', temporaryNumber: true, routingCode: ops[0].routingCode });
+    expect(q.json.lines[2].portIn).toMatchObject({ donorMsisdn: '+60128123456', temporaryNumber: true, mnpOperatorId: ops[0].mnpOperatorId });
     // too many members, and a plan the group does not allow
     const four = { offerId: 'plan-family-100', members: Array.from({ length: 4 }, () => ({ offerId: 'plan-family-member' })) };
     expect((await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines: [four] } })).status).toBe(422);

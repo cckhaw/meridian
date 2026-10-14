@@ -41,9 +41,9 @@ const text = (v: unknown, what: string, max: number) => {
   return t;
 };
 
-export interface CleanPortIn extends Omit<PortInInput, 'temporaryNumber'> { donorOperator: string; donorRoutingCode: string; temporaryNumber: boolean }
+export interface CleanPortIn extends Omit<PortInInput, 'temporaryNumber'> { donorOperator: string; donorMnpOperatorId: string; temporaryNumber: boolean }
 
-/** Checks the donor details of a port-in line and returns them as they are stored: the operator's name and routing code as they are now. */
+/** Checks the donor details of a port-in line and returns them as they are stored: the operator's name and operator ID as they are now. */
 export async function cleanPortIn(q: Queryable, i: PortInInput): Promise<CleanPortIn> {
   if (!i.donorOperatorId) throw invalid('Choose the donor operator the number is coming from.');
   const op = await getDonorOperator(q, i.donorOperatorId).catch(() => null);
@@ -54,7 +54,7 @@ export async function cleanPortIn(q: Queryable, i: PortInInput): Promise<CleanPo
   const idType = text(i.holderIdType, 'The ID type of the account holder', 20).toUpperCase();
   if (!(PORT_IN_ID_TYPES as readonly string[]).includes(idType)) throw invalid(`The ID type is one of ${PORT_IN_ID_TYPES.join(', ')}.`);
   return {
-    donorOperatorId: op.id as string, donorOperator: op.name as string, donorRoutingCode: op.routingCode as string, donorMsisdn: n.value, holderName: text(i.holderName, 'The account holder’s name', 100),
+    donorOperatorId: op.id as string, donorOperator: op.name as string, donorMnpOperatorId: op.mnpOperatorId as string, donorMsisdn: n.value, holderName: text(i.holderName, 'The account holder’s name', 100),
     holderIdType: idType, holderIdNumber: text(i.holderIdNumber, 'The account holder’s ID number', 40), temporaryNumber: !!i.temporaryNumber,
   };
 }
@@ -70,13 +70,13 @@ export async function assertPortableNumber(q: Queryable, msisdn: string): Promis
 export async function createPortInTx(q: Queryable, r: { customerId: string; orderId?: string; orderLineId?: string; serviceId: string; input: CleanPortIn; temporaryMsisdn?: string | null; actor: string }): Promise<Row> {
   const id = randomUUID();
   await q.query(
-    `INSERT INTO port_in_requests (id, customer_id, order_id, order_line_id, service_id, donor_operator, donor_msisdn, holder_name, holder_id_type, holder_id_number, temporary_msisdn, created_by, donor_operator_id, donor_routing_code)
+    `INSERT INTO port_in_requests (id, customer_id, order_id, order_line_id, service_id, donor_operator, donor_msisdn, holder_name, holder_id_type, holder_id_number, temporary_msisdn, created_by, donor_operator_id, donor_mnp_operator_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-    [id, r.customerId, r.orderId ?? null, r.orderLineId ?? null, r.serviceId, r.input.donorOperator, r.input.donorMsisdn, r.input.holderName, r.input.holderIdType, r.input.holderIdNumber, r.temporaryMsisdn ?? null, r.actor, r.input.donorOperatorId, r.input.donorRoutingCode]);
+    [id, r.customerId, r.orderId ?? null, r.orderLineId ?? null, r.serviceId, r.input.donorOperator, r.input.donorMsisdn, r.input.holderName, r.input.holderIdType, r.input.holderIdNumber, r.temporaryMsisdn ?? null, r.actor, r.input.donorOperatorId, r.input.donorMnpOperatorId]);
   await q.query(`UPDATE services SET port_in_id=$2, number_status=$3 WHERE id=$1`, [r.serviceId, id, r.temporaryMsisdn ? 'TEMPORARY' : null]);
   await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, instruction, payload) VALUES ('NETWORK', $1, 'PORT_IN_REQUEST', $2)`,
-    [r.serviceId, JSON.stringify({ portInId: id, donorOperator: r.input.donorOperator, donorRoutingCode: r.input.donorRoutingCode, donorMsisdn: r.input.donorMsisdn, temporaryMsisdn: r.temporaryMsisdn ?? null })]);
-  await audit(q, r.actor, 'port_in', id, 'REQUESTED', { donorMsisdn: r.input.donorMsisdn, donorOperator: r.input.donorOperator, routingCode: r.input.donorRoutingCode, temporary: !!r.temporaryMsisdn });
+    [r.serviceId, JSON.stringify({ portInId: id, donorOperator: r.input.donorOperator, donorMnpOperatorId: r.input.donorMnpOperatorId, donorMsisdn: r.input.donorMsisdn, temporaryMsisdn: r.temporaryMsisdn ?? null })]);
+  await audit(q, r.actor, 'port_in', id, 'REQUESTED', { donorMsisdn: r.input.donorMsisdn, donorOperator: r.input.donorOperator, mnpOperatorId: r.input.donorMnpOperatorId, temporary: !!r.temporaryMsisdn });
   return getPortIn(q, id);
 }
 

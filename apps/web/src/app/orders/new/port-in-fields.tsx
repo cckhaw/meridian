@@ -8,13 +8,13 @@ const ID_TYPES: Array<[string, string]> = [['NATIONAL_ID', 'National ID'], ['PAS
 /** What the national clearinghouse needs to move a number from another operator: the donor, the number, and who holds the account there. */
 export function PortInFields({ value, onChange }: { value: PortInForm; onChange: (v: PortInForm) => void }) {
   const set = (patch: Partial<PortInForm>) => onChange({ ...value, ...patch });
-  const ops = useApi<{ items: Array<{ id: string; name: string; routingCode: string }> }>('/settings/donor-operators?active=1');
+  const ops = useApi<{ items: Array<{ id: string; name: string; mnpOperatorId: string }> }>('/settings/donor-operators?active=1');
   const chosen = ops.data?.items.find((o) => o.id === value.donorOperatorId);
   return (
     <div className="space-y-3 rounded-control bg-surface2 p-3">
       {ops.data && ops.data.items.length === 0 && <Alert>No donor operators are set up yet. An administrator adds them in Settings → Donor operators.</Alert>}
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Current operator (donor)" hint={chosen ? `Routing code ${chosen.routingCode}` : undefined}>
+        <Field label="Current operator (donor)" hint={chosen ? `Operator ID ${chosen.mnpOperatorId}` : undefined}>
           <Select value={value.donorOperatorId} onChange={(e) => set({ donorOperatorId: e.target.value })} disabled={!ops.data}>
             <option value="">{ops.data ? 'Choose the operator…' : 'Loading…'}</option>
             {(ops.data?.items ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
