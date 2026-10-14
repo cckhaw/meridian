@@ -992,3 +992,29 @@ describe('maintaining roles and permissions', () => {
     expect((await call('DELETE', '/roles/billing-viewer', { cookie: admin })).status).toBe(200);
   });
 });
+
+describe('operations support: warehouses and write-offs', () => {
+  it('lets Operations Support keep warehouses and write stock off, and keeps stores from doing either', async () => {
+    const ops = await staff(['inventory-ops']);
+    const shop = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    const wh = await call('POST', '/warehouses', { cookie: ops.cookie, body: { name: 'Johor DC', address: 'JB' } });
+    expect(wh.status).toBe(200);
+    expect((await call('POST', '/warehouses', { cookie: shop.cookie, body: { name: 'Sneaky DC' } })).status).toBe(403);
+    expect((await call('GET', '/warehouses', { cookie: shop.cookie })).status).toBe(200);
+    const id = wh.json.id as string;
+
+    expect((await call('POST', '/inventory/adjust', { cookie: ops.cookie, body: { locationId: id, sku: 'ROUTER-9', delta: 8, note: 'GRN 5' } })).status).toBe(200);
+    expect((await call('POST', '/inventory/adjust', { cookie: ops.cookie, body: { locationId: id, sku: 'ROUTER-9', delta: -1 } })).status).toBe(400); // reducing stock is a write-off
+    expect((await call('POST', '/inventory/write-off', { cookie: shop.cookie, body: { locationId: 'STORE-SG-001', sku: 'PHONE-X1-128', quantity: 1, reason: 'LOST' } })).status).toBe(403);
+    expect((await call('POST', '/inventory/write-off', { cookie: ops.cookie, body: { locationId: id, sku: 'ROUTER-9', quantity: 2, reason: 'DAMAGED', note: 'dropped' } })).status).toBe(200);
+    expect((await call('POST', '/inventory/write-off', { cookie: ops.cookie, body: { locationId: id, sku: 'ROUTER-9', quantity: 2, reason: 'OTHER' } })).status).toBe(400);
+
+    const moves = (await call('GET', `/inventory/movements?locationId=${id}`, { cookie: ops.cookie })).json.items;
+    expect(moves.map((m: any) => [m.kind, m.delta])).toEqual([['WRITE_OFF', -2], ['RECEIPT', 8]]);
+    expect((await call('GET', `/inventory/movements?locationId=${id}`, { cookie: shop.cookie })).json.items.every((m: any) => m.locationId === 'STORE-SG-001')).toBe(true); // a store sees only its own movements, whatever it asks for
+
+    expect((await call('DELETE', `/warehouses/${id}`, { cookie: ops.cookie })).status).toBe(422); // still holds 6
+    expect((await call('POST', '/inventory/write-off', { cookie: ops.cookie, body: { locationId: id, sku: 'ROUTER-9', quantity: 6, reason: 'EXPIRED' } })).status).toBe(200);
+    expect((await call('DELETE', `/warehouses/${id}`, { cookie: ops.cookie })).status).toBe(200);
+  });
+});

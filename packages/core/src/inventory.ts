@@ -2,6 +2,8 @@ import type { Queryable, Row } from './db.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
+import { audit } from './audit.js';
+import { assertStockLocation } from './warehouses.js';
 
 export const MAIN_WAREHOUSE = 'WH-MAIN';
 
@@ -82,4 +84,58 @@ export async function restockConsumed(q: Queryable, orderId: string, group: stri
   const rs = (await q.query('SELECT * FROM inventory_reservations WHERE order_id=$1 AND consumed_at IS NOT NULL AND fulfil_group=$2', [orderId, group])).rows;
   for (const r of rs) await q.query('UPDATE inventory_stock SET on_hand = on_hand + $3 WHERE location_id=$1 AND sku=$2', [r.locationId, r.sku, r.quantity]);
   return rs.length;
+}
+
+// ───────────────────────── stock movements: receipts, write-offs, history ─────────────────────────
+export const WRITE_OFF_REASONS = ['DAMAGED', 'LOST', 'EXPIRED', 'THEFT', 'COUNT', 'OTHER'] as const;
+export type WriteOffReason = (typeof WRITE_OFF_REASONS)[number];
+export type MovementKind = 'RECEIPT' | 'IMPORT' | 'WRITE_OFF' | 'COUNT';
+
+/** Leaves a line in the stock history. `onHand` is the quantity after the movement. */
+export async function recordMovement(q: Queryable, m: { locationId: string; sku: string; delta: number; onHand: number; kind: MovementKind; reason?: string | null; note?: string | null; actor: string }) {
+  await q.query(
+    `INSERT INTO stock_movements (location_id, sku, delta, on_hand, kind, reason, note, actor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [m.locationId, m.sku, m.delta, m.onHand, m.kind, m.reason ?? null, m.note?.trim().slice(0, 300) || null, m.actor]);
+}
+
+const sku_ = (s: string) => s.trim().toUpperCase();
+
+/** Goods receipt, one SKU at a time (for bigger deliveries use the CSV import). */
+export async function receiveStock(q: Queryable, actor: string, i: { locationId: string; sku: string; quantity: number; note?: string }) {
+  if (!Number.isInteger(i.quantity) || i.quantity < 1 || i.quantity > 1_000_000) throw invalid('Receive a whole number of units, at least 1.');
+  const sku = sku_(i.sku);
+  await assertStockLocation(q, i.locationId);
+  const r = await adjustStock(q, i.locationId, sku, i.quantity);
+  await recordMovement(q, { locationId: i.locationId, sku, delta: i.quantity, onHand: Number(r?.onHand), kind: 'RECEIPT', note: i.note, actor });
+  await audit(q, actor, 'inventory', `${i.locationId}/${sku}`, 'RECEIVED', { quantity: i.quantity });
+  return r;
+}
+
+/** Writing stock off (damaged, lost, expired, stolen, or a count that came up short). Needs a reason, and never goes below what is reserved. */
+export async function writeOffStock(q: Queryable, actor: string, i: { locationId: string; sku: string; quantity: number; reason: string; note?: string }) {
+  if (!Number.isInteger(i.quantity) || i.quantity < 1 || i.quantity > 1_000_000) throw invalid('Write off a whole number of units, at least 1.');
+  if (!(WRITE_OFF_REASONS as readonly string[]).includes(i.reason)) throw invalid(`Choose why the stock is written off: ${WRITE_OFF_REASONS.join(', ')}.`);
+  if (i.reason === 'OTHER' && !(i.note ?? '').trim()) throw invalid('Say what happened when the reason is Other.');
+  const sku = sku_(i.sku);
+  const cur = (await q.query('SELECT on_hand, reserved FROM inventory_stock WHERE location_id=$1 AND sku=$2 FOR UPDATE', [i.locationId, sku])).rows[0];
+  if (!cur) throw notFound('stock record', `${sku}@${i.locationId}`);
+  const free = Number(cur.onHand) - Number(cur.reserved);
+  if (i.quantity > free) throw rejected(`Only ${free} of ${sku} at ${i.locationId} can be written off${Number(cur.reserved) ? ` (${cur.reserved} are reserved for orders)` : ''}; you asked for ${i.quantity}.`);
+  const r = await adjustStock(q, i.locationId, sku, -i.quantity);
+  await recordMovement(q, { locationId: i.locationId, sku, delta: -i.quantity, onHand: Number(r?.onHand), kind: 'WRITE_OFF', reason: i.reason, note: i.note, actor });
+  await audit(q, actor, 'inventory', `${i.locationId}/${sku}`, 'WRITTEN_OFF', { quantity: i.quantity, reason: i.reason });
+  return r;
+}
+
+export async function listMovements(q: Queryable, f: { locationId?: string; sku?: string; kind?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+  const limit = pageSize(f.limit, 50, 200);
+  const { params, p } = sqlBuilder();
+  const where: string[] = [];
+  if (f.locationId) where.push(`location_id = ${p(f.locationId)}`);
+  if (f.kind) where.push(`kind = ${p(f.kind)}`);
+  if (f.sku?.trim()) where.push(`sku LIKE ${p(likePrefix(f.sku.trim().toUpperCase()))}`);
+  const cur = decodeCursor(f.cursor, 1);
+  if (cur) where.push(`id < ${p(Number(cur[0]))}::bigint`);
+  const rows = (await q.query(`SELECT id::text AS id, at, location_id, sku, delta, on_hand, kind, reason, note, actor FROM stock_movements ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${p(limit + 1)}`, params)).rows;
+  return toPage(rows, limit, (r) => [r.id as string]);
 }

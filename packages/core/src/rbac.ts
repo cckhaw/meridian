@@ -23,6 +23,8 @@ const CORE_PERMISSIONS = [
   'finance:read', 'finance:export',
   'catalog:read', 'catalog:write',
   'inventory:read', 'inventory:write',
+  'inventory:writeoff', // take stock off the books with a reason: damaged, lost, expired, stolen, a count that came up short
+  'warehouse:manage', // add, rename, switch off and remove warehouse locations
   'case:read', 'case:create', 'case:write',
   'commission:read',
   'dealer:read', 'dealer:manage', // dealers and their agents are master data kept in the CRM
@@ -41,7 +43,7 @@ export const isPermission = (p: string): p is Permission => (ALL_PERMISSIONS as 
 
 export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
-  'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance',
+  'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'inventory-ops',
 ] as const;
 export type BuiltinRoleId = (typeof ROLE_IDS)[number];
 /** A role id: one of the built-in roles, or the id of a role an administrator created. */
@@ -143,6 +145,11 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     summary: 'Reviews identity verification for online sign-ups and referred cases: approves, rejects, or sends back for corrections. Sees identity evidence; cannot sell or change billing.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'kyc:review', 'audit:read', 'case:read'],
   },
+  'inventory-ops': {
+    id: 'inventory-ops', label: 'Operations Support', scope: 'staff', home: '/inventory',
+    summary: 'Looks after stock: keeps warehouse locations, loads stock in batches or one SKU at a time, and writes stock off with a reason. Sees the stock history; cannot sell or change billing.',
+    permissions: ['dashboard:read', 'catalog:read', 'inventory:read', 'inventory:write', 'inventory:writeoff', 'warehouse:manage', 'order:read'],
+  },
   'revenue-assurance': {
     id: 'revenue-assurance', label: 'Revenue Assurance', scope: 'staff', home: '/finance',
     summary: 'Checks that billing, payments and the ledger agree (read-only).',
@@ -151,7 +158,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
 };
 
 /** Priority for choosing the landing page when a user holds several roles. */
-const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
+const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'inventory-ops', 'product-configurator', 'rating-charging', 'self-serve'];
 
 // ───────────────────────── modules (navigation) ─────────────────────────
 export interface ModuleDef {
