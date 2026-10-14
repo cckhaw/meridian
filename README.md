@@ -1,8 +1,8 @@
 # Meridian
 
 CRM, order management, billing and finance for a telecom operator: customers and hierarchies, product catalog, orders and fulfilment,
-subscription lifecycle, bill runs and invoices, double-entry ledger with SAP export, cases, inventory, role-based access,
-an editable product hierarchy with dependencies between products, regional/branding settings, and an independently hosted **self-service store-front**
+subscription lifecycle (suspension, dunning, termination, port-out), bill runs and invoices, double-entry ledger with SAP export, cases, inventory with warehouses and write-offs, role-based access with roles you define,
+an editable product hierarchy with dependencies between products, one-market or multi-market operation, regional/branding settings, and an independently hosted **self-service store-front**
 with KYC onboarding, Stripe payments and assisted in-store sales.
 
 Sign-in is required. Staff and customers see only the modules and records their **role** allows ([docs/ROLES.md](docs/ROLES.md)).
@@ -19,7 +19,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 77 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 317 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -30,17 +30,18 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 ## Documentation
 
 - [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
-- [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies
+- [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies, bulk offer import, markets
+- [Service lifecycle](docs/LIFECYCLE.md): voluntary suspension, credit-limit bars, the dunning ladder, termination and ETC, port-out
 - [Orders: fulfilment, cancellation and returns](docs/ORDERS.md): fulfilment groups, points of no return, refunds, instalments, bundles
 - [Customers, segments and groups](docs/CUSTOMERS.md): customer → account → service, segments, moving customers, groups with principal and supplementary services
 - [Working with millions of records](docs/SCALE.md): paging, search and indexes behind every list
 - [Operating Meridian](docs/OPERATIONS.md): environment, runbook, payments, scale, upgrades
 - [Security model](docs/SECURITY.md): what is protected, and what still needs work
-- [Roles and permissions](docs/ROLES.md): generated from the code that enforces them
+- [Roles and permissions](docs/ROLES.md): the default roles (generated from the code that enforces them), and how to change them or add your own
 - [Architecture](docs/ARCHITECTURE.md)
 
 ## Status
 
-Production-oriented, not feature-complete. **Not included in this release:** payment gateways other than Stripe, usage rating and charging (the Go gateway is a skeleton), MFA/SSO, customer login to the store-front (existing customers buying online), returns and exchanges, a
-visual order-workflow designer (the Temporal service exists but is not wired to the app), notifications, GraphQL. See
+Production-oriented, not feature-complete. **Not included in this release:** payment gateways other than Stripe, usage rating and charging (the Go gateway is a skeleton; the charging system reports unbilled usage through the credit-check and closing-bill APIs), MFA/SSO, customer login to the store-front (existing customers buying online), a
+visual order-workflow designer (the Temporal service holds the order and dunning workflows but is not wired to the app), delivery of notifications and network instructions (they are queued in an outbox for adapters; nothing sends SMS/e-mail or talks to PCRF/HLR yet), screens for the lifecycle settings, GraphQL. See
 [Security](docs/SECURITY.md#not-covered-yet-plan-for-these-before-regulated-go-live) before handling real customer data.

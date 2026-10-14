@@ -29,18 +29,20 @@
 - `@meridian/core` talks to one `Db` interface (`db.ts`): `pg` when `DATABASE_URL` is set, otherwise embedded Postgres (PGlite). Migrations in
   `packages/db/migrations` are embedded into `migrations.generated.ts` (`pnpm --filter @meridian/db embed`) so bundles carry no loose SQL files.
 - Orders run as an in-process state machine inside one DB transaction (`orders.ts`): a decline or stock-out ends in FAILED with compensation
-  (refund, release) committed, never a half-written order. The Temporal workflow in `services/order-service` models the same states for a
-  deployment that wants durable timers and human-in-the-loop steps; it is not wired to the web app.
+  (refund, release) committed, never a half-written order. The Temporal workflows in `services/order-service` (orders, and the dunning ladder) model the same states for a
+  deployment that wants durable timers and human-in-the-loop steps; they are not wired to the web app.
 - **Global identifiers**: `services` is sharded, so its unique index only holds per shard. MSISDNs and circuit ids are claimed in `identifier_registry`
   in the same transaction. (A test caught this: two customers on different shards could otherwise hold the same number.)
 - **Ledger**: every business event posts one balanced journal (`ledger.ts`). `reconcile()` checks ledger vs invoices (AR) and vs payments (cash).
   Revenue is recognised on payment for upfront items and on invoice for recurring/instalment items.
 - **Billing** is in arrears with a unique index on (account, period) so re-runs are no-ops; each account bills in its own transaction.
+- **Service lifecycle** (`lifecycle*.ts`, [LIFECYCLE.md](LIFECYCLE.md)): a guarded state machine (`lifecycle-state.ts`) for suspension, bars, resumption, termination and port-out; a configurable dunning ladder (`runDunning`, also modelled as a Temporal workflow with durable timers and a payment signal); credit-limit bars; every change logged to `service_lifecycle_events`, and every instruction for other systems (PCRF/PCF, HLR/HSS, SMS/e-mail, collections, GL) written to `lifecycle_outbox` in the same transaction.
+- **Markets** (`settings.ts`): one market by default (the Regional country); optionally several, each with its own name, tax and dial code, and a default market. `marketMode`/`effectiveMarket` are the only places that decide whether a market filter or check applies. **Stock** (`inventory.ts`, `warehouses.ts`): locations are warehouses and stores; every receipt, CSV load and write-off leaves a row in `stock_movements`.
 - Catalog for the working app lives in Postgres (JSONB). `services/catalog-service` (Mongo) keeps the same model and now shares the ETC and
   hierarchy rules from `@meridian/core`.
 
 ## Identity and access
-`packages/core/src/rbac.ts` is the single source of truth: permissions, 13 roles, data scopes, modules. `auth.ts` handles credentials,
+`packages/core/src/rbac.ts` is the single source of truth: permissions, the built-in roles (16), data scopes, modules. Administrators can change what a built-in role may do and define roles of their own (`roles-config.ts`, kept in settings and read on every request), so access is decided from the defaults in `rbac.ts` plus that role book. `auth.ts` handles credentials,
 sessions, lockout and user administration; the super user is read from the environment. The API router (`apps/web/src/server/router.ts`) declares a
 permission per route and enforces authentication, CSRF, the forced password change, permissions and row scope before any handler runs.
 The UI builds navigation from the server's module list for the signed-in user. See [SECURITY.md](SECURITY.md) and [ROLES.md](ROLES.md).
@@ -50,5 +52,5 @@ No gateway is bundled. `MERIDIAN_PAYMENT_MODE=manual` (production default) captu
 receipt reference, and a payment provider confirms online payments through the signed webhook. `simulated` (development) auto-approves cards.
 
 ## Known limitations
-No MFA/SSO; flat tax rate per market; currencies assumed 2-decimal; cross-shard ownership transfer is rejected (needs the shard migration job);
-dev partitions cover shards 0-15 only; usage rating/charging, returns and exchanges, invoice designer, notifications and the order-workflow designer UI are not built.
+No MFA/SSO; one currency per deployment (markets differ in tax and dial code, not currency); currencies assumed 2-decimal; cross-shard ownership transfer is rejected (needs the shard migration job);
+dev partitions cover shards 0-15 only; usage rating/charging, the invoice designer, delivery of notifications and network instructions (queued in `lifecycle_outbox`) and the order-workflow designer UI are not built.
