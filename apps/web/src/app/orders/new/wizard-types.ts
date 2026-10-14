@@ -1,4 +1,4 @@
-import { behaviourOf } from '@meridian/types';
+import { behaviourOf, type OfferNode } from '@meridian/types';
 import { toMinor } from '@/lib/format';
 
 export type StepId = 'product' | 'device' | 'addons' | 'family' | 'sim' | 'payment' | 'customer' | 'delivery' | 'review' | 'pay';
@@ -6,7 +6,7 @@ export const STEP_TITLE: Record<StepId, string> = {
   product: 'Plan or product', device: 'Device', addons: 'Add-ons', family: 'Family members', sim: 'SIM and number', payment: 'How to pay', customer: 'Customer', delivery: 'Delivery and installation', review: 'Review', pay: 'Payment',
 };
 export const STEP_HINT: Record<StepId, string> = {
-  product: 'What is the customer buying?', device: 'Pick the colour and storage, or add a device.', addons: 'Extras this customer can add, and bundle savings.', family: 'The lines that share this plan: new numbers, or numbers brought from another operator.', sim: 'Hand over a SIM card (or issue an eSIM) and choose the number.',
+  product: 'What is the customer buying?', device: 'Pick the colour and storage, or add a device.', addons: 'Extras this customer can add, and bundle savings.', family: 'The lines that share this plan, and the plan each one takes. SIM cards and numbers come next.', sim: 'Hand over a SIM card (or issue an eSIM) and choose the number.',
   payment: 'Pay each item in full today, or spread it over the contract.', customer: 'Who is this for? Look them up by ID, or create them.', delivery: 'Where to send things, and when the technician can come.',
   review: 'Check everything before it is submitted.', pay: 'Take payment and submit the order.',
 };
@@ -15,13 +15,14 @@ export const STEP_HINT: Record<StepId, string> = {
 export interface PortInForm { donorOperatorId: string; donorMsisdn: string; holderName: string; holderIdType: string; holderIdNumber: string; temporaryNumber: boolean }
 export const emptyPortIn = (): PortInForm => ({ donorOperatorId: '', donorMsisdn: '', holderName: '', holderIdType: 'NATIONAL_ID', holderIdNumber: '', temporaryNumber: true });
 export const portInReady = (p?: PortInForm | null) => !p || (!!p.donorOperatorId && p.donorMsisdn.replace(/\D/g, '').length >= 8 && !!p.holderName.trim() && !!p.holderIdNumber.trim());
-const portInBody = (p?: PortInForm | null) => (p ? { ...p, donorMsisdn: p.donorMsisdn.replace(/[^\d+]/g, '') } : undefined);
+// A port-in that is still being filled in is not sent: the quote would refuse it, and the order panel would show a validation error for a form the user has not finished.
+const portInBody = (p?: PortInForm | null) => (p && portInReady(p) ? { ...p, donorMsisdn: p.donorMsisdn.replace(/[^\d+]/g, '') } : undefined);
 
 /** The number a line holds while it is being sold: held for the customer (a chosen number), or left to the pool. */
 export interface NumberHolder { msisdn: string; numberToken?: string; numberTier?: string; numberFeeMinor?: number; numberExpires?: string }
 /** A member line of a group plan, taken together with the head's line. */
-export interface Member extends NumberHolder { key: string; offerId: string; simType: '' | 'PHYSICAL' | 'ESIM'; portIn?: PortInForm | null }
-export const newMember = (offerId: string): Member => ({ key: Math.random().toString(36).slice(2, 8), offerId, simType: 'PHYSICAL', msisdn: '' });
+export interface Member extends NumberHolder { key: string; offerId: string; iccid?: string; simType: '' | 'PHYSICAL' | 'ESIM'; portIn?: PortInForm | null }
+export const newMember = (offerId: string): Member => ({ key: Math.random().toString(36).slice(2, 8), offerId, iccid: '', simType: 'PHYSICAL', msisdn: '' });
 export const isGroupPlan = (o: any) => !!o?.group?.isGroupOffer;
 
 export interface Item {
@@ -68,7 +69,7 @@ export function lineBody(i: Item, all: Item[] = []) {
   return {
     ...(i.deal && plan >= 0 ? { attachTo: plan, dealTermMonths: i.deal.term } : {}),
     offerId: i.offer.id, quantity: i.quantity, msisdn: i.portIn ? undefined : i.msisdn || undefined, portIn: portInBody(i.portIn),
-    members: isGroupPlan(i.offer) ? (i.members ?? []).filter((m) => m.offerId).map((m) => ({ offerId: m.offerId, simType: m.simType || undefined, msisdn: m.portIn ? undefined : m.msisdn || undefined, numberToken: !m.portIn && m.msisdn && m.numberToken ? m.numberToken : undefined, portIn: portInBody(m.portIn) })) : undefined,
+    members: isGroupPlan(i.offer) ? (i.members ?? []).filter((m) => m.offerId).map((m) => ({ offerId: m.offerId, iccid: m.iccid || undefined, simType: !m.iccid && m.simType ? m.simType : undefined, msisdn: m.portIn ? undefined : m.msisdn || undefined, numberToken: !m.portIn && m.msisdn && m.numberToken ? m.numberToken : undefined, portIn: portInBody(m.portIn) })) : undefined,
     iccid: i.iccid || undefined, simType: !i.iccid && i.simType ? i.simType : undefined, numberToken: i.msisdn && i.numberToken ? i.numberToken : undefined,
     options: i.variantId ? { variantId: i.variantId } : undefined,
     payment: i.payMode === 'INSTALLMENT' ? { mode: 'INSTALLMENT' as const, months: i.months, downPaymentMinor: i.down ? toMinor(i.down) : 0 } : undefined,
@@ -80,3 +81,34 @@ export const SWATCH: Record<string, string> = {
   black: '#1d1d1f', 'space black': '#2c2c2e', graphite: '#4a4a4c', grey: '#8e8e93', gray: '#8e8e93', silver: '#d1d1d6', white: '#f5f5f7', starlight: '#f0e6d3',
   gold: '#e3c8a0', 'rose gold': '#e8b4b8', pink: '#f4a7b9', red: '#e03a3e', orange: '#f5841f', yellow: '#fdd835', green: '#4caf50', blue: '#3a7bd5', 'sierra blue': '#9bb5ce', purple: '#8e6bbf', titanium: '#9a9a96',
 };
+
+/** A mobile plan (a SIM plan, with or without a device): an order has one of these. Group plans carry their other lines as members. */
+export const isMobilePlan = (o: OfferNode | any) => { const b = behaviourOf(o); return b.role === 'PLAN' && b.service === 'MOBILE' && o.kind !== 'WEARABLE'; };
+
+/** A line that gets its own SIM and number: a plan's own line, or one member line of a group plan. */
+export interface Slot { iccid?: string; simType?: '' | 'PHYSICAL' | 'ESIM'; portIn?: PortInForm | null; msisdn: string; numberToken?: string; numberTier?: string; numberFeeMinor?: number; numberExpires?: string }
+export const digits = (v: string) => v.replace(/\D/g, '');
+
+/** The SIM cards and numbers already used by the other lines of the order (the plan lines and every member line), so a picker can leave them out. */
+export function takenElsewhere(items: Item[], except: Slot): { iccids: Set<string>; msisdns: Set<string> } {
+  const iccids = new Set<string>(), msisdns = new Set<string>();
+  const add = (x: Slot) => {
+    if (x === except) return;
+    if (x.iccid) iccids.add(x.iccid);
+    if (x.msisdn) msisdns.add(digits(x.msisdn));
+    if (x.portIn?.donorMsisdn) msisdns.add(digits(x.portIn.donorMsisdn));
+  };
+  for (const i of items) { add(i); for (const m of i.members ?? []) add(m); }
+  return { iccids, msisdns };
+}
+
+/** The first SIM card or number chosen for two lines of the same order, in words, or null when every line has its own. */
+export function duplicateProblem(items: Item[]): string | null {
+  const seenSim = new Set<string>(), seenNum = new Set<string>();
+  for (const i of items) for (const x of [i as Slot, ...(i.members ?? [])] as Slot[]) {
+    if (x.iccid) { if (seenSim.has(x.iccid)) return `The SIM card ${x.iccid} is chosen for more than one line. Each line needs its own card.`; seenSim.add(x.iccid); }
+    const n = x.portIn?.donorMsisdn ? digits(x.portIn.donorMsisdn) : x.msisdn ? digits(x.msisdn) : '';
+    if (n) { if (seenNum.has(n)) return `The number ${n} is chosen for more than one line. Each line needs its own number.`; seenNum.add(n); }
+  }
+  return null;
+}

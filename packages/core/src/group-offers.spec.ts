@@ -52,6 +52,12 @@ describe('Vector A: a group is made by the order that sells a group plan', () =>
     await expect(order(c.customer.id, [{ ...head, members: [{ offerId: 'plan-sim-5g' }] }])).rejects.toThrow(/not one of the plans/);
     await expect(order(c.customer.id, [{ offerId: 'plan-sim-5g', members: [{ offerId: 'plan-family-member' }] }])).rejects.toThrow(/not a group plan/);
 
+    // every line of the order has its own SIM card and its own number
+    const card = '8960123456789012345';
+    await expect(order(c.customer.id, [{ ...head, iccid: card, members: [{ offerId: 'plan-family-member', iccid: card }] }])).rejects.toThrow(/SIM card .* more than one line/);
+    await expect(order(c.customer.id, [{ ...head, members: [{ offerId: 'plan-family-member', portIn: { ...donor(1), temporaryNumber: true } }, { offerId: 'plan-family-member', portIn: { ...donor(1), temporaryNumber: false } }] }])).rejects.toThrow(/more than one line|on this order twice/);
+    await expect(order(c.customer.id, [{ ...head, msisdn: '+60125000001', members: [{ offerId: 'plan-family-member', msisdn: '60125000001' }] }])).rejects.toThrow(/more than one line|on this order twice/);
+
     const o = await order(c.customer.id, [{ ...head, members: [
       { offerId: 'plan-family-member', simType: 'ESIM' },
       { offerId: 'plan-family-member', portIn: { ...donor(1), temporaryNumber: true } },
