@@ -16,6 +16,7 @@ import { today } from './dates.js';
 import { createAccount } from './customers.js';
 import { releaseFromGroup } from './groups.js';
 import { getLifecycleSettings } from './lifecycle-config.js';
+import { releaseResourcesOnTermination } from './nrm.js';
 import { assertTransition, logLifecycle, queueOutbox, restrictionOf, setBarLevel, voluntarySuspendedDays, type RestrictionKind } from './lifecycle-state.js';
 import { addMonths, addDays, diffDays, fmt } from './dates.js';
 
@@ -187,10 +188,12 @@ export async function transferOwnership(db: Db, id: string, toCustomerId: string
 /** The early-termination charge for a running service. A device bought on a contract with the plan carries its own terms; otherwise the plan's own contract applies. */
 export async function etcQuoteForService(q: Queryable, s: Row, when: Date): Promise<EtcQuote> {
   const d = s.deal as { termMonths: number; subsidyMinor: number; waiveInLastMonths?: number; currency: string } | null;
-  if (!d) return etcQuoteForOffer(q, s.offerId, new Date(s.contractStart), when);
+  // A VIP number comes with a stiffer charge for leaving early: the multiplier set for its tier when it was sold.
+  const vip = (quote: EtcQuote): EtcQuote => (s.vipEtcBps && s.vipEtcBps !== 10000 && quote.chargeMinor > 0 ? { ...quote, chargeMinor: Math.round((quote.chargeMinor * s.vipEtcBps) / 10000), vipMultiplierBps: s.vipEtcBps } : quote);
+  if (!d) return vip(await etcQuoteForOffer(q, s.offerId, new Date(s.contractStart), when));
   const money = { amountMinor: d.subsidyMinor, currency: d.currency };
-  return quoteEtc({ offerId: s.offerId, contractStart: new Date(s.contractStart), terminationDate: when,
-    contract: { termMonths: d.termMonths as 12 | 24 | 36, etc: { method: 'SUBSIDY_AMORTISED', waiveInLastMonths: d.waiveInLastMonths ?? 1 }, subsidy: { subsidyAmount: money, deviceRetailPrice: money } } });
+  return vip(quoteEtc({ offerId: s.offerId, contractStart: new Date(s.contractStart), terminationDate: when,
+    contract: { termMonths: d.termMonths as 12 | 24 | 36, etc: { method: 'SUBSIDY_AMORTISED', waiveInLastMonths: d.waiveInLastMonths ?? 1 }, subsidy: { subsidyAmount: money, deviceRetailPrice: money } } }));
 }
 
 export interface TerminationOptions {
@@ -276,6 +279,7 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
     if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
     if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
 
+    await releaseResourcesOnTermination(q, s, { ported: o.ported, date: dayOfEnd, actor, reason: o.reason ?? 'terminated' }); // the SIM, IMSI and number go back to their pools on their own terms
     await q.query(`UPDATE services SET status='TERMINATED', terminated_at=$2, terminated_reason=$3, suspended_reason=NULL, suspension_kind=NULL, suspend_until=NULL, bar_level='HARD', iccid=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id, when.toISOString(), o.reason ?? 'unspecified']);
     await q.query('UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1', [id]); // outstanding instalments fall due in the ETC
     let invoice: Row | null = null;

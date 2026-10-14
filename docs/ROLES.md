@@ -43,6 +43,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | Number porting |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
 | Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  | ✓ |
 | Inventory | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |  | ✓ |
+| Numbers & SIMs | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | Finance | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | Stores | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Dealers |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |
@@ -82,6 +83,9 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `catalog:write` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `inventory:read` | ✓ | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |  |  | ✓ |
 | `inventory:write` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  | ✓ |
+| `numbering:read` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
+| `numbering:select` |  |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
+| `numbering:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | `inventory:writeoff` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | `warehouse:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | `case:read` | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |  | ✓ |  |

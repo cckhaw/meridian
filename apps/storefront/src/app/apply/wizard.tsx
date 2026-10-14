@@ -12,7 +12,7 @@ interface View {
   quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number } }>; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; taxName: string } | null;
   personal: Record<string, string | undefined>; personalProblems: string[]; address: Record<string, string> | null; consent: Record<string, unknown> | null;
   kyc: { status: string; method: string; reason: string | null; returned: boolean } | null; documents: string[];
-  order: { id: string; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; lines: Array<{ name: string; quantity: number }> } | null;
+  order: { id: string; number?: string | null; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; lines: Array<{ name: string; quantity: number }> } | null;
 }
 
 const ID_LABEL: Record<string, string> = { NATIONAL_ID: 'National ID card', PASSPORT: 'Passport', DRIVING_LICENCE: 'Driving licence', RESIDENCE_PERMIT: 'Residence permit' };
@@ -328,7 +328,7 @@ function Done({ order, shipping }: { order: NonNullable<View['order']>; shipping
         <div className="space-y-3 text-center" role="status">
           <div aria-hidden className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-success/15 text-title2 text-success">✓</div>
           <h1 className="text-title1 font-bold">{['COMPLETED', 'ACTIVATED'].includes(order.state) ? 'You’re all set' : 'Order received'}</h1>
-          <p className="text-body text-label2">Order {order.id.slice(0, 8).toUpperCase()} · {order.state.toLowerCase().replace(/_/g, ' ')}</p>
+          <p className="text-body text-label2">Order {order.number ?? order.id.slice(0, 8).toUpperCase()} · {order.state.toLowerCase().replace(/_/g, ' ')}</p>
           <ul className="text-subhead">{order.lines.map((l) => <li key={l.name}>{l.name}{l.quantity > 1 ? ` × ${l.quantity}` : ''}</li>)}</ul>
           {order.numbers.length > 0 && <p className="rounded-control bg-surface2 p-3 text-subhead">Your new number: <strong className="tabular-nums">{order.numbers.join(', ')}</strong></p>}
           {order.trackingNumber && <p className="text-subhead">Tracking number: <strong>{order.trackingNumber}</strong></p>}

@@ -37,7 +37,7 @@ export async function logLifecycle(q: Queryable, e: { serviceId: string; account
     [e.serviceId, e.accountId ?? null, e.action, e.from ?? null, e.to ?? null, e.kind ?? null, e.actor, JSON.stringify(e.detail ?? {})]);
 }
 
-export type OutboxKind = 'NETWORK' | 'NOTIFY' | 'COLLECTIONS' | 'GL';
+export type OutboxKind = 'NETWORK' | 'NOTIFY' | 'COLLECTIONS' | 'GL' | 'EVENT';
 /** Queues something for another system (policy control, HLR/HSS, SMS/email, collections, the ledger), in the same transaction as the change. */
 export async function queueOutbox(q: Queryable, m: { kind: OutboxKind; instruction: string; serviceId?: string | null; accountId?: string | null; payload?: unknown }): Promise<void> {
   await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, account_id, instruction, payload) VALUES ($1,$2,$3,$4,$5)`,

@@ -29,6 +29,8 @@ const G: Record<string, ReactNode> = {
   catalog: <><path d="M3 12.5V4h8.5l9 9a1.5 1.5 0 0 1 0 2.1l-6.4 6.4a1.5 1.5 0 0 1-2.1 0L3 12.5z" /><circle cx="7.5" cy="8.5" r="1.3" /></>,
   // warehouse
   inventory: <><path d="M3 10 12 4l9 6v10H3V10z" /><path d="M8 20v-6h8v6M8 17h8" /></>,
+  // a SIM card with its clipped corner and chip: numbers, SIMs and identities
+  numbering: <><path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><rect x="9" y="11" width="6" height="6" rx="1.2" /><path d="M9 14h6M12 11v6" /></>,
   // banknote
   finance: <><rect x="3" y="6" width="18" height="12" rx="2" /><circle cx="12" cy="12" r="2.8" /><path d="M6.5 12h.01M17.5 12h.01" /></>,
   // percent badge

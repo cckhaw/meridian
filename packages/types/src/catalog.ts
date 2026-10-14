@@ -164,4 +164,6 @@ export interface EtcQuote {
   /** For RECURRING_PLUS_SUBSIDY: the two parts that make up chargeMinor. */
   recurringMinor?: number;
   clawbackMinor?: number;
+  /** A VIP number multiplies the charge: 15000 = 1.5x. */
+  vipMultiplierBps?: number;
 }

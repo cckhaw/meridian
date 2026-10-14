@@ -1,6 +1,8 @@
 import type { OfferNode } from '@meridian/types';
 import { createNode } from './catalog.js';
 import { runBillCycle, payInvoice } from './billing.js';
+import { importImsis, importMsisdns, importSims } from './nrm-pools.js';
+import { NumberReservationService } from './number-reservation.js';
 import { runDunning } from './lifecycle-service.js';
 import { createCustomer } from './customers.js';
 import { createGroup } from './groups.js';
@@ -117,8 +119,23 @@ export async function seedReference(db: Db): Promise<void> {
   });
 }
 
+/** Sample pools so the Numbers & SIMs screens and the order wizard have something to show: numbers (some memorable), identities, SIMs and eSIMs. */
+async function seedNumbering(db: Db): Promise<void> {
+  const num = (n: number) => `+6592${String(n).padStart(6, '0')}`;
+  const pool: string[] = Array.from({ length: 500 }, (_, i) => num(10000 + i * 7));
+  pool.push('+6592888888', '+6592123456', '+6592334455', '+6592121212', '+6592207777', '+6592991122', '+6592121288', '+6598888888');
+  await importMsisdns(db, { csv: [...new Set(pool)].join('\n') }, { apply: true, actor: 'seed', batch: 'seed' });
+  await importImsis(db, { range: { from: '525010100000000', to: '525010100000119' } }, { apply: true, actor: 'seed', batch: 'seed' });
+  const iccid = (n: number) => `8965${String(100_000_000_000_000 + n).padStart(15, '0')}`;
+  await importSims(db, { csv: Array.from({ length: 40 }, (_, i) => iccid(i)).join('\n') }, { apply: true, actor: 'seed', locationId: 'WH-MAIN', batch: 'seed-wh' });
+  await importSims(db, { csv: Array.from({ length: 12 }, (_, i) => iccid(100 + i)).join('\n') }, { apply: true, actor: 'seed', locationId: 'STORE-SG-001', batch: 'seed-store' });
+  await importSims(db, { csv: Array.from({ length: 6 }, (_, i) => `${iccid(200 + i)},,ESIM`).join('\n') }, { apply: true, actor: 'seed', locationId: 'WH-MAIN', kind: 'ESIM', batch: 'seed-esim' });
+  await new NumberReservationService(db).holdForAuction(['+6598888888'], 'seed');
+}
+
 /** Demo tenants created through the real order/billing code paths, with history backdated so bills, an overdue account and a suspension exist. */
 export async function seedDemo(db: Db): Promise<void> {
+  await seedNumbering(db);
   if ((await db.query(`SELECT 1 FROM customers WHERE display_name='Tan Wei Ming' LIMIT 1`)).rows.length) return;
   const orbitDealer = await createDealer(db, 'seed', { name: 'Orbit Mobile Partners', contactName: 'Priya Nair', email: 'partners@orbit.example.com' });
   const orbitAgent = await createAgent(db, 'seed', orbitDealer.id as string, { name: 'Marcus Teo', phone: '+6591110000' });

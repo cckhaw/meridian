@@ -35,7 +35,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
   const [accounts, svcSummary, orders, invoices, cases, children, groupCount, lineage, balance, acctCount] = await Promise.all([
     listAccounts(q, id, { limit: 20 }),
     q.query(`SELECT type, status, count(*) AS n FROM services WHERE customer_id=$1 GROUP BY type, status ORDER BY type, status`, [id]),
-    q.query(`SELECT o.id, o.state, o.channel, o.total_minor, o.currency, o.created_at,
+    q.query(`SELECT o.id, o.number, o.state, o.channel, o.total_minor, o.currency, o.created_at,
         (SELECT string_agg(ol.description, ', ') FROM order_lines ol WHERE ol.order_id = o.id) AS summary FROM orders o WHERE o.customer_id=$1 ORDER BY o.created_at DESC LIMIT 10`, [id]),
     q.query(`SELECT i.id, i.number, i.status, i.issue_date, i.due_date, i.total_minor, i.currency, i.total_minor - i.paid_minor - i.credited_minor AS balance_minor FROM invoices i WHERE i.customer_id=$1 ORDER BY i.issue_date DESC, i.number DESC LIMIT 10`, [id]),
     q.query(`SELECT id, number, type, status, priority, subject, created_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
@@ -83,7 +83,7 @@ async function computeDashboard(q: Queryable): Promise<Row> {
     one(`SELECT count(*) AS open FROM cases WHERE status IN ('OPEN','IN_PROGRESS')`),
     q.query(`SELECT s.offer_id, c.name, c.data, c.kind, count(*) AS n FROM services s JOIN catalog_nodes c ON c.id = s.offer_id WHERE s.status='ACTIVE' GROUP BY s.offer_id, c.name, c.data, c.kind`),
     q.query(`SELECT state, count(*) AS n FROM orders GROUP BY state ORDER BY n DESC`),
-    q.query(`SELECT o.id, o.state, o.total_minor, o.currency, o.created_at, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.created_at DESC LIMIT 6`),
+    q.query(`SELECT o.id, o.number, o.state, o.total_minor, o.currency, o.created_at, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.created_at DESC LIMIT 6`),
   ]);
   // Monthly recurring revenue (net of nothing: list price per month) across active services.
   let mrr = 0;

@@ -18,7 +18,7 @@ export default function Orders() {
     <>
       <LargeTitle subtitle="Newest first. Search by customer name, mobile number, e-mail or an order id.">Orders</LargeTitle>
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
-        <SearchField label="Search orders" placeholder="Customer, mobile number or order id…" value={q} onChange={setQ} className="md:max-w-md md:flex-1" />
+        <SearchField label="Search orders" placeholder="Customer, mobile number or order number (20261014-00042)…" value={q} onChange={setQ} className="md:max-w-md md:flex-1" />
         <Select aria-label="State" value={state} onChange={(e) => setState(e.target.value)} className="md:max-w-[220px]">{STATES.map((s) => <option key={s} value={s}>{s ? label(s) : 'All states'}</option>)}</Select>
         {can('order:create:SELF_SERVE', 'order:create:RETAIL_ASSISTED', 'order:create:QUICK_SALE', 'order:create:TELESALES', 'order:create:DEALER', 'order:create:CALL_CENTER') && <Link href="/orders/new" className="md:ml-auto"><Button>New order</Button></Link>}
       </div>
@@ -29,7 +29,7 @@ export default function Orders() {
         <>
           <TableWrap><thead><tr><Th>Order</Th><Th>Customer</Th><Th>Items</Th><Th>Channel</Th><Th>State</Th><Th right>Total</Th><Th>Placed</Th></tr></thead><tbody>
             {list.items.map((o: any) => (
-              <tr key={o.id}><Td><Link className="font-mono text-accent" href={`/orders/${o.id}`}>{o.id.slice(0, 8)}</Link></Td>
+              <tr key={o.id}><Td><Link className="font-mono text-accent" href={`/orders/${o.id}`}>{o.number ?? o.id.slice(0, 8)}</Link></Td>
                 <Td><Link className="text-accent" href={`/customers/${o.customerId}`}>{o.customerName}</Link></Td><Td className="max-w-xs">{o.summary}</Td>
                 <Td>{label(o.channel)}</Td><Td><Badge tone={tone(o.state)}>{label(o.state)}</Badge></Td><Td right>{money(o.totalMinor, o.currency)}</Td><Td>{dt(o.createdAt)}</Td></tr>
             ))}

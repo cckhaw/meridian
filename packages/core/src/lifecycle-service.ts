@@ -8,6 +8,8 @@ import { getLifecycleSettings, type DunningAction, type LifecycleSettings } from
 import { autoResumeDue, completePortOut, etcQuoteForService, resumeService, suspendService, suspendVoluntary, terminateService, type LifecycleChannel, type TerminationOptions, type VoluntaryRequest } from './lifecycle.js';
 import { liftCreditRestrictions, logLifecycle, queueOutbox, restrictionOf, setBarLevel } from './lifecycle-state.js';
 import { postJournal } from './ledger.js';
+import { recycleExpired } from './nrm.js';
+import { NumberReservationService } from './number-reservation.js';
 
 // ───────────────────────── B. credit limit and threshold breach ─────────────────────────
 export interface CreditEvaluation {
@@ -279,7 +281,9 @@ export class LifecycleService {
     const resumed = await autoResumeDue(this.db, asOf);
     const dunning = await runDunning(this.db, asOf);
     const released = await releaseQuarantinedNumbers(this.db, asOf);
-    return { asOf, resumed, dunning, releasedNumbers: released };
+    const nrm = await recycleExpired(this.db, asOf); // IMSIs and numbers whose cooling-off ended go back to their pools
+    const holds = await new NumberReservationService(this.db).expireStale();
+    return { asOf, resumed, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds };
   }
 
   async history(serviceId: string, limit = 100) {
