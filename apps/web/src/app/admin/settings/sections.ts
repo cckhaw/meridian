@@ -8,7 +8,7 @@ export interface SettingsSection { id: string; group: string; label: string; des
 export const GROUPS = ['General', 'Customers', 'Catalog', 'Sales and orders', 'Back office'] as const;
 
 export const SECTIONS: SettingsSection[] = [
-  { id: 'regional', group: 'General', label: 'Regional', description: 'Currency, number and date formats, time zone, tax', keywords: 'currency money format number date time timezone tax gst sst vat dial code country' },
+  { id: 'regional', group: 'General', label: 'Regional format', description: 'Currency, number and date formats, time zone, tax', keywords: 'currency money format number date time timezone tax gst sst vat dial code country' },
   { id: 'markets', group: 'General', label: 'Markets', description: 'Sell in one market, or in several countries', keywords: 'market markets country countries multiple single multi region territory sell availability' },
   { id: 'appearance', group: 'General', label: 'Appearance', description: 'Portal name, logo and colour theme', keywords: 'logo brand name theme colour color dark light' },
   { id: 'customers', group: 'Customers', label: 'Customers and segments', description: 'Creating customers, the details on the customer form, and the segments', keywords: 'customer segment consumer enterprise iot create new form field address postcode city state country date birth dob gender email phone required optional hidden' },

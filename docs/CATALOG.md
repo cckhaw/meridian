@@ -25,7 +25,7 @@ Search is on the server and covers the whole catalog by words in the name or cod
 **Catalog → New offer** is a short guided flow, and what you choose decides what it asks next:
 
 1. **What is it?** The group it sits in, the **offer type**, and the name. The type decides the rest of the flow.
-2. **Pricing.** Monthly fee (not for outright goods), upfront price, whether prices include tax, and the contract term (not offered for outright goods). A subsidy only appears for offers that include a device. **Currency and the tax name and rate come from Settings → Regional**, so they always match what is set there.
+2. **Pricing.** Monthly fee (not for outright goods), upfront price, whether prices include tax, and the contract term (not offered for outright goods). A subsidy only appears for offers that include a device. **Currency and the tax name and rate come from Settings → Regional format**, so they always match what is set there.
 3. **Fulfilment.** How the customer gets it, from the list in Settings: delivered, **collect in store**, installation, SIM activation. Add-ons skip this step.
 4. **Stock.** Only if a chosen fulfilment option tracks stock: the SKUs reserved when it is sold, and (for devices) colours and storage. A SIM-only plan shows no stock step unless you have turned on stock tracking for SIM activation.
 5. **Availability.** Channels, and the partner code for partner subscriptions. The market appears here only when several markets are switched on (see below).
@@ -110,7 +110,7 @@ A stock SKU may contain letters, digits, dash, dot, underscore and slash (manufa
 
 Settings → Markets chooses how the CRM treats countries.
 
-- **One market (default).** The whole CRM works in the country set under Settings → Regional. No screen asks for a market; offers, logins, stores and customers are not tied to one; nothing is filtered or refused by market. The CSV `market` column is ignored.
+- **One market (default).** The whole CRM works in the country set under Settings → Regional format. No screen asks for a market; offers, logins, stores and customers are not tied to one; nothing is filtered or refused by market. The CSV `market` column is ignored.
 - **Several markets.** Settings → Markets then lists the markets you sell in. For each you set the name, tax name and rate, and dial code (**Add a market** from the built-in list or define your own with a two-letter code; **Remove** drops one). Your own country is always in the list and takes its tax and dial code from Regional. A market that offers, logins, customers or stores still use cannot be removed. One market is the **default**: new logins, offers, customers, store-front sales and CSV-imported offers start in it when nobody picks one. An offer lists the markets it is sold in (blank means all), a login and a store belong to a market, and a customer's market decides which offers they can buy, the tax that applies and the dial code for new numbers. The deployment still has one currency (offer prices and the ledger are in it); the home country uses the tax and dial code from Regional and other markets use their own.
 
 Switching never deletes data: offers, logins and customers keep the market they have, and the limits apply again when several markets are switched back on.

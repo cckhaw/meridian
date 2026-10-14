@@ -253,7 +253,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
               {b.role !== 'GOODS' && <Field label={`Monthly fee (${currency})`} hint="Leave empty if there is no monthly charge."><Input type="number" min="0" step={moneyStep()} value={f.recurring} onChange={set('recurring')} disabled={L} /></Field>}
               <Field label={`${upfrontLabel} (${currency})`} hint={b.goods && b.role !== 'GOODS' ? 'Paid at the start, in full or by instalments' : undefined}><Input type="number" min="0" step={moneyStep()} value={f.upfront} onChange={set('upfront')} disabled={L} /></Field>
               <label className="flex min-h-tap items-center gap-3 text-body sm:col-span-2"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.taxInclusive} onChange={(e) => setF({ ...f, taxInclusive: e.target.checked })} disabled={L} />Prices include {taxLabel}</label>
-              <p className="text-footnote text-label2 sm:col-span-2">Currency and tax come from Settings → Regional ({currency}, {regional.taxName} {regional.taxBps / 100}%).</p>
+              <p className="text-footnote text-label2 sm:col-span-2">Currency and tax come from Settings → Regional format ({currency}, {regional.taxName} {regional.taxBps / 100}%).</p>
             </Card>
             {b.contract !== 'none' && (
               <Card className="grid gap-4 sm:grid-cols-2">

@@ -13,7 +13,7 @@ Every list in Meridian is built so that opening a screen costs the same whether 
    |---|---|---|
    | a uuid | exact id | primary key |
    | `alice@ex` | e-mail prefix | `lower(email) text_pattern_ops` |
-   | `+6591…` or `9123…` | phone / MSISDN prefix, with or without the country code from Settings → Regional | `customers.phone`, `services.identifier` prefix indexes |
+   | `+6591…` or `9123…` | phone / MSISDN prefix, with or without the country code from Settings → Regional format | `customers.phone`, `services.identifier` prefix indexes |
    | `alex ta` | words of a name, each as a prefix | GIN full-text on `display_name` (catalog: name + code) |
    | symbols only (`%`, `_`) | nothing — text is literal, never a pattern | |
 
