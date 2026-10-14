@@ -3,6 +3,7 @@ import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, 
 import { useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { StorePicker } from '@/app/stores/store-picker';
+import { useRegional } from '@/components/settings-provider';
 import { dt, label, money } from '@/lib/format';
 
 interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null }
@@ -43,7 +44,7 @@ export default function Users() {
             <tr key={u.id}>
               <Td><span className="font-medium">{u.displayName}</span><div className="font-mono text-caption text-label2">{u.username}</div></Td>
               <Td><span className="flex flex-wrap gap-1">{u.roles.map((r: string) => <Badge key={r}>{roleLabel(r)}</Badge>)}</span></Td>
-              <Td className="text-footnote text-label2">{[u.storeId && `store ${u.storeId}`, u.dealerId && `dealer ${u.dealerId}`, u.customerId && 'portal customer'].filter(Boolean).join(' · ') || '—'}</Td>
+              <Td className="text-footnote text-label2">{[u.storeId && `store ${u.storeId}`, u.dealerId && `dealer ${u.dealerId}`, u.customerId && 'portal customer', u.marketCode && `sells in ${u.marketCode}`].filter(Boolean).join(' · ')}</Td>
               <Td><Badge tone={u.status === 'ACTIVE' ? 'success' : 'neutral'}>{label(u.status)}</Badge>{u.locked && <Badge tone="danger">Locked</Badge>}{u.mustChangePassword && <Badge tone="warning">Temp password</Badge>}</Td>
               <Td>{u.lastLoginAt ? dt(u.lastLoginAt) : 'Never'}</Td>
               <Td right><span className="flex justify-end gap-1">
@@ -74,6 +75,18 @@ export default function Users() {
 
 const needs = (roles: Role[], picked: string[], scope: string) => roles.some((r) => picked.includes(r.id) && r.scope === scope);
 
+/** The market a login sells in: it decides which offers appear in the order screen (an offer is sold in one or more markets). */
+function MarketField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const meta = useApi<any>('/meta');
+  const regional = useRegional();
+  const markets: Record<string, { name: string }> = meta.data?.markets ?? {};
+  return (
+    <Field label="Market" hint="The offers they can sell: those sold in this market. New logins start with your own country (Settings → Regional).">
+      <Select value={value || regional?.country || ''} onChange={(e) => onChange(e.target.value)}>{Object.entries(markets).map(([code, m]) => <option key={code} value={code}>{m.name} ({code})</option>)}</Select>
+    </Field>
+  );
+}
+
 function RolePicker({ roles, value, onChange }: { roles: Role[]; value: string[]; onChange: (v: string[]) => void }) {
   return (
     <fieldset className="grid gap-2 sm:grid-cols-2">
@@ -89,15 +102,16 @@ function RolePicker({ roles, value, onChange }: { roles: Role[]; value: string[]
 }
 
 function UserForm({ roles, onDone }: { roles: Role[]; onDone: (r?: any) => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', email: '', roles: [] as string[], storeId: '', dealerId: '', customerId: '' });
+  const [f, setF] = useState({ username: '', displayName: '', email: '', roles: [] as string[], storeId: '', dealerId: '', customerId: '', marketCode: '' });
   const { run, busy, error } = useAction();
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   return (
     <Card className="mb-6">
-      <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); const r = await run(() => post('/users', { ...f, storeId: f.storeId || undefined, dealerId: f.dealerId || undefined, customerId: f.customerId || undefined, email: f.email || undefined })); if (r) onDone(r); }}>
+      <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); const r = await run(() => post('/users', { ...f, storeId: f.storeId || undefined, dealerId: f.dealerId || undefined, customerId: f.customerId || undefined, email: f.email || undefined, marketCode: f.marketCode || undefined })); if (r) onDone(r); }}>
         <Field label="Username" hint="3-50 characters: letters, digits, dot, dash, underscore"><Input required value={f.username} onChange={set('username')} autoCapitalize="none" /></Field>
         <Field label="Full name"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
         <Field label="Email"><Input type="email" value={f.email} onChange={set('email')} /></Field>
+        <MarketField value={f.marketCode} onChange={(v) => setF({ ...f, marketCode: v })} />
         <div className="sm:col-span-2"><RolePicker roles={roles} value={f.roles} onChange={(v) => setF({ ...f, roles: v })} /></div>
         {needs(roles, f.roles, 'store') && <Field label="Store" hint="The store whose orders and stock they can see. Add stores under Stores."><StorePicker value={f.storeId} onChange={(id) => setF({ ...f, storeId: id })} /></Field>}
         {needs(roles, f.roles, 'dealer') && <Field label="Dealer ID" hint="Their orders and commission are limited to this dealer"><Input required value={f.dealerId} onChange={set('dealerId')} /></Field>}
@@ -110,15 +124,16 @@ function UserForm({ roles, onDone }: { roles: Role[]; onDone: (r?: any) => void 
 }
 
 function EditUser({ user, roles, onDone }: { user: any; roles: Role[]; onDone: () => void }) {
-  const [f, setF] = useState({ displayName: user.displayName, email: user.email ?? '', roles: user.roles as string[], storeId: user.storeId ?? '', dealerId: user.dealerId ?? '', status: user.status });
+  const [f, setF] = useState({ displayName: user.displayName, email: user.email ?? '', roles: user.roles as string[], storeId: user.storeId ?? '', dealerId: user.dealerId ?? '', status: user.status, marketCode: user.marketCode ?? '' });
   const { run, busy, error } = useAction();
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   return (
     <Card className="mb-6 border border-accent/30">
       <h2 className="mb-3 text-title3 font-semibold">Edit {user.username}</h2>
-      <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await run(() => patch(`/users/${user.id}`, { displayName: f.displayName, email: f.email || undefined, roles: f.roles, status: f.status, storeId: f.storeId || null, dealerId: f.dealerId || null }))) onDone(); }}>
+      <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await run(() => patch(`/users/${user.id}`, { displayName: f.displayName, email: f.email || undefined, roles: f.roles, status: f.status, storeId: f.storeId || null, dealerId: f.dealerId || null, marketCode: f.marketCode || undefined }))) onDone(); }}>
         <Field label="Full name"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
         <Field label="Email"><Input type="email" value={f.email} onChange={set('email')} /></Field>
+        <MarketField value={f.marketCode} onChange={(v) => setF({ ...f, marketCode: v })} />
         <Field label="Status" hint="Disabling signs them out immediately"><Select value={f.status} onChange={set('status')}><option value="ACTIVE">Active</option><option value="DISABLED">Disabled</option></Select></Field>
         <div className="sm:col-span-2"><RolePicker roles={roles} value={f.roles} onChange={(v) => setF({ ...f, roles: v })} /></div>
         {needs(roles, f.roles, 'store') && <Field label="Store"><StorePicker value={f.storeId} onChange={(id) => setF({ ...f, storeId: id })} /></Field>}

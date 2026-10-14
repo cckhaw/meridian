@@ -161,7 +161,7 @@ post('/users', 'user:manage', async (c) => { const b = newUser.parse(c.body); aw
 patch('/users/:id', 'user:manage', async (c) => {
   const b = z.object({
     displayName: blank(z.string().min(1).max(100)), email: blank(z.string().email()), roles: z.array(z.string()).optional(), status: z.enum(['ACTIVE', 'DISABLED']).optional(),
-    storeId: z.string().max(50).nullable().optional(), dealerId: z.string().max(50).nullable().optional(),
+    storeId: z.string().max(50).nullable().optional(), dealerId: z.string().max(50).nullable().optional(), marketCode: blank(z.string().length(2)),
   }).parse(c.body);
   await guardUserChange(c, c.params.id!, b.roles);
   return core.updateUser(c.db, c.user.username, c.params.id!, b);

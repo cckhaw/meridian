@@ -195,3 +195,17 @@ describe('documentation', () => {
     expect(onDisk, 'docs/ROLES.md is out of date: run `pnpm --filter @meridian/core docs:roles`').toBe(rolesMarkdown());
   });
 });
+
+describe('the market a login sells in', () => {
+  it('starts as the deployment\'s own country, can be chosen, and can be changed later', async () => {
+    const regional = (await db.query(`SELECT value FROM settings WHERE key='regional'`)).rows[0]?.value ?? {};
+    await db.query(`INSERT INTO settings (key, value, updated_by) VALUES ('regional', $1, 'test') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, [JSON.stringify({ ...regional, country: 'MY' })]);
+    const a = await createUser(db, 'root', { username: 'market.default', displayName: 'Default Market', roles: ['call-center'] });
+    expect(a.user.marketCode).toBe('MY'); // not Singapore by habit
+    const b = await createUser(db, 'root', { username: 'market.chosen', displayName: 'Chosen Market', roles: ['call-center'], marketCode: 'th' });
+    expect(b.user.marketCode).toBe('TH');
+    await expect(createUser(db, 'root', { username: 'market.bad', displayName: 'Bad', roles: ['call-center'], marketCode: 'ZZ' })).rejects.toThrow(/unknown market/);
+    expect((await updateUser(db, 'root', b.user.id, { marketCode: 'SG' })).marketCode).toBe('SG');
+    expect((await updateUser(db, 'root', b.user.id, { displayName: 'Chosen Market 2' })).marketCode).toBe('SG'); // other edits leave it alone
+  });
+});

@@ -57,11 +57,19 @@ function OfferPicker({ w, kind, placeholder, noteFor }: { w: Wizard; kind: strin
   const term = useDebounced(q.trim());
   const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}&kind=${kind}&q=${encodeURIComponent(term)}`);
   const toggle = (o: any) => w.setItems((cur) => (cur.some((i) => i.offer.id === o.id) ? cur.filter((i) => i.offer.id !== o.id) : [...cur, newItem(o)]));
+  // When nothing is listed, find out whether offers exist in some other market, so the message can say why instead of pretending there are none.
+  const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term ? `/catalog?limit=1&status=ACTIVE&kind=${kind}` : null);
   return (
     <>
       <SearchField label={placeholder} placeholder={placeholder} value={q} onChange={setQ} className="mb-3 sm:max-w-md" />
       {list.loading && list.items.length === 0 && <Spinner />}
-      {!list.loading && list.items.length === 0 && <Alert tone="info">{term ? 'Nothing matches.' : 'No sellable offers here yet.'}{w.can('catalog:write') ? ' Create and activate offers in the catalog.' : ''}</Alert>}
+      {!list.loading && list.items.length === 0 && (
+        <Alert tone="info">
+          {term ? 'Nothing matches.' : elsewhere.data && elsewhere.data.items.length > 0
+            ? <>There are live offers, but none is sold in <strong>{w.marketCode}</strong>, the market of this login. {w.can('user:manage') ? 'Change this user’s market under Users & roles, or sell the offers in that market (offer → Availability).' : 'Ask an administrator to set your market, or to sell the offers in it.'}</>
+            : <>No sellable offers here yet.{w.can('catalog:write') ? ' Create and activate offers in the catalog.' : ''}</>}
+        </Alert>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         {list.items.map((o) => <OfferCard key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} note={noteFor?.(o)} />)}
       </div>

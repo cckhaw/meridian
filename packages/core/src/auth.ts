@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { audit } from './audit.js';
+import { MARKETS } from './config.js';
+import { getRegional } from './settings.js';
 import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
@@ -227,6 +229,13 @@ const adminView = (r: Row) => ({
   storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: r.marketCode?.trim(), createdAt: r.createdAt, createdBy: r.createdBy,
 });
 
+/** A login's market decides which offers it can sell: the one given, else the deployment's own country (Settings → Regional), else Singapore. */
+async function userMarket(q: Queryable, given?: string): Promise<string> {
+  if (given) { const m = given.toUpperCase(); if (!MARKETS[m]) throw invalid(`unknown market ${given}`); return m; }
+  const r = await getRegional(q);
+  return MARKETS[r.country] ? r.country : 'SG';
+}
+
 /** Creates a user. Without a password a one-time temporary password is generated and returned; the user must change it at first sign-in. */
 export async function createUser(db: Db, actor: string, i: NewUser): Promise<{ user: ReturnType<typeof adminView>; temporaryPassword?: string }> {
   if (!USERNAME.test(i.username)) throw invalid('username must be 3-50 characters: letters, digits, dot, dash or underscore');
@@ -246,7 +255,7 @@ export async function createUser(db: Db, actor: string, i: NewUser): Promise<{ u
     const r = (await db.query(
       `INSERT INTO users (username, display_name, email, password_hash, roles, must_change_password, store_id, dealer_id, customer_id, market_code, created_by)
        VALUES ($1,$2,$3,$4,$5,true,$6,$7,$8,$9,$10) RETURNING *`,
-      [i.username.toLowerCase(), i.displayName.trim(), i.email ?? null, hash, roles, i.storeId ?? null, i.dealerId ?? null, i.customerId ?? null, i.marketCode ?? 'SG', actor])).rows[0]!;
+      [i.username.toLowerCase(), i.displayName.trim(), i.email ?? null, hash, roles, i.storeId ?? null, i.dealerId ?? null, i.customerId ?? null, await userMarket(db, i.marketCode), actor])).rows[0]!;
     await audit(db, actor, 'user', r.id, 'USER_CREATED', { username: r.username, roles });
     return { user: adminView(r), temporaryPassword: temp };
   } catch (e) {
@@ -268,7 +277,7 @@ export async function listUsers(q: Queryable, f: { q?: string; limit?: number; c
   return { items: page.items.map((r) => adminView(r)), nextCursor: page.nextCursor };
 }
 
-export async function updateUser(db: Db, actor: string, id: string, p: { displayName?: string; email?: string; roles?: string[]; status?: 'ACTIVE' | 'DISABLED'; storeId?: string | null; dealerId?: string | null }) {
+export async function updateUser(db: Db, actor: string, id: string, p: { displayName?: string; email?: string; roles?: string[]; status?: 'ACTIVE' | 'DISABLED'; storeId?: string | null; dealerId?: string | null; marketCode?: string }) {
   return db.tx(async (q) => {
     const u = (await q.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [id])).rows[0];
     if (!u || u.isSuperuser) throw notFound('user', id);
@@ -277,11 +286,11 @@ export async function updateUser(db: Db, actor: string, id: string, p: { display
     checkBinding(roles, { storeId, dealerId, customerId: u.customerId });
     if (storeId && storeId !== u.storeId) await assertStoreUsable(q, storeId);
     await q.query(
-      `UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), roles=$4, status = COALESCE($5, status), store_id=$6, dealer_id=$7, updated_at=now() WHERE id=$1`,
-      [id, p.displayName?.trim() ?? null, p.email ?? null, roles, p.status ?? null, storeId, dealerId]);
+      `UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), roles=$4, status = COALESCE($5, status), store_id=$6, dealer_id=$7, market_code = COALESCE($8, market_code), updated_at=now() WHERE id=$1`,
+      [id, p.displayName?.trim() ?? null, p.email ?? null, roles, p.status ?? null, storeId, dealerId, p.marketCode ? await userMarket(q, p.marketCode) : null]);
     // Permission and status changes take effect immediately, not at next login.
     if (p.roles || p.status === 'DISABLED' || p.storeId !== undefined || p.dealerId !== undefined) await revokeUserSessions(q, id);
-    await audit(q, actor, 'user', id, 'USER_UPDATED', { roles: p.roles, status: p.status });
+    await audit(q, actor, 'user', id, 'USER_UPDATED', { roles: p.roles, status: p.status, marketCode: p.marketCode });
     return adminView((await q.query('SELECT * FROM users WHERE id=$1', [id])).rows[0]!);
   });
 }
