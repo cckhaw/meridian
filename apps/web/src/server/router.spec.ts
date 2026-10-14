@@ -1131,3 +1131,53 @@ describe('numbers, SIM cards and order numbers', () => {
     expect(order.number).toMatch(/^\d{8}-\d{5}$/);
   });
 });
+
+describe('group plans and port-in through the API', () => {
+  it('sells a family plan with new and ported-in lines in one order, answers the port-in, and moves a single line to a group plan', async () => {
+    const root_ = await root();
+    const agent = await staff(['telesales']);
+    const c = await customer(root_, 'Family buyer');
+    expect((await call('POST', '/numbering/import/msisdn', { cookie: root_, body: { range: { from: '60126000001', to: '60126000030' }, apply: true } })).status).toBe(200);
+    const lines = [{ offerId: 'plan-family-100', members: [
+      { offerId: 'plan-family-member' },
+      { offerId: 'plan-family-member', portIn: { donorOperator: 'OtherTel', donorMsisdn: '60128123456', holderName: 'Aisha Rahman', holderIdType: 'NATIONAL_ID', holderIdNumber: 'S1234567D', temporaryNumber: true } },
+    ] }];
+    // the cart's quote lists the head and its members, with the group terms
+    const q = await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines } });
+    expect(q.status).toBe(200);
+    expect(q.json.lines).toHaveLength(3);
+    expect(q.json.lines[0].groupPlan).toMatchObject({ maxMembers: 3, sharedPoolQuotaGb: 100 });
+    expect([q.json.lines[1].memberOf, q.json.lines[2].memberOf]).toEqual([0, 0]);
+    expect(q.json.lines[2].portIn).toMatchObject({ donorMsisdn: '+60128123456', temporaryNumber: true });
+    // too many members, and a plan the group does not allow
+    const four = { offerId: 'plan-family-100', members: Array.from({ length: 4 }, () => ({ offerId: 'plan-family-member' })) };
+    expect((await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines: [four] } })).status).toBe(422);
+    expect((await call('POST', '/orders/quote', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines: [{ offerId: 'plan-family-100', members: [{ offerId: 'plan-sim-5g' }] }] } })).status).toBe(422);
+
+    const placed = await call('POST', '/orders', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: c, lines, payment: { method: 'CREDIT_CARD' } } });
+    expect(placed.status).toBe(200);
+    const acct = (await call('GET', `/customers/${c}`, { cookie: root_ })).json.accounts[0].id;
+    const groups = (await call('GET', `/accounts/${acct}/groups`, { cookie: root_ })).json.items;
+    expect(groups).toHaveLength(1);
+    const g = (await call('GET', `/groups/${groups[0].id}`, { cookie: root_ })).json;
+    expect([g.origin, g.slots.used, g.slots.remaining, g.members.length]).toEqual(['CHECKOUT', 2, 1, 3]);
+
+    // the port-in is a request staff can see and the clearinghouse can answer, once
+    expect((await call('GET', '/mnp/port-in', { cookie: (await staff(['retail-store'], { storeId: 'STORE-SG-001' })).cookie })).status).toBe(403);
+    const list = await call('GET', '/mnp/port-in?status=PENDING', { cookie: root_ });
+    const req = list.json.items.find((r: any) => r.donorMsisdn === '+60128123456');
+    expect(req).toMatchObject({ status: 'PENDING', serviceIdentifier: req.temporaryMsisdn });
+    const done = await call('POST', `/mnp/port-in/${req.id}/decision`, { cookie: root_, body: { approved: true, reference: 'NCH-7', complete: true } });
+    expect([done.status, done.json.status]).toEqual([200, 'COMPLETED']);
+    expect((await call('POST', `/mnp/port-in/${req.id}/decision`, { cookie: root_, body: { approved: true, complete: true } })).json.alreadyDone).toBe(true);
+    expect((await call('GET', `/groups/${groups[0].id}`, { cookie: root_ })).json.members.map((m: any) => m.identifier)).toContain('+60128123456'); // the ported number is on the member, the group untouched
+
+    // Vector B: a single line moves to a group plan; staff only
+    const single = await call('POST', '/orders', { cookie: agent.cookie, body: { channel: 'TELESALES', customerId: await customer(root_, 'Single'), lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CREDIT_CARD' } } });
+    const svc = (await call('GET', `/services?customerId=${single.json.customerId}&limit=5`, { cookie: root_ })).json.items[0];
+    expect((await call('POST', `/services/${svc.id}/upgrade-to-group`, { cookie: root_, body: { offerId: 'plan-sim-5g' } })).status).toBe(422);
+    const up = await call('POST', `/services/${svc.id}/upgrade-to-group`, { cookie: root_, body: { offerId: 'plan-family-100' } });
+    expect([up.status, up.json.origin, up.json.slots.remaining]).toEqual([200, 'PLAN_CHANGE', 3]);
+    expect((await call('POST', `/services/${svc.id}/upgrade-to-group`, { body: { offerId: 'plan-family-100' } })).status).toBe(401);
+  });
+});

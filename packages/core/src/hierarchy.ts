@@ -20,6 +20,10 @@ export function validateParent(node: Pick<CatalogNode, 'level'>, parent: Pick<Ca
 /** Kind-specific invariants for offers. Returns a list of violations (empty = valid). */
 export function validateOffer(o: OfferNode): string[] {
   const errs: string[] = [];
+  if (o.group?.isGroupOffer) {
+    const b = behaviourOf(o);
+    if (b.goods || !b.service || b.service !== 'MOBILE') errs.push('a group plan must be a mobile service plan');
+  }
   if (o.prices.length === 0) errs.push('offer needs at least one price component');
   const variants = o.variants ?? [];
   if (variants.length) {

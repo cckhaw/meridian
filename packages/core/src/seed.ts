@@ -16,7 +16,7 @@ import { createAgent, createDealer } from './dealers.js';
 const sgd = (amountMinor: number) => ({ amountMinor, currency: 'SGD' as const });
 const base = { status: 'ACTIVE' as const, markets: ['SG'], parentId: null };
 
-type OfferSeed = Pick<OfferNode, 'id' | 'name' | 'kind' | 'prices' | 'fulfilment'> & Partial<Pick<OfferNode, 'contract' | 'partnerCode' | 'requires' | 'excludes' | 'description'>> & { group: string };
+type OfferSeed = Pick<OfferNode, 'id' | 'name' | 'kind' | 'prices' | 'fulfilment'> & Partial<Pick<OfferNode, 'contract' | 'partnerCode' | 'requires' | 'excludes' | 'description'>> & { terms?: OfferNode['group'] } & { group: string };
 const ful = (o: Partial<OfferNode['fulfilment']> = {}) => ({ requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [], ...o });
 const rec = (amt: number) => ({ type: 'RECURRING' as const, amount: sgd(amt), periodMonths: 1, taxInclusive: true });
 const PHONE_VARIANTS = [
@@ -28,6 +28,9 @@ const once = (amt: number) => ({ type: 'ONE_TIME' as const, amount: sgd(amt), ta
 
 const OFFERS: OfferSeed[] = [
   { id: 'plan-sim-5g', group: 'sim-only', name: '5G SIM-only 100GB', kind: 'SIM_ONLY', prices: [rec(3500), once(1000)], contract: { termMonths: 0 }, fulfilment: ful({ requiresSimActivation: true }), description: 'No contract. Includes 100GB 5G data and unlimited calls.' },
+  { id: 'plan-family-member', group: 'family', name: 'Family Member line', kind: 'SIM_ONLY', prices: [rec(1500), once(0)], contract: { termMonths: 0 }, fulfilment: ful({ requiresSimActivation: true }), description: 'A line that joins a Family Plan and shares its data pool.' },
+  { id: 'plan-family-100', group: 'family', name: 'Family Plan 100GB (shared)', kind: 'SIM_ONLY', prices: [rec(8900), once(1000)], contract: { termMonths: 0 }, fulfilment: ful({ requiresSimActivation: true }),
+    terms: { isGroupOffer: true, maxGroupMembers: 3, allowedMemberOfferIds: ['plan-family-member'], sharedPoolQuotaGb: 100 }, description: 'The family head plus up to 3 member lines sharing 100GB. Members take the Family Member line.' },
   { id: 'plan-phone-12', group: 'device', name: '5G Plan + Phone (12 mo)', kind: 'SIM_DEVICE', prices: [rec(8800), once(49900)],
     contract: { termMonths: 12, etc: { method: 'SUBSIDY_AMORTISED', waiveInLastMonths: 1 }, subsidy: { deviceRetailPrice: sgd(120000), subsidyAmount: sgd(70100) } }, fulfilment: ful({ requiresShipping: true, requiresSimActivation: true, inventorySkus: ['PHONE-X1-128'] }) },
   { id: 'plan-phone-24', group: 'device', name: '5G Plan + Phone (24 mo)', kind: 'SIM_DEVICE', prices: [rec(6800), once(29900)],
@@ -50,7 +53,7 @@ const OFFERS: OfferSeed[] = [
 
 const TREE = [
   { id: 'mobile', level: 'NETWORK_TYPE', name: 'Mobile', networkType: 'mobile', children: [
-    { id: 'postpaid', name: 'Postpaid', groups: ['sim-only', 'device', 'insurance', 'vas'] }, { id: 'wearables', name: 'Wearables', groups: ['wearable'] }] },
+    { id: 'postpaid', name: 'Postpaid', groups: ['sim-only', 'family', 'device', 'insurance', 'vas'] }, { id: 'wearables', name: 'Wearables', groups: ['wearable'] }] },
   { id: 'fiber', level: 'NETWORK_TYPE', name: 'Fibre', networkType: 'fiber', children: [{ id: 'residential', name: 'Residential', groups: ['home'] }] },
   { id: 'iot', level: 'NETWORK_TYPE', name: 'IoT', networkType: 'iot', children: [{ id: 'iot-enterprise', name: 'Enterprise IoT', groups: ['enterprise'] }] },
   { id: 'none', level: 'NETWORK_TYPE', name: 'Non-telco', networkType: 'none', children: [
@@ -97,7 +100,7 @@ export async function seedReference(db: Db): Promise<void> {
       const gp = groupParent.get(o.group)!;
       await createNode(q, { ...base, id: o.id, level: 'OFFER', code: o.id, name: o.name, path: `${gp}/${o.id}`, parentId: `grp-${o.group}`, kind: o.kind, prices: o.prices,
         contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode, description: o.description, characteristics: {}, requires: o.requires ?? [], excludes: o.excludes ?? [],
-        variants: o.fulfilment.inventorySkus.includes('PHONE-X1-128') ? PHONE_VARIANTS : [],
+        group: o.terms, variants: o.fulfilment.inventorySkus.includes('PHONE-X1-128') ? PHONE_VARIANTS : [],
         deals: o.id === 'good-phone-outright' ? [{ termMonths: 12, subsidyMinor: 20000, waiveInLastMonths: 1 }, { termMonths: 24, subsidyMinor: 40000, waiveInLastMonths: 1 }] : [] } as never);
     }
     for (const [offerId, items] of Object.entries(LINE_ITEMS)) {

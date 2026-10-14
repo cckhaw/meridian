@@ -74,16 +74,43 @@ async function eligibleServices(q: Queryable, accountId: string, ids: string[]):
   return rows;
 }
 
-export async function createGroup(q: Queryable, actor: string, i: { accountId: string; name: string; principalServiceId: string; supplementaryServiceIds?: string[]; benefits?: GroupBenefits }): Promise<Row> {
+/** The terms of the group plan a group was made for (how many supplementary lines, which offers they may take), or null for a group made by hand. */
+export async function groupPlanTerms(q: Queryable, offerId: string | null | undefined): Promise<{ max: number; allowed: string[] } | null> {
+  if (!offerId) return null;
+  const g = (await q.query(`SELECT data->'group' AS g FROM catalog_nodes WHERE id=$1`, [offerId])).rows[0]?.g;
+  return g?.isGroupOffer ? { max: g.maxGroupMembers as number, allowed: (g.allowedMemberOfferIds ?? []) as string[] } : null;
+}
+
+/** Whether a service may join a plan-based group as a supplementary line: a slot is free and its offer is one the group plan allows. */
+async function assertCanJoin(q: Queryable, g: Row, services: Row[]): Promise<void> {
+  const terms = await groupPlanTerms(q, g.offerId);
+  const used = Number((await q.query(`SELECT count(*) AS n FROM service_group_members WHERE group_id=$1 AND role='SUPPLEMENTARY'`, [g.id])).rows[0]!.n);
+  if (g.maxSupplementary != null && used + services.length > g.maxSupplementary) {
+    const left = Math.max(0, g.maxSupplementary - used);
+    throw rejected(`This group holds ${g.maxSupplementary} supplementary line${g.maxSupplementary === 1 ? '' : 's'} besides the family head, and ${left === 0 ? 'every slot is taken' : `${left} slot${left === 1 ? ' is' : 's are'} left`}.`);
+  }
+  if (terms?.allowed.length) {
+    const offers = (await q.query('SELECT s.identifier, s.offer_id FROM services s WHERE s.id = ANY($1::uuid[])', [services.map((x) => x.id)])).rows;
+    for (const o of offers) if (!terms.allowed.includes(o.offerId as string)) throw rejected(`${o.identifier} is on a plan this group does not allow as a member line.`);
+  }
+}
+
+export async function createGroup(q: Queryable, actor: string, i: { accountId: string; name: string; principalServiceId: string; supplementaryServiceIds?: string[]; benefits?: GroupBenefits; offerId?: string; maxSupplementary?: number | null; origin?: 'MANUAL' | 'CHECKOUT' | 'PLAN_CHANGE' }): Promise<Row> {
   const acct = (await q.query('SELECT id, customer_id, shard_id FROM accounts WHERE id=$1', [i.accountId])).rows[0];
   if (!acct) throw notFound('account', i.accountId);
   const sup = [...new Set(i.supplementaryServiceIds ?? [])];
   if (sup.includes(i.principalServiceId)) throw invalid('the principal service cannot also be supplementary');
   const benefits = cleanBenefits(i.benefits);
-  await eligibleServices(q, i.accountId, [i.principalServiceId, ...sup]);
+  const found = await eligibleServices(q, i.accountId, [i.principalServiceId, ...sup]);
+  const terms = await groupPlanTerms(q, i.offerId);
+  const max = i.maxSupplementary ?? terms?.max ?? null;
+  if (max != null && sup.length > max) throw rejected(`This group holds ${max} supplementary line${max === 1 ? '' : 's'} besides the family head; ${sup.length} were given.`);
+  if (terms?.allowed.length) {
+    for (const id of sup) { const row = found.find((r) => r.id === id); const off = (await q.query('SELECT offer_id FROM services WHERE id=$1', [id])).rows[0]?.offerId; if (!terms.allowed.includes(off as string)) throw rejected(`${row?.identifier ?? id} is on a plan this group does not allow as a member line.`); }
+  }
   const id = randomUUID();
-  await q.query(`INSERT INTO service_groups (id, shard_id, customer_id, account_id, name, benefits, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [id, acct.shardId, acct.customerId, i.accountId, name(i.name), JSON.stringify(benefits), actor]);
+  await q.query(`INSERT INTO service_groups (id, shard_id, customer_id, account_id, name, benefits, created_by, offer_id, max_supplementary, origin) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [id, acct.shardId, acct.customerId, i.accountId, name(i.name), JSON.stringify(benefits), actor, i.offerId ?? null, max, i.origin ?? 'MANUAL']);
   await q.query(`INSERT INTO service_group_members (group_id, service_id, role, added_by) VALUES ($1,$2,'PRINCIPAL',$3)`, [id, i.principalServiceId, actor]);
   for (const s of sup) await q.query(`INSERT INTO service_group_members (group_id, service_id, role, added_by) VALUES ($1,$2,'SUPPLEMENTARY',$3)`, [id, s, actor]);
   await audit(q, actor, 'service_group', id, 'create', { accountId: i.accountId, principal: i.principalServiceId, supplementary: sup.length });
@@ -96,7 +123,9 @@ export async function getGroup(q: Queryable, id: string): Promise<Row> {
     `SELECT m.service_id, m.role, m.added_at, s.identifier, s.type, s.status, s.offer_id, n.name AS offer_name
        FROM service_group_members m JOIN services s ON s.id = m.service_id LEFT JOIN catalog_nodes n ON n.id = s.offer_id
       WHERE m.group_id=$1 ORDER BY (m.role = 'PRINCIPAL') DESC, s.identifier LIMIT 500`, [id])).rows;
-  return { ...g, members };
+  const used = members.filter((m) => m.role === 'SUPPLEMENTARY').length;
+  const slots = g.maxSupplementary == null ? null : { max: g.maxSupplementary as number, used, remaining: Math.max(0, (g.maxSupplementary as number) - used) };
+  return { ...g, members, slots };
 }
 
 /** The groups of an account (or a customer), newest last, a page at a time, each with its principal and size. */
@@ -128,6 +157,7 @@ export async function updateGroup(q: Queryable, actor: string, id: string, p: { 
 export async function addGroupMember(q: Queryable, actor: string, groupId: string, serviceId: string): Promise<Row> {
   const g = await activeGroup(q, groupId);
   await eligibleServices(q, g.accountId, [serviceId]);
+  await assertCanJoin(q, g, [{ id: serviceId }]);
   await q.query(`INSERT INTO service_group_members (group_id, service_id, role, added_by) VALUES ($1,$2,'SUPPLEMENTARY',$3)`, [groupId, serviceId, actor]);
   await audit(q, actor, 'service_group', groupId, 'add_member', { serviceId });
   return getGroup(q, groupId);

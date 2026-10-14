@@ -19,6 +19,8 @@ import { assertDealerSale } from './dealers.js';
 import { consumeMsisdnTx, releaseMsisdnTx, reserveMsisdnTx } from './number-reservation.js';
 import { activateResourcesTx, allocateSimTx, releaseOrderSimsTx } from './nrm-pools.js';
 import { taxSplit } from './tax.js';
+import { syncOrderGroups } from './group-orders.js';
+import { createPortInTx } from './port-in.js';
 import { conflict } from './errors.js';
 
 export type { GroupKind, LineInput, LinePayment } from './order-pricing.js';
@@ -109,9 +111,9 @@ async function allocateLineTx(q: Queryable, p: Awaited<ReturnType<typeof priceBa
       await q.query(`UPDATE number_reservation_locks SET expires_at='infinity' WHERE resource_type='MSISDN' AND resource_id=$1 AND state='ACTIVE'`, [p.input.msisdn]);
     }
     out.msisdn = p.input.msisdn;
-  } else if (mobile && !p.input.msisdn && (await q.query('SELECT 1 FROM msisdn_inventory LIMIT 1')).rows.length) {
+  } else if (mobile && !p.input.msisdn && !(p.input.portIn && !p.input.portIn.temporaryNumber) && ((await q.query('SELECT 1 FROM msisdn_inventory LIMIT 1')).rows.length || p.input.portIn)) {
     const pick = (await q.query(`SELECT msisdn FROM msisdn_inventory WHERE tier='STANDARD' AND (state='AVAILABLE' OR (state='RESERVED_CHECKOUT' AND reserved_until < now())) ORDER BY msisdn LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
-    if (!pick) throw rejected('There are no standard numbers left in the pool. Load more numbers, or choose a number.');
+    if (!pick) throw rejected(p.input.portIn ? 'There is no temporary number to give while the port-in is processed (the pool has no standard numbers left). Load more numbers, or port in without a temporary number.' : 'There are no standard numbers left in the pool. Load more numbers, or choose a number.');
     await reserveMsisdnTx(q, pick.msisdn as string, holder, randomUUID(), 60_000, { actor });
     await q.query(`UPDATE msisdn_inventory SET reserved_until=NULL WHERE msisdn=$1`, [pick.msisdn]);
     await q.query(`UPDATE number_reservation_locks SET expires_at='infinity' WHERE resource_type='MSISDN' AND resource_id=$1 AND state='ACTIVE'`, [pick.msisdn]);
@@ -181,13 +183,15 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
     const alloc = await allocateLineTx(q, p, orderId, att.storeId ?? null, actor);
     await q.query(
       `INSERT INTO order_lines (shard_id, order_id, offer_id, quantity, unit_price_minor, msisdn, serial_number, description, net_minor, tax_minor,
-         fulfil_group, options, pay_mode, installment_months, down_payment_minor, paid_now_minor, discount_minor, discount_rules, position, attach_position, deal, iccid, sim_type, vip_tier, vip_fee_minor)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+         fulfil_group, options, pay_mode, installment_months, down_payment_minor, paid_now_minor, discount_minor, discount_rules, position, attach_position, deal, iccid, sim_type, vip_tier, vip_fee_minor,
+         group_head_position, join_group_id, port_in)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`,
       [customer.shardId, orderId, p.offer.id, p.qty, Math.round(p.gross / p.qty), alloc.msisdn ?? p.input.msisdn ?? null, p.input.serialNumber ?? null, p.offer.name, p.net, p.tax,
        p.group, JSON.stringify({ ...(p.variant ? { variantId: p.variant.id, colour: p.variant.colour, storage: p.variant.storage, sku: p.variant.sku } : {}), ...(alloc.msisdn ? { numberFromPool: true } : {}) }),
        p.payMode, p.months, p.downMinor, p.paidNow, p.discountMinor, p.discountRules, p.position, p.attachPosition ?? null,
        p.deal ? JSON.stringify({ termMonths: p.deal.termMonths, subsidyMinor: p.deal.subsidyMinor, waiveInLastMonths: p.deal.waiveInLastMonths ?? 1, retailMinor: p.deal.retailMinor, currency: priced.currency }) : null,
-       alloc.iccid ?? null, alloc.simType ?? null, p.vipTier ?? null, p.vipFeeMinor],
+       alloc.iccid ?? null, alloc.simType ?? null, p.vipTier ?? null, p.vipFeeMinor,
+       p.input.memberOf ?? null, p.input.joinGroupId ?? null, p.input.portIn ? JSON.stringify(p.input.portIn) : null],
     );
   }
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
@@ -490,7 +494,9 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
       continue;
     }
     let identifier: string;
-    if (l.msisdn) { // number portability (port-in) or chosen number
+    const awaitingPort = !!l.portIn && !l.msisdn; // a port-in without a temporary number: the service waits PENDING and starts when its number arrives
+    if (awaitingPort) identifier = (l.portIn as { donorMsisdn: string }).donorMsisdn;
+    else if (l.msisdn) { // a chosen number, or the temporary number given while a port-in is processed
       if (!/^\+\d{8,15}$/.test(l.msisdn)) throw invalid(`invalid MSISDN ${l.msisdn}, use E.164 like ${mk.dialCode}91234567`);
       identifier = l.msisdn;
     } else if (type === 'MOBILE') identifier = mk.dialCode + (await q.query(`SELECT nextval('msisdn_seq') AS n`)).rows[0]!.n;
@@ -499,15 +505,17 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
     const id = randomUUID();
     if (l.msisdn && (await q.query(`SELECT 1 FROM identifier_registry WHERE type=$1 AND identifier=$2`, [type, identifier])).rows.length) throw conflict(`number ${identifier} is already in service`);
     await q.query(
-      `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,'ACTIVE',now(),$8,now(),$9)`,
+      `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,${awaitingPort ? "'PENDING',NULL" : "'ACTIVE',now()"},$8,${awaitingPort ? 'NULL' : 'now()'},$9)`,
       [id, o.shardId, accountId, o.customerId, type, identifier, l.offerId, term, o.id],
     );
-    if (l.iccid || l.msisdn) { // the SIM and number come out of the pools and point at the new service
+    await q.query('UPDATE order_lines SET service_id=$3 WHERE id=$1 AND shard_id=$2', [l.id, o.shardId, id]);
+    if ((l.iccid || l.msisdn) && !awaitingPort) { // the SIM and number come out of the pools and point at the new service
       const r = await activateResourcesTx(q, { iccid: l.iccid, serviceId: id, actor: 'order' });
       const vip = l.msisdn ? (await q.query('SELECT r.etc_multiplier_bps FROM msisdn_inventory m JOIN msisdn_vip_tier_rules r ON r.tier = m.tier WHERE m.msisdn=$1 AND r.enabled', [l.msisdn])).rows[0] : undefined;
       await q.query('UPDATE services SET iccid=$2, imsi=$3, vip_tier=$4, vip_etc_bps=$5 WHERE id=$1', [id, l.iccid ?? null, r.imsi, l.vipTier ?? null, vip && vip.etcMultiplierBps !== 10000 ? vip.etcMultiplierBps : null]);
       if (l.msisdn) await consumeMsisdnTx(q, l.msisdn, id, 'order');
     }
+    if (l.portIn) await createPortInTx(q, { customerId: o.customerId, orderId: o.id, orderLineId: l.id, serviceId: id, input: l.portIn, temporaryMsisdn: awaitingPort ? null : l.msisdn, actor: 'order' });
     if (device) {
       await q.query('UPDATE services SET deal=$2 WHERE id=$1', [id, JSON.stringify({ deviceLineId: device.id, deviceOfferId: device.offerId, device: device.description, termMonths: device.deal.termMonths,
         subsidyMinor: device.deal.subsidyMinor, waiveInLastMonths: device.deal.waiveInLastMonths ?? 1, currency: device.deal.currency })]);
@@ -534,6 +542,7 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
     if (/duplicate key/.test((e as Error).message)) throw conflict('one of the requested numbers is already in service');
     throw e;
   }
+  await syncOrderGroups(q, o, 'order'); // a group plan sold here opens its group, and member lines join it
 }
 
 /** Net value the sale is worth to the seller: what is still standing after any cancellations, plus a year-agnostic first month of each plan. */

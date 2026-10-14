@@ -193,6 +193,7 @@ const offerFields = {
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
   partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
   requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]), suspension: z.object({ mode: z.enum(['PAUSE', 'MAINTENANCE_FEE']), monthlyFeeMinor: z.number().int().min(0).max(100_000_000).optional() }).optional(),
+  group: z.object({ isGroupOffer: z.boolean(), maxGroupMembers: z.number().int().min(1).max(20), allowedMemberOfferIds: z.array(z.string().max(70)).max(50).default([]), sharedPoolQuotaGb: z.number().min(0).max(100_000).optional() }).nullable().optional(),
 };
 const lineItemFields = {
   itemType: z.enum(LINE_ITEM_TYPES), description: z.string().max(300).optional(), quantity: z.number().int().min(1).max(1_000_000).optional(),
@@ -209,7 +210,7 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension,
+  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
@@ -576,6 +577,19 @@ post('/groups/:id/principal', 'service:manage', async ({ db, user, params, body 
   return db.tx((q) => core.changePrincipal(q, user.username, params.id!, z.object({ serviceId: uuid }).parse(body).serviceId));
 });
 
+/** Vector B: an existing single line moves to a group plan and becomes the family head; the plan's remaining slots stay open for members. */
+post('/services/:id/upgrade-to-group', 'service:manage', async ({ db, user, params, body }) => new core.GroupOrderService(db).upgrade(params.id!, z.object({ offerId: z.string().max(70) }).parse(body).offerId, user.username));
+
+// ───────────────────────── number portability into the operator (port-in) ─────────────────────────
+get('/mnp/port-in', ['mnp:manage'], ({ db, query }) => core.listPortIns(db, { status: str(query, 'status'), customerId: str(query, 'customerId'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/mnp/port-in/:id', ['mnp:manage'], ({ db, params }) => core.getPortIn(db, params.id!));
+/** The clearinghouse's callback: the donor approved or refused. `complete` also does the switch-over at once. Repeating an answer changes nothing. */
+post('/mnp/port-in/:id/decision', ['mnp:manage'], ({ db, user, params, body }) => core.decidePortIn(db, params.id!, {
+  ...z.object({ approved: z.boolean(), reference: z.string().max(60).optional(), reason: z.string().max(200).optional(), effectiveAt: z.string().max(40).optional(), complete: z.boolean().optional() }).parse(body), actor: user.username,
+}));
+post('/mnp/port-in/:id/complete', ['mnp:manage'], ({ db, user, params }) => core.completePortIn(db, params.id!, user.username));
+post('/mnp/port-in/:id/cancel', ['mnp:manage'], ({ db, user, params, body }) => core.cancelPortIn(db, params.id!, z.object({ reason: z.string().max(200).default('cancelled') }).parse(body ?? {}).reason, user.username));
+
 // ───────────────────────── services ─────────────────────────
 get('/services', 'service:read', ({ db, user, query }) => core.listServices(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), accountId: str(query, 'accountId'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'), groupable: query.get('groupable') === '1',
@@ -702,11 +716,22 @@ get('/services/:id/etc', 'service:read', async ({ db, user, params }) => {
 });
 
 // ───────────────────────── orders ─────────────────────────
+const portInBody = z.object({
+  donorOperator: z.string().min(1).max(60), donorMsisdn: z.string().min(8).max(20), holderName: z.string().min(1).max(100),
+  holderIdType: z.string().min(1).max(20), holderIdNumber: z.string().min(1).max(40), temporaryNumber: z.boolean().optional(),
+});
+/** A member line of a group plan: a new number, a chosen number, or a number ported in, each with its own SIM and plan. */
+const memberBody = z.object({
+  offerId: z.string(), msisdn: z.string().optional(), iccid: z.string().regex(/^89\d{17,18}$/).optional(), simType: z.enum(['PHYSICAL', 'ESIM']).optional(), numberToken: z.string().max(80).optional(),
+  options: z.object({ variantId: z.string().max(40).optional() }).optional(), payment: z.object({ mode: z.enum(['UPFRONT', 'INSTALLMENT']), months: z.number().int().optional(), downPaymentMinor: z.number().int().min(0).optional() }).optional(),
+  portIn: portInBody.optional(),
+});
 const lineBody = z.object({
   offerId: z.string(), quantity: z.number().int().min(1).max(1_000_000).optional(), msisdn: z.string().optional(), serialNumber: z.string().optional(),
   options: z.object({ variantId: z.string().max(40).optional() }).optional(),
   iccid: z.string().regex(/^89\d{17,18}$/).optional(), simType: z.enum(['PHYSICAL', 'ESIM']).optional(), numberToken: z.string().max(80).optional(),
   attachTo: z.number().int().min(0).max(49).optional(), dealTermMonths: z.number().int().optional(),
+  members: z.array(memberBody).max(20).optional(), joinGroupId: uuid.optional(), portIn: portInBody.optional(),
   payment: z.object({ mode: z.enum(['UPFRONT', 'INSTALLMENT']), months: z.number().int().optional(), downPaymentMinor: z.number().int().min(0).optional() }).optional(),
 });
 const orderBody = z.object({
@@ -909,7 +934,7 @@ post('/numbers/reserve', ['numbering:select'], ({ db, user, body }) => new core.
 post('/numbers/release', ['numbering:select'], async ({ db, user, body }) => ({ released: await new core.NumberReservationService(db).release(z.object({ msisdn: z.string().max(20) }).parse(body).msisdn, `checkout:${user.id}`, user.username) }));
 get('/sims/available', ['numbering:select'], ({ db, user, query }) => core.listSims(db, { state: 'AVAILABLE', kind: (str(query, 'kind') as never) ?? 'PHYSICAL', locationId: user.scope.storeId ?? str(query, 'locationId'), q: str(query, 'q'), limit: num(query, 'limit') ?? 20, cursor: str(query, 'cursor') }));
 get('/settings/numbering', ['settings:manage'], ({ db }) => core.getNumberingSettings(db));
-post('/settings/numbering', ['settings:manage'], ({ db, user, body }) => core.setNumberingSettings(db, user.username, z.object({ requireSim: z.boolean(), reservationMinutes: z.number().int(), imsiQuarantineDays: z.number().int(), auctionSettlementHours: z.number().int() }).parse(body)));
+post('/settings/numbering', ['settings:manage'], ({ db, user, body }) => core.setNumberingSettings(db, user.username, z.object({ requireSim: z.boolean(), reservationMinutes: z.number().int(), imsiQuarantineDays: z.number().int(), auctionSettlementHours: z.number().int(), portInExpiryDays: z.number().int().default(14) }).parse(body)));
 
 /** Bulk offers from a CSV file: a template (optionally with every current offer, to edit in bulk), a check that changes nothing, then the load (all rows or none). */
 get('/catalog-import/template', 'catalog:write', async ({ db, query }) => csv(await core.offersTemplate(db, { withOffers: query.get('offers') === '1' }), query.get('offers') === '1' ? 'meridian-offers-export.csv' : 'meridian-offers-import-template.csv'));

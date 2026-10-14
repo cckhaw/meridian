@@ -9,7 +9,7 @@ import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
-import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, isPlan, newItem, type Cust, type Item } from './wizard-types';
+import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, flatLines, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
@@ -147,7 +147,7 @@ function ContractChoice({ w, item }: { w: Wizard; item: Item }) {
   const taken = new Set(w.items.filter((x) => x.key !== item.key && x.deal).map((x) => x.deal!.planKey));
   const plans = w.items.filter((x) => isPlan(x.offer) && x.quantity === 1 && !taken.has(x.key));
   const set = (deal: Item['deal']) => w.setItems((c) => c.map((x) => (x.key === item.key ? { ...x, deal, payMode: 'UPFRONT' } : x)));
-  const l = w.quote?.lines?.[w.items.findIndex((x) => x.key === item.key)];
+  const l = w.quote?.lines?.[quoteIndex(w.items, w.items.findIndex((x) => x.key === item.key))];
   return (
     <Card className="mb-4 space-y-3">
       <div><p className="font-semibold">{item.offer.name}</p><p className="text-footnote text-label2">Buy it outright, or on a contract with a plan and pay less today.</p></div>
@@ -226,7 +226,7 @@ export function PaymentStep({ w }: { w: Wizard }) {
       {w.quoteError && <div className="mb-4"><Alert>{w.quoteError}</Alert></div>}
       <div className="space-y-4">
         {w.items.map((it, idx) => {
-          const l = lines[idx];
+          const l = lines[quoteIndex(w.items, idx)];
           const can = financeable(it.offer) || !!it.deal;
           const term = it.deal?.term ?? (it.offer.contract?.termMonths || 36);
           const months = MONTHS.filter((m) => m <= term);
@@ -393,6 +393,7 @@ function Terms({ groups }: { groups: Array<{ group: string; title: string; point
 export function ReviewStep({ w }: { w: Wizard }) {
   const segs = useSegments();
   const q = w.quote;
+  const flat = flatLines(w.items);
   if (!q) return <Spinner />;
   return (
     <div className="space-y-5">
@@ -412,8 +413,10 @@ export function ReviewStep({ w }: { w: Wizard }) {
               <ul className="grid gap-1 text-subhead sm:grid-cols-2">{l.entitlements.map((e: any, k: number) => <li key={k} className="flex gap-2"><span aria-hidden className="text-success">✓</span><span>{e.unlimited ? 'Unlimited' : e.quantity && !['unit', 'SIM'].includes(e.unit ?? '') ? `${e.quantity.toLocaleString()} ${e.unit ?? ''}`.trim() : ''} {e.name}</span></li>)}</ul></div>
           )}
           <dl className="mt-3 border-t border-separator pt-2">
-            {l.needsSim && <Row k="SIM" v={w.items[i]?.iccid ? w.items[i]!.iccid! : w.items[i]?.simType === 'ESIM' ? 'New eSIM' : w.items[i]?.simType === 'PHYSICAL' ? 'Next free card' : 'Not chosen'} />}
-            {l.needsSim && <Row k="Number" v={w.items[i]?.msisdn ? w.items[i]!.msisdn : 'Assigned from the pool'} />}
+            {l.groupPlan && <Row k="Group plan" v={`You are the family head · up to ${l.groupPlan.maxMembers} member lines${l.groupPlan.sharedPoolQuotaGb ? ` · ${l.groupPlan.sharedPoolQuotaGb} GB shared` : ''}`} />}
+            {l.memberOf !== undefined && <Row k="Member of" v={q.lines[l.memberOf]?.name ?? 'the group plan'} />}
+            {l.needsSim && <Row k="SIM" v={flat[i]?.iccid ? flat[i]!.iccid! : flat[i]?.simType === 'ESIM' ? 'New eSIM' : flat[i]?.simType === 'PHYSICAL' ? 'Next free card' : 'Not chosen'} />}
+            {l.portIn ? <Row k="Number" v={`${l.portIn.donorMsisdn} ported in from ${l.portIn.donorOperator}${l.portIn.temporaryNumber ? ', with a temporary number until the port is approved' : ': the line starts when the number arrives'}`} /> : l.needsSim && <Row k="Number" v={flat[i]?.msisdn ? flat[i]!.msisdn! : 'Assigned from the pool'} />}
             {l.vip && <Row k={`${label(l.vip.tier)} number fee`} v={`${money(l.vip.feeMinor)} (included above)`} />}
             {l.monthlyFeeMinor > 0 && <Row k="Plan fee" v={`${money(l.monthlyFeeMinor)} / month`} />}
             <Row k="Contract" v={l.contractMonths ? `${l.contractMonths} months` : (q.lines.find((x: any) => x.deal?.attachTo === i) ? `${q.lines.find((x: any) => x.deal?.attachTo === i).deal.termMonths} months (with ${q.lines.find((x: any) => x.deal?.attachTo === i).name})` : 'No contract')} />

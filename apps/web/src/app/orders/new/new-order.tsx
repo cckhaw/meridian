@@ -7,8 +7,9 @@ import { useAuth } from '@/lib/auth';
 import { money } from '@/lib/format';
 import type { Party } from './steps';
 import { AddonsStep, CustomerStep, DeliveryStep, DeviceStep, PayStep, PaymentStep, ProductStep, ReviewStep, type Wizard } from './steps';
+import { FamilyStep } from './family-step';
 import { SimStep } from './sim-step';
-import { financeable, lineBody, newItem, type Cust, type Item, type StepId } from './wizard-types';
+import { financeable, isGroupPlan, lineBody, newItem, portInReady, quoteIndex, type Cust, type Item, type StepId } from './wizard-types';
 import { Row, StepFrame, Stepper } from './wizard-ui';
 
 // Every CRM order is staff-assisted. Self-serve orders come from the store-front, so that channel is not offered here.
@@ -88,6 +89,7 @@ export function NewOrder() {
   const steps = useMemo<StepId[]>(() => {
     const s: StepId[] = ['product'];
     if (!quick) s.push('device', 'addons');
+    if (!quick && !portal && items.some((i) => isGroupPlan(i.offer))) s.push('family');
     if (!quick && !portal && needs.sim && can('numbering:select')) s.push('sim');
     if (items.some((i) => financeable(i.offer))) s.push('payment');
     if (!quick && !portal) s.push('customer');
@@ -105,7 +107,8 @@ export function NewOrder() {
     switch (stepId) {
       case 'product': return items.length === 0 ? 'Choose at least one item to continue.' : retail && !(me?.storeId || store) ? 'Choose the store first.' : channel === 'DEALER' && !dealer ? 'Choose the dealer first.' : channel === 'DEALER' && !agent ? 'Choose the dealer’s agent who made the sale.' : null;
       case 'device': return items.some((i) => i.offer.variants?.length && !i.variantId) ? 'Choose a colour and storage.' : null;
-      case 'sim': return quoteError ?? problems[0] ?? (numbering.data?.settings?.requireSim ? items.map((i, k) => (quote?.lines?.[k]?.needsSim && !i.iccid && !i.simType ? `Choose the SIM for ${i.offer.name}.` : null)).find(Boolean) ?? null : null);
+      case 'family': return items.flatMap((i) => (i.members ?? []).map((m, k) => (!m.offerId ? `Choose the plan for member ${k + 1}.` : !portInReady(m.portIn) ? `Complete the port-in details for member ${k + 1}.` : null))).find(Boolean) ?? quoteError ?? null;
+      case 'sim': return !portInReady(items.find((i) => !portInReady(i.portIn))?.portIn) ? 'Complete the port-in details.' :  quoteError ?? problems[0] ?? (numbering.data?.settings?.requireSim ? items.map((i, k) => (quote?.lines?.[quoteIndex(items, k)]?.needsSim && !i.iccid && !i.simType ? `Choose the SIM for ${i.offer.name}.` : null)).find(Boolean) ?? null : null);
       case 'payment': return quoteError;
       case 'customer': return !customer ? 'Choose or create the customer to continue.' : problems[0] ?? null;
       case 'delivery': return how === 'COLLECT' && !pickupStore ? 'Choose the store where the customer will collect.' : shipTo && !address.trim() ? 'Enter the delivery address.' : needs.installation && !shipTo && !address.trim() ? 'Enter the installation address.' : null;
@@ -147,6 +150,7 @@ export function NewOrder() {
                 {stepId === 'product' && <ProductStep w={w} />}
                 {stepId === 'device' && <DeviceStep w={w} />}
                 {stepId === 'addons' && <AddonsStep w={w} />}
+                {stepId === 'family' && <FamilyStep w={w} />}
                 {stepId === 'sim' && <SimStep w={w} requireSim={!!numbering.data?.settings?.requireSim} />}
                 {stepId === 'payment' && <PaymentStep w={w} />}
                 {stepId === 'customer' && <CustomerStep w={w} />}
@@ -186,7 +190,8 @@ function Summary({ w, onJump }: { w: Wizard; onJump: (id: string) => void }) {
       {w.items.length === 0 ? <p className="text-subhead text-label2">Nothing yet. Choose a plan or product to start.</p> : (
         <ul className="space-y-3">
           {w.items.map((it, i) => {
-            const l = q?.lines?.[i];
+            const qi = quoteIndex(w.items, i);
+            const l = q?.lines?.[qi];
             return (
               <li key={it.key} className="rounded-control bg-surface2 p-3">
                 <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate font-medium">{it.offer.name}</p>
@@ -194,9 +199,10 @@ function Summary({ w, onJump }: { w: Wizard; onJump: (id: string) => void }) {
                   {l?.payMode === 'INSTALLMENT' && <p className="text-footnote text-label2">{l.months} × {money(l.instalmentMinor)}/mo</p>}</div>
                   <button aria-label={`Remove ${it.offer.name}`} className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-label2 hover:bg-separator" onClick={() => w.setItems((c) => c.filter((x) => x.key !== it.key))}>×</button></div>
                 <div className="mt-2 flex items-center justify-between text-subhead">
-                  <span className="flex items-center gap-1"><button aria-label="Fewer" className="grid h-7 w-7 place-items-center rounded-full bg-surface" onClick={() => w.setItems((c) => c.map((x) => (x.key === it.key ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x)))}>−</button><span className="w-6 text-center tabular-nums">{it.quantity}</span><button aria-label="More" className="grid h-7 w-7 place-items-center rounded-full bg-surface" onClick={() => w.setItems((c) => c.map((x) => (x.key === it.key ? { ...x, quantity: Math.min(1000, x.quantity + 1) } : x)))}>+</button></span>
+                  {isGroupPlan(it.offer) ? <span className="text-footnote text-label2">{(it.members ?? []).length} member line{(it.members ?? []).length === 1 ? '' : 's'}</span> : <span className="flex items-center gap-1"><button aria-label="Fewer" className="grid h-7 w-7 place-items-center rounded-full bg-surface" onClick={() => w.setItems((c) => c.map((x) => (x.key === it.key ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x)))}>−</button><span className="w-6 text-center tabular-nums">{it.quantity}</span><button aria-label="More" className="grid h-7 w-7 place-items-center rounded-full bg-surface" onClick={() => w.setItems((c) => c.map((x) => (x.key === it.key ? { ...x, quantity: Math.min(1000, x.quantity + 1) } : x)))}>+</button></span>}
                   {l && <span className="tabular-nums">{money(l.priceMinor)}</span>}
                 </div>
+                {isGroupPlan(it.offer) && (it.members ?? []).map((m, k) => { const ml = q?.lines?.[qi + 1 + k]; return ml ? <p key={m.key} className="mt-1 flex justify-between gap-2 text-footnote text-label2"><span className="truncate">+ {ml.name}{ml.portIn ? ' (port-in)' : ''}</span><span className="tabular-nums">{money(ml.priceMinor)}</span></p> : null; })}
               </li>
             );
           })}
