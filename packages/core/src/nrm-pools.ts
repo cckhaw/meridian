@@ -3,7 +3,7 @@ import type { Db, Queryable, Row } from './db.js';
 import { audit } from './audit.js';
 import { csvCell, parseCsv } from './csv.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
-import { assertIccidTransition, assertImsiTransition, auditIdentifier, getMatcher, getNumberingSettings, type IccidState } from './nrm.js';
+import { assertIccidTransition, assertImsiTransition, auditIdentifier, getMatcher, getNumberingSettings, type IccidState, type ImsiState, type ResourceType } from './nrm.js';
 import { assertStockLocation } from './warehouses.js';
 import { VIP_TIERS, type VipTier } from './vip-pattern-matcher.js';
 
@@ -175,16 +175,36 @@ export async function importSims(db: Db, input: { csv: string }, o: SimImportOpt
     const pool = needImsi.length ? await takeImsis(q, needImsi.length) : [];
     if (pool.length < needImsi.length) throw rejected(`The IMSI pool has ${pool.length} free identities but ${needImsi.length} SIMs need one. Load more IMSIs first, or load the SIMs with their IMSI.`);
     needImsi.forEach((f, i) => { f.imsi = pool[i]!; });
-    for (const f of fresh) {
-      await q.query(`INSERT INTO iccid_inventory (iccid, kind, state, location_id, imsi, activation_code, batch) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [f.iccid, f.kind, f.location.startsWith('WH-') ? 'WAREHOUSE_INVENTORY' : 'DISTRIBUTED_DEALER', f.location, f.imsi, f.code, batch]);
-      if (f.imsi) {
-        const existing = (await q.query('SELECT state FROM imsi_inventory WHERE imsi=$1', [f.imsi])).rows[0];
-        if (!existing) await q.query(`INSERT INTO imsi_inventory (imsi, batch) VALUES ($1,$2)`, [f.imsi, batch]); // an IMSI that came with its SIM joins the pool and is bound at once
-        await bindImsi(q, f.imsi, f.iccid, o.actor, 'written onto the SIM at personalisation');
-        res.bound++;
+    // Set-based, in chunks: one statement per thousand SIMs, not several per SIM (a 10,000-card batch must finish well inside a request).
+    const withImsi = fresh.filter((f) => f.imsi);
+    const seenImsi = new Set<string>();
+    for (const f of withImsi) { if (seenImsi.has(f.imsi!)) throw rejected(`The IMSI ${f.imsi} is on more than one SIM in this file.`); seenImsi.add(f.imsi!); }
+    for (let i = 0; i < withImsi.length; i += CHUNK) {
+      const ids = withImsi.slice(i, i + CHUNK).map((f) => f.imsi!);
+      // An IMSI that came with its SIM joins the pool first, then is bound at once.
+      await q.query(`INSERT INTO imsi_inventory (imsi, batch) SELECT x, $2 FROM unnest($1::text[]) AS x ON CONFLICT DO NOTHING`, [ids, batch]);
+      const states = new Map((await q.query('SELECT imsi, state FROM imsi_inventory WHERE imsi = ANY($1::text[]) FOR UPDATE', [ids])).rows.map((r) => [r.imsi as string, r.state as string]));
+      for (const id of ids) assertImsiTransition(id, (states.get(id) ?? 'POOL_UNASSIGNED') as ImsiState, 'BOUND_TO_SIM');
+    }
+    const audits: Array<{ type: ResourceType; id: string; from: string | null; to: string; reason: string; detail: unknown }> = [];
+    for (let i = 0; i < fresh.length; i += CHUNK) {
+      const part = fresh.slice(i, i + CHUNK);
+      await q.query(`INSERT INTO iccid_inventory (iccid, kind, state, location_id, imsi, activation_code, batch)
+        SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
+        [part.map((f) => f.iccid), part.map((f) => f.kind), part.map((f) => (f.location.startsWith('WH-') ? 'WAREHOUSE_INVENTORY' : 'DISTRIBUTED_DEALER')), part.map((f) => f.location), part.map((f) => f.imsi), part.map((f) => f.code), part.map(() => batch)]);
+      const bound = part.filter((f) => f.imsi);
+      if (bound.length) {
+        await q.query(`UPDATE imsi_inventory m SET state='BOUND_TO_SIM', iccid=u.iccid, updated_at=now() FROM unnest($1::text[], $2::text[]) AS u(imsi, iccid) WHERE m.imsi=u.imsi`, [bound.map((f) => f.imsi), bound.map((f) => f.iccid)]);
+        res.bound += bound.length;
+        for (const f of bound) audits.push({ type: 'IMSI', id: f.imsi!, from: 'POOL_UNASSIGNED', to: 'BOUND_TO_SIM', reason: 'written onto the SIM at personalisation', detail: { iccid: f.iccid } });
       }
-      await auditIdentifier(q, { type: 'ICCID', id: f.iccid, to: 'WAREHOUSE_INVENTORY', actor: o.actor, reason: 'loaded', detail: { batch, kind: f.kind, location: f.location, imsi: f.imsi } });
+      for (const f of part) audits.push({ type: 'ICCID', id: f.iccid, from: null, to: 'WAREHOUSE_INVENTORY', reason: 'loaded', detail: { batch, kind: f.kind, location: f.location, imsi: f.imsi } });
+    }
+    for (let i = 0; i < audits.length; i += CHUNK) {
+      const part = audits.slice(i, i + CHUNK);
+      await q.query(`INSERT INTO identifier_lifecycle_audit (resource_type, resource_id, from_state, to_state, actor, reason, detail)
+        SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[]::jsonb[])`,
+        [part.map((x) => x.type), part.map((x) => x.id), part.map((x) => x.from), part.map((x) => x.to), part.map(() => o.actor), part.map((x) => x.reason), part.map((x) => JSON.stringify(x.detail))]);
     }
     await audit(q, o.actor, 'numbering', 'iccid', 'IMPORTED', { added: fresh.length, bound: res.bound, batch });
   });
