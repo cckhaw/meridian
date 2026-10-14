@@ -142,7 +142,7 @@ export function NewOrder() {
   return (
     <>
       <Stepper steps={steps} index={at} onGo={go} />
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 pb-48 md:pb-28 lg:pb-0">
           <StepFrame id={stepId} direction={dir.current}>
             {preset.loading && !customer && presetCustomer ? <Spinner /> : (

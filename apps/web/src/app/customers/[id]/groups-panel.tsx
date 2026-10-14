@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, LoadMore, Modal, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Empty, Field, Input, LoadMore, Modal, Select, Spinner, DataList } from '@meridian/ui';
 import { useState } from 'react';
 import { del, patch, post, useAction, useApi, usePaged } from '@/lib/api';
 import { label, tone } from '@/lib/format';
@@ -120,21 +120,16 @@ function ManageGroup({ id, accountId, canManage, onClose }: { id: string; accoun
       {data && (
         <div className="space-y-4">
           <p className="text-subhead text-label2">{benefitsText(data.benefits)}</p>
-          <TableWrap><thead><tr><Th>Service</Th><Th>Plan</Th><Th>Role</Th>{canManage && <Th><span className="sr-only">Actions</span></Th>}</tr></thead><tbody>
-            {data.members.map((m: any) => (
-              <tr key={m.serviceId}>
-                <Td className="font-mono">{m.identifier}</Td>
-                <Td className="text-footnote text-label2">{m.offerName} · <Badge tone={tone(m.status)}>{label(m.status)}</Badge></Td>
-                <Td><Badge tone={m.role === 'PRINCIPAL' ? 'success' : 'neutral'}>{m.role === 'PRINCIPAL' ? 'Principal' : 'Supplementary'}</Badge></Td>
-                {canManage && (
-                  <Td right>
-                    {m.role !== 'PRINCIPAL' && <button className="min-h-tap px-2 text-accent" onClick={() => void close(() => post(`/groups/${id}/principal`, { serviceId: m.serviceId }))}>Make principal</button>}
-                    {(m.role !== 'PRINCIPAL' || data.members.length === 1) && <button className="min-h-tap px-2 text-danger" onClick={() => void close(async () => { const r = await del(`/groups/${id}/members/${m.serviceId}`); if (r?.closed) onClose(); })}>Remove</button>}
-                  </Td>
-                )}
-              </tr>
-            ))}
-          </tbody></TableWrap>
+          <DataList label="Group members" rows={data.members} rowKey={(m: any) => m.serviceId}
+            columns={[
+              { key: 'id', label: 'Service', primary: true, render: (m: any) => <span className="font-mono">{m.identifier}</span> },
+              { key: 'plan', label: 'Plan', render: (m: any) => <span className="text-footnote text-label2">{m.offerName} · <Badge tone={tone(m.status)}>{label(m.status)}</Badge></span> },
+              { key: 'role', label: 'Role', render: (m: any) => <Badge tone={m.role === 'PRINCIPAL' ? 'success' : 'neutral'}>{m.role === 'PRINCIPAL' ? 'Principal' : 'Supplementary'}</Badge> },
+            ]}
+            actions={canManage ? (m: any) => (<>
+              {m.role !== 'PRINCIPAL' && <Button variant="secondary" onClick={() => void close(() => post(`/groups/${id}/principal`, { serviceId: m.serviceId }))}>Make principal</Button>}
+              {(m.role !== 'PRINCIPAL' || data.members.length === 1) && <Button variant="plain" onClick={() => void close(async () => { const r = await del(`/groups/${id}/members/${m.serviceId}`); if (r?.closed) onClose(); })}>Remove</Button>}
+            </>) : undefined} />
           {canManage && data.members.length > 1 && <p className="text-footnote text-label2">The principal can leave only after another service takes over, or the group is dissolved: a supplementary service cannot exist without one.</p>}
           {canManage && (
             <>

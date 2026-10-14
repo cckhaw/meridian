@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Field, Input, Select, Spinner, Td, Th } from '@meridian/ui';
 import Link from 'next/link';
 import { use, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
@@ -24,7 +24,7 @@ export default function InvoicePage({ params }: { params: Promise<{ id: string }
   if (!i) return null;
   const open = i.balanceMinor > 0 && i.status !== 'VOID';
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
       <article className="rounded-card bg-surface p-6 shadow-card sm:p-8 print:shadow-none" aria-label={`Invoice ${i.number}`}>
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-separator pb-5">
           <div><p className="text-title2 font-bold">{brand.name}</p><p className="text-footnote text-label2">Tax invoice</p></div>
@@ -35,9 +35,11 @@ export default function InvoicePage({ params }: { params: Promise<{ id: string }
           <div><dt className="text-label2">Period</dt><dd>{d(i.periodStart)} – {d(i.periodEnd)}</dd></div>
           <div><dt className="text-label2">Issued / due</dt><dd>{d(i.issueDate)} / <span className={i.status === 'OVERDUE' ? 'font-medium text-danger' : ''}>{d(i.dueDate)}</span></dd></div>
         </dl>
-        <TableWrap><thead><tr><Th>Description</Th><Th right>Net</Th><Th right>{i.taxName}</Th></tr></thead><tbody>
-          {i.lines.map((l: any) => <tr key={l.id}><Td>{l.description}</Td><Td right>{money(l.netMinor, i.currency)}</Td><Td right>{money(l.taxMinor, i.currency)}</Td></tr>)}
-        </tbody></TableWrap>
+        <div className="overflow-x-auto rounded-card bg-surface2">
+          <table className="w-full text-left text-subhead"><thead><tr><Th>Description</Th><Th right>Net</Th><Th right>{i.taxName}</Th></tr></thead><tbody>
+            {i.lines.map((l: any) => <tr key={l.id}><Td>{l.description}</Td><Td right className="whitespace-nowrap">{money(l.netMinor, i.currency)}</Td><Td right className="whitespace-nowrap">{money(l.taxMinor, i.currency)}</Td></tr>)}
+          </tbody></table>
+        </div>
         <dl className="ml-auto mt-5 max-w-xs space-y-1 text-subhead">
           <div className="flex justify-between"><dt className="text-label2">Subtotal</dt><dd className="tabular-nums">{money(i.netMinor, i.currency)}</dd></div>
           <div className="flex justify-between"><dt className="text-label2">{i.taxName}</dt><dd className="tabular-nums">{money(i.taxMinor, i.currency)}</dd></div>

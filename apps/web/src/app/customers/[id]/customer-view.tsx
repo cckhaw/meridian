@@ -63,7 +63,7 @@ export function CustomerView({ id }: { id: string }) {
         <Button variant="secondary" className="!min-h-[36px] shrink-0 !px-3 !text-subhead" aria-expanded={navOpen} onClick={() => setNavOpen(!navOpen)}>{navOpen ? 'Hide hierarchy' : 'Hierarchy'}</Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(280px,340px)_1fr] lg:items-start">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] lg:items-start">
         <aside className={`${navOpen ? 'block' : 'hidden'} min-w-0 lg:sticky lg:top-6 lg:block lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto`}>
           <HierarchyNav customer={cust} ancestors={c.ancestors} counts={{ accounts: c.accountCount, children: c.childCount }}
             canBrowse={canBrowse} canBilling={can('billing:read')} accountId={accountId} serviceId={serviceId} onAccount={(a) => select(a)} onService={(a, s) => select(a, s)} />

@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, LoadMore, SearchField, SectionTitle, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, DataList, Empty, Field, Input, LargeTitle, LoadMore, SearchField, SectionTitle, Select, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
@@ -32,12 +32,16 @@ function Billing() {
       {!list.loading && list.items.length === 0 && !list.error && <Empty>{term || status ? 'No invoices match.' : 'No invoices yet. Run a bill cycle above.'}</Empty>}
       {list.items.length > 0 && (
         <>
-          <TableWrap><thead><tr><Th>Invoice</Th><Th>Customer</Th><Th>Period</Th><Th>Due</Th><Th>Status</Th><Th right>Total</Th><Th right>Balance</Th></tr></thead><tbody>
-            {list.items.map((i: any) => (
-              <tr key={i.id}><Td><Link className="font-medium text-accent" href={`/billing/${i.id}`}>{i.number}</Link></Td><Td>{can('customer:search') ? i.customerName : '—'}</Td><Td className="whitespace-nowrap">{d(i.periodStart)} – {d(i.periodEnd)}</Td>
-                <Td>{d(i.dueDate)}</Td><Td><Badge tone={tone(i.status)}>{label(i.status)}</Badge></Td><Td right>{money(i.totalMinor, i.currency)}</Td><Td right>{money(i.balanceMinor, i.currency)}</Td></tr>
-            ))}
-          </tbody></TableWrap>
+          <DataList label="Invoices" rows={list.items} rowKey={(i: any) => i.id}
+            columns={[
+              { key: 'no', label: 'Invoice', primary: true, render: (i: any) => <Link className="font-medium text-accent" href={`/billing/${i.id}`}>{i.number}</Link> },
+              { key: 'cust', label: 'Customer', render: (i: any) => (can('customer:search') ? i.customerName : '—') },
+              { key: 'period', label: 'Period', render: (i: any) => <span className="whitespace-nowrap">{d(i.periodStart)} – {d(i.periodEnd)}</span> },
+              { key: 'due', label: 'Due', render: (i: any) => d(i.dueDate) },
+              { key: 'st', label: 'Status', render: (i: any) => <Badge tone={tone(i.status)}>{label(i.status)}</Badge> },
+              { key: 'total', label: 'Total', right: true, render: (i: any) => money(i.totalMinor, i.currency) },
+              { key: 'bal', label: 'Balance', right: true, render: (i: any) => money(i.balanceMinor, i.currency) },
+            ]} />
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="invoices" />
         </>
       )}
@@ -55,7 +59,7 @@ function Runs({ onDone }: { onDone: () => void }) {
       <Card>
         <h2 className="text-title3 font-semibold">Bill run</h2>
         <p className="mb-3 text-subhead text-label2">Bills every account whose cycle day matches the date (daily-cycle accounts every day), in arrears. Safe to re-run: existing invoices are skipped.</p>
-        <div className="flex flex-wrap items-end gap-3"><Field label="Run date"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
+        <div className="form-row"><Field label="Run date"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
           <Button disabled={bill.busy} onClick={async () => setRes(await bill.run(() => post('/billing/run', { asOf })))}>{bill.busy ? 'Running…' : 'Run bill cycle'}</Button></div>
         {bill.error && <div className="mt-3"><Alert>{bill.error}</Alert></div>}
         {res && <div className="mt-3"><Alert tone={res.errors.length ? 'danger' : 'success'}>{res.accounts} accounts due · {res.invoices} invoices ({money(res.totalMinor)}) · {res.skipped} skipped{res.errors.length > 0 && ` · ${res.errors.length} errors: ${res.errors[0].error}`}</Alert></div>}
