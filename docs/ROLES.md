@@ -4,6 +4,8 @@
 
 The API checks **permissions**, never role names. A user holds one or more **roles**; their permissions are the union. The environment-defined **super user** holds every permission.
 
+**These tables are the defaults.** An administrator can change what each role may do under Users & roles → Roles and permissions (including the credit-note limit); the change applies to everyone holding the role on their next request, is written to the audit log, and **Reset to default** returns the role to what is below. `settings:manage` can never be given to a role, and the Administrator role always keeps `user:manage`. A role’s scope (which records it sees) and landing page are not editable.
+
 **Scope** decides *which rows* a role can see: `All records`, or only the user’s own `store`, `dealer` or `customer`. A user with any unscoped role sees everything their permissions allow. A scoped role with a missing binding sees nothing (fails closed).
 
 ## Summary

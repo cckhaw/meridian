@@ -188,17 +188,27 @@ export interface Principal {
   dealerId?: string | null;
 }
 
-export function permissionsOf(p: Pick<Principal, 'isSuperuser' | 'roles'>): Set<Permission> {
+/**
+ * What an administrator has changed about a role (Users & roles → Roles and permissions). The table above is the default; an override replaces a
+ * role's permission list and/or credit-note limit. Everything that decides access takes the overrides, which are read from the database per request.
+ */
+export type RoleOverrides = Partial<Record<RoleId, { permissions?: Permission[]; creditLimitMinor?: number | null }>>;
+
+/** The permissions a role has right now. */
+export const rolePermissions = (id: RoleId, ov?: RoleOverrides): Permission[] => ov?.[id]?.permissions ?? ROLES[id]?.permissions ?? [];
+export const roleCreditLimit = (id: RoleId, ov?: RoleOverrides): number | null | undefined => (ov?.[id] && 'creditLimitMinor' in ov[id]! ? ov[id]!.creditLimitMinor : ROLES[id]?.creditLimitMinor);
+
+export function permissionsOf(p: Pick<Principal, 'isSuperuser' | 'roles'>, ov?: RoleOverrides): Set<Permission> {
   if (p.isSuperuser) return new Set(ALL_PERMISSIONS);
-  return new Set(p.roles.flatMap((r) => ROLES[r]?.permissions ?? []));
+  return new Set(p.roles.flatMap((r) => rolePermissions(r, ov)));
 }
 
 /** Largest credit note the principal may issue; `null` = unlimited; 0 = none. */
-export function creditLimitOf(p: Pick<Principal, 'isSuperuser' | 'roles'>): number | null {
+export function creditLimitOf(p: Pick<Principal, 'isSuperuser' | 'roles'>, ov?: RoleOverrides): number | null {
   if (p.isSuperuser) return null;
   let max = 0;
   for (const r of p.roles) {
-    const l = ROLES[r]?.creditLimitMinor;
+    const l = roleCreditLimit(r, ov);
     if (l === null) return null;
     if (typeof l === 'number') max = Math.max(max, l);
   }
@@ -232,8 +242,8 @@ export function homeOf(p: Principal): string {
 export interface NavModule { id: string; label: string; href: string; icon: string }
 
 /** Modules this principal can open. A portal customer's "Customers" entry becomes "My account". */
-export function modulesOf(p: Principal): NavModule[] {
-  const perms = permissionsOf(p);
+export function modulesOf(p: Principal, effective?: ReadonlySet<Permission>): NavModule[] {
+  const perms = effective ?? permissionsOf(p);
   const scope = scopeOf(p);
   const out: NavModule[] = MODULES.filter((m) => m.anyOf.some((x) => perms.has(x))).map(({ id, label, href, icon }) => ({ id, label, href, icon }));
   if (scope.customerId && !perms.has('customer:search')) out.unshift({ id: 'account', label: 'My account', href: '/account', icon: 'person' });

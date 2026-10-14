@@ -138,7 +138,10 @@ get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(d
 get('/meta', null, async ({ db, user }) => ({ ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db), billCycles: await core.getBillCycles(db) }));
 
 // ───────────────────────── users and roles ─────────────────────────
-get('/roles', 'user:manage', () => Object.values(core.ROLES).map(({ id, label, summary, scope, permissions, creditLimitMinor }) => ({ id, label, summary, scope, permissions, creditLimitMinor })));
+get('/roles', 'user:manage', ({ db }) => core.listRoles(db));
+get('/roles/permissions', 'user:manage', () => core.permissionCatalogue());
+patch('/roles/:id', 'user:manage', ({ db, user, params, body }) => core.setRolePermissions(db, user.username, params.id!, z.object({ permissions: z.array(z.string().max(60)).max(80), creditLimitMinor: z.number().int().min(0).nullable().optional() }).parse(body)));
+post('/roles/:id/reset', 'user:manage', ({ db, user, params }) => core.resetRole(db, user.username, params.id!));
 get('/users', 'user:manage', ({ db, query }) => core.listUsers(db, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 const newUser = z.object({
   username: z.string().min(3).max(50), displayName: z.string().min(1).max(100), email: blank(z.string().email()), roles: z.array(z.string()).min(1),
