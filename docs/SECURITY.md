@@ -24,6 +24,10 @@
 - Payment webhooks are authenticated by the provider’s signature, bound to amount and currency, de-duplicated by event id and replay-limited.
 - A KYC duplicate cannot be approved online, and the existing customer’s id is never disclosed.
 
+## Numbering
+
+Pool management needs `numbering:manage`; sellers hold only `numbering:select`. Tier regexes are validated before saving (no nested quantifiers, bounded length) so a rule cannot stall the server. Every identifier change is audited in `identifier_lifecycle_audit`. IMSIs are SIM secrets-adjacent: they are shown only to `numbering:read`.
+
 ## Request hardening
 - State-changing requests must carry a matching `Origin` (CSRF). The payment webhook is exempt and uses an HMAC signature instead.
 - Request bodies are capped at 1 MB and validated with schemas. Errors never include stack traces or SQL.

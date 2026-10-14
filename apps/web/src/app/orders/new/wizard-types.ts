@@ -1,18 +1,20 @@
 import { behaviourOf } from '@meridian/types';
 import { toMinor } from '@/lib/format';
 
-export type StepId = 'product' | 'device' | 'addons' | 'payment' | 'customer' | 'delivery' | 'review' | 'pay';
+export type StepId = 'product' | 'device' | 'addons' | 'sim' | 'payment' | 'customer' | 'delivery' | 'review' | 'pay';
 export const STEP_TITLE: Record<StepId, string> = {
-  product: 'Plan or product', device: 'Device', addons: 'Add-ons', payment: 'How to pay', customer: 'Customer', delivery: 'Delivery and installation', review: 'Review', pay: 'Payment',
+  product: 'Plan or product', device: 'Device', addons: 'Add-ons', sim: 'SIM and number', payment: 'How to pay', customer: 'Customer', delivery: 'Delivery and installation', review: 'Review', pay: 'Payment',
 };
 export const STEP_HINT: Record<StepId, string> = {
-  product: 'What is the customer buying?', device: 'Pick the colour and storage, or add a device.', addons: 'Extras this customer can add, and bundle savings.',
+  product: 'What is the customer buying?', device: 'Pick the colour and storage, or add a device.', addons: 'Extras this customer can add, and bundle savings.', sim: 'Hand over a SIM card (or issue an eSIM) and choose the number.',
   payment: 'Pay each item in full today, or spread it over the contract.', customer: 'Who is this for? Look them up by ID, or create them.', delivery: 'Where to send things, and when the technician can come.',
   review: 'Check everything before it is submitted.', pay: 'Take payment and submit the order.',
 };
 
 export interface Item {
   key: string; offer: any; quantity: number; msisdn: string; variantId?: string;
+  /** The SIM for a plan that needs one: a card's ICCID, or `simType` alone (next free card, or a fresh eSIM). `numberToken` is the hold on a chosen number. */
+  iccid?: string; simType?: '' | 'PHYSICAL' | 'ESIM'; numberToken?: string; numberTier?: string; numberFeeMinor?: number; numberExpires?: string;
   payMode: 'UPFRONT' | 'INSTALLMENT'; months: number; down: string;
   /** A device bought on a contract with one of the plans in the basket. */
   deal?: { planKey: string; term: number };
@@ -42,6 +44,7 @@ export function lineBody(i: Item, all: Item[] = []) {
   return {
     ...(i.deal && plan >= 0 ? { attachTo: plan, dealTermMonths: i.deal.term } : {}),
     offerId: i.offer.id, quantity: i.quantity, msisdn: i.msisdn || undefined,
+    iccid: i.iccid || undefined, simType: !i.iccid && i.simType ? i.simType : undefined, numberToken: i.msisdn && i.numberToken ? i.numberToken : undefined,
     options: i.variantId ? { variantId: i.variantId } : undefined,
     payment: i.payMode === 'INSTALLMENT' ? { mode: 'INSTALLMENT' as const, months: i.months, downPaymentMinor: i.down ? toMinor(i.down) : 0 } : undefined,
   };

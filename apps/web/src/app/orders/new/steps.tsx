@@ -412,6 +412,9 @@ export function ReviewStep({ w }: { w: Wizard }) {
               <ul className="grid gap-1 text-subhead sm:grid-cols-2">{l.entitlements.map((e: any, k: number) => <li key={k} className="flex gap-2"><span aria-hidden className="text-success">✓</span><span>{e.unlimited ? 'Unlimited' : e.quantity && !['unit', 'SIM'].includes(e.unit ?? '') ? `${e.quantity.toLocaleString()} ${e.unit ?? ''}`.trim() : ''} {e.name}</span></li>)}</ul></div>
           )}
           <dl className="mt-3 border-t border-separator pt-2">
+            {l.needsSim && <Row k="SIM" v={w.items[i]?.iccid ? w.items[i]!.iccid! : w.items[i]?.simType === 'ESIM' ? 'New eSIM' : w.items[i]?.simType === 'PHYSICAL' ? 'Next free card' : 'Not chosen'} />}
+            {l.needsSim && <Row k="Number" v={w.items[i]?.msisdn ? w.items[i]!.msisdn : 'Assigned from the pool'} />}
+            {l.vip && <Row k={`${label(l.vip.tier)} number fee`} v={`${money(l.vip.feeMinor)} (included above)`} />}
             {l.monthlyFeeMinor > 0 && <Row k="Plan fee" v={`${money(l.monthlyFeeMinor)} / month`} />}
             <Row k="Contract" v={l.contractMonths ? `${l.contractMonths} months` : (q.lines.find((x: any) => x.deal?.attachTo === i) ? `${q.lines.find((x: any) => x.deal?.attachTo === i).deal.termMonths} months (with ${q.lines.find((x: any) => x.deal?.attachTo === i).name})` : 'No contract')} />
             {l.deal && <Row k="Contract price" v={`${money(l.deal.retailMinor)} retail − ${money(l.deal.subsidyMinor)} subsidy, with ${l.deal.planName}`} />}

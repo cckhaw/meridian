@@ -3,7 +3,7 @@ import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type P
 import { ruleSatisfied, listBundleRules } from './bundles.js';
 import { decide, deadlineDays, getCancellationSettings, listRules, type CancellationDecision, type Facts } from './cancellation.js';
 import { COMMISSION_BPS, GL, paymentMode } from './config.js';
-import { effectiveMarket, marketFor } from './settings.js';
+import { effectiveMarket, getRegional, marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { monthlyFee } from './catalog.js';
 import { DomainError, invalid, notFound, rejected } from './errors.js';
@@ -16,6 +16,8 @@ import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.
 import { customerIdsMatching, parseQuery } from './search.js';
 import { audit } from './audit.js';
 import { assertDealerSale } from './dealers.js';
+import { consumeMsisdnTx, releaseMsisdnTx, reserveMsisdnTx } from './number-reservation.js';
+import { activateResourcesTx, allocateSimTx, releaseOrderSimsTx } from './nrm-pools.js';
 import { taxSplit } from './tax.js';
 import { conflict } from './errors.js';
 
@@ -78,6 +80,58 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
   return db.tx((q) => placeOrderTx(q, input));
 }
 
+/** The next order number: the order date (in the deployment's time zone) and a counter for that day, e.g. 20261014-00042. Atomic, so two orders never share one. */
+export async function nextOrderNumber(q: Queryable, now: Date = new Date()): Promise<string> {
+  const tz = (await getRegional(q)).timezone;
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now); // YYYY-MM-DD
+  const n = (await q.query(`INSERT INTO order_counters (day, last) VALUES ($1::date, 1) ON CONFLICT (day) DO UPDATE SET last = order_counters.last + 1 RETURNING last`, [day])).rows[0]!.last as number;
+  return `${day.replaceAll('-', '')}-${String(n).padStart(5, '0')}`;
+}
+
+/**
+ * Takes the SIM and number an order line asked for, in the order's own transaction: a named SIM or the next free one at the seller's store (or an
+ * eSIM profile), and the chosen number from the pool. A mobile plan with no number named takes the next Standard number when the deployment
+ * keeps a number pool. Nothing is taken for lines that need neither.
+ */
+async function allocateLineTx(q: Queryable, p: Awaited<ReturnType<typeof priceBasket>>['lines'][number], orderId: string, storeId: string | null, actor: string): Promise<{ msisdn?: string; iccid?: string; simType?: string }> {
+  const out: { msisdn?: string; iccid?: string; simType?: string } = {};
+  const holder = `order:${orderId}`;
+  const mobile = createsService(p.offer) && serviceType(p.offer) === 'MOBILE' && p.qty === 1;
+  if (p.input.msisdn && p.numberInPool) {
+    const token = (await q.query(`SELECT token FROM number_reservation_locks WHERE resource_type='MSISDN' AND resource_id=$1 AND state='ACTIVE'`, [p.input.msisdn])).rows[0]?.token;
+    const row = (await q.query('SELECT state, reserved_by FROM msisdn_inventory WHERE msisdn=$1', [p.input.msisdn])).rows[0];
+    if (row?.state === 'RESERVED_CHECKOUT' && p.input.numberToken && token === p.input.numberToken) {
+      await q.query(`UPDATE msisdn_inventory SET reserved_by=$2, reserved_until=NULL, updated_at=now() WHERE msisdn=$1`, [p.input.msisdn, holder]); // the checkout hold becomes the order's
+      await q.query(`UPDATE number_reservation_locks SET holder=$2, expires_at='infinity' WHERE resource_type='MSISDN' AND resource_id=$1 AND state='ACTIVE'`, [p.input.msisdn, holder]);
+    } else {
+      await reserveMsisdnTx(q, p.input.msisdn, holder, randomUUID(), 60_000, { actor });
+      await q.query(`UPDATE msisdn_inventory SET reserved_until=NULL WHERE msisdn=$1`, [p.input.msisdn]);
+      await q.query(`UPDATE number_reservation_locks SET expires_at='infinity' WHERE resource_type='MSISDN' AND resource_id=$1 AND state='ACTIVE'`, [p.input.msisdn]);
+    }
+    out.msisdn = p.input.msisdn;
+  } else if (mobile && !p.input.msisdn && (await q.query('SELECT 1 FROM msisdn_inventory LIMIT 1')).rows.length) {
+    const pick = (await q.query(`SELECT msisdn FROM msisdn_inventory WHERE tier='STANDARD' AND (state='AVAILABLE' OR (state='RESERVED_CHECKOUT' AND reserved_until < now())) ORDER BY msisdn LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
+    if (!pick) throw rejected('There are no standard numbers left in the pool. Load more numbers, or choose a number.');
+    await reserveMsisdnTx(q, pick.msisdn as string, holder, randomUUID(), 60_000, { actor });
+    await q.query(`UPDATE msisdn_inventory SET reserved_until=NULL WHERE msisdn=$1`, [pick.msisdn]);
+    await q.query(`UPDATE number_reservation_locks SET expires_at='infinity' WHERE resource_type='MSISDN' AND resource_id=$1 AND state='ACTIVE'`, [pick.msisdn]);
+    out.msisdn = pick.msisdn as string;
+  }
+  if (p.input.iccid || p.input.simType) {
+    if (!mobile) throw invalid(`${p.offer.name} does not take a SIM.`);
+    const sim = await allocateSimTx(q, { iccid: p.input.iccid, simType: p.input.simType }, { orderId, storeId, actor });
+    out.iccid = sim.iccid; out.simType = sim.kind;
+  }
+  return out;
+}
+
+/** An order that did not become a service gives its numbers and SIMs back. */
+export async function releaseOrderNumbering(q: Queryable, orderId: string, actor = 'system'): Promise<void> {
+  await releaseOrderSimsTx(q, orderId, actor);
+  const holder = `order:${orderId}`;
+  for (const r of (await q.query(`SELECT msisdn FROM msisdn_inventory WHERE state='RESERVED_CHECKOUT' AND reserved_by=$1`, [holder])).rows) await releaseMsisdnTx(q, r.msisdn as string, holder, actor);
+}
+
 /** The order transaction body, so callers (store checkout) can create a customer and its order atomically. */
 export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row> {
   const actor = input.actor ?? input.attribution?.salespersonId ?? 'system';
@@ -108,6 +162,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
     } else delivery = { method };
   }
   const orderId = randomUUID();
+  const orderNumber = await nextOrderNumber(q);
   const att = input.attribution ?? {};
   if (input.channel === 'DEALER') {
     if (!att.dealerId || !att.dealerAgentId) throw invalid('a dealer order needs the dealer and the agent who sold it');
@@ -117,20 +172,22 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
   const months = priced.lines.find((l) => l.payMode === 'INSTALLMENT')?.months ?? null;
   await q.query(
     `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id, dealer_agent_id,
-       commission_eligible, payment_method, installment_months, fulfilment, created_by)
-     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+       commission_eligible, payment_method, installment_months, fulfilment, created_by, number)
+     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     [orderId, customer.shardId, customerId, input.accountId ?? null, input.channel, priced.dueNow, priced.currency, priced.marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null, att.dealerAgentId ?? null,
-     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(delivery ? { delivery } : {}), ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor],
+     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(delivery ? { delivery } : {}), ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor, orderNumber],
   );
   for (const p of priced.lines) {
+    const alloc = await allocateLineTx(q, p, orderId, att.storeId ?? null, actor);
     await q.query(
       `INSERT INTO order_lines (shard_id, order_id, offer_id, quantity, unit_price_minor, msisdn, serial_number, description, net_minor, tax_minor,
-         fulfil_group, options, pay_mode, installment_months, down_payment_minor, paid_now_minor, discount_minor, discount_rules, position, attach_position, deal)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
-      [customer.shardId, orderId, p.offer.id, p.qty, Math.round(p.gross / p.qty), p.input.msisdn ?? null, p.input.serialNumber ?? null, p.offer.name, p.net, p.tax,
-       p.group, JSON.stringify(p.variant ? { variantId: p.variant.id, colour: p.variant.colour, storage: p.variant.storage, sku: p.variant.sku } : {}),
+         fulfil_group, options, pay_mode, installment_months, down_payment_minor, paid_now_minor, discount_minor, discount_rules, position, attach_position, deal, iccid, sim_type, vip_tier, vip_fee_minor)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+      [customer.shardId, orderId, p.offer.id, p.qty, Math.round(p.gross / p.qty), alloc.msisdn ?? p.input.msisdn ?? null, p.input.serialNumber ?? null, p.offer.name, p.net, p.tax,
+       p.group, JSON.stringify({ ...(p.variant ? { variantId: p.variant.id, colour: p.variant.colour, storage: p.variant.storage, sku: p.variant.sku } : {}), ...(alloc.msisdn ? { numberFromPool: true } : {}) }),
        p.payMode, p.months, p.downMinor, p.paidNow, p.discountMinor, p.discountRules, p.position, p.attachPosition ?? null,
-       p.deal ? JSON.stringify({ termMonths: p.deal.termMonths, subsidyMinor: p.deal.subsidyMinor, waiveInLastMonths: p.deal.waiveInLastMonths ?? 1, retailMinor: p.deal.retailMinor, currency: priced.currency }) : null],
+       p.deal ? JSON.stringify({ termMonths: p.deal.termMonths, subsidyMinor: p.deal.subsidyMinor, waiveInLastMonths: p.deal.waiveInLastMonths ?? 1, retailMinor: p.deal.retailMinor, currency: priced.currency }) : null,
+       alloc.iccid ?? null, alloc.simType ?? null, p.vipTier ?? null, p.vipFeeMinor],
     );
   }
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
@@ -322,9 +379,9 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
   await postJournal(q, {
     date: today(), sourceType: 'ORDER', sourceId: o.id, currency: o.currency,
     lines: [
-      { account: GL.CASH, debit: o.totalMinor, description: `Order ${o.id.slice(0, 8)} receipt (${o.paymentMethod})` },
-      ...[...revenue].map(([account, credit]) => ({ account, credit, description: `Order ${o.id.slice(0, 8)} revenue` })),
-      { account: GL.TAX_PAYABLE, credit: tax, description: `Order ${o.id.slice(0, 8)} ${(await marketFor(q, o.marketCode)).taxName}` },
+      { account: GL.CASH, debit: o.totalMinor, description: `Order ${o.number ?? o.id.slice(0, 8)} receipt (${o.paymentMethod})` },
+      ...[...revenue].map(([account, credit]) => ({ account, credit, description: `Order ${o.number ?? o.id.slice(0, 8)} revenue` })),
+      { account: GL.TAX_PAYABLE, credit: tax, description: `Order ${o.number ?? o.id.slice(0, 8)} ${(await marketFor(q, o.marketCode)).taxName}` },
     ],
   });
   return true;
@@ -332,6 +389,7 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
 
 async function fail(q: Queryable, o: Row, ctx: Ctx, reason: string) {
   await releaseReservations(q, o.id);
+  await releaseOrderNumbering(q, o.id, 'system');
   await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND status='ACTIVE'`, [o.id]);
   const paid = (await q.query(`SELECT 1 FROM payments WHERE order_id=$1 AND status='CAPTURED'`, [o.id])).rows.length > 0;
   if (paid) await refund(q, o, await orderLines(q, o.id), { retainMinor: 0, clawbackMinor: 0, label: 'Order failed', all: true });
@@ -444,6 +502,12 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
       `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,'ACTIVE',now(),$8,now(),$9)`,
       [id, o.shardId, accountId, o.customerId, type, identifier, l.offerId, term, o.id],
     );
+    if (l.iccid || l.msisdn) { // the SIM and number come out of the pools and point at the new service
+      const r = await activateResourcesTx(q, { iccid: l.iccid, serviceId: id, actor: 'order' });
+      const vip = l.msisdn ? (await q.query('SELECT r.etc_multiplier_bps FROM msisdn_inventory m JOIN msisdn_vip_tier_rules r ON r.tier = m.tier WHERE m.msisdn=$1 AND r.enabled', [l.msisdn])).rows[0] : undefined;
+      await q.query('UPDATE services SET iccid=$2, imsi=$3, vip_tier=$4, vip_etc_bps=$5 WHERE id=$1', [id, l.iccid ?? null, r.imsi, l.vipTier ?? null, vip && vip.etcMultiplierBps !== 10000 ? vip.etcMultiplierBps : null]);
+      if (l.msisdn) await consumeMsisdnTx(q, l.msisdn, id, 'order');
+    }
     if (device) {
       await q.query('UPDATE services SET deal=$2 WHERE id=$1', [id, JSON.stringify({ deviceLineId: device.id, deviceOfferId: device.offerId, device: device.description, termMonths: device.deal.termMonths,
         subsidyMinor: device.deal.subsidyMinor, waiveInLastMonths: device.deal.waiveInLastMonths ?? 1, currency: device.deal.currency })]);
@@ -561,7 +625,7 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
         const g = want('GOODS', 'PENDING');
         if (o.fulfilment?.delivery?.method === 'COLLECT') throw rejected('this order is collected in store, not shipped');
         await consumeReservations(q, orderId, 'GOODS');
-        const tracking = action.trackingNumber ?? `TRK-${orderId.slice(0, 8).toUpperCase()}`;
+        const tracking = action.trackingNumber ?? `TRK-${String(o.number ?? orderId.slice(0, 8)).replace('-', '')}`;
         await patchGroup(q, g.id, `status='LOCKED', locked_at=now(), details = details || $2::jsonb`, [JSON.stringify({ trackingNumber: tracking })]);
         await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [orderId, JSON.stringify({ trackingNumber: tracking })]);
         await markPointOfNoReturn(q, o);
@@ -714,6 +778,7 @@ async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: st
     if (!p.decision.allow || !physicallyCancellable(kind, g.status)) throw rejected(p.decision.message || 'that part can no longer be cancelled');
     const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
     await releaseReservations(q, o.id, kind);
+    if (kind === 'ACTIVATION') await releaseOrderNumbering(q, o.id, actor); // the SIM and number of a plan that is not going ahead
     const r = await refund(q, o, mine, { retainMinor: p.fee, clawbackMinor: p.claw, label: `Cancelled ${kind.toLowerCase()}` });
     await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND fulfil_group=$2 AND status='ACTIVE'`, [o.id, kind]);
     if (kind === 'INSTALL') await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status IN ('BOOKED','DISPATCHED')`, [o.id]);
@@ -736,6 +801,7 @@ export async function cancelOrder(db: Db, orderId: string, reason: string, actor
     const gs = await groupRows(q, orderId);
     if (!gs.length) { // not paid yet: nothing is fulfilling
       await releaseReservations(q, orderId);
+      await releaseOrderNumbering(q, orderId, actor);
       await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1`, [orderId]);
       await setState(q, o, 'CANCELLED', actor, reason || 'cancelled');
       return getOrder(q, orderId);
@@ -837,10 +903,13 @@ export async function sweepOrders(db: Db, now = new Date(), actor = 'system'): P
   return { atRisk, cancelled };
 }
 
-export async function getOrder(q: Queryable, id: string, who: Who = STAFF): Promise<Row> {
+export async function getOrder(q: Queryable, ref: string, who: Who = STAFF): Promise<Row> {
+  // An order is found by its id or by its number (20261014-00042).
+  const byNumber = /^\d{8}-\d{5,}$/.test(ref);
   const o = (await q.query(
-    `SELECT o.*, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id=$1`, [id])).rows[0];
-  if (!o) throw notFound('order', id);
+    `SELECT o.*, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${byNumber ? 'o.number' : 'o.id'}=$1`, [ref])).rows[0];
+  if (!o) throw notFound('order', ref);
+  const id = o.id as string;
   const [lines, history, payments, services, appts, groups] = await Promise.all([
     q.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id', [id]),
     q.query('SELECT from_state, to_state, actor, reason, occurred_at FROM order_state_history WHERE order_id=$1 ORDER BY id', [id]),
@@ -882,13 +951,16 @@ export async function listOrders(q: Queryable, f: { customerId?: string; storeId
   if (f.state) where.push(`o.state = ${p(f.state)}`);
   if (f.channel) where.push(`o.channel = ${p(f.channel)}`);
   // Search: an order id, or whoever the customer is (name words, e-mail, phone / mobile number).
-  const pq = await parseQuery(q, f.q);
-  if (pq.kind === 'id') where.push(`(o.id = ${p(pq.id)}::uuid OR o.customer_id = ${p(pq.id)}::uuid)`);
+  const asked = (f.q ?? '').trim();
+  const byNumber = /^\d{8}(-\d{0,5})?$/.test(asked) || /^\d{8}-$/.test(asked);
+  const pq = byNumber ? ({ kind: 'none' } as const) : await parseQuery(q, f.q);
+  if (byNumber) where.push(`o.number LIKE ${p(asked + '%')}`);
+  else if (pq.kind === 'id') where.push(`(o.id = ${p(pq.id)}::uuid OR o.customer_id = ${p(pq.id)}::uuid)`);
   else { const ids = customerIdsMatching(pq, p); if (ids) where.push(`o.customer_id IN (${ids})`); }
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(o.created_at, o.id) < (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
   const rows = (await q.query(
-    `SELECT o.id, o.state, o.channel, o.total_minor, o.currency, o.created_at, o.created_at::text AS cursor_ts, o.store_id, o.salesperson_id, c.display_name AS customer_name, o.customer_id,
+    `SELECT o.id, o.number, o.state, o.channel, o.total_minor, o.currency, o.created_at, o.created_at::text AS cursor_ts, o.store_id, o.salesperson_id, c.display_name AS customer_name, o.customer_id,
        (SELECT string_agg(ol.description || CASE WHEN ol.quantity > 1 THEN ' x' || ol.quantity ELSE '' END, ', ') FROM order_lines ol WHERE ol.order_id = o.id) AS summary
      FROM orders o JOIN customers c ON c.id = o.customer_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY o.created_at DESC, o.id DESC LIMIT ${p(limit + 1)}`, params)).rows;

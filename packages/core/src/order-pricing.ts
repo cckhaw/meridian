@@ -8,6 +8,7 @@ import { invalid, rejected } from './errors.js';
 import { effectiveMarket, marketFor, marketMode } from './settings.js';
 import { getStoreSettings } from './store-settings.js';
 import { taxSplit } from './tax.js';
+import { needsSim, resolveNumbering } from './order-numbering.js';
 
 export type GroupKind = 'ACTIVATION' | 'GOODS' | 'INSTALL';
 export const INSTALMENT_MONTHS = [3, 6, 12, 24, 36];
@@ -17,6 +18,10 @@ export const MAX_BULK = 1_000_000;
 export interface LinePayment { mode: 'UPFRONT' | 'INSTALLMENT'; months?: number; downPaymentMinor?: number }
 export interface LineInput {
   offerId: string; quantity?: number; msisdn?: string; serialNumber?: string; options?: { variantId?: string }; payment?: LinePayment;
+  /** The SIM for a plan that needs one: a physical card's ICCID, or `simType` alone for the next free card (PHYSICAL) or a fresh eSIM profile (ESIM). */
+  iccid?: string; simType?: 'PHYSICAL' | 'ESIM';
+  /** The hold on the chosen number, from when the customer picked it. */
+  numberToken?: string;
   /** A device bought on a contract with a plan: the position (in `lines`) of the plan line it goes with, and the contract length. */
   attachTo?: number; dealTermMonths?: number;
 }
@@ -61,6 +66,8 @@ export interface PricedLine {
   payMode: 'UPFRONT' | 'INSTALLMENT'; months: number | null; downMinor: number; paidNow: number; financed: number; instalmentMinor: number;
   monthlyFeeMinor: number;      // recurring plan fee, tax included, for the quantity
   entitlements: Entitlement[];
+  /** A VIP number: its tier, the connection fee included in the upfront price, and the multiplier on the early-termination charge. */
+  vipTier?: string | null; vipFeeMinor: number; vipEtcBps?: number; numberInPool?: boolean;
 }
 export interface Priced {
   customer: Row | null; marketCode: string; currency: string; taxName: string; taxBps: number;
@@ -157,6 +164,12 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
   if (legacy && !INSTALMENT_MONTHS.includes(input.payment.installmentMonths ?? 0)) throw invalid(`installmentMonths must be ${INSTALMENT_MONTHS.join(', ')}`);
   if (legacy && !hasService) throw rejected('instalments need a service to bill against');
   const ents = await entitlementsFor(q, [...offers.keys()]);
+  const contractOf = (pos: number) => {
+    const dev = [...attached.entries()].find(([plan]) => plan === pos);
+    return dev ? (offers.get(input.lines[dev[1]]!.offerId)!.deals ?? []).find((d) => d.termMonths === input.lines[dev[1]]!.dealTermMonths)?.termMonths ?? 0 : offers.get(input.lines[pos]!.offerId)!.contract?.termMonths ?? 0;
+  };
+  const fmtMoney = (minor: number) => `${mk.currency} ${(minor / 100).toFixed(2)}`;
+  const numbering = await resolveNumbering(q, input.lines, offers, { channel: input.channel, contractMonthsOf: contractOf, fail, fmt: fmtMoney });
 
   const lines: PricedLine[] = input.lines.map((l, position) => {
     const offer = offers.get(l.offerId)!;
@@ -168,6 +181,8 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
     let subsidyLeft = dealDef?.subsidyMinor ?? 0;
     const parts = offer.prices.filter((p) => p.type === 'ONE_TIME').map((p) => { const cut = Math.min(subsidyLeft, p.amount.amountMinor); subsidyLeft -= cut; return taxSplit((p.amount.amountMinor - cut) * qty, mk.taxBps, p.taxInclusive); });
     if (variant?.priceDeltaMinor) parts.push(taxSplit(variant.priceDeltaMinor * qty, mk.taxBps, flag));
+    const nr = numbering.get(position);
+    if (nr?.oneTimeFeeMinor) parts.push(taxSplit(nr.oneTimeFeeMinor, mk.taxBps, flag)); // the VIP connection fee is part of what is paid now
     const split = parts.reduce((a, s) => ({ net: a.net + s.net, tax: a.tax + s.tax, gross: a.gross + s.gross }), { net: 0, tax: 0, gross: 0 });
     // Payment structure for this line: explicit, or the whole-order instalment default.
     const wanted: LinePayment = l.payment ?? (legacy && createsService(offer) && split.gross > 0 ? { mode: 'INSTALLMENT', months: input.payment.installmentMonths } : { mode: 'UPFRONT' });
@@ -179,6 +194,7 @@ export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?:
       paidNow: 0, financed: 0, instalmentMinor: 0,
       monthlyFeeMinor: fee ? taxSplit(fee.amount.amountMinor * qty, mk.taxBps, fee.taxInclusive).gross : 0,
       entitlements: ents.get(offer.id) ?? [],
+      vipTier: nr?.tier && nr.tier !== 'STANDARD' ? nr.tier : null, vipFeeMinor: nr?.oneTimeFeeMinor ?? 0, vipEtcBps: nr?.inPool ? nr.etcMultiplierBps : undefined, numberInPool: nr?.inPool,
     };
   });
 
@@ -243,6 +259,10 @@ export interface OrderQuoteLine {
   requiresShipping: boolean; requiresInstallation: boolean;
   listMinor: number; discountMinor: number; priceMinor: number;
   payMode: 'UPFRONT' | 'INSTALLMENT'; months: number | null; downMinor: number; paidNowMinor: number; financedMinor: number; instalmentMinor: number; monthlyFeeMinor: number;
+  /** The plan needs a SIM (one line, one plan). */
+  needsSim: boolean;
+  /** A VIP number on this line: its tier and the connection fee included in the price. */
+  vip?: { tier: string; feeMinor: number; etcMultiplierBps: number };
 }
 export interface OrderQuote {
   currency: string; taxName: string; taxBps: number;
@@ -250,7 +270,7 @@ export interface OrderQuote {
   dueNowMinor: number; monthlyPlanMinor: number; monthlyInstalmentMinor: number; monthlyTotalMinor: number; discountMinor: number;
   problems: string[];
   groups: Array<{ group: GroupKind; title: string; text: string; points: Array<{ when: string; what: string }>; items: string[] }>;
-  needs: { delivery: boolean; installation: boolean; customer: boolean };
+  needs: { delivery: boolean; installation: boolean; customer: boolean; sim: boolean };
   /** How the goods can reach the customer (ship, collect in store, or both) when the order has goods and is not sold over a counter. */
   deliveryMethods: DeliveryMethod[];
   installationSlaDays: number | null;
@@ -271,10 +291,12 @@ export async function quoteOrder(q: Queryable, input: PricingInput): Promise<Ord
       requiresShipping: !!l.offer.fulfilment?.requiresShipping, requiresInstallation: !!l.offer.fulfilment?.requiresInstallation,
       listMinor: l.listGross, discountMinor: l.discountMinor, priceMinor: l.gross,
       payMode: l.payMode, months: l.months, downMinor: l.downMinor, paidNowMinor: l.paidNow, financedMinor: l.financed, instalmentMinor: l.instalmentMinor, monthlyFeeMinor: l.monthlyFeeMinor,
+      needsSim: createsService(l.offer) && needsSim(l.offer) && l.qty === 1,
+      vip: l.vipTier ? { tier: l.vipTier, feeMinor: l.vipFeeMinor, etcMultiplierBps: l.vipEtcBps ?? 10000 } : undefined,
     })),
     dueNowMinor: p.dueNow, monthlyPlanMinor: p.monthlyPlanMinor, monthlyInstalmentMinor: p.monthlyInstalmentMinor, monthlyTotalMinor: p.monthlyPlanMinor + p.monthlyInstalmentMinor, discountMinor: p.discountMinor,
     groups: terms.map((t) => ({ ...t, items: p.lines.filter((l) => l.group === t.group).map((l) => l.offer.name) })),
-    needs: { delivery: kinds.includes('GOODS') && !RETAIL_CHANNELS.includes(input.channel), installation: kinds.includes('INSTALL'), customer: p.hasService },
+    needs: { delivery: kinds.includes('GOODS') && !RETAIL_CHANNELS.includes(input.channel), installation: kinds.includes('INSTALL'), customer: p.hasService, sim: p.lines.some((l) => createsService(l.offer) && needsSim(l.offer) && l.qty === 1) },
     deliveryMethods: RETAIL_CHANNELS.includes(input.channel) ? [] : deliveryMethods(p.lines.map((l) => l.offer)),
     installationSlaDays: kinds.includes('INSTALL') ? await autoCancelDays(q, 'INSTALL') : null,
   };

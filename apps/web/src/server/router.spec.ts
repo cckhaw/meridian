@@ -1086,3 +1086,28 @@ describe('service lifecycle API', () => {
   });
 });
 
+
+describe('numbers, SIM cards and order numbers', () => {
+  it('keeps pool management to Inventory Operations, lets sellers search and hold numbers, and dates order numbers', async () => {
+    const root_ = await root();
+    const seller = await staff(['call-center']);
+    expect((await call('GET', '/numbering/summary', { cookie: seller.cookie })).status).toBe(403);
+    expect((await call('POST', '/numbering/import/msisdn', { cookie: seller.cookie, body: { csv: '+6591110001', apply: true } })).status).toBe(403);
+    expect((await call('POST', '/numbering/import/msisdn', { cookie: root_, body: { range: { from: '+6591110001', to: '+6591110020' }, apply: true } })).status).toBe(200);
+    const found = await call('GET', '/numbers/search', { cookie: seller.cookie });
+    expect(found.status).toBe(200);
+    const first = (found.json.items ?? found.json.numbers ?? [])[0];
+    expect(first).toBeDefined();
+    const msisdn = first.msisdn as string;
+    expect((await call('POST', '/numbers/reserve', { cookie: seller.cookie, body: { msisdn } })).status).toBe(200);
+    expect((await call('POST', '/numbers/release', { cookie: seller.cookie, body: { msisdn } })).json.released).toBe(true);
+    const ops = await staff(['inventory-ops']);
+    expect((await call('GET', '/numbering/summary', { cookie: ops.cookie })).status).toBe(200);
+    expect((await call('GET', '/numbering/tiers', { cookie: root_ })).json.tiers.length).toBeGreaterThan(3);
+
+    const A = await customer(root_, 'Numbered');
+    const sold = await placeOrder(db, { customerId: A, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'x' }, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-sim-5g' }] });
+    const order = (await call('GET', `/orders/${sold.id}`, { cookie: root_ })).json;
+    expect(order.number).toMatch(/^\d{8}-\d{5}$/);
+  });
+});

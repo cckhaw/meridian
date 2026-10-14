@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { money } from '@/lib/format';
 import type { Party } from './steps';
 import { AddonsStep, CustomerStep, DeliveryStep, DeviceStep, PayStep, PaymentStep, ProductStep, ReviewStep, type Wizard } from './steps';
+import { SimStep } from './sim-step';
 import { financeable, lineBody, newItem, type Cust, type Item, type StepId } from './wizard-types';
 import { Row, StepFrame, Stepper } from './wizard-ui';
 
@@ -45,6 +46,7 @@ export function NewOrder() {
   const dir = useRef<'fwd' | 'back'>('fwd');
   const idemKey = useRef(crypto.randomUUID()); // one key per form: a double-click or retry cannot create a second order
   const meta = useApi('/meta');
+  const numbering = useApi<any>(can('numbering:select') ? '/numbering/tiers' : null);
   const { run, busy, error } = useAction();
   const marketCode = me?.marketCode ?? 'SG';
   const cashier = can('order:payment') && !portal;
@@ -79,19 +81,20 @@ export function NewOrder() {
   }, [key]);
 
   // ── which steps this order needs ──
-  const needs = quote?.needs ?? { delivery: false, installation: false };
+  const needs = quote?.needs ?? { delivery: false, installation: false, sim: false };
   const methods: Array<'SHIP' | 'COLLECT'> = quote?.deliveryMethods ?? [];
   const how: 'SHIP' | 'COLLECT' | null = !needs.delivery || methods.length === 0 ? null : method && methods.includes(method) ? method : methods.includes('SHIP') ? 'SHIP' : 'COLLECT';
   const shipTo = how === 'SHIP' || (needs.delivery && how === null);
   const steps = useMemo<StepId[]>(() => {
     const s: StepId[] = ['product'];
     if (!quick) s.push('device', 'addons');
+    if (!quick && !portal && needs.sim && can('numbering:select')) s.push('sim');
     if (items.some((i) => financeable(i.offer))) s.push('payment');
     if (!quick && !portal) s.push('customer');
     if (needs.delivery || needs.installation) s.push('delivery');
     s.push('review', 'pay');
     return s;
-  }, [quick, portal, items, needs.delivery, needs.installation]);
+  }, [quick, portal, items, needs.delivery, needs.installation, needs.sim, can]);
   const at = Math.min(index, steps.length - 1);
   const stepId = steps[at]!;
 
@@ -102,6 +105,7 @@ export function NewOrder() {
     switch (stepId) {
       case 'product': return items.length === 0 ? 'Choose at least one item to continue.' : retail && !(me?.storeId || store) ? 'Choose the store first.' : channel === 'DEALER' && !dealer ? 'Choose the dealer first.' : channel === 'DEALER' && !agent ? 'Choose the dealer’s agent who made the sale.' : null;
       case 'device': return items.some((i) => i.offer.variants?.length && !i.variantId) ? 'Choose a colour and storage.' : null;
+      case 'sim': return quoteError ?? problems[0] ?? (numbering.data?.settings?.requireSim ? items.map((i, k) => (quote?.lines?.[k]?.needsSim && !i.iccid && !i.simType ? `Choose the SIM for ${i.offer.name}.` : null)).find(Boolean) ?? null : null);
       case 'payment': return quoteError;
       case 'customer': return !customer ? 'Choose or create the customer to continue.' : problems[0] ?? null;
       case 'delivery': return how === 'COLLECT' && !pickupStore ? 'Choose the store where the customer will collect.' : shipTo && !address.trim() ? 'Enter the delivery address.' : needs.installation && !shipTo && !address.trim() ? 'Enter the installation address.' : null;
@@ -143,6 +147,7 @@ export function NewOrder() {
                 {stepId === 'product' && <ProductStep w={w} />}
                 {stepId === 'device' && <DeviceStep w={w} />}
                 {stepId === 'addons' && <AddonsStep w={w} />}
+                {stepId === 'sim' && <SimStep w={w} requireSim={!!numbering.data?.settings?.requireSim} />}
                 {stepId === 'payment' && <PaymentStep w={w} />}
                 {stepId === 'customer' && <CustomerStep w={w} />}
                 {stepId === 'delivery' && <DeliveryStep w={w} />}

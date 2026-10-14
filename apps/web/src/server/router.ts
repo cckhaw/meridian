@@ -701,6 +701,7 @@ get('/services/:id/etc', 'service:read', async ({ db, user, params }) => {
 const lineBody = z.object({
   offerId: z.string(), quantity: z.number().int().min(1).max(1_000_000).optional(), msisdn: z.string().optional(), serialNumber: z.string().optional(),
   options: z.object({ variantId: z.string().max(40).optional() }).optional(),
+  iccid: z.string().regex(/^89\d{17,18}$/).optional(), simType: z.enum(['PHYSICAL', 'ESIM']).optional(), numberToken: z.string().max(80).optional(),
   attachTo: z.number().int().min(0).max(49).optional(), dealTermMonths: z.number().int().optional(),
   payment: z.object({ mode: z.enum(['UPFRONT', 'INSTALLMENT']), months: z.number().int().optional(), downPaymentMinor: z.number().int().min(0).optional() }).optional(),
 });
@@ -858,6 +859,49 @@ get('/warehouses', 'inventory:read', async ({ db }) => ({ items: await core.list
 post('/warehouses', 'warehouse:manage', ({ db, user, body }) => core.createWarehouse(db, user.username, z.object({ name: z.string().min(1).max(80), address: blank(z.string().max(300)) }).parse(body)));
 patch('/warehouses/:id', 'warehouse:manage', ({ db, user, params, body }) => core.updateWarehouse(db, user.username, params.id!, z.object({ name: z.string().min(1).max(80), address: z.string().max(300), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
 route('DELETE', '/warehouses/:id', 'warehouse:manage', ({ db, user, params }) => core.deleteWarehouse(db, user.username, params.id!));
+
+// ───────────────────────── numbers, SIMs and identities ─────────────────────────
+const pool = z.object({ csv: z.string().max(4_000_000).optional(), range: z.object({ from: z.string().max(20), to: z.string().max(20) }).optional(), apply: z.boolean().default(false), batch: z.string().max(60).optional() })
+  .refine((b) => !!b.csv !== !!b.range, 'give either a file or a range');
+const NUM_BODY = { maxBody: 4_500_000 };
+get('/numbering/summary', ['numbering:read'], ({ db }) => core.nrmSummary(db));
+get('/numbering/numbers', ['numbering:read'], ({ db, query }) => core.listMsisdns(db, { state: str(query, 'state'), tier: str(query, 'tier'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/numbering/sims', ['numbering:read'], ({ db, query }) => core.listSims(db, { state: str(query, 'state'), kind: str(query, 'kind') as never, locationId: str(query, 'locationId'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/numbering/imsis', ['numbering:read'], ({ db, query }) => core.listImsis(db, { state: str(query, 'state'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/numbering/history', ['numbering:read'], async ({ db, query }) => ({ items: await core.identifierHistory(db, z.enum(['MSISDN', 'ICCID', 'IMSI']).parse(str(query, 'type')), z.string().min(1).max(40).parse(str(query, 'id')), num(query, 'limit')) }));
+get('/numbering/tiers', ['numbering:read', 'numbering:select'], async ({ db }) => ({ tiers: await core.listTierRules(db), settings: await core.getNumberingSettings(db) }));
+patch('/numbering/tiers/:tier', ['numbering:manage'], ({ db, user, params, body }) => core.updateTierRule(db, user.username, params.tier!, z.object({
+  label: z.string().max(40).optional(), patterns: z.array(z.object({ code: z.string().max(30), regex: z.string().max(160) })).max(20).optional(), oneTimeFeeMinor: z.number().int().optional(),
+  minMonthlyPlanMinor: z.number().int().optional(), minContractMonths: z.number().int().optional(), etcMultiplierBps: z.number().int().optional(), enabled: z.boolean().optional(),
+}).parse(body)));
+post('/numbering/tiers/reclassify', ['numbering:manage'], ({ db, user, body }) => core.reclassifyNumbers(db, user.username, z.object({ all: z.boolean().optional() }).parse(body ?? {})));
+post('/numbering/import/msisdn', ['numbering:manage'], ({ db, user, body }) => { const b = pool.parse(body); return core.importMsisdns(db, b, { apply: b.apply, actor: user.username, batch: b.batch }); }, NUM_BODY);
+post('/numbering/import/imsi', ['numbering:manage'], ({ db, user, body }) => { const b = pool.parse(body); return core.importImsis(db, b, { apply: b.apply, actor: user.username, batch: b.batch }); }, NUM_BODY);
+post('/numbering/import/sim', ['numbering:manage'], ({ db, user, body }) => {
+  const b = z.object({ csv: z.string().min(1).max(4_000_000), apply: z.boolean().default(false), batch: z.string().max(60).optional(), kind: z.enum(['PHYSICAL', 'ESIM']).optional(), locationId: z.string().max(50).optional(), autoBindImsi: z.boolean().optional() }).parse(body);
+  return core.importSims(db, { csv: b.csv }, { apply: b.apply, actor: user.username, batch: b.batch, kind: b.kind, locationId: b.locationId, autoBindImsi: b.autoBindImsi });
+}, NUM_BODY);
+get('/numbering/sim-template', ['numbering:manage'], async () => csv(await core.simTemplate(), 'meridian-sim-import-template.csv'));
+post('/numbering/sims/:iccid/transition', ['numbering:manage'], ({ db, user, params, body }) => {
+  const b = z.object({ to: z.enum(core.ICCID_STATES), reason: z.string().max(200).optional(), locationId: z.string().max(50).optional() }).parse(body);
+  return core.transitionSim(db, params.iccid!, b.to, { actor: user.username, reason: b.reason, locationId: b.locationId });
+});
+post('/numbering/auction/hold', ['numbering:manage'], ({ db, user, body }) => new core.NumberReservationService(db).holdForAuction(z.object({ msisdns: z.array(z.string().max(20)).min(1).max(1000) }).parse(body).msisdns, user.username));
+post('/numbering/auction/release', ['numbering:manage'], ({ db, user, body }) => new core.NumberReservationService(db).releaseFromAuction(z.object({ msisdns: z.array(z.string().max(20)).min(1).max(1000) }).parse(body).msisdns, user.username));
+post('/numbering/auction/settle', ['numbering:manage'], ({ db, user, body }) => new core.NumberReservationService(db).settleAuction(z.object({ msisdn: z.string().max(20), auctionId: z.string().min(1).max(60), winnerCustomerId: uuid, winningBidMinor: z.number().int().min(0), currency: z.string().length(3).optional() }).parse(body), user.username));
+post('/numbering/recycle', ['numbering:manage'], async ({ db, user, body }) => {
+  const asOf = z.object({ asOf: date.optional() }).parse(body ?? {}).asOf;
+  return { recycled: await core.recycleExpired(db, asOf, user.username), expiredHolds: await new core.NumberReservationService(db).expireStale() };
+});
+// Choosing a number and a SIM while selling.
+get('/numbers/search', ['numbering:select'], ({ db, query }) => new core.NumberReservationService(db).search({
+  tier: str(query, 'tier') as never, prefix: str(query, 'prefix'), suffix: str(query, 'suffix'), contains: str(query, 'contains'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
+}));
+post('/numbers/reserve', ['numbering:select'], ({ db, user, body }) => new core.NumberReservationService(db).reserve(z.object({ msisdn: z.string().max(20) }).parse(body).msisdn, `checkout:${user.id}`, { actor: user.username }));
+post('/numbers/release', ['numbering:select'], async ({ db, user, body }) => ({ released: await new core.NumberReservationService(db).release(z.object({ msisdn: z.string().max(20) }).parse(body).msisdn, `checkout:${user.id}`, user.username) }));
+get('/sims/available', ['numbering:select'], ({ db, user, query }) => core.listSims(db, { state: 'AVAILABLE', kind: (str(query, 'kind') as never) ?? 'PHYSICAL', locationId: user.scope.storeId ?? str(query, 'locationId'), q: str(query, 'q'), limit: num(query, 'limit') ?? 20, cursor: str(query, 'cursor') }));
+get('/settings/numbering', ['settings:manage'], ({ db }) => core.getNumberingSettings(db));
+post('/settings/numbering', ['settings:manage'], ({ db, user, body }) => core.setNumberingSettings(db, user.username, z.object({ requireSim: z.boolean(), reservationMinutes: z.number().int(), imsiQuarantineDays: z.number().int(), auctionSettlementHours: z.number().int() }).parse(body)));
 
 /** Bulk offers from a CSV file: a template (optionally with every current offer, to edit in bulk), a check that changes nothing, then the load (all rows or none). */
 get('/catalog-import/template', 'catalog:write', async ({ db, query }) => csv(await core.offersTemplate(db, { withOffers: query.get('offers') === '1' }), query.get('offers') === '1' ? 'meridian-offers-export.csv' : 'meridian-offers-import-template.csv'));

@@ -47,6 +47,10 @@ sessions, lockout and user administration; the super user is read from the envir
 permission per route and enforces authentication, CSRF, the forced password change, permissions and row scope before any handler runs.
 The UI builds navigation from the server's module list for the signed-in user. See [SECURITY.md](SECURITY.md) and [ROLES.md](ROLES.md).
 
+## Numbering
+
+Number Resource Management lives in `packages/core` (`nrm.ts`, `nrm-pools.ts`, `number-reservation.ts`, `vip-pattern-matcher.ts`, `order-numbering.ts`) on migrations `0020` and `0021`. Locks are database row locks with an optional Redis adapter; events go through the lifecycle outbox; IMSI recycling also runs as a Temporal workflow in `services/order-service`. Details in [NUMBERING.md](NUMBERING.md).
+
 ## Payments
 No gateway is bundled. `MERIDIAN_PAYMENT_MODE=manual` (production default) captures nothing automatically: cashiers record a terminal approval or
 receipt reference, and a payment provider confirms online payments through the signed webhook. `simulated` (development) auto-approves cards.

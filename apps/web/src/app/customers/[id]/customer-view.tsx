@@ -142,7 +142,7 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
       {can('order:read') && <><SectionTitle>Recent orders</SectionTitle>
       {c.recentOrders.length === 0 ? <Empty>No orders yet.</Empty> : (
         <TableWrap><thead><tr><Th>Order</Th><Th>Items</Th><Th>State</Th><Th right>Total</Th><Th>Placed</Th></tr></thead><tbody>
-          {c.recentOrders.map((o: any) => <tr key={o.id}><Td><Link className="font-mono text-accent" href={`/orders/${o.id}`}>{o.id.slice(0, 8)}</Link></Td><Td>{o.summary}</Td><Td><Badge tone={tone(o.state)}>{label(o.state)}</Badge></Td><Td right>{money(o.totalMinor, o.currency)}</Td><Td>{dt(o.createdAt)}</Td></tr>)}
+          {c.recentOrders.map((o: any) => <tr key={o.id}><Td><Link className="font-mono text-accent" href={`/orders/${o.id}`}>{o.number ?? o.id.slice(0, 8)}</Link></Td><Td>{o.summary}</Td><Td><Badge tone={tone(o.state)}>{label(o.state)}</Badge></Td><Td right>{money(o.totalMinor, o.currency)}</Td><Td>{dt(o.createdAt)}</Td></tr>)}
         </tbody></TableWrap>
       )}</>}
 

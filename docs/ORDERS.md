@@ -1,5 +1,7 @@
 # Orders: fulfilment, cancellation and returns
 
+Every order carries a readable number `YYYYMMDD-NNNNN`; orders that sell a SIM also hold a SIM card and number until activation. See [NUMBERING.md](NUMBERING.md).
+
 An order is not one thing that ships or doesn't. A basket can hold a mobile plan, a phone that is posted, and a fibre line that needs a technician, and each of those has its own timeline and its own point of no return. Meridian therefore splits a paid order into up to three **fulfilment groups**:
 
 | Group | What is in it | Moves through | Point of no return |

@@ -24,6 +24,9 @@ const CORE_PERMISSIONS = [
   'finance:read', 'finance:export',
   'catalog:read', 'catalog:write',
   'inventory:read', 'inventory:write',
+  'numbering:read', // see the pools of numbers, SIMs and identities
+  'numbering:select', // choose a number and a SIM while selling
+  'numbering:manage', // load the pools, set tier prices, hold numbers for auction, retire SIMs
   'inventory:writeoff', // take stock off the books with a reason: damaged, lost, expired, stolen, a count that came up short
   'warehouse:manage', // add, rename, switch off and remove warehouse locations
   'case:read', 'case:create', 'case:write',
@@ -74,7 +77,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   admin: {
     id: 'admin', label: 'Administrator', scope: 'staff', home: '/admin/users',
     summary: 'Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits.',
-    permissions: ['dashboard:read', 'user:manage', 'audit:read', 'catalog:read', 'catalog:write', 'customer:search', 'customer:read', 'service:read', 'order:read',
+    permissions: ['dashboard:read', 'numbering:read', 'user:manage', 'audit:read', 'catalog:read', 'catalog:write', 'customer:search', 'customer:read', 'service:read', 'order:read',
       'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage'],
   },
   'product-configurator': {
@@ -100,30 +103,30 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'call-center': {
     id: 'call-center', label: 'Call Center Agent', scope: 'staff', home: '/customers',
     summary: 'Handles customer queries on the Customer 360: profile, services, orders, bills, cases. Can suspend/resume, change SIM or number, take payments.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'order:read', ...ch('CALL_CENTER'),
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'order:read', ...ch('CALL_CENTER'), 'numbering:select',
       'order:payment', 'billing:read', 'billing:pay', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   telesales: {
     id: 'telesales', label: 'Telesales Agent', scope: 'staff', home: '/orders/new?channel=TELESALES',
     summary: 'Sells by phone: creates customers and telesales orders.',
-    permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'catalog:read', 'order:read', ...ch('TELESALES'), 'order:payment'],
+    permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'catalog:read', 'order:read', ...ch('TELESALES'), 'order:payment', 'numbering:select'],
   },
   'retail-store': {
     id: 'retail-store', label: 'Retail Store', scope: 'store', home: '/orders/new?channel=RETAIL_ASSISTED',
     summary: 'Sells over the counter at one store: assisted and quick-sale orders, SIM changes, store stock. Sees only that store’s orders and stock.',
     permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'),
       'order:payment', 'order:fulfil', 'order:cancel', 'inventory:read', 'inventory:write', 'commission:read', 'billing:read', 'billing:pay',
-      'store:assist', 'kyc:attest'],
+      'store:assist', 'kyc:attest', 'numbering:select'],
   },
   dealer: {
     id: 'dealer', label: 'Dealer', scope: 'dealer', home: '/orders/new?channel=DEALER',
     summary: 'A partner who sells for the operator. Sees only their own orders and commission.',
-    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'commission:read', 'dealer:read'],
+    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'commission:read', 'dealer:read', 'numbering:select'],
   },
   'dealer-desk': {
     id: 'dealer-desk', label: 'Dealer Desk', scope: 'staff', home: '/orders/new?channel=DEALER',
     summary: 'Operator staff who keep the dealers and their agents and place orders on a dealer’s behalf, naming the dealer and the agent who sold it.',
-    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'order:payment', 'commission:read', 'dealer:read', 'dealer:manage'],
+    permissions: ['customer:search', 'customer:read', 'customer:create', 'catalog:read', 'order:read', ...ch('DEALER'), 'order:payment', 'commission:read', 'dealer:read', 'dealer:manage', 'numbering:select'],
   },
   'customer-service': {
     id: 'customer-service', label: 'Customer Service', scope: 'staff', home: '/cases', creditLimitMinor: 20_000,
@@ -149,7 +152,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'inventory-ops': {
     id: 'inventory-ops', label: 'Operations Support', scope: 'staff', home: '/inventory',
     summary: 'Looks after stock: keeps warehouse locations, loads stock in batches or one SKU at a time, and writes stock off with a reason. Sees the stock history; cannot sell or change billing.',
-    permissions: ['dashboard:read', 'catalog:read', 'inventory:read', 'inventory:write', 'inventory:writeoff', 'warehouse:manage', 'order:read'],
+    permissions: ['dashboard:read', 'catalog:read', 'inventory:read', 'inventory:write', 'inventory:writeoff', 'warehouse:manage', 'numbering:read', 'numbering:select', 'numbering:manage', 'order:read'],
   },
   'revenue-assurance': {
     id: 'revenue-assurance', label: 'Revenue Assurance', scope: 'staff', home: '/finance',
@@ -182,6 +185,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'mnp', label: 'Number porting', href: '/mnp', icon: 'swap', anyOf: ['mnp:manage'] },
   { id: 'catalog', label: 'Catalog', href: '/catalog', icon: 'grid', anyOf: ['catalog:read'] },
   { id: 'inventory', label: 'Inventory', href: '/inventory', icon: 'cube', anyOf: ['inventory:read'] },
+  { id: 'numbering', label: 'Numbers & SIMs', href: '/numbering', icon: 'numbering', anyOf: ['numbering:read'] },
   { id: 'finance', label: 'Finance', href: '/finance', icon: 'ledger', anyOf: ['finance:read'] },
   { id: 'stores', label: 'Stores', href: '/stores', icon: 'pin', anyOf: ['store:manage'] },
   { id: 'dealers', label: 'Dealers', href: '/dealers', icon: 'store', anyOf: ['dealer:read'] },

@@ -327,7 +327,7 @@ export async function startPayment(db: Db, appId: string, access: AppAccess, o: 
   if (o.returnUrl && !/^https:\/\/|^http:\/\/localhost/.test(o.returnUrl)) throw invalid('returnUrl must be an https URL.');
   const attempt = (await db.query('SELECT count(*) AS n FROM payment_intents WHERE order_id=$1', [order.id])).rows[0]!.n as number;
   const intent = await gw.createIntent({
-    amountMinor: order.totalMinor, currency: order.currency, reference: order.id, description: `Order ${String(order.id).slice(0, 8)}`,
+    amountMinor: order.totalMinor, currency: order.currency, reference: order.id, description: `Order ${order.number ?? String(order.id).slice(0, 8)}`,
     idempotencyKey: `meridian-order-${order.id}-${attempt}`, returnUrl: o.returnUrl, metadata: { order_id: order.id, application_id: appId },
   });
   await db.tx(async (q) => {
@@ -378,7 +378,7 @@ export async function applicationView(q: Queryable, id: string, access: AppAcces
   let order: Row | null = null;
   if (a.orderId) {
     const o = await getOrder(q, a.orderId);
-    order = { id: o.id, state: o.state, totalMinor: o.totalMinor, currency: o.currency, trackingNumber: o.fulfilment?.trackingNumber ?? null, failureReason: o.failureReason ?? null,
+    order = { id: o.id, number: o.number ?? null, state: o.state, totalMinor: o.totalMinor, currency: o.currency, trackingNumber: o.fulfilment?.trackingNumber ?? null, failureReason: o.failureReason ?? null,
       numbers: (o.services as Row[]).filter((s) => s.type === 'MOBILE').map((s) => s.identifier), lines: (o.lines as Row[]).map((l) => ({ name: l.description, quantity: l.quantity })) };
   }
   const p = a.personal as Partial<Personal>;
