@@ -974,4 +974,21 @@ describe('maintaining roles and permissions', () => {
     expect((await call('POST', '/roles/call-center/reset', { cookie: admin })).json.customised).toBe(false);
     expect((await call('GET', '/invoices?limit=1', { cookie: seller.cookie })).status).toBe(200);
   });
+
+  it('creates a role, assigns it to a user, and refuses to delete it while it is held', async () => {
+    const admin = await root();
+    const made = await call('POST', '/roles', { cookie: admin, body: { name: 'Billing Viewer', scope: 'staff', home: '/billing', permissions: ['dashboard:read', 'billing:read'] } });
+    expect(made.status).toBe(200);
+    expect(made.json.id).toBe('billing-viewer');
+    expect((await call('GET', '/roles', { cookie: admin })).json.some((r: any) => r.id === 'billing-viewer' && r.custom)).toBe(true);
+    const u = await staff(['billing-viewer']);
+    expect((await call('GET', '/invoices?limit=1', { cookie: u.cookie })).status).toBe(200);
+    expect((await call('GET', '/customers?limit=1', { cookie: u.cookie })).status).toBe(403);
+    expect((await call('GET', '/auth/me', { cookie: u.cookie })).json.user.home).toBe('/billing');
+    expect((await call('DELETE', '/roles/billing-viewer', { cookie: admin })).status).toBe(422);
+    expect((await call('POST', '/roles', { cookie: u.cookie, body: { name: 'Nope' } })).status).toBe(403);
+    await db.query(`DELETE FROM sessions WHERE user_id=$1`, [u.id]);
+    await db.query(`DELETE FROM users WHERE id=$1`, [u.id]);
+    expect((await call('DELETE', '/roles/billing-viewer', { cookie: admin })).status).toBe(200);
+  });
 });

@@ -43,8 +43,12 @@ export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
   'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance',
 ] as const;
-export type RoleId = (typeof ROLE_IDS)[number];
-export const isRoleId = (r: string): r is RoleId => (ROLE_IDS as readonly string[]).includes(r);
+export type BuiltinRoleId = (typeof ROLE_IDS)[number];
+/** A role id: one of the built-in roles, or the id of a role an administrator created. */
+export type RoleId = string;
+export const isBuiltinRole = (r: string): r is BuiltinRoleId => (ROLE_IDS as readonly string[]).includes(r);
+/** True for a built-in role. Roles an administrator created are known only from the database; see `RoleBook`. */
+export const isRoleId = isBuiltinRole;
 
 /** What rows a role can see. `staff` = everything its permissions allow; the others are bound to one entity. */
 export type DataScope = 'staff' | 'customer' | 'store' | 'dealer';
@@ -63,7 +67,7 @@ export interface RoleDef {
 
 const ch = (...c: Channel[]) => c.map((x) => `order:create:${x}` as Permission);
 
-export const ROLES: Record<RoleId, RoleDef> = {
+export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   admin: {
     id: 'admin', label: 'Administrator', scope: 'staff', home: '/admin/users',
     summary: 'Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits.',
@@ -147,7 +151,7 @@ export const ROLES: Record<RoleId, RoleDef> = {
 };
 
 /** Priority for choosing the landing page when a user holds several roles. */
-const HOME_PRIORITY: RoleId[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
+const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'product-configurator', 'rating-charging', 'self-serve'];
 
 // ───────────────────────── modules (navigation) ─────────────────────────
 export interface ModuleDef {
@@ -189,26 +193,36 @@ export interface Principal {
 }
 
 /**
- * What an administrator has changed about a role (Users & roles → Roles and permissions). The table above is the default; an override replaces a
- * role's permission list and/or credit-note limit. Everything that decides access takes the overrides, which are read from the database per request.
+ * Everything an administrator can change about roles (Users & roles → Roles and permissions): the permissions and credit limit of built-in roles,
+ * and roles they created. The table above is the default. The book is read from the database per request and passed to whatever decides access.
  */
-export type RoleOverrides = Partial<Record<RoleId, { permissions?: Permission[]; creditLimitMinor?: number | null }>>;
+export interface RoleBook {
+  changes: Partial<Record<string, { permissions?: Permission[]; creditLimitMinor?: number | null }>>;
+  custom: Record<string, RoleDef>;
+}
+export type RoleOverrides = RoleBook;
+export const EMPTY_BOOK: RoleBook = { changes: {}, custom: {} };
 
+/** A role's definition, built-in or created. */
+export const roleDef = (id: RoleId, book?: RoleBook): RoleDef | undefined => book?.custom[id] ?? (isBuiltinRole(id) ? ROLES[id] : undefined);
 /** The permissions a role has right now. */
-export const rolePermissions = (id: RoleId, ov?: RoleOverrides): Permission[] => ov?.[id]?.permissions ?? ROLES[id]?.permissions ?? [];
-export const roleCreditLimit = (id: RoleId, ov?: RoleOverrides): number | null | undefined => (ov?.[id] && 'creditLimitMinor' in ov[id]! ? ov[id]!.creditLimitMinor : ROLES[id]?.creditLimitMinor);
+export const rolePermissions = (id: RoleId, book?: RoleBook): Permission[] => book?.changes[id]?.permissions ?? roleDef(id, book)?.permissions ?? [];
+export const roleCreditLimit = (id: RoleId, book?: RoleBook): number | null | undefined => {
+  const c = book?.changes[id];
+  return c && 'creditLimitMinor' in c ? c.creditLimitMinor : roleDef(id, book)?.creditLimitMinor;
+};
 
-export function permissionsOf(p: Pick<Principal, 'isSuperuser' | 'roles'>, ov?: RoleOverrides): Set<Permission> {
+export function permissionsOf(p: Pick<Principal, 'isSuperuser' | 'roles'>, book?: RoleBook): Set<Permission> {
   if (p.isSuperuser) return new Set(ALL_PERMISSIONS);
-  return new Set(p.roles.flatMap((r) => rolePermissions(r, ov)));
+  return new Set(p.roles.flatMap((r) => rolePermissions(r, book)));
 }
 
 /** Largest credit note the principal may issue; `null` = unlimited; 0 = none. */
-export function creditLimitOf(p: Pick<Principal, 'isSuperuser' | 'roles'>, ov?: RoleOverrides): number | null {
+export function creditLimitOf(p: Pick<Principal, 'isSuperuser' | 'roles'>, book?: RoleBook): number | null {
   if (p.isSuperuser) return null;
   let max = 0;
   for (const r of p.roles) {
-    const l = roleCreditLimit(r, ov);
+    const l = roleCreditLimit(r, book);
     if (l === null) return null;
     if (typeof l === 'number') max = Math.max(max, l);
   }
@@ -220,12 +234,13 @@ export interface Scope { customerId?: string; storeId?: string; dealerId?: strin
 /**
  * Data scope. A user with ANY unscoped (staff) role, or the super user, is unrestricted. Otherwise the scopes of their
  * roles apply. A scoped role whose binding is missing (retail user without a store) yields an impossible filter, never "all".
+ * A role that is not known (removed since) counts as scoped to nothing, never as unrestricted.
  */
-export function scopeOf(p: Principal): Scope {
-  if (p.isSuperuser || p.roles.some((r) => ROLES[r]?.scope === 'staff')) return { unrestricted: true };
+export function scopeOf(p: Principal, book?: RoleBook): Scope {
+  if (p.isSuperuser || p.roles.some((r) => roleDef(r, book)?.scope === 'staff')) return { unrestricted: true };
   const s: Scope = { unrestricted: false };
   for (const r of p.roles) {
-    const sc = ROLES[r]?.scope;
+    const sc = roleDef(r, book)?.scope;
     if (sc === 'customer') s.customerId = p.customerId ?? '00000000-0000-0000-0000-000000000000';
     if (sc === 'store') s.storeId = p.storeId ?? '\u0000none';
     if (sc === 'dealer') s.dealerId = p.dealerId ?? '\u0000none';
@@ -233,30 +248,31 @@ export function scopeOf(p: Principal): Scope {
   return s;
 }
 
-export function homeOf(p: Principal): string {
+export function homeOf(p: Principal, book?: RoleBook): string {
   if (p.isSuperuser) return '/';
-  const r = HOME_PRIORITY.find((x) => p.roles.includes(x));
-  return r ? ROLES[r].home : '/';
+  const r = HOME_PRIORITY.find((x) => p.roles.includes(x)) ?? p.roles.find((x) => roleDef(x, book));
+  return (r && roleDef(r, book)?.home) || '/';
 }
 
 export interface NavModule { id: string; label: string; href: string; icon: string }
 
 /** Modules this principal can open. A portal customer's "Customers" entry becomes "My account". */
-export function modulesOf(p: Principal, effective?: ReadonlySet<Permission>): NavModule[] {
-  const perms = effective ?? permissionsOf(p);
-  const scope = scopeOf(p);
+export function modulesOf(p: Principal, effective?: ReadonlySet<Permission>, book?: RoleBook): NavModule[] {
+  const perms = effective ?? permissionsOf(p, book);
+  const scope = scopeOf(p, book);
   const out: NavModule[] = MODULES.filter((m) => m.anyOf.some((x) => perms.has(x))).map(({ id, label, href, icon }) => ({ id, label, href, icon }));
   if (scope.customerId && !perms.has('customer:search')) out.unshift({ id: 'account', label: 'My account', href: '/account', icon: 'person' });
   return out;
 }
 
 /** Required binding per role, so user creation can refuse a store user with no store. */
-export function missingBinding(roles: RoleId[], b: { storeId?: string | null; dealerId?: string | null; customerId?: string | null }): string | null {
+export function missingBinding(roles: RoleId[], b: { storeId?: string | null; dealerId?: string | null; customerId?: string | null }, book?: RoleBook): string | null {
   for (const r of roles) {
-    const sc = ROLES[r].scope;
-    if (sc === 'store' && !b.storeId) return `role "${ROLES[r].label}" needs a store id`;
-    if (sc === 'dealer' && !b.dealerId) return `role "${ROLES[r].label}" needs a dealer id`;
-    if (sc === 'customer' && !b.customerId) return `role "${ROLES[r].label}" needs a linked customer`;
+    const d = roleDef(r, book);
+    if (!d) continue;
+    if (d.scope === 'store' && !b.storeId) return `role "${d.label}" needs a store id`;
+    if (d.scope === 'dealer' && !b.dealerId) return `role "${d.label}" needs a dealer id`;
+    if (d.scope === 'customer' && !b.customerId) return `role "${d.label}" needs a linked customer`;
   }
   return null;
 }

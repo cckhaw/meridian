@@ -139,8 +139,11 @@ get('/meta', null, async ({ db, user }) => ({ ...await (async () => { const m = 
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', ({ db }) => core.listRoles(db));
-get('/roles/permissions', 'user:manage', () => core.permissionCatalogue());
-patch('/roles/:id', 'user:manage', ({ db, user, params, body }) => core.setRolePermissions(db, user.username, params.id!, z.object({ permissions: z.array(z.string().max(60)).max(80), creditLimitMinor: z.number().int().min(0).nullable().optional() }).parse(body)));
+get('/roles/permissions', 'user:manage', () => ({ permissions: core.permissionCatalogue(), landing: core.MODULES.map((m) => ({ href: m.href, label: m.label })) }));
+const roleBody = z.object({ name: z.string().max(60).optional(), summary: z.string().max(300).optional(), scope: z.enum(['staff', 'store', 'dealer']).optional(), home: z.string().max(80).optional(), permissions: z.array(z.string().max(60)).max(80).optional(), creditLimitMinor: z.number().int().min(0).nullable().optional(), copyFrom: z.string().max(60).optional() });
+post('/roles', 'user:manage', ({ db, user, body }) => core.createCustomRole(db, user.username, roleBody.parse(body)));
+patch('/roles/:id', 'user:manage', ({ db, user, params, body }) => core.updateRole(db, user.username, params.id!, roleBody.parse(body)));
+route('DELETE', '/roles/:id', 'user:manage', ({ db, user, params }) => core.deleteCustomRole(db, user.username, params.id!));
 post('/roles/:id/reset', 'user:manage', ({ db, user, params }) => core.resetRole(db, user.username, params.id!));
 get('/users', 'user:manage', ({ db, query }) => core.listUsers(db, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 const newUser = z.object({
