@@ -22,12 +22,15 @@ interface FormState {
   variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
   /** Contracts this device can be bought on with a plan. */
   deals: Array<{ term: string; subsidy: string; waive: string }>;
+  /** A group plan (family / multi-line share). */
+  isGroup: boolean; maxMembers: string; memberOffers: string[]; poolGb: string;
 }
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: '', description: '', market, recurring: '', upfront: '', taxInclusive: true,
   term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '',
   requires: [], excludes: [], channels: [], status: 'DRAFT', activeFrom: '', variants: [], deals: [],
+  isGroup: false, maxMembers: '3', memberOffers: [], poolGb: '',
 });
 
 /** Offers saved before fulfilment options existed carry only the flags; show them as the built-in options they correspond to. */
@@ -42,6 +45,7 @@ function fromOffer(o: any, market: string): FormState {
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
     options: optionsOf(o.fulfilment), skus: (o.fulfilment?.inventorySkus ?? []).join(', '), trackSim: (o.fulfilment?.inventorySkus ?? []).length > 0,
     partner: o.partnerCode ?? '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
+    isGroup: !!o.group?.isGroupOffer, maxMembers: String(o.group?.maxGroupMembers ?? 3), memberOffers: o.group?.allowedMemberOfferIds ?? [], poolGb: o.group?.sharedPoolQuotaGb != null ? String(o.group.sharedPoolQuotaGb) : '',
     deals: (o.deals ?? []).map((d: any) => ({ term: String(d.termMonths), subsidy: major(d.subsidyMinor), waive: String(d.waiveInLastMonths ?? 1) })),
     variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
   };
@@ -122,6 +126,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const canTrack = chosenOptions.some((o: any) => o.tracksStock);
   const tracksStock = canTrack && (!!b?.goods || f.trackSim);
   const hasDevice = !!b?.goods && (has('SHIP') || has('COLLECT'));
+  const canGroup = !!b && b.role === 'PLAN' && !b.goods && b.service === 'MOBILE'; // only a mobile service plan can be shared by a group
 
   const currency = regional.currency;
   const taxLabel = `${regional.taxName} (${regional.taxBps / 100}%)`;
@@ -158,7 +163,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   };
   const fulfilment = { options: f.options, inventorySkus: tracksStock ? csv(f.skus) : [] };
   const deals = b?.outright ? f.deals.filter((d) => d.subsidy).map((d) => ({ termMonths: Number(d.term), subsidyMinor: toMinor(d.subsidy), waiveInLastMonths: Number(d.waive || 1) })) : [];
-  const common = { deals, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
+  const group = canGroup && f.isGroup ? { isGroupOffer: true, maxGroupMembers: Number(f.maxMembers), allowedMemberOfferIds: f.memberOffers, sharedPoolQuotaGb: f.poolGb.trim() ? Number(f.poolGb) : undefined } : editing ? null : undefined; // null clears it on an offer that had one
+  const common = { deals, group, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
     variants: hasDevice && tracksStock ? f.variants.filter((v) => v.colour.trim() && v.sku.trim()).map((v) => ({ id: slug(`${v.colour}-${v.storage}`) || slug(v.sku), colour: v.colour.trim(), storage: v.storage.trim() || undefined, sku: v.sku.trim(), priceDeltaMinor: v.delta ? toMinor(v.delta) : undefined })) : [] };
 
   // What stops the person moving on from this step, in words.
@@ -168,6 +174,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
       case 'pricing': return prices.length === 0 ? (b?.role === 'GOODS' ? 'Enter the price.' : 'Enter a monthly fee or an upfront price.') : null;
       case 'fulfilment': return b?.goods && !has('SHIP') && !has('COLLECT') ? 'Choose how the customer gets the goods: delivery or collect in store.' : b?.needsInstallation && !has('INSTALL') ? 'Fibre needs an installation option.' : null;
       case 'review': return f.status === 'SCHEDULED' && (!f.activeFrom || f.activeFrom < tomorrow()) ? 'Choose a go-live date after today.' : null;
+      case 'rules': return canGroup && f.isGroup && !(Number.isInteger(Number(f.maxMembers)) && Number(f.maxMembers) >= 1 && Number(f.maxMembers) <= 20) ? 'A group plan holds 1 to 20 member lines.' : canGroup && f.isGroup && f.poolGb.trim() && !(Number(f.poolGb) >= 0) ? 'The shared data pool is a number of GB.' : null;
       case 'availability': return b?.needsPartner && !f.partner.trim() ? 'Enter the partner code.' : null;
       default: return null;
     }
@@ -374,9 +381,26 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
         )}
 
         {stepId === 'rules' && (
+          <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <DependencyPicker title="Customer must first have" help="The customer needs one of these in the same order, or already own it. Pick a whole category or group to mean “any offer beneath it”." value={f.requires} names={names} remember={remember} levels={['OFFER', 'GROUP', 'CATEGORY', 'NETWORK_TYPE']} taken={chosen} onChange={(requires) => setF({ ...f, requires })} />
             <DependencyPicker title="Cannot be bought together with" help="Offers that cannot be in the same order as this one." value={f.excludes} names={names} remember={remember} levels={['OFFER']} taken={chosen} onChange={(excludes) => setF({ ...f, excludes })} />
+          </div>
+          {canGroup && (
+            <Card className="space-y-4">
+              <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={f.isGroup} onChange={(e) => setF({ ...f, isGroup: e.target.checked })} />
+                <span><span className="font-medium">This is a group plan (family or multi-line share)</span><span className="block text-footnote text-label2">Buying it creates the group: the buyer is the family head, and member lines join it in the same order, or later. You cannot make a group by hand.</span></span></label>
+              {f.isGroup && (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Member lines it holds" hint="Besides the family head's own line (1 to 20)."><Input type="number" min={1} max={20} value={f.maxMembers} onChange={set('maxMembers')} /></Field>
+                    <Field label="Shared data pool (GB)" hint="Optional. The pool the whole group shares."><Input type="number" min={0} step="any" value={f.poolGb} onChange={set('poolGb')} /></Field>
+                  </div>
+                  <DependencyPicker title="Plans a member line may take" help="Leave empty to allow any ordinary mobile plan. A group plan cannot be a member plan." value={f.memberOffers} names={names} remember={remember} levels={['OFFER']} taken={chosen} onChange={(memberOffers) => setF({ ...f, memberOffers })} />
+                </>
+              )}
+            </Card>
+          )}
           </div>
         )}
 
@@ -393,6 +417,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                 {steps.includes('fulfilment') && <Line k="Fulfilment" v={chosenOptions.map((o: any) => o.name).join(', ') || '—'} onEdit={() => go(steps.indexOf('fulfilment'))} />}
                 {steps.includes('stock') && <Line k="Stock" v={[csv(f.skus).join(', '), f.variants.filter((v) => v.colour.trim()).length ? `${f.variants.filter((v) => v.colour.trim()).length} colour/storage options` : ''].filter(Boolean).join(' · ') || 'No SKUs'} onEdit={() => go(steps.indexOf('stock'))} />}
                 <Line k="Sold through" v={f.channels.length ? f.channels.map(label).join(', ') : 'Every channel'} onEdit={() => go(steps.indexOf('availability'))} />
+                {canGroup && f.isGroup && <Line k="Group plan" v={`${f.maxMembers} member lines${f.poolGb ? ` · ${f.poolGb} GB shared` : ''}${f.memberOffers.length ? ` · ${f.memberOffers.length} allowed member plan${f.memberOffers.length === 1 ? '' : 's'}` : ''}`} onEdit={() => go(steps.indexOf('rules'))} />}
                 <Line k="Rules" v={`${f.requires.length} required · ${f.excludes.length} excluded`} onEdit={() => go(steps.indexOf('rules'))} />
               </dl>
             </Card>

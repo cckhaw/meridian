@@ -1,21 +1,38 @@
 import { behaviourOf } from '@meridian/types';
 import { toMinor } from '@/lib/format';
 
-export type StepId = 'product' | 'device' | 'addons' | 'sim' | 'payment' | 'customer' | 'delivery' | 'review' | 'pay';
+export type StepId = 'product' | 'device' | 'addons' | 'family' | 'sim' | 'payment' | 'customer' | 'delivery' | 'review' | 'pay';
 export const STEP_TITLE: Record<StepId, string> = {
-  product: 'Plan or product', device: 'Device', addons: 'Add-ons', sim: 'SIM and number', payment: 'How to pay', customer: 'Customer', delivery: 'Delivery and installation', review: 'Review', pay: 'Payment',
+  product: 'Plan or product', device: 'Device', addons: 'Add-ons', family: 'Family members', sim: 'SIM and number', payment: 'How to pay', customer: 'Customer', delivery: 'Delivery and installation', review: 'Review', pay: 'Payment',
 };
 export const STEP_HINT: Record<StepId, string> = {
-  product: 'What is the customer buying?', device: 'Pick the colour and storage, or add a device.', addons: 'Extras this customer can add, and bundle savings.', sim: 'Hand over a SIM card (or issue an eSIM) and choose the number.',
+  product: 'What is the customer buying?', device: 'Pick the colour and storage, or add a device.', addons: 'Extras this customer can add, and bundle savings.', family: 'The lines that share this plan: new numbers, or numbers brought from another operator.', sim: 'Hand over a SIM card (or issue an eSIM) and choose the number.',
   payment: 'Pay each item in full today, or spread it over the contract.', customer: 'Who is this for? Look them up by ID, or create them.', delivery: 'Where to send things, and when the technician can come.',
   review: 'Check everything before it is submitted.', pay: 'Take payment and submit the order.',
 };
+
+/** A number brought from another operator: the donor's details, and whether to give a temporary number from our pool meanwhile. */
+export interface PortInForm { donorOperator: string; donorMsisdn: string; holderName: string; holderIdType: string; holderIdNumber: string; temporaryNumber: boolean }
+export const emptyPortIn = (): PortInForm => ({ donorOperator: '', donorMsisdn: '', holderName: '', holderIdType: 'NATIONAL_ID', holderIdNumber: '', temporaryNumber: true });
+export const portInReady = (p?: PortInForm | null) => !p || (!!p.donorOperator.trim() && p.donorMsisdn.replace(/\D/g, '').length >= 8 && !!p.holderName.trim() && !!p.holderIdNumber.trim());
+const portInBody = (p?: PortInForm | null) => (p ? { ...p, donorMsisdn: p.donorMsisdn.replace(/[^\d+]/g, '') } : undefined);
+
+/** The number a line holds while it is being sold: held for the customer (a chosen number), or left to the pool. */
+export interface NumberHolder { msisdn: string; numberToken?: string; numberTier?: string; numberFeeMinor?: number; numberExpires?: string }
+/** A member line of a group plan, taken together with the head's line. */
+export interface Member extends NumberHolder { key: string; offerId: string; simType: '' | 'PHYSICAL' | 'ESIM'; portIn?: PortInForm | null }
+export const newMember = (offerId: string): Member => ({ key: Math.random().toString(36).slice(2, 8), offerId, simType: 'PHYSICAL', msisdn: '' });
+export const isGroupPlan = (o: any) => !!o?.group?.isGroupOffer;
 
 export interface Item {
   key: string; offer: any; quantity: number; msisdn: string; variantId?: string;
   /** The SIM for a plan that needs one: a card's ICCID, or `simType` alone (next free card, or a fresh eSIM). `numberToken` is the hold on a chosen number. */
   iccid?: string; simType?: '' | 'PHYSICAL' | 'ESIM'; numberToken?: string; numberTier?: string; numberFeeMinor?: number; numberExpires?: string;
   payMode: 'UPFRONT' | 'INSTALLMENT'; months: number; down: string;
+  /** A number brought from another operator for this line, instead of one from our pool. */
+  portIn?: PortInForm | null;
+  /** A group plan: its member lines. */
+  members?: Member[];
   /** A device bought on a contract with one of the plans in the basket. */
   deal?: { planKey: string; term: number };
 }
@@ -38,12 +55,20 @@ export const newItem = (offer: any): Item => ({
   variantId: offer.variants?.[0]?.id, payMode: 'UPFRONT', months: Math.min(12, offer.contract?.termMonths || 12), down: '',
 });
 
+/** The quote lists a group plan's member lines right after it, so an item's own line is further down once earlier items have members. */
+export const quoteIndex = (items: Item[], k: number) => items.slice(0, k).reduce((n, x) => n + (isGroupPlan(x.offer) ? (x.members ?? []).filter((m) => m.offerId).length : 0), k);
+
+/** What was chosen for each quote line (members included), in the quote's order, so the review can show the SIM and number beside the price. */
+export const flatLines = (items: Item[]): Array<{ iccid?: string; simType?: string; msisdn?: string; portIn?: PortInForm | null }> =>
+  items.flatMap((i) => [i, ...(isGroupPlan(i.offer) ? (i.members ?? []).filter((m) => m.offerId) : [])]);
+
 /** The request the quote and the order are built from. */
 export function lineBody(i: Item, all: Item[] = []) {
   const plan = i.deal ? all.findIndex((x) => x.key === i.deal!.planKey) : -1;
   return {
     ...(i.deal && plan >= 0 ? { attachTo: plan, dealTermMonths: i.deal.term } : {}),
-    offerId: i.offer.id, quantity: i.quantity, msisdn: i.msisdn || undefined,
+    offerId: i.offer.id, quantity: i.quantity, msisdn: i.portIn ? undefined : i.msisdn || undefined, portIn: portInBody(i.portIn),
+    members: isGroupPlan(i.offer) ? (i.members ?? []).filter((m) => m.offerId).map((m) => ({ offerId: m.offerId, simType: m.simType || undefined, msisdn: m.portIn ? undefined : m.msisdn || undefined, numberToken: !m.portIn && m.msisdn && m.numberToken ? m.numberToken : undefined, portIn: portInBody(m.portIn) })) : undefined,
     iccid: i.iccid || undefined, simType: !i.iccid && i.simType ? i.simType : undefined, numberToken: i.msisdn && i.numberToken ? i.numberToken : undefined,
     options: i.variantId ? { variantId: i.variantId } : undefined,
     payment: i.payMode === 'INSTALLMENT' ? { mode: 'INSTALLMENT' as const, months: i.months, downPaymentMinor: i.down ? toMinor(i.down) : 0 } : undefined,

@@ -18,7 +18,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
     ...(r.level === 'NETWORK_TYPE' ? { networkType: d.networkType } : {}),
     ...(r.level === 'OFFER'
       ? { kind: r.kind, template: d.template ?? r.kind, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
-          characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [], variants: d.variants ?? [], deals: d.deals ?? [] }
+          characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [], variants: d.variants ?? [], deals: d.deals ?? [], group: d.group }
       : {}),
     ...(r.level === 'LINE_ITEM'
       ? { itemType: d.itemType, description: d.description, quantity: d.quantity, unit: d.unit, unlimited: !!d.unlimited, sku: d.sku }
@@ -30,7 +30,7 @@ const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, desc
 
 const offerData = (o: Partial<OfferNode>) => ({
   template: o.template, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
-  characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [], deals: o.deals ?? [], suspension: o.suspension,
+  characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [], deals: o.deals ?? [], suspension: o.suspension, group: o.group?.isGroupOffer ? o.group : undefined,
 });
 
 // ───────────────────────── reads ─────────────────────────
@@ -201,6 +201,23 @@ async function assertSkuFree(q: Queryable, offerId: string, sku: string, exceptI
   if (other) throw invalid(`SKU ${sku} is already used by the line item “${other.name}”`);
 }
 
+/** A group plan's terms must be sensible and point only at real, ordinary offers that can be a supplementary line. */
+async function assertGroupTerms(q: Queryable, offerId: string, g: OfferNode['group']): Promise<void> {
+  if (!g?.isGroupOffer) return;
+  if (!Number.isInteger(g.maxGroupMembers) || g.maxGroupMembers < 1 || g.maxGroupMembers > 20) throw invalid('A group plan holds 1 to 20 supplementary lines.');
+  if (g.sharedPoolQuotaGb !== undefined && (!Number.isFinite(g.sharedPoolQuotaGb) || g.sharedPoolQuotaGb < 0 || g.sharedPoolQuotaGb > 100_000)) throw invalid('The shared data pool is 0 to 100,000 GB.');
+  const ids = [...new Set(g.allowedMemberOfferIds ?? [])];
+  if (ids.length > 50) throw invalid('A group plan can name up to 50 member offers.');
+  if (ids.includes(offerId)) throw invalid('A group plan cannot be its own member offer.');
+  if (!ids.length) return;
+  const rows = (await q.query(`SELECT id, level, data FROM catalog_nodes WHERE id = ANY($1::text[])`, [ids])).rows;
+  for (const id of ids) {
+    const r = rows.find((x) => x.id === id);
+    if (!r || r.level !== 'OFFER') throw invalid(`“${id}” is not an offer.`);
+    if (r.data?.group?.isGroupOffer) throw invalid(`“${id}” is itself a group plan, so it cannot be a member offer.`);
+  }
+}
+
 export async function createNode(q: Queryable, input: NodeInput, actor = 'system'): Promise<CatalogNode> {
   if (!input.id || !/^[a-z0-9][a-z0-9-]*$/.test(input.id)) throw invalid('node id must be lowercase letters, digits and dashes');
   const parent = input.parentId ? (await q.query('SELECT level, path FROM catalog_nodes WHERE id=$1', [input.parentId])).rows[0] : null;
@@ -214,6 +231,7 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
     const errs = validateOffer(input as unknown as OfferNode);
     if (errs.length) throw invalid('invalid offer', errs);
     await assertDependenciesValid(q, input.id, path, input.requires ?? [], input.excludes ?? []);
+    await assertGroupTerms(q, input.id, (input as unknown as OfferNode).group);
   }
   if ((input.level as CatalogNodeLevel) === 'LINE_ITEM') {
     const errs = validateLineItem(input as unknown as LineItemNode);
@@ -240,7 +258,7 @@ export interface NodePatch {
   itemType?: string; quantity?: number | null; unit?: string; unlimited?: boolean; sku?: string;
   name?: string; networkType?: string; markets?: string[];
   kind?: string; description?: string; prices?: PriceComponent[]; contract?: ContractTerms; fulfilment?: OfferNode['fulfilment'];
-  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals']; suspension?: OfferNode['suspension'];
+  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals']; suspension?: OfferNode['suspension']; group?: OfferNode['group'] | null;
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -288,6 +306,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
       kind: (patch.kind ?? o.kind) as OfferNode['kind'], description: patch.description ?? o.description, prices: patch.prices ?? o.prices,
       contract: patch.contract ?? o.contract, fulfilment: patch.fulfilment ?? o.fulfilment, partnerCode: patch.partnerCode ?? o.partnerCode,
       characteristics: patch.characteristics ?? o.characteristics, requires: patch.requires ?? o.requires, excludes: patch.excludes ?? o.excludes, salesChannels: patch.salesChannels ?? o.salesChannels ?? [], variants: patch.variants ?? o.variants ?? [], deals: patch.deals ?? o.deals ?? [], suspension: patch.suspension ?? o.suspension,
+      group: patch.group === null ? undefined : patch.group ?? o.group,
     } as OfferNode;
     const commercialChange = !same(next.prices, o.prices) || !same(next.contract, o.contract) || next.kind !== o.kind;
     if (commercialChange) {
@@ -304,6 +323,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
     const dupe = (next.fulfilment?.inventorySkus ?? []).filter((x) => itemSkus.includes(x));
     if (dupe.length) throw invalid(`stock SKU ${dupe.join(', ')} is already reserved by one of this offer's line items`);
     await assertDependenciesValid(q, id, cur.path, next.requires, next.excludes);
+    await assertGroupTerms(q, id, next.group);
     Object.assign(data, offerData(next));
     kind = next.kind;
   }

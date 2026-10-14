@@ -9,6 +9,8 @@ import { effectiveMarket, marketFor, marketMode } from './settings.js';
 import { getStoreSettings } from './store-settings.js';
 import { taxSplit } from './tax.js';
 import { needsSim, resolveNumbering } from './order-numbering.js';
+import { prepareLines, type MemberInput } from './group-orders.js';
+import type { PortInInput } from './port-in.js';
 
 export type GroupKind = 'ACTIVATION' | 'GOODS' | 'INSTALL';
 export const INSTALMENT_MONTHS = [3, 6, 12, 24, 36];
@@ -24,6 +26,14 @@ export interface LineInput {
   numberToken?: string;
   /** A device bought on a contract with a plan: the position (in `lines`) of the plan line it goes with, and the contract length. */
   attachTo?: number; dealTermMonths?: number;
+  /** A group plan: the member lines that join it (new numbers, ported-in numbers, SIMs or eSIMs), up to the plan's limit. Expanded into lines before pricing. */
+  members?: MemberInput[];
+  /** Set on a member line once expanded: the position of the group plan line it belongs to. */
+  memberOf?: number;
+  /** The line joins a group that already exists (more members for a family plan). */
+  joinGroupId?: string;
+  /** The line brings a number from another operator (port-in). `temporaryNumber` gives the customer a number from our pool meanwhile. */
+  portIn?: PortInInput;
 }
 export interface PricingInput {
   customerId?: string; accountId?: string; channel: OrderChannel; marketCode?: string; lines: LineInput[];
@@ -98,8 +108,9 @@ async function entitlementsFor(q: Queryable, offerIds: string[]): Promise<Map<st
  * Prices a basket exactly as placing the order will, without saving anything. `soft` collects prerequisite/conflict problems instead of throwing,
  * so the order wizard can show the price and say what is missing. Everything else invalid still throws.
  */
-export async function priceBasket(q: Queryable, input: PricingInput, o: { soft?: boolean } = {}): Promise<Priced> {
-  if (!input.lines.length) throw invalid('an order needs at least one line');
+export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: boolean } = {}): Promise<Priced> {
+  if (!raw.lines.length) throw invalid('an order needs at least one line');
+  const input: PricingInput = { ...raw, lines: await prepareLines(q, raw) }; // group plans become their member lines; port-in details are checked
   const problems: string[] = [];
   const fail = (m: string) => { if (!o.soft) throw rejected(m); problems.push(m); };
 
@@ -263,6 +274,12 @@ export interface OrderQuoteLine {
   needsSim: boolean;
   /** A VIP number on this line: its tier and the connection fee included in the price. */
   vip?: { tier: string; feeMinor: number; etcMultiplierBps: number };
+  /** A group plan (the family head's line): how many member lines it holds and the pool they share. */
+  groupPlan?: { maxMembers: number; sharedPoolQuotaGb: number | null };
+  /** A member line: the position of the group plan line it belongs to, or the existing group it joins. */
+  memberOf?: number; joinGroupId?: string;
+  /** A number brought from another operator, and whether a temporary number is given meanwhile. */
+  portIn?: { donorMsisdn: string; donorOperator: string; temporaryNumber: boolean };
 }
 export interface OrderQuote {
   currency: string; taxName: string; taxBps: number;
@@ -293,6 +310,9 @@ export async function quoteOrder(q: Queryable, input: PricingInput): Promise<Ord
       payMode: l.payMode, months: l.months, downMinor: l.downMinor, paidNowMinor: l.paidNow, financedMinor: l.financed, instalmentMinor: l.instalmentMinor, monthlyFeeMinor: l.monthlyFeeMinor,
       needsSim: createsService(l.offer) && needsSim(l.offer) && l.qty === 1,
       vip: l.vipTier ? { tier: l.vipTier, feeMinor: l.vipFeeMinor, etcMultiplierBps: l.vipEtcBps ?? 10000 } : undefined,
+      groupPlan: l.offer.group?.isGroupOffer ? { maxMembers: l.offer.group.maxGroupMembers, sharedPoolQuotaGb: l.offer.group.sharedPoolQuotaGb ?? null } : undefined,
+      memberOf: l.input.memberOf, joinGroupId: l.input.joinGroupId,
+      portIn: l.input.portIn ? { donorMsisdn: l.input.portIn.donorMsisdn, donorOperator: l.input.portIn.donorOperator, temporaryNumber: !!l.input.portIn.temporaryNumber } : undefined,
     })),
     dueNowMinor: p.dueNow, monthlyPlanMinor: p.monthlyPlanMinor, monthlyInstalmentMinor: p.monthlyInstalmentMinor, monthlyTotalMinor: p.monthlyPlanMinor + p.monthlyInstalmentMinor, discountMinor: p.discountMinor,
     groups: terms.map((t) => ({ ...t, items: p.lines.filter((l) => l.group === t.group).map((l) => l.offer.name) })),

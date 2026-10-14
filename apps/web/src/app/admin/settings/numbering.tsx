@@ -3,7 +3,7 @@ import { Alert, Button, Card, Field, Input, SectionTitle, Spinner } from '@merid
 import { useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
 
-interface Form { requireSim: boolean; reservationMinutes: number; imsiQuarantineDays: number; auctionSettlementHours: number; msisdnCoolingDays: number }
+interface Form { requireSim: boolean; reservationMinutes: number; imsiQuarantineDays: number; auctionSettlementHours: number; portInExpiryDays: number; msisdnCoolingDays: number }
 
 /** The rules behind an MSISDN's, ICCID's and IMSI's life: how long things are held, and how long they rest before they can be used again. */
 export function NumberingSettings() {
@@ -39,6 +39,7 @@ function Editor({ numbering, lifecycle, onSaved }: { numbering: any; lifecycle: 
         <SectionTitle>Holds and auctions</SectionTitle>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Hold a chosen MSISDN or ICCID for (minutes)" hint="While a seller is checking out. MSISDNs on a placed order stay held until it activates or is cancelled."><Input type="number" min={1} max={1440} value={s.reservationMinutes} onChange={num('reservationMinutes')} /></Field>
+          <Field label="A port-in waits for the donor operator (days)" hint="If the other operator has not answered by then, the request expires. The customer keeps a temporary number if they were given one."><Input type="number" min={1} max={60} value={s.portInExpiryDays} onChange={num('portInExpiryDays')} /></Field>
           <Field label="Auction winner has (hours)" hint="To complete the order for a number won at auction."><Input type="number" min={1} max={720} value={s.auctionSettlementHours} onChange={num('auctionSettlementHours')} /></Field>
         </div>
         <label className="mt-4 flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={s.requireSim} onChange={(e) => setS({ ...s, requireSim: e.target.checked })} /><span><span className="font-medium">Every plan needs a SIM</span><span className="block text-footnote text-label2">The CRM cannot place an order for a plan with SIM activation until an ICCID (SIM card or eSIM) is chosen. Off: the step is offered but may be skipped.</span></span></label>

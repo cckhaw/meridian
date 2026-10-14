@@ -15,8 +15,10 @@ export interface NumberingSettings {
   imsiQuarantineDays: number;
   /** How long an auction winner has to complete the order. */
   auctionSettlementHours: number;
+  /** How long a port-in request waits for the donor operator's answer before it expires. */
+  portInExpiryDays: number;
 }
-export const DEFAULT_NUMBERING: NumberingSettings = { requireSim: false, reservationMinutes: 15, imsiQuarantineDays: 90, auctionSettlementHours: 48 };
+export const DEFAULT_NUMBERING: NumberingSettings = { requireSim: false, reservationMinutes: 15, imsiQuarantineDays: 90, auctionSettlementHours: 48, portInExpiryDays: 14 };
 
 export async function getNumberingSettings(q: Queryable): Promise<NumberingSettings> {
   const v = (await q.query(`SELECT value FROM settings WHERE key='numbering'`)).rows[0]?.value as Partial<NumberingSettings> | undefined;
@@ -27,7 +29,8 @@ export async function setNumberingSettings(q: Queryable, actor: string, s: Numbe
   if (!int(s.reservationMinutes, 1, 24 * 60)) throw invalid('A number is held for 1 to 1440 minutes.');
   if (!int(s.imsiQuarantineDays, 0, 730)) throw invalid('An IMSI rests 0 to 730 days.');
   if (!int(s.auctionSettlementHours, 1, 24 * 30)) throw invalid('An auction winner has 1 to 720 hours.');
-  const v: NumberingSettings = { requireSim: !!s.requireSim, reservationMinutes: s.reservationMinutes, imsiQuarantineDays: s.imsiQuarantineDays, auctionSettlementHours: s.auctionSettlementHours };
+  if (!int(s.portInExpiryDays, 1, 60)) throw invalid('A port-in request waits 1 to 60 days for the donor operator.');
+  const v: NumberingSettings = { requireSim: !!s.requireSim, portInExpiryDays: s.portInExpiryDays, reservationMinutes: s.reservationMinutes, imsiQuarantineDays: s.imsiQuarantineDays, auctionSettlementHours: s.auctionSettlementHours };
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('numbering', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(v), actor]);
   await audit(q, actor, 'settings', 'numbering', 'update', { ...v });
   return v;

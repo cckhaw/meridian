@@ -1,10 +1,11 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, SearchField, Segmented, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Card, SearchField, Segmented, Spinner } from '@meridian/ui';
 import { useEffect, useState } from 'react';
 import { post, useApi, useDebounced } from '@/lib/api';
 import { money } from '@/lib/format';
 import type { Wizard } from './steps';
-import type { Item } from './wizard-types';
+import { PortInFields } from './port-in-fields';
+import { emptyPortIn, quoteIndex, type Item, type NumberHolder } from './wizard-types';
 
 const TIER_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = { STANDARD: 'neutral', SILVER: 'neutral', GOLD: 'warning', DIAMOND: 'success', AUCTION: 'danger' };
 const fmtNumber = (m: string) => m.replace(/^(\+\d{2})(\d{2})(\d+)$/, '$1 $2 $3');
@@ -12,7 +13,7 @@ const fmtNumber = (m: string) => m.replace(/^(\+\d{2})(\d{2})(\d+)$/, '$1 $2 $3'
 /** Step "SIM and number": for every plan in the basket that needs a SIM, hand over a card (or issue an eSIM) and choose the number. */
 export function SimStep({ w, requireSim }: { w: Wizard; requireSim: boolean }) {
   const lines: any[] = w.quote?.lines ?? [];
-  const needing = w.items.map((it, k) => ({ it, k })).filter(({ k }) => lines[k]?.needsSim);
+  const needing = w.items.map((it, k) => ({ it, k: quoteIndex(w.items, k) })).filter(({ k }) => lines[k]?.needsSim);
   if (!needing.length) return <Alert tone="info">Nothing in this order needs a SIM.</Alert>;
   return (
     <div className="space-y-5">
@@ -26,7 +27,7 @@ function PlanSim({ w, item, line, requireSim }: { w: Wizard; item: Item; line: a
   const set = (patch: Partial<Item>) => w.setItems((cur) => cur.map((x) => (x.key === item.key ? { ...x, ...patch } : x)));
   const [simMode, setSimMode] = useState<'NEXT' | 'CARD' | 'ESIM' | 'NONE'>(item.iccid ? 'CARD' : item.simType === 'ESIM' ? 'ESIM' : item.simType === 'PHYSICAL' ? 'NEXT' : requireSim ? 'NEXT' : 'NONE');
   useEffect(() => { if (requireSim && simMode === 'NEXT' && !item.iccid && !item.simType) set({ simType: 'PHYSICAL' }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const numMode: 'AUTO' | 'CHOOSE' | 'OWN' = item.numberToken ? 'CHOOSE' : item.msisdn ? 'OWN' : 'AUTO';
+  const numMode: 'AUTO' | 'CHOOSE' | 'OWN' = item.numberToken ? 'CHOOSE' : item.portIn ? 'OWN' : 'AUTO';
   const [pickNumber, setPickNumber] = useState(!!item.numberToken);
   return (
     <Card>
@@ -43,11 +44,11 @@ function PlanSim({ w, item, line, requireSim }: { w: Wizard; item: Item; line: a
       </div>
 
       <h4 className="mb-2 mt-5 text-subhead font-semibold">Number</h4>
-      <Segmented label="Number" value={pickNumber ? 'CHOOSE' : numMode === 'OWN' ? 'OWN' : 'AUTO'} onChange={(v) => { setPickNumber(v === 'CHOOSE'); if (v !== 'CHOOSE') release(item.msisdn, item.numberToken); set({ msisdn: '', numberToken: '', numberTier: '', numberFeeMinor: 0, numberExpires: '' }); }}
-        options={[{ value: 'AUTO', label: 'Assign one' }, { value: 'CHOOSE', label: 'Choose a number' }, { value: 'OWN', label: 'Bring their own' }]} />
+      <Segmented label="Number" value={pickNumber ? 'CHOOSE' : numMode === 'OWN' ? 'OWN' : 'AUTO'} onChange={(v) => { setPickNumber(v === 'CHOOSE'); if (v !== 'CHOOSE') release(item.msisdn, item.numberToken); set({ msisdn: '', numberToken: '', numberTier: '', numberFeeMinor: 0, numberExpires: '', portIn: v === 'OWN' ? (item.portIn ?? emptyPortIn()) : null }); }}
+        options={[{ value: 'AUTO', label: 'Assign one' }, { value: 'CHOOSE', label: 'Choose a number' }, { value: 'OWN', label: 'Port in their number' }]} />
       <div className="mt-3">
         {!pickNumber && numMode !== 'OWN' && <p className="text-subhead text-label2">A standard number is assigned from the pool.</p>}
-        {numMode === 'OWN' && !pickNumber && <Field label="Number to port in" hint="With the country code, for example +6591234567"><Input value={item.msisdn} onChange={(e) => set({ msisdn: e.target.value.replace(/[^\d+]/g, '') })} inputMode="tel" /></Field>}
+        {numMode === 'OWN' && !pickNumber && item.portIn && <PortInFields value={item.portIn} onChange={(portIn) => set({ portIn })} />}
         {pickNumber && <NumberChooser item={item} set={set} />}
       </div>
       {line?.vip && <p className="mt-3 text-footnote text-label2">A {line.vip.tier.toLowerCase()} number adds a connection fee of {money(line.vip.feeMinor, w.quote.currency)} to what is paid now{line.vip.etcMultiplierBps > 10000 ? `, and the early-termination charge is ${(line.vip.etcMultiplierBps / 10000).toFixed(2).replace(/\.?0+$/, '')}× if the contract ends early` : ''}.</p>}
@@ -55,7 +56,10 @@ function PlanSim({ w, item, line, requireSim }: { w: Wizard; item: Item; line: a
   );
 }
 
-const release = (msisdn?: string, token?: string) => { if (msisdn && token) void post('/numbers/release', { msisdn }).catch(() => {}); };
+export const release = (msisdn?: string, token?: string) => { if (msisdn && token) void post('/numbers/release', { msisdn }).catch(() => {}); };
+
+/** Reminder shown under SIM pickers: physical cards are taken from the seller's own stock. */
+export function CardNote() { return <p className="mt-4 text-footnote text-label2">A physical card is taken from your own stock when the order is placed; an eSIM profile is issued new.</p>; }
 
 function CardPicker({ value, onPick }: { value: string; onPick: (iccid: string) => void }) {
   const [q, setQ] = useState('');
@@ -79,7 +83,7 @@ function CardPicker({ value, onPick }: { value: string; onPick: (iccid: string) 
   );
 }
 
-function NumberChooser({ item, set }: { item: Item; set: (p: Partial<Item>) => void }) {
+export function NumberChooser({ item, set }: { item: NumberHolder; set: (p: Partial<NumberHolder>) => void }) {
   const [tier, setTier] = useState('');
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());

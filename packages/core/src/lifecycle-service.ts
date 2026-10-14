@@ -8,8 +8,9 @@ import { getLifecycleSettings, type DunningAction, type LifecycleSettings } from
 import { autoResumeDue, completePortOut, etcQuoteForService, resumeService, suspendService, suspendVoluntary, terminateService, type LifecycleChannel, type TerminationOptions, type VoluntaryRequest } from './lifecycle.js';
 import { liftCreditRestrictions, logLifecycle, queueOutbox, restrictionOf, setBarLevel } from './lifecycle-state.js';
 import { postJournal } from './ledger.js';
-import { recycleExpired } from './nrm.js';
+import { getNumberingSettings, recycleExpired } from './nrm.js';
 import { NumberReservationService } from './number-reservation.js';
+import { expireStalePortIns } from './port-in.js';
 
 // ───────────────────────── B. credit limit and threshold breach ─────────────────────────
 export interface CreditEvaluation {
@@ -283,7 +284,8 @@ export class LifecycleService {
     const released = await releaseQuarantinedNumbers(this.db, asOf);
     const nrm = await recycleExpired(this.db, asOf); // IMSIs and numbers whose cooling-off ended go back to their pools
     const holds = await new NumberReservationService(this.db).expireStale();
-    return { asOf, resumed, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds };
+    const portInsExpired = await expireStalePortIns(this.db, (await getNumberingSettings(this.db)).portInExpiryDays); // donors that never answered
+    return { asOf, resumed, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds, portInsExpired };
   }
 
   async history(serviceId: string, limit = 100) {

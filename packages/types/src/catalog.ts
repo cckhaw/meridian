@@ -126,6 +126,18 @@ export interface OfferNode extends CatalogNodeBase {
   deals?: DeviceDeal[];
   /** What a customer-requested suspension costs: recurring charges paused (default), or reduced to a monthly maintenance fee. */
   suspension?: SuspensionTerms;
+  /** Set on a group plan (a family or multi-line share): how many lines can join, which offers they may take, and the pool they share. */
+  group?: GroupOfferTerms;
+}
+
+export interface GroupOfferTerms {
+  isGroupOffer: boolean;
+  /** The most supplementary lines the group can hold, besides the family head. */
+  maxGroupMembers: number;
+  /** Offers a supplementary line may take. Empty = any mobile plan that is not itself a group plan. */
+  allowedMemberOfferIds: string[];
+  /** The data pool the whole group shares, in GB (informational: usage rating is not part of this release). */
+  sharedPoolQuotaGb?: number;
 }
 
 export interface SuspensionTerms {

@@ -60,6 +60,10 @@ Operations can move numbers into `AUCTION_HOLD` (`POST /api/numbering/auction/ho
 
 `numbering:read` (administrators, Inventory Operations), `numbering:select` (sellers: retail store, call centre, telesales, dealers) and `numbering:manage` (Inventory Operations). Change them under Users & roles; see [ROLES.md](ROLES.md).
 
+## Temporary and ported-in numbers
+
+A line that brings a number from another operator can be given a **temporary** number from the Standard pool while the port is processed; when the donor approves, the line takes the ported number (it joins the inventory as in service) and the temporary number goes to cooling-off. See [FAMILY_PLANS.md](FAMILY_PLANS.md). A port-in request that is never answered expires after **Settings → Numbers & SIMs → A port-in waits for the donor operator** days (default 14), checked by the daily job.
+
 ## Not covered yet
 
 The storefront (self-serve) does not offer number or SIM choice; the eSIM SM-DP+ port, Redis lock, Kafka delivery and Temporal activities are interfaces or stubs; and the new screens have not been exercised in a browser.
