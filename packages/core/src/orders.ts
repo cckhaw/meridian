@@ -2,13 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type PaymentMethod } from '@meridian/types';
 import { ruleSatisfied, listBundleRules } from './bundles.js';
 import { decide, deadlineDays, getCancellationSettings, listRules, type CancellationDecision, type Facts } from './cancellation.js';
-import { COMMISSION_BPS, GL, paymentMode } from './config.js';
+import { GL, paymentMode } from './config.js';
+import { recordOrderCommission } from './commission.js';
+import { clawBack } from './commission-processor.js';
 import { effectiveMarket, getRegional, marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { monthlyFee } from './catalog.js';
 import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve, restockConsumed } from './inventory.js';
-import { postJournal } from './ledger.js';
+import { postJournal, type RevenueStream } from './ledger.js';
 import { today } from './dates.js';
 import { createsService, deliveryMethods, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type GroupKind, type LineInput } from './order-pricing.js';
 import { assertStoreUsable } from './stores.js';
@@ -170,7 +172,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
     if (!att.dealerId || !att.dealerAgentId) throw invalid('a dealer order needs the dealer and the agent who sold it');
     await assertDealerSale(q, att.dealerId, att.dealerAgentId);
   }
-  const eligible = !!(att.salespersonId || att.dealerId) && input.channel in COMMISSION_BPS;
+  const eligible = !!(att.salespersonId || att.dealerId); // whether it earns, and how much, is decided by the commission plans
   const months = priced.lines.find((l) => l.payMode === 'INSTALLMENT')?.months ?? null;
   await q.query(
     `INSERT INTO orders (id, shard_id, customer_id, account_id, channel, state, total_minor, currency, market_code, store_id, salesperson_id, dealer_id, dealer_agent_id,
@@ -376,15 +378,15 @@ async function capture(q: Queryable, o: Row, reference?: string, gatewayRef?: st
   let tax = 0;
   for (const l of lines) {
     const { net, tax: t } = shareOf(l.paidNowMinor, l);
-    const acct = isGoods(l.offer) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
-    revenue.set(acct, (revenue.get(acct) ?? 0) + net);
+    const key = isGoods(l.offer) ? `${GL.GOODS_REVENUE}|GOODS` : `${GL.SERVICE_REVENUE}|ONE_TIME`; // the stream tells the posting rules which SAP account it goes to
+    revenue.set(key, (revenue.get(key) ?? 0) + net);
     tax += t;
   }
   await postJournal(q, {
     date: today(), sourceType: 'ORDER', sourceId: o.id, currency: o.currency,
     lines: [
       { account: GL.CASH, debit: o.totalMinor, description: `Order ${o.number ?? o.id.slice(0, 8)} receipt (${o.paymentMethod})` },
-      ...[...revenue].map(([account, credit]) => ({ account, credit, description: `Order ${o.number ?? o.id.slice(0, 8)} revenue` })),
+      ...[...revenue].map(([key, credit]) => { const [account, stream] = key.split('|') as [string, RevenueStream]; return { account, stream, credit, description: `Order ${o.number ?? o.id.slice(0, 8)} revenue` }; }),
       { account: GL.TAX_PAYABLE, credit: tax, description: `Order ${o.number ?? o.id.slice(0, 8)} ${(await marketFor(q, o.marketCode)).taxName}` },
     ],
   });
@@ -418,18 +420,18 @@ async function refund(q: Queryable, o: Row, lines: Row[], spec: RefundSpec): Pro
   for (const l of lines) {
     if (!(l.status === 'ACTIVE' || spec.all) || l.paidNowMinor <= 0) continue;
     const { net, tax: t } = shareOf(l.paidNowMinor, l);
-    const acct = isGoods(l.offer ?? { kind: l.kind }) ? GL.GOODS_REVENUE : GL.SERVICE_REVENUE;
-    rev.set(acct, (rev.get(acct) ?? 0) + net); tax += t;
+    const key = isGoods(l.offer ?? { kind: l.kind }) ? `${GL.GOODS_REVENUE}|GOODS` : `${GL.SERVICE_REVENUE}|ONE_TIME`;
+    rev.set(key, (rev.get(key) ?? 0) + net); tax += t;
   }
   const keep = taxSplit(retained, mk.taxBps, true);
   await postJournal(q, {
     date: today(), sourceType: 'REFUND', sourceId: o.id, currency: o.currency,
     lines: [
-      ...[...rev].map(([account, debit]) => ({ account, debit, description: `${spec.label}: revenue reversed` })),
+      ...[...rev].map(([key, debit]) => { const [account, stream] = key.split('|') as [string, RevenueStream]; return { account, stream, debit, description: `${spec.label}: revenue reversed` }; }),
       { account: GL.TAX_PAYABLE, debit: tax, description: `${spec.label}: ${mk.taxName} reversed` },
       { account: GL.CASH, credit: paid, description: `${spec.label}: paid ${paid} (refund ${cash})` },
       { account: GL.CASH, debit: retained, description: `${spec.label}: amount kept` },
-      { account: GL.SERVICE_REVENUE, credit: keep.net, description: `${spec.label}: kept as revenue` },
+      { account: GL.SERVICE_REVENUE, stream: 'ONE_TIME', credit: keep.net, description: `${spec.label}: kept as revenue` },
       { account: GL.TAX_PAYABLE, credit: keep.tax, description: `${spec.label}: ${mk.taxName} on amount kept` },
     ],
   });
@@ -545,29 +547,30 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
   await syncOrderGroups(q, o, 'order'); // a group plan sold here opens its group, and member lines join it
 }
 
-/** Net value the sale is worth to the seller: what is still standing after any cancellations, plus a year-agnostic first month of each plan. */
-async function commissionBasis(q: Queryable, o: Row): Promise<number> {
+/** What each line of the sale is worth to the seller: what is still standing after any cancellations, plus the first month of each plan. */
+async function commissionLines(q: Queryable, o: Row): Promise<import('./commission-calculator.js').SaleLine[]> {
   const mk = await marketFor(q, o.marketCode);
-  let basis = 0;
-  for (const l of await orderLines(q, o.id)) {
+  const all = await orderLines(q, o.id);
+  const out: import('./commission-calculator.js').SaleLine[] = [];
+  for (const l of all) {
     if (l.status !== 'ACTIVE') continue;
-    basis += l.netMinor;
-    const fee = createsService(l.offer) ? monthlyFee(l.offer) : null;
-    if (fee) basis += taxSplit(fee.amount.amountMinor, mk.taxBps, fee.taxInclusive).net * l.quantity;
+    const svc = createsService(l.offer);
+    const fee = svc ? monthlyFee(l.offer) : null;
+    const basis = l.netMinor + (fee ? taxSplit(fee.amount.amountMinor, mk.taxBps, fee.taxInclusive).net * l.quantity : 0);
+    // A device sold on a contract carries the contract's length, and so does the plan it is attached to.
+    const device = l.deal ? l : all.find((x) => x.attachPosition === l.position && x.status === 'ACTIVE' && x.deal);
+    const term = Number(device?.deal?.termMonths ?? l.offer.contract?.termMonths ?? 0);
+    out.push({ lineId: l.id, offerId: l.offerId, offerKind: l.offer.kind, termMonths: term, quantity: l.quantity, basisMinor: basis, createsService: svc });
   }
-  return basis;
+  return out;
 }
 
 async function complete(q: Queryable, o: Row) {
   await setState(q, o, 'COMPLETED', 'system');
-  const bps = COMMISSION_BPS[o.channel];
-  const net = await commissionBasis(q, o);
-  if (o.commissionEligible && bps && net > 0) {
-    await q.query(
-      `INSERT INTO commissions (order_id, store_id, salesperson_id, dealer_id, basis_minor, rate_bps, amount_minor, currency) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [o.id, o.storeId, o.salespersonId, o.dealerId, net, bps, Math.round((net * bps) / 10_000), o.currency],
-    );
-  }
+  const lines = (await commissionLines(q, o)).filter((l) => l.basisMinor > 0 || l.createsService);
+  if (!lines.length) return;
+  await recordOrderCommission(q, { channel: o.channel, dealerId: o.dealerId, dealerAgentId: o.dealerAgentId, salespersonId: o.salespersonId, storeId: o.storeId, commissionEligible: o.commissionEligible },
+    { orderId: o.id, completedOn: today(), currency: o.currency, lines });
 }
 
 // ───────────────────────── external events ─────────────────────────
@@ -868,6 +871,7 @@ export async function returnGoods(db: Db, orderId: string, o2: { reason: string;
       for (const s of svc) await q.query(`UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1 AND (description LIKE $2 OR description = $3)`, [s.id, `${dl.description} instalment%`, `Instalment rounding (${dl.description})`]);
     }
     await q.query(`UPDATE order_lines SET status='RETURNED' WHERE order_id=$1 AND fulfil_group='GOODS' AND status='ACTIVE'`, [orderId]);
+    for (const l of mine) await clawBack(q, { orderId, orderLineId: l.id, trigger: 'ORDER_CANCELLED', on: today() }, actor); // the sale is undone: its commission goes back by the plan's policy
     await patchGroup(q, g.id, `status='RETURNED', refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ returnReason: o2.reason, returnCondition: o2.condition ?? 'GOOD', rule: dec.rule?.id ?? null, returnedAt: new Date().toISOString() })]);
     await note(q, o, actor, `Goods returned${r.refundMinor ? `, ${fmt(r.refundMinor, o.currency)} refunded` : ''}${r.retainedMinor ? `, ${fmt(r.retainedMinor, o.currency)} kept` : ''}: ${o2.reason}`);
     await audit(q, actor, 'order', orderId, 'GOODS_RETURNED', { refundMinor: r.refundMinor, deductionMinor: deduction, rule: dec.rule?.id ?? null });

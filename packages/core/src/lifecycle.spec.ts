@@ -87,6 +87,7 @@ describe('subscription lifecycle', () => {
     expect(r.service.status).toBe('TERMINATED');
     expect(r.etcMinor).toBe(Math.round((90100 * (24 - 5)) / 24)); // 180 days = 5 whole calendar months elapsed
     expect(r.invoice!.totalMinor).toBeGreaterThan(r.etcMinor); // + tax
+    expect((await db.query(`SELECT sum(credit_minor) AS cr FROM gl_entries WHERE stream='ETC' AND source_id=$1`, [r.invoice!.id])).rows[0]!.cr).toBeGreaterThan(0);
     await expect(terminateService(db, serviceId)).rejects.toThrow(/already/);
     const free = await withService('plan-sim-5g', 30);
     expect((await terminateService(db, free.serviceId)).etcMinor).toBe(0);

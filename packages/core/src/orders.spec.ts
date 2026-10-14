@@ -23,7 +23,7 @@ describe('order capture and fulfilment', () => {
     const after = await stockAt(db, 'STORE-SG-001', 'PHONE-X1-128');
     expect(after.onHand).toBe(before.onHand - 1);
     expect(after.reserved).toBe(before.reserved);
-    expect((await db.query('SELECT amount_minor FROM commissions WHERE order_id=$1', [o.id])).rows[0]!.amountMinor).toBeGreaterThan(0);
+    expect((await db.query("SELECT amount_minor FROM agent_ledger_entries WHERE order_id=$1 AND entry_type='EARNING'", [o.id])).rows[0]!.amountMinor).toBeGreaterThan(0);
     expect(o.cancellable).toBe(false); // handed over = past the point of no return
     expect((await reconcile(db)).ok).toBe(true);
   });

@@ -5,6 +5,7 @@ import { etcQuoteForOffer } from './catalog.js';
 import { quoteEtc } from './etc.js';
 import { issueInvoice, invoiceBalance, settle, type DraftLine } from './billing.js';
 import { postJournal } from './ledger.js';
+import { clawBackService } from './commission-processor.js';
 import { monthlyFee } from './catalog.js';
 import { getRegional, marketFor } from './settings.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
@@ -270,18 +271,19 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
           const off = (await voluntarySuspendedDays(q, { serviceId: id }, from, dayOfEnd)).get(id) ?? 0;
           const monthly = fee.amount.amountMinor / (fee.periodMonths ?? 1);
           unbilledRecurring = Math.min(Math.round(monthly), Math.round((monthly * Math.max(0, days - off)) / 30));
-          if (unbilledRecurring > 0) lines.push({ serviceId: id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: fee.taxInclusive, description: `${offerRow!.name} ${s.identifier} until termination (${from} to ${dayOfEnd})`, amountMinor: unbilledRecurring });
+          if (unbilledRecurring > 0) lines.push({ serviceId: id, kind: 'RECURRING', stream: offerRow?.data?.partnerCode ? 'THIRD_PARTY' : 'SUBSCRIPTION', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: fee.taxInclusive, description: `${offerRow!.name} ${s.identifier} until termination (${from} to ${dayOfEnd})`, amountMinor: unbilledRecurring });
         }
       }
     }
     const usage = o.unbilledUsageMinor ?? 0;
     if (usage < 0 || !Number.isInteger(usage)) throw invalid('unbilledUsageMinor is a whole amount, zero or more');
-    if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
-    if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
+    if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', stream: 'USAGE', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
+    if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', stream: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
 
     await releaseResourcesOnTermination(q, s, { ported: o.ported, date: dayOfEnd, actor, reason: o.reason ?? 'terminated' }); // the SIM, IMSI and number go back to their pools on their own terms
     await q.query(`UPDATE services SET status='TERMINATED', terminated_at=$2, terminated_reason=$3, suspended_reason=NULL, suspension_kind=NULL, suspend_until=NULL, bar_level='HARD', iccid=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id, when.toISOString(), o.reason ?? 'unspecified']);
     await q.query('UPDATE service_charges SET remaining_cycles = 0 WHERE service_id=$1', [id]); // outstanding instalments fall due in the ETC
+    await clawBackService(q, s, o.ported ? 'PORT_OUT' : 'TERMINATION', dayOfEnd, actor); // a customer leaving early takes the seller's commission back, by the plan's policy
     let invoice: Row | null = null;
     const acct = (await q.query('SELECT * FROM accounts WHERE id=$1', [s.accountId])).rows[0]!;
     if (lines.length) {

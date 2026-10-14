@@ -7,13 +7,16 @@ import { marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
 import { addDays, addMonths, dayOf, diffDays, fmt, today, toDate, type DateStr } from './dates.js';
 import { invalid, notFound, rejected } from './errors.js';
-import { postJournal } from './ledger.js';
+import { postJournal, type RevenueStream } from './ledger.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { customerIdsMatching, likePrefix, parseQuery } from './search.js';
 import { taxSplit } from './tax.js';
 import { liftCreditRestrictions, restoreAfterPayment, voluntarySuspendedDays } from './lifecycle-state.js';
 
-export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; description: string; amountMinor: number; taxInclusive: boolean }
+export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; /** The revenue stream the line belongs to, for the posting rules. */ stream?: RevenueStream; description: string; amountMinor: number; taxInclusive: boolean }
+
+/** Which stream an invoice line is booked to: what it says, or what its kind implies. */
+const streamOfLine = (l: DraftLine): RevenueStream => l.stream ?? (l.kind === 'ETC' ? 'ETC' : l.kind === 'INSTALLMENT' ? 'DEVICE_INSTALMENT' : 'SUBSCRIPTION');
 
 /** Persists an invoice from priced draft lines and posts Dr AR / Cr revenue / Cr tax. Returns null when the total is zero. */
 export async function issueInvoice(
@@ -39,16 +42,17 @@ export async function issueInvoice(
   const revenue = new Map<string, number>();
   for (const l of priced) {
     await q.query(
-      `INSERT INTO invoice_lines (invoice_id, service_id, kind, revenue_account, description, net_minor, tax_minor) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [id, l.serviceId ?? null, l.kind, l.revenueAccount, l.description, l.net, l.tax],
+      `INSERT INTO invoice_lines (invoice_id, service_id, kind, revenue_account, description, net_minor, tax_minor, stream) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, l.serviceId ?? null, l.kind, l.revenueAccount, l.description, l.net, l.tax, streamOfLine(l)],
     );
-    revenue.set(l.revenueAccount, (revenue.get(l.revenueAccount) ?? 0) + l.net);
+    const key = `${l.revenueAccount}|${streamOfLine(l)}`;
+    revenue.set(key, (revenue.get(key) ?? 0) + l.net);
   }
   await postJournal(q, {
     date: o.issueDate, sourceType: 'INVOICE', sourceId: id, currency: acct.currency,
     lines: [
       { account: GL.AR, debit: net + tax, description: `Invoice ${number}` },
-      ...[...revenue].map(([account, credit]) => ({ account, credit, description: `Invoice ${number} revenue` })),
+      ...[...revenue].map(([key, credit]) => { const [account, stream] = key.split('|') as [string, RevenueStream]; return { account, stream, credit, description: `Invoice ${number} revenue (${stream.toLowerCase().replace(/_/g, ' ')})` }; }),
       { account: GL.TAX_PAYABLE, credit: tax, description: `Invoice ${number} ${mk.taxName}` },
     ],
   });
@@ -119,14 +123,14 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
   for (const r of full) {
     const p = await periodFee(r.offerId);
     if (!p) continue;
-    lines.push({ kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
+    lines.push({ kind: 'RECURRING', stream: p.o.partnerCode ? 'THIRD_PARTY' : 'SUBSCRIPTION', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
       description: `${p.o.name}${r.n > 1 ? ` x ${r.n}` : ''} (${periodStart} to ${periodEnd})`, amountMinor: p.amount * r.n });
   }
   for (const s of partial) {
     const p = await periodFee(s.offerId);
     if (!p) continue;
     const active = diffDays(periodEnd, s.activated) + 1;
-    lines.push({ serviceId: s.id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
+    lines.push({ serviceId: s.id, kind: 'RECURRING', stream: p.o.partnerCode ? 'THIRD_PARTY' : 'SUBSCRIPTION', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
       description: `${p.o.name} ${s.identifier} (pro-rated ${active}/${days} days)`, amountMinor: daily ? p.amount : Math.round((p.monthly * active) / days) });
   }
   if (skip.length) {
@@ -138,7 +142,7 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
       const from = s.activated > periodStart ? (s.activated as string) : periodStart;
       const inService = Math.max(0, diffDays(periodEnd, from) + 1 - off);
       const base = daily ? p.amount : p.monthly;
-      if (inService > 0) lines.push({ serviceId: s.id, kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
+      if (inService > 0) lines.push({ serviceId: s.id, kind: 'RECURRING', stream: p.o.partnerCode ? 'THIRD_PARTY' : 'SUBSCRIPTION', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive,
         description: `${p.o.name} ${s.identifier} (pro-rated ${inService}/${days} days, suspended ${off})`, amountMinor: Math.round((base * inService) / days) });
       const sus = p.o.suspension;
       if (sus?.mode === 'MAINTENANCE_FEE' && (sus.monthlyFeeMinor ?? 0) > 0 && off > 0) {
@@ -166,7 +170,7 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
   // Instalments and one-off adjustments
   const charges = (await q.query(`SELECT * FROM service_charges WHERE account_id=$1 AND remaining_cycles > 0 ORDER BY created_at`, [a.id])).rows;
   for (const c of charges) {
-    lines.push({ serviceId: c.serviceId, kind: c.kind === 'INSTALLMENT' ? 'INSTALLMENT' : 'ADJUSTMENT', revenueAccount: GL.GOODS_REVENUE, taxInclusive: c.taxInclusive, description: c.description, amountMinor: c.amountMinor });
+    lines.push({ serviceId: c.serviceId, kind: c.kind === 'INSTALLMENT' ? 'INSTALLMENT' : 'ADJUSTMENT', stream: 'DEVICE_INSTALMENT', revenueAccount: GL.GOODS_REVENUE, taxInclusive: c.taxInclusive, description: c.description, amountMinor: c.amountMinor });
     await q.query('UPDATE service_charges SET remaining_cycles = remaining_cycles - 1 WHERE id=$1', [c.id]);
   }
   const inv = await issueInvoice(q, a, { kind: 'CYCLE', periodStart, periodEnd, issueDate: asOf, lines });

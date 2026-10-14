@@ -101,23 +101,6 @@ async function computeDashboard(q: Queryable): Promise<Row> {
 }
 
 // ───────────────────────── GL: journals, SAP export, reconciliation ─────────────────────────
-const DOC_TYPE: Record<string, string> = { INVOICE: 'DR', PAYMENT: 'DZ', CREDIT_NOTE: 'DG', REFUND: 'DZ', ORDER: 'SA' };
-const csvCell = (v: string | number) => { const s = String(v); return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; };
-
-/** SAP-style journal upload. One header row; amount is positive with a D/C indicator. */
-export function glCsv(rows: Row[], companyCode = process.env.MERIDIAN_SAP_COMPANY_CODE ?? '1000'): string {
-  const head = ['CompanyCode', 'PostingDate', 'DocType', 'DocumentRef', 'Currency', 'LineNo', 'GLAccount', 'DC', 'Amount', 'Text', 'Reference'];
-  const lineNo = new Map<string, number>();
-  const body = rows.map((r) => {
-    const n = (lineNo.get(r.journalId) ?? 0) + 1;
-    lineNo.set(r.journalId, n);
-    const debit = r.debitMinor > 0;
-    const amt = ((debit ? r.debitMinor : r.creditMinor) / 100).toFixed(2); // all supported currencies are modelled with 2 minor digits
-    return [companyCode, String(r.entryDate).replaceAll('-', ''), DOC_TYPE[r.sourceType] ?? 'SA', String(r.journalId).slice(0, 8).toUpperCase(), r.currency, n, r.accountCode, debit ? 'D' : 'C', amt, r.description, `${r.sourceType}:${r.sourceId}`].map(csvCell).join(',');
-  });
-  return [head.join(','), ...body].join('\r\n') + '\r\n';
-}
-
 export async function listGl(q: Queryable, f: { exported?: boolean; limit?: number; cursor?: string } = {}): Promise<Page<Row> & { unexported: Row }> {
   const limit = pageSize(f.limit, 50, 200);
   const { params, p } = sqlBuilder();
@@ -129,25 +112,6 @@ export async function listGl(q: Queryable, f: { exported?: boolean; limit?: numb
   const unexported = (await q.query(`SELECT count(*) AS n, COALESCE(sum(debit_minor),0) AS debit FROM gl_entries WHERE exported_batch_id IS NULL`)).rows[0]!;
   return { ...toPage(rows, limit, (r) => [r.id as number]), unexported };
 }
-
-/** Snapshots every not-yet-exported journal into a batch (marking them exported) and returns the CSV. Idempotent per entry. */
-export async function exportGl(db: Db): Promise<{ batch: Row | null; csv: string }> {
-  return db.tx(async (q) => {
-    const rows = (await q.query('SELECT * FROM gl_entries WHERE exported_batch_id IS NULL ORDER BY id FOR UPDATE')).rows;
-    if (!rows.length) return { batch: null, csv: glCsv([]) };
-    const dr = rows.reduce((s, r) => s + r.debitMinor, 0), cr = rows.reduce((s, r) => s + r.creditMinor, 0);
-    if (dr !== cr) throw new Error(`refusing to export an unbalanced ledger: debit ${dr} != credit ${cr}`);
-    const batch = (await q.query(`INSERT INTO gl_batches (entry_count, debit_minor, credit_minor) VALUES ($1,$2,$3) RETURNING *`, [rows.length, dr, cr])).rows[0]!;
-    await q.query('UPDATE gl_entries SET exported_batch_id=$1 WHERE exported_batch_id IS NULL', [batch.id]);
-    return { batch, csv: glCsv(rows) };
-  });
-}
-
-export async function getBatchCsv(q: Queryable, batchId: string) {
-  const rows = (await q.query('SELECT * FROM gl_entries WHERE exported_batch_id=$1 ORDER BY id', [batchId])).rows;
-  return glCsv(rows);
-}
-export const listBatches = async (q: Queryable) => (await q.query('SELECT * FROM gl_batches ORDER BY created_at DESC LIMIT 50')).rows;
 
 export interface ReconCheck { name: string; expected: number; actual: number; ok: boolean; note: string }
 
@@ -171,16 +135,6 @@ export async function reconcile(q: Queryable): Promise<{ ok: boolean; checks: Re
     `SELECT account_code, sum(debit_minor) AS debit_minor, sum(credit_minor) AS credit_minor, sum(debit_minor) - sum(credit_minor) AS balance_minor FROM gl_entries GROUP BY account_code ORDER BY account_code`)).rows
     .map((r) => ({ ...r, accountName: GL_NAMES[r.accountCode] ?? r.accountCode }));
   return { ok: checks.every((c) => c.ok), checks, trialBalance };
-}
-
-/** Commission by store and agent. Bounded to the top 200 earners; the grouping runs over an index-friendly filter, never the whole ledger unfiltered for scoped roles. */
-export async function commissionReport(q: Queryable, f: { storeId?: string; dealerId?: string } = {}) {
-  const params: unknown[] = []; const where: string[] = [];
-  if (f.storeId) where.push(`store_id = $${params.push(f.storeId)}`);
-  if (f.dealerId) where.push(`dealer_id = $${params.push(f.dealerId)}`);
-  return (await q.query(
-    `SELECT COALESCE(store_id,'-') AS store_id, COALESCE(salesperson_id, dealer_id, '-') AS agent, count(*) AS orders, sum(basis_minor) AS basis_minor, sum(amount_minor) AS commission_minor, max(currency) AS currency
-     FROM commissions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY 1, 2 ORDER BY commission_minor DESC LIMIT 200`, params)).rows;
 }
 
 export async function auditLog(q: Queryable, f: { entity?: string; entityId?: string; actor?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {

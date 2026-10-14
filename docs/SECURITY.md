@@ -48,3 +48,7 @@ Pool management needs `numbering:manage`; sellers hold only `numbering:select`. 
 - **Column-level encryption** for contact details, retention and erasure workflows, and consent records (GDPR/PDPA).
 - An independent **penetration test** and a review against your regulator’s requirements (for example MAS TRM, PDPA, local telecom licensing rules).
 - Approval workflows (maker-checker) beyond the per-role credit limit.
+
+## Ledger integrity and SAP export
+
+Posted ledger lines cannot be deleted or edited (a database trigger allows only the one-time export stamp), events are idempotent by id, and the exported file is stored with its SHA-256 and re-read at reconciliation. Posting rules and SAP settings need `finance:configure`; sending events needs `ledger:ingest`; every change is audited. The SAP REST token is read from `MERIDIAN_SAP_TOKEN`, never stored in the database. See [FINANCE.md](FINANCE.md).

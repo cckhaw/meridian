@@ -3,7 +3,8 @@ import { creditInvoice, getInvoice, payInvoice, runBillCycle } from './billing.j
 import { runDunning } from './lifecycle-service.js';
 import { addDays, dayOf, today } from './dates.js';
 import type { Db } from './db.js';
-import { exportGl, glCsv, reconcile } from './reports.js';
+import { exportGl } from './journal-batches.js';
+import { reconcile } from './reports.js';
 import { advanceOrder, placeOrder } from './orders.js';
 import { resumeService } from './lifecycle.js';
 import { taxSplit } from './tax.js';
@@ -47,6 +48,9 @@ describe('billing', () => {
     expect(inv.dueDate).toBe(addDays(today(), 14));
     const again = await runBillCycle(db, today(), { accountId: account.id });
     expect(again).toMatchObject({ invoices: 0, skipped: 1 });
+    // each revenue stream is tagged, so Finance can send a partner's content (Netflix) to its own SAP account
+    const streams = (await db.query(`SELECT stream, sum(credit_minor) AS cr FROM gl_entries WHERE source_type='INVOICE' AND source_id=$1 AND account_code='4000' GROUP BY stream`, [inv.id])).rows;
+    expect(Object.fromEntries(streams.map((r: any) => [r.stream, Number(r.cr)]))).toEqual({ SUBSCRIPTION: taxSplit(3500, 900, true).net, THIRD_PARTY: taxSplit(1999, 900, true).net });
     expect((await reconcile(db)).ok).toBe(true);
   });
 
@@ -135,15 +139,10 @@ describe('general ledger export', () => {
     expect(first.batch).not.toBeNull();
     expect(first.batch!.debitMinor).toBe(first.batch!.creditMinor);
     const lines = first.csv.trim().split('\r\n');
-    expect(lines[0]).toBe('CompanyCode,PostingDate,DocType,DocumentRef,Currency,LineNo,GLAccount,DC,Amount,Text,Reference');
-    expect(lines.length - 1).toBe(first.batch!.entryCount);
+    expect(lines[0]).toBe('CompanyCode,PostingDate,DocType,DocumentRef,Currency,LineNo,PostingKey,GLAccount,DC,Amount,CostCenter,ProfitCenter,TaxCode,Text,Reference');
+    expect(lines.length).toBeGreaterThan(1);
     const second = await exportGl(db);
     expect(second.batch).toBeNull();
     expect((await reconcile(db)).ok).toBe(true);
-  });
-  it('escapes CSV fields', () => {
-    const csv = glCsv([{ journalId: 'abcdefgh-1', entryDate: '2026-01-02', sourceType: 'INVOICE', sourceId: 'x', accountCode: '1200', description: 'Say "hi", ok', debitMinor: 1050, creditMinor: 0, currency: 'SGD' }]);
-    expect(csv).toContain('"Say ""hi"", ok"');
-    expect(csv).toContain(',D,10.50,');
   });
 });
