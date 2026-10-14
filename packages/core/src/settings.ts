@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { currencyInfo, DEFAULT_REGIONAL, regionalProblems, type RegionalSettings } from '@meridian/types';
 import { audit } from './audit.js';
-import { market, type Market } from './config.js';
+import { market, MARKETS, type Market } from './config.js';
 
 import type { Queryable } from './db.js';
 import { invalid, rejected } from './errors.js';
@@ -14,35 +14,89 @@ export async function getRegional(q: Queryable): Promise<RegionalSettings> {
 }
 
 // ───────────────────────── markets ─────────────────────────
-export interface MarketSettings { multiple: boolean }
-export const DEFAULT_MARKET_SETTINGS: MarketSettings = { multiple: false };
-
-export async function getMarketSettings(q: Queryable): Promise<MarketSettings> {
-  const r = (await q.query(`SELECT value FROM settings WHERE key='markets'`)).rows[0];
-  return { multiple: r?.value?.multiple === true };
+export interface MarketSettings {
+  multiple: boolean;
+  /** The market used when nobody picks one (new logins, offers, customers, store sales) while several markets are on. */
+  defaultMarket: string;
+  /** The markets that can be chosen. The home country (Settings → Regional) is always one of them. */
+  markets: Market[];
 }
 
-export async function setMarketSettings(q: Queryable, actor: string, s: MarketSettings): Promise<MarketSettings> {
-  const value: MarketSettings = { multiple: !!s.multiple };
+const MARKET_CODE = /^[A-Z]{2}$/;
+const cleanMarket = (m: Market): Market => {
+  const code = String(m.code ?? '').trim().toUpperCase();
+  if (!MARKET_CODE.test(code)) throw invalid(`A market code is two letters, such as SG (got “${m.code ?? ''}”).`);
+  const name = String(m.name ?? '').trim();
+  if (!name || name.length > 60) throw invalid(`Give market ${code} a name of up to 60 characters.`);
+  const dialCode = String(m.dialCode ?? '').trim();
+  if (!/^\+\d{1,4}$/.test(dialCode)) throw invalid(`The dial code of ${name} looks like +65.`);
+  const taxName = String(m.taxName ?? '').trim();
+  if (!taxName || taxName.length > 20) throw invalid(`Give the tax of ${name} a short name such as GST (up to 20 characters).`);
+  if (!Number.isInteger(m.taxBps) || m.taxBps < 0 || m.taxBps > 10000) throw invalid(`The tax rate of ${name} must be between 0% and 100%.`);
+  return { code, name, currency: '', dialCode, taxBps: m.taxBps, taxName };
+};
+
+export async function getMarketSettings(q: Queryable): Promise<MarketSettings> {
+  const [row, r] = await Promise.all([q.query(`SELECT value FROM settings WHERE key='markets'`).then((x) => x.rows[0]?.value as Partial<MarketSettings> | undefined), getRegional(q)]);
+  const stored = Array.isArray(row?.markets) && row.markets.length ? row.markets : Object.values(MARKETS);
+  // The home country always shows the tax and dial code from Regional, which is where they are edited.
+  const markets = stored.map((m) => ({ ...m, currency: r.currency, ...(m.code === r.country ? { taxBps: r.taxBps, taxName: r.taxName, dialCode: r.dialCode } : {}) }));
+  if (!markets.some((m) => m.code === r.country)) markets.unshift({ ...market(r.country), code: r.country, name: market(r.country).code === r.country ? market(r.country).name : r.country, currency: r.currency });
+  const defaultMarket = markets.some((m) => m.code === row?.defaultMarket) ? (row!.defaultMarket as string) : r.country;
+  return { multiple: row?.multiple === true, defaultMarket, markets };
+}
+
+/** Whether anything still uses a market, so removing it would strand offers, logins, customers or stores. */
+async function marketUsage(q: Queryable, code: string): Promise<string[]> {
+  const n = async (sql: string) => Number((await q.query(sql, [code])).rows[0]?.n ?? 0);
+  const uses: Array<[string, number]> = [
+    ['offer', await n(`SELECT count(*) AS n FROM catalog_nodes WHERE level='OFFER' AND $1 = ANY(markets)`)],
+    ['login', await n(`SELECT count(*) AS n FROM users WHERE market_code=$1`)],
+    ['customer', await n(`SELECT count(*) AS n FROM customers WHERE market_code=$1`)],
+    ['store', await n(`SELECT count(*) AS n FROM stores WHERE market_code=$1`)],
+  ];
+  return uses.filter(([, c]) => c > 0).map(([w, c]) => `${c} ${w}${c === 1 ? '' : 's'}`);
+}
+
+export async function setMarketSettings(q: Queryable, actor: string, s: { multiple: boolean; defaultMarket?: string; markets?: Market[] }): Promise<MarketSettings> {
+  const before = await getMarketSettings(q);
+  const r = await getRegional(q);
+  const markets = (s.markets ?? before.markets).map(cleanMarket);
+  const codes = new Set<string>();
+  for (const m of markets) { if (codes.has(m.code)) throw invalid(`Market ${m.code} is listed twice.`); codes.add(m.code); }
+  if (!codes.has(r.country)) throw invalid(`${r.country} is your own country (Settings → Regional), so it stays in the list.`);
+  const defaultMarket = (s.defaultMarket ?? before.defaultMarket).trim().toUpperCase();
+  if (!codes.has(defaultMarket)) throw invalid(`The default market ${defaultMarket} must be one of the markets in the list.`);
+  for (const old of before.markets) {
+    if (codes.has(old.code)) continue;
+    const used = await marketUsage(q, old.code);
+    if (used.length) throw rejected(`${old.name} cannot be removed: ${used.join(', ')} still use it. Move them to another market first.`);
+  }
+  const value = { multiple: !!s.multiple, defaultMarket, markets: markets.map(({ currency: _c, ...m }) => m) };
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('markets', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(value), actor]);
-  await audit(q, actor, 'settings', 'markets', 'update', { ...value });
-  return value;
+  await audit(q, actor, 'settings', 'markets', 'update', { multiple: value.multiple, defaultMarket, markets: value.markets.map((m) => m.code), from: before.markets.map((m) => m.code) });
+  return getMarketSettings(q);
 }
 
 /**
  * How markets apply right now. With one market (the default) everything belongs to the deployment's own country from Settings → Regional:
  * no market is asked for, none filters an offer, a customer or a login. With several, `home` is still the country the currency and tax
- * settings describe, and every offer, login, customer and order carries a market.
+ * settings describe, `default` is the market used when nobody picks one, and every offer, login, customer and order carries a market.
  */
-export async function marketMode(q: Queryable): Promise<{ multiple: boolean; home: string }> {
+export async function marketMode(q: Queryable): Promise<{ multiple: boolean; home: string; default: string }> {
   const [m, r] = await Promise.all([getMarketSettings(q), getRegional(q)]);
-  return { multiple: m.multiple, home: r.country };
+  return { multiple: m.multiple, home: r.country, default: m.multiple ? m.defaultMarket : r.country };
 }
 
-/** The market to use for something: the one asked for when several markets are on, otherwise the deployment's own. */
+/** The market to use for something: the one asked for when several markets are on (it must be one of them), else the default market. */
 export async function effectiveMarket(q: Queryable, asked?: string | null): Promise<string> {
-  const m = await marketMode(q);
-  return m.multiple && asked ? asked.trim().toUpperCase() : m.home;
+  const m = await getMarketSettings(q);
+  const r = await getRegional(q);
+  if (!m.multiple) return r.country;
+  if (!asked) return m.defaultMarket;
+  const code = asked.trim().toUpperCase();
+  if (!m.markets.some((x) => x.code === code)) throw invalid(`unknown market ${asked}`);
+  return code;
 }
 
 /** The market to match when looking for a duplicate ID document: any market when there is only one. */
@@ -55,10 +109,10 @@ export async function marketDuplicates(q: Queryable, code: string): Promise<stri
  * market uses it; the home country also takes the tax and dial code set in Regional, other markets keep their own.
  */
 export async function marketFor(q: Queryable, code: string): Promise<Market> {
-  const [mode, r] = await Promise.all([marketMode(q), getRegional(q)]);
-  const base = market(mode.multiple ? code : mode.home);
-  const home = base.code === r.country;
-  return { ...base, currency: r.currency, taxBps: home || !mode.multiple ? r.taxBps : base.taxBps, taxName: home || !mode.multiple ? r.taxName : base.taxName, dialCode: home || !mode.multiple ? r.dialCode : base.dialCode };
+  const [ms, r] = await Promise.all([getMarketSettings(q), getRegional(q)]);
+  const base = ms.multiple ? ms.markets.find((m) => m.code === code.trim()) ?? market(code) : ms.markets.find((m) => m.code === r.country)!;
+  const own = !ms.multiple || base.code === r.country;
+  return { ...base, currency: r.currency, taxBps: own ? r.taxBps : base.taxBps, taxName: own ? r.taxName : base.taxName, dialCode: own ? r.dialCode : base.dialCode };
 }
 
 const TRANSACTION_TABLES = ['orders', 'invoices', 'payments', 'gl_entries', 'commissions'] as const;

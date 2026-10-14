@@ -204,11 +204,11 @@ describe('the market a login sells in', () => {
     expect(u.user.marketCode).toBe((await getRegional(db)).country);
   });
   it('starts as the deployment\'s own country, can be chosen, and can be changed later (several markets)', async () => {
-    await setMarketSettings(db, 'root', { multiple: true });
+    await setMarketSettings(db, 'root', { multiple: true, defaultMarket: 'MY' });
     const regional = (await db.query(`SELECT value FROM settings WHERE key='regional'`)).rows[0]?.value ?? {};
     await db.query(`INSERT INTO settings (key, value, updated_by) VALUES ('regional', $1, 'test') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, [JSON.stringify({ ...regional, country: 'MY' })]);
     const a = await createUser(db, 'root', { username: 'market.default', displayName: 'Default Market', roles: ['call-center'] });
-    expect(a.user.marketCode).toBe('MY'); // not Singapore by habit
+    expect(a.user.marketCode).toBe('MY'); // the default market, not Singapore by habit
     const b = await createUser(db, 'root', { username: 'market.chosen', displayName: 'Chosen Market', roles: ['call-center'], marketCode: 'th' });
     expect(b.user.marketCode).toBe('TH');
     await expect(createUser(db, 'root', { username: 'market.bad', displayName: 'Bad', roles: ['call-center'], marketCode: 'ZZ' })).rejects.toThrow(/unknown market/);

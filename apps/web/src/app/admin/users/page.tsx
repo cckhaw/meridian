@@ -84,8 +84,8 @@ function MarketField({ value, onChange }: { value: string; onChange: (v: string)
   const markets: Record<string, { name: string }> = meta.data?.markets ?? {};
   if (!meta.data?.multiMarket) return null; // one market for the whole CRM: nothing to choose
   return (
-    <Field label="Market" hint="The offers they can sell: those sold in this market. New logins start with your own country (Settings → Regional).">
-      <Select value={value || regional?.country || ''} onChange={(e) => onChange(e.target.value)}>{Object.entries(markets).map(([code, m]) => <option key={code} value={code}>{m.name} ({code})</option>)}</Select>
+    <Field label="Market" hint="The offers they can sell: those sold in this market. New logins start in the default market (Settings → Markets).">
+      <Select value={value || meta.data?.defaultMarket || regional?.country || ''} onChange={(e) => onChange(e.target.value)}>{Object.entries(markets).map(([code, m]) => <option key={code} value={code}>{m.name} ({code})</option>)}</Select>
     </Field>
   );
 }

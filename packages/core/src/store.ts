@@ -34,7 +34,7 @@ const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 async function storeMarket(q: Queryable, customerId?: string | null): Promise<string> {
   const mode = await marketMode(q);
   if (mode.multiple && customerId) return ((await getCustomer(q, customerId)).marketCode as string).trim();
-  return mode.home;
+  return mode.default;
 }
 
 // ───────────────────────── catalog and pricing (always computed here, never taken from the client) ─────────────────────────
