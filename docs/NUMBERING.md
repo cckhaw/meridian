@@ -46,7 +46,7 @@ Patterns are validated (no nested quantifiers, bounded length) before they are s
 
 ## Loading pools
 
-**Numbers & SIMs → Load** takes a CSV or a range for MSISDNs (up to 200,000 per load), IMSIs, and ICCIDs (SIM cards and eSIMs, `89…`, 19–20 digits; a SIM can be bound to a free IMSI on load). Each load has a *check* step before *apply*. `GET /api/numbering/sim-template` downloads a SIM template.
+**Numbers & SIMs → Load** takes a CSV or a range for MSISDNs (up to 200,000 per load), IMSIs, and ICCIDs (SIM cards and eSIMs, `89…`, 19–20 digits; an ICCID can be bound to a free IMSI on load). Each load has a *check* step before *apply*. An MSISDN starts with its **country code and needs no + sign** (`60128001234`; spreadsheets drop the + anyway). A + is accepted and spaces or dashes are ignored, but a local number starting with 0 is refused. MSISDNs are stored as `+60128001234`. Each load has a **Download the … template** link (`GET /api/numbering/template/msisdn|imsi|sim`), a ready-to-fill sample whose MSISDNs start with the regional country code.
 
 ## Reservations and concurrency
 

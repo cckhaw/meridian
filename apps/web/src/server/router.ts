@@ -886,6 +886,10 @@ post('/numbering/import/sim', ['numbering:manage'], ({ db, user, body }) => {
   return core.importSims(db, { csv: b.csv }, { apply: b.apply, actor: user.username, batch: b.batch, kind: b.kind, locationId: b.locationId, autoBindImsi: b.autoBindImsi });
 }, NUM_BODY);
 get('/numbering/sim-template', ['numbering:manage'], async () => csv(await core.simTemplate(), 'meridian-sim-import-template.csv'));
+get('/numbering/template/:kind', ['numbering:manage'], async ({ db, params }) => {
+  const kind = z.enum(['msisdn', 'imsi', 'sim']).parse(params.kind);
+  return csv(core.poolTemplate(kind, (await core.getRegional(db)).dialCode), `meridian-${kind}-import-template.csv`);
+});
 post('/numbering/sims/:iccid/transition', ['numbering:manage'], ({ db, user, params, body }) => {
   const b = z.object({ to: z.enum(core.ICCID_STATES), reason: z.string().max(200).optional(), locationId: z.string().max(50).optional() }).parse(body);
   return core.transitionSim(db, params.iccid!, b.to, { actor: user.username, reason: b.reason, locationId: b.locationId });

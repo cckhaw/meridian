@@ -7,7 +7,19 @@ import { assertIccidTransition, assertImsiTransition, auditIdentifier, getMatche
 import { assertStockLocation } from './warehouses.js';
 import { VIP_TIERS, type VipTier } from './vip-pattern-matcher.js';
 
-const E164 = /^\+\d{8,15}$/;
+/**
+ * A phone number as people write it in a file: the country code first, with or without a leading + (spreadsheets drop it anyway), and spaces,
+ * brackets or dashes allowed. It is stored as +<digits>. A local number (starting with 0) is refused because its country is unknown.
+ */
+export function normalizeMsisdn(raw: string): { value: string } | { error: string } {
+  const v = raw.trim().replace(/[\s()-]/g, '');
+  if (/^\d(\.\d+)?e\+?\d+$/i.test(v)) return { error: 'The spreadsheet turned this into scientific notation. Format the column as Text and enter it again.' };
+  const digits = v.replace(/^\+/, '').replace(/^00/, '');
+  if (!/^\d+$/.test(digits)) return { error: 'Digits only, starting with the country code, like 60128001234 (a + is optional).' };
+  if (digits.startsWith('0')) return { error: 'Start with the country code, not a 0: 60128001234, not 0128001234.' };
+  if (digits.length < 8 || digits.length > 15) return { error: 'A number with its country code is 8 to 15 digits, like 60128001234.' };
+  return { value: `+${digits}` };
+}
 const IMSI = /^\d{15}$/;
 export const ICCID = /^89\d{17,18}$/;
 const CHUNK = 1000;
@@ -19,10 +31,10 @@ export interface PoolImportResult {
   byTier?: Partial<Record<VipTier, number>>;
 }
 
-/** Numbers from a range: +60128000000 to +60128009999 (digits only after the +, same length, at most 200,000). */
-function expandRange(from: string, to: string, max = MAX_RANGE): string[] {
-  const prefix = from.startsWith('+') ? '+' : '';
-  const a = from.replace(/^\+/, ''), b = to.replace(/^\+/, '');
+/** Numbers from a range: 60128000000 to 60128009999 (digits only, the + is optional, same length, at most 200,000). */
+function expandRange(from: string, to: string, plus: boolean, max = MAX_RANGE): string[] {
+  const prefix = plus ? '+' : '';
+  const a = from.trim().replace(/^\+/, ''), b = to.trim().replace(/^\+/, '');
   if (!/^\d+$/.test(a) || !/^\d+$/.test(b) || a.length !== b.length) throw invalid('A range runs between two numbers of the same length.');
   const lo = BigInt(a), hi = BigInt(b);
   if (hi < lo) throw invalid('The range ends before it starts.');
@@ -32,26 +44,28 @@ function expandRange(from: string, to: string, max = MAX_RANGE): string[] {
   return out;
 }
 
-function listFrom(input: { csv?: string; range?: { from: string; to: string } }, headerNames: string[]): Array<{ line: number; cells: string[] }> {
-  if (input.range) return expandRange(input.range.from, input.range.to).map((v, i) => ({ line: i + 1, cells: [v] }));
+function listFrom(input: { csv?: string; range?: { from: string; to: string } }, headerNames: string[], plus = false): Array<{ line: number; cells: string[] }> {
+  if (input.range) return expandRange(input.range.from, input.range.to, plus).map((v, i) => ({ line: i + 1, cells: [v] }));
   const rows = parseCsv(input.csv ?? '');
   if (!rows.length) throw invalid('The file is empty.');
-  const first = (rows[0]!.cells[0] ?? '').toLowerCase().trim();
+  const first = (rows.find((r) => !(r.cells[0] ?? '').trim().startsWith('#'))?.cells[0] ?? '').toLowerCase().trim();
   const hasHeader = headerNames.includes(first);
-  return rows.slice(hasHeader ? 1 : 0).filter((r) => r.cells.some((c) => c.trim()));
+  const body = rows.filter((r) => !(r.cells[0] ?? '').trim().startsWith('#'));
+  return body.slice(hasHeader ? 1 : 0).filter((r) => r.cells.some((c) => c.trim()));
 }
 
 // ───────────────────────── MSISDN ─────────────────────────
 /** Loads phone numbers into the pool, each put in its tier by the pattern rules. The check changes nothing. A number already in the pool is skipped, never overwritten. */
 export async function importMsisdns(db: Db, input: { csv?: string; range?: { from: string; to: string } }, o: { apply: boolean; actor: string; batch?: string }): Promise<PoolImportResult> {
-  const rows = listFrom(input, ['msisdn', 'number']);
+  const rows = listFrom(input, ['msisdn', 'number'], true);
   const matcher = await getMatcher(db);
   const res: PoolImportResult = { applied: false, total: rows.length, added: 0, duplicates: 0, errors: [], byTier: {} };
   const seen = new Set<string>();
   const good: Array<{ msisdn: string; tier: VipTier; code: string | null }> = [];
   for (const r of rows) {
-    const v = (r.cells[0] ?? '').trim().replace(/[\s()-]/g, '');
-    if (!E164.test(v)) { res.errors.push({ line: r.line, value: v, message: 'Use the full number with country code, like +60128001234.' }); continue; }
+    const n = normalizeMsisdn(r.cells[0] ?? '');
+    if ('error' in n) { res.errors.push({ line: r.line, value: (r.cells[0] ?? '').trim(), message: n.error }); continue; }
+    const v = n.value;
     if (seen.has(v)) { res.duplicates++; continue; }
     seen.add(v);
     const c = matcher.classify(v);
@@ -178,13 +192,18 @@ export async function importSims(db: Db, input: { csv: string }, o: SimImportOpt
   return res;
 }
 
-export async function simTemplate(): Promise<string> {
-  return [
-    '# ICCID: 19-20 digits starting with 89. IMSI: 15 digits, optional (a free one from the pool is written onto the SIM if blank). type: PHYSICAL or ESIM. location: a warehouse or store id.',
-    'iccid,imsi,type,location,activation_code',
-    ['8960123456789012345', '', 'PHYSICAL', 'WH-MAIN', ''].map(csvCell).join(','),
-  ].join('\n') + '\n';
+/** A ready-to-fill sample file for each kind of pool load. Kept free of comments so it loads as it is; the screen explains the columns. */
+export type PoolKind = 'msisdn' | 'imsi' | 'sim';
+export function poolTemplate(kind: PoolKind, dialCode = '+60'): string {
+  const cc = dialCode.replace(/^\+/, '') || '60';
+  const lines = {
+    msisdn: ['msisdn', `${cc}128001234`, `${cc}128001235`, `${cc}128001236`],
+    imsi: ['imsi', '525010000000001', '525010000000002', '525010000000003'],
+    sim: ['iccid,imsi,type,location,activation_code', ['8960123456789012345', '525010000000001', 'PHYSICAL', 'WH-MAIN', ''].map(csvCell).join(','), ['8960123456789012352', '', 'PHYSICAL', 'WH-MAIN', ''].map(csvCell).join(','), ['8960123456789012369', '', 'ESIM', 'WH-MAIN', 'LPA:1$smdp.example.com$ACTIVATION-1'].map(csvCell).join(',')],
+  }[kind];
+  return lines.join('\n') + '\n';
 }
+export const simTemplate = async (): Promise<string> => poolTemplate('sim');
 
 /** Moves a SIM between states by hand (hand out to a dealer, take back, scrap, decommission). A SIM that was never used gives its IMSI back to the pool. */
 export async function transitionSim(db: Db, iccid: string, to: IccidState, o: { actor: string; reason?: string; locationId?: string }): Promise<Row> {

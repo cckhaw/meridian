@@ -7,7 +7,7 @@ import { LifecycleService } from './lifecycle-service.js';
 import { getOrder, listOrders, nextOrderNumber, placeOrder, cancelOrder } from './orders.js';
 import { NumberReservationService, RedisLock, type RedisLike } from './number-reservation.js';
 import { getMatcher, getNumberingSettings, identifierHistory, listTierRules, recycleExpired, setNumberingSettings, updateTierRule } from './nrm.js';
-import { importImsis, importMsisdns, importSims, issueEsimProfile, listSims, transitionSim } from './nrm-pools.js';
+import { importImsis, importMsisdns, importSims, issueEsimProfile, listSims, normalizeMsisdn, poolTemplate, transitionSim } from './nrm-pools.js';
 import { backdate, freshDb, newCustomer } from './test-helpers.js';
 import { VipPatternMatcher, type TierRule } from './vip-pattern-matcher.js';
 
@@ -304,5 +304,32 @@ describe('when the subscriber leaves', () => {
     expect(out).toHaveProperty('expiredHolds');
     expect((await listTierRules(db)).map((r) => r.tier)).toEqual(['AUCTION', 'DIAMOND', 'GOLD', 'SILVER', 'STANDARD']);
     void updateNode;
+  });
+});
+
+describe('loading MSISDNs without the plus sign, and the sample files', () => {
+  it('takes the country code first, with or without +, and refuses local numbers and spreadsheet damage', async () => {
+    expect(normalizeMsisdn('60128001234')).toEqual({ value: '+60128001234' });
+    expect(normalizeMsisdn('+60 12-800 1234')).toEqual({ value: '+60128001234' });
+    expect(normalizeMsisdn('0060128001234')).toEqual({ value: '+60128001234' });
+    expect(normalizeMsisdn('0128001234')).toHaveProperty('error', expect.stringMatching(/country code/));
+    expect(normalizeMsisdn('6.01280E+11')).toHaveProperty('error', expect.stringMatching(/scientific/));
+    expect(normalizeMsisdn('abc')).toHaveProperty('error');
+    const r = await importMsisdns(db, { csv: 'msisdn\n60125550001\n+60125550002\n0125550003\n' }, { apply: false, actor: 'ops' });
+    expect([r.added, r.errors.map((e) => e.line)]).toEqual([2, [4]]);
+    await importMsisdns(db, { csv: '60125550001\n+60125550002\n' }, { apply: true, actor: 'ops' });
+    expect((await db.query(`SELECT msisdn FROM msisdn_inventory WHERE msisdn IN ('+60125550001','+60125550002') ORDER BY 1`)).rows.map((x) => x.msisdn)).toEqual(['+60125550001', '+60125550002']);
+    const range = await importMsisdns(db, { range: { from: '60125560000', to: '60125560009' } }, { apply: true, actor: 'ops' });
+    expect(range.added).toBe(10);
+    expect((await db.query(`SELECT count(*)::int AS n FROM msisdn_inventory WHERE msisdn LIKE '+601255600%'`)).rows[0]!.n).toBe(10);
+  });
+
+  it('gives a sample file for each pool that loads as it is', async () => {
+    const m = poolTemplate('msisdn', '+65');
+    expect(m.split('\n')[1]).toBe('65128001234');
+    expect((await importMsisdns(db, { csv: m }, { apply: false, actor: 'ops' })).errors).toEqual([]);
+    expect((await importImsis(db, { csv: poolTemplate('imsi') }, { apply: false, actor: 'ops' })).errors).toEqual([]);
+    const sim = await importSims(db, { csv: poolTemplate('sim') }, { apply: false, actor: 'ops' });
+    expect([sim.errors, sim.total]).toEqual([[], 3]);
   });
 });
