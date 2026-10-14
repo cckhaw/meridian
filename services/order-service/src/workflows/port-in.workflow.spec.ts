@@ -8,7 +8,7 @@ let env: TestWorkflowEnvironment;
 beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 
-const details = { portInId: 'p1', serviceId: 's1', donorOperator: 'OtherTel', donorRoutingCode: 'OT-01', donorMsisdn: '+60128001234', temporaryMsisdn: '+60125550001' };
+const details = { portInId: 'p1', serviceId: 's1', donorOperator: 'OtherTel', donorMnpOperatorId: 'OT-01', donorMsisdn: '+60128001234', temporaryMsisdn: '+60125550001' };
 const run = async (queue: string, acts: PortInActivities, go: (h: Awaited<ReturnType<typeof env.client.workflow.start>>) => Promise<void>, input: object = details) => {
   const worker = await Worker.create({ connection: env.nativeConnection, taskQueue: queue, workflowsPath: new URL('./index.ts', import.meta.url).pathname, activities: acts as never });
   return worker.runUntil(async () => {

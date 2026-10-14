@@ -13,7 +13,7 @@ let db: Db;
 let OTHERTEL = '';
 beforeAll(async () => {
   db = await freshDb();
-  OTHERTEL = (await createDonorOperator(db, 'admin', { name: 'OtherTel', routingCode: 'ot-01' })).id as string;
+  OTHERTEL = (await createDonorOperator(db, 'admin', { name: 'OtherTel', mnpOperatorId: 'ot-01' })).id as string;
   await importMsisdns(db, { range: { from: '60125000001', to: '60125000060' } }, { apply: true, actor: 'ops' });
   await importImsis(db, { range: { from: '525010000009000', to: '525010000009040' } }, { apply: true, actor: 'ops' });
   const esims = Array.from({ length: 12 }, (_, i) => `8960777${String(1_000_000_000_000 + i).slice(1)},,ESIM`);
@@ -179,12 +179,12 @@ describe('Vector B: an existing single line moves to a group plan', () => {
 });
 
 describe('donor operators', () => {
-  it('are kept in a list with a routing code, and a port-in must choose one from it', async () => {
+  it('are kept in a list with an operator ID, and a port-in must choose one from it', async () => {
     const op = (await listDonorOperators(db)).find((o) => o.id === OTHERTEL)!;
-    expect([op.name, op.routingCode, op.status]).toEqual(['OtherTel', 'OT-01', 'ACTIVE']); // codes are kept in capitals
-    await expect(createDonorOperator(db, 'admin', { name: 'othertel', routingCode: 'X1' })).rejects.toThrow(/already an operator/);
-    await expect(createDonorOperator(db, 'admin', { name: 'Another', routingCode: 'ot-01' })).rejects.toThrow(/belongs to another/);
-    await expect(createDonorOperator(db, 'admin', { name: 'Bad', routingCode: 'no spaces' })).rejects.toThrow(/routing code/);
+    expect([op.name, op.mnpOperatorId, op.status]).toEqual(['OtherTel', 'OT-01', 'ACTIVE']); // codes are kept in capitals
+    await expect(createDonorOperator(db, 'admin', { name: 'othertel', mnpOperatorId: 'X1' })).rejects.toThrow(/already an operator/);
+    await expect(createDonorOperator(db, 'admin', { name: 'Another', mnpOperatorId: 'ot-01' })).rejects.toThrow(/belongs to another/);
+    await expect(createDonorOperator(db, 'admin', { name: 'Bad', mnpOperatorId: 'no spaces' })).rejects.toThrow(/operator ID/);
 
     const c = await newCustomer(db);
     await expect(order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: { ...donor(20), donorOperatorId: undefined } }])).rejects.toThrow(/Choose the donor operator/);
@@ -192,8 +192,8 @@ describe('donor operators', () => {
     const o = await order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: { ...donor(20), temporaryNumber: true } }]);
     const svc = (await servicesOf(o.id))[0]!;
     const req = await getPortIn(db, svc.portInId);
-    expect([req.donorOperator, req.donorRoutingCode, req.donorOperatorId]).toEqual(['OtherTel', 'OT-01', OTHERTEL]);
-    expect((await db.query(`SELECT payload FROM lifecycle_outbox WHERE service_id=$1 AND instruction='PORT_IN_REQUEST'`, [svc.id])).rows[0]!.payload).toMatchObject({ donorRoutingCode: 'OT-01' });
+    expect([req.donorOperator, req.donorMnpOperatorId, req.donorOperatorId]).toEqual(['OtherTel', 'OT-01', OTHERTEL]);
+    expect((await db.query(`SELECT payload FROM lifecycle_outbox WHERE service_id=$1 AND instruction='PORT_IN_REQUEST'`, [svc.id])).rows[0]!.payload).toMatchObject({ donorMnpOperatorId: 'OT-01' });
 
     // renaming later does not rewrite what a request was raised with; switching off stops new requests
     await updateDonorOperator(db, 'admin', OTHERTEL, { name: 'OtherTel Berhad' });
@@ -203,7 +203,7 @@ describe('donor operators', () => {
     await expect(order(c.customer.id, [{ offerId: 'plan-sim-5g', portIn: donor(21) }])).rejects.toThrow(/switched off/);
     // one that was used is switched off, not deleted; an unused one is removed
     expect(await deleteDonorOperator(db, 'admin', OTHERTEL)).toEqual({ deleted: false, deactivated: true });
-    const spare = await createDonorOperator(db, 'admin', { name: 'Spare Telco', routingCode: 'SP-9' });
+    const spare = await createDonorOperator(db, 'admin', { name: 'Spare Telco', mnpOperatorId: 'SP-9' });
     expect(await deleteDonorOperator(db, 'admin', spare.id as string)).toEqual({ deleted: true, deactivated: false });
     await updateDonorOperator(db, 'admin', OTHERTEL, { status: 'ACTIVE' });
   });
