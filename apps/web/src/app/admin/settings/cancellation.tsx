@@ -61,7 +61,8 @@ export function CancellationSettings() {
                   <p className="text-subhead text-label2">{v.descriptions[r.id]}</p>
                   {r.message && <p className="mt-0.5 text-footnote text-label2">Customer is told: “{r.message}”</p>}
                 </div>
-                <span className="flex shrink-0 items-center gap-1">
+                {/* The actions sit on their own line under the text: beside it they squeeze the rule's wording into a sliver. */}
+                <span className="flex w-full flex-wrap items-center gap-1 sm:pl-10">
                   <Button variant="plain" aria-label={`Move ${r.name} up`} disabled={i === 0 || act.busy} className="!min-h-[36px] !px-2" onClick={() => apply(() => post(`/settings/cancellation/rules/${r.id}/move`, { direction: 'up' }))}>↑</Button>
                   <Button variant="plain" aria-label={`Move ${r.name} down`} disabled={i === mine.length - 1 || act.busy} className="!min-h-[36px] !px-2" onClick={() => apply(() => post(`/settings/cancellation/rules/${r.id}/move`, { direction: 'down' }))}>↓</Button>
                   <Button variant="secondary" className="!min-h-[36px] !px-3 !text-subhead" onClick={() => apply(() => patch(`/settings/cancellation/rules/${r.id}`, { ...r, enabled: !r.enabled }))}>{r.enabled ? 'Turn off' : 'Turn on'}</Button>
