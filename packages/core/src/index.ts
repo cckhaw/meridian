@@ -111,3 +111,6 @@ export * from './interactions.js';
 export * from './case-sla.js';
 export * from './case-incidents.js';
 export * from './case-refunds.js';
+export * from './workforce.js';
+export * from './wfm-webhook.js';
+export { WFM_VENDORS, wfmVendor, type WfmVendor, type WfmSlot, type WfmConnector } from './wfm/index.js';
