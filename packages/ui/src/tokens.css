@@ -57,6 +57,7 @@ body { background: rgb(var(--bg-grouped)); color: rgb(var(--label)); }
 @media (min-width: 1024px) {
   html[data-sidebar='rail'] .shell-sidebar { width: 4.5rem; }
   html[data-sidebar='rail'] .shell-content { padding-left: 4.5rem; }
+  html[data-sidebar='rail'] .shell-main { max-width: 1760px; }
   html[data-sidebar='rail'] .rail-hide { display: none; }
   html[data-sidebar='rail'] .rail-only { display: block; }
   html[data-sidebar='rail'] .rail-center { justify-content: center; padding-left: 0; padding-right: 0; gap: 0; }
