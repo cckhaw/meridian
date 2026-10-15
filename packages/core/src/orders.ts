@@ -90,7 +90,9 @@ export async function placeOrder(db: Db, input: OrderInput): Promise<Row> {
 export async function nextOrderNumber(q: Queryable, now: Date = new Date()): Promise<string> {
   const tz = (await getRegional(q)).timezone;
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now); // YYYY-MM-DD
-  const n = (await q.query(`INSERT INTO order_counters (day, last) VALUES ($1::date, 1) ON CONFLICT (day) DO UPDATE SET last = order_counters.last + 1 RETURNING last`, [day])).rows[0]!.last as number;
+  // The day's starting point is written once (the first order of the day); every order then takes the next sequence value, which never waits on another order.
+  await q.query(`INSERT INTO order_counters (day, last, base) SELECT $1::date, 0, nextval('order_number_seq') WHERE NOT EXISTS (SELECT 1 FROM order_counters WHERE day=$1::date) ON CONFLICT (day) DO NOTHING`, [day]);
+  const n = (await q.query(`SELECT nextval('order_number_seq') - base AS n FROM order_counters WHERE day=$1::date`, [day])).rows[0]!.n as number;
   return `${day.replaceAll('-', '')}-${String(n).padStart(5, '0')}`;
 }
 

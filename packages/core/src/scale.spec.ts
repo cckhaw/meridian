@@ -211,3 +211,34 @@ describe('customer lookup by ID document', () => {
     expect(JSON.stringify(c)).not.toContain('1234567');
   });
 });
+
+describe('lookups by id alone, and order numbers', () => {
+  it('has an index on id for every sharded table that is found by id alone, so each lookup is one probe per partition (150-400 ms without, measured at 4 million rows)', async () => {
+    for (const [table, col] of [['customers', 'id'], ['accounts', 'id'], ['orders', 'id'], ['services', 'id'], ['order_lines', 'order_id'], ['services', 'order_id']] as const) {
+      const plan = (await db.query(`SELECT indexdef FROM pg_indexes WHERE tablename = $1 AND indexdef ~ $2`, [table, `\\(${col}\\)`])).rows;
+      expect(plan.length, `${table}(${col})`).toBeGreaterThan(0);
+    }
+    await db.query('SET enable_seqscan = off');
+    const ex = (await db.query(`EXPLAIN SELECT * FROM services WHERE id = '00000000-0000-0000-0000-000000000001'`)).rows.map((r: any) => Object.values(r)[0]).join('\n');
+    await db.query('RESET enable_seqscan');
+    expect(ex).toMatch(/services_h\d+_id_idx/);
+  });
+
+  it('numbers orders 1, 2, 3 each day without holding a lock until the order commits', async () => {
+    const { nextOrderNumber } = await import('./orders.js');
+    const day = new Date('2031-05-05T04:00:00Z');
+    const [a, b] = await db.tx(async (q) => [await nextOrderNumber(q, day), await nextOrderNumber(q, day)]);
+    expect([a, b]).toEqual(['20310505-00001', '20310505-00002']);
+    // A second transaction takes its number while the first is still open and does not wait for it. (The embedded database has one connection, so this needs real Postgres.)
+    if (db.kind === 'postgres') {
+      let release!: () => void;
+      const open = db.tx(async (q) => { const n = await nextOrderNumber(q, day); await new Promise<void>((r) => { release = r; }); return n; });
+      await new Promise((r) => setTimeout(r, 100));
+      const other = await Promise.race([db.tx((q) => nextOrderNumber(q, day)), new Promise<string>((r) => setTimeout(() => r('WAITED'), 3000))]);
+      release();
+      expect(other).toBe('20310505-00004');
+      expect(await open).toBe('20310505-00003');
+    }
+    expect(await nextOrderNumber(db, new Date('2031-05-06T04:00:00Z'))).toBe('20310506-00001');
+  });
+});

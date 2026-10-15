@@ -13,6 +13,10 @@ export interface Db extends Queryable {
   close(): Promise<void>;
 }
 
+/** The Queryables that are one transaction's connection: their lifetime is the transaction, so a value read through one can be remembered for the transaction (see settings.ts). */
+export const TX_SCOPE = new WeakSet<object>();
+const inTx = <T extends object>(q: T): T => { TX_SCOPE.add(q); return q; };
+
 const camel = (s: string) => s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 
 /** snake_case -> camelCase keys, Date -> ISO string, so domain code and JSON responses stay plain. */
@@ -54,7 +58,7 @@ async function openPglite(dir?: string): Promise<Db> {
   });
   const base = wrap(lite);
   await migrate(base, (sql) => lite.exec(sql));
-  return { kind: 'pglite', ...base, tx: (fn) => lite.transaction((t) => fn(wrap(t as unknown as PGlite))), close: () => lite.close() };
+  return { kind: 'pglite', ...base, tx: (fn) => lite.transaction((t) => fn(inTx(wrap(t as unknown as PGlite)))), close: () => lite.close() };
 }
 
 async function openPostgres(url: string): Promise<Db> {
@@ -87,7 +91,7 @@ async function openPostgres(url: string): Promise<Db> {
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        const out = await fn(wrap(c));
+        const out = await fn(inTx(wrap(c)));
         await c.query('COMMIT');
         return out;
       } catch (e) {
