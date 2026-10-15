@@ -95,6 +95,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `numbering:read` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | `numbering:select` |  |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  | ✓ |
 | `numbering:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
+| `inventory:transfer` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  | ✓ |
 | `inventory:writeoff` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | `warehouse:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 | `case:read` | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |  | ✓ |  |

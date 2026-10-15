@@ -89,7 +89,7 @@ export async function restockConsumed(q: Queryable, orderId: string, group: stri
 // ───────────────────────── stock movements: receipts, write-offs, history ─────────────────────────
 export const WRITE_OFF_REASONS = ['DAMAGED', 'LOST', 'EXPIRED', 'THEFT', 'COUNT', 'OTHER'] as const;
 export type WriteOffReason = (typeof WRITE_OFF_REASONS)[number];
-export type MovementKind = 'RECEIPT' | 'IMPORT' | 'WRITE_OFF' | 'COUNT';
+export type MovementKind = 'RECEIPT' | 'IMPORT' | 'WRITE_OFF' | 'COUNT' | 'TRANSFER_OUT' | 'TRANSFER_IN' | 'TRANSFER_SHORT';
 
 /** Leaves a line in the stock history. `onHand` is the quantity after the movement. */
 export async function recordMovement(q: Queryable, m: { locationId: string; sku: string; delta: number; onHand: number; kind: MovementKind; reason?: string | null; note?: string | null; actor: string }) {

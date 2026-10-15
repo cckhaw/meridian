@@ -1922,4 +1922,22 @@ describe('offer type switches and service types', () => {
     const link = await call('GET', '/v1/invoices/00000000-0000-4000-8000-000000000001/pdf?exp=1&sig=bad', { origin: null });
     expect(link.status).toBe(401);                                                  // a forged or expired link is refused
   });
+  it('stock transfers: request, dispatch and receive over the API, kept to the people allowed, and SIM cards for a sale come from where it is made', async () => {
+    const su = await root();
+    const agent = await staff(['call-center']);
+    expect((await call('POST', '/inventory/transfers', { cookie: agent.cookie, body: { from: 'WH-MAIN', to: 'STORE-SG-002', lines: [{ sku: 'WATCH-L1', quantity: 1 }] } })).status).toBe(403);
+    const places = (await call('GET', '/inventory/transfer-places', { cookie: su })).json.items;
+    expect(places.map((p: any) => p.id)).toEqual(expect.arrayContaining(['WH-MAIN', 'STORE-SG-001', 'STORE-SG-002']));
+    const t = await call('POST', '/inventory/transfers', { cookie: su, body: { from: 'WH-MAIN', to: 'STORE-SG-002', lines: [{ sku: 'WATCH-L1', quantity: 2 }], note: 'API test' } });
+    expect([t.status, t.json.status]).toEqual([200, 'REQUESTED']);
+    expect((await call('POST', `/inventory/transfers/${t.json.id}/receive`, { cookie: su, body: {} })).status).toBe(409);       // not dispatched yet
+    expect((await call('POST', `/inventory/transfers/${t.json.id}/dispatch`, { cookie: su })).json.status).toBe('IN_TRANSIT');
+    expect((await call('POST', `/inventory/transfers/${t.json.id}/receive`, { cookie: su, body: {} })).json.status).toBe('RECEIVED');
+    expect((await call('GET', '/inventory/transfers?status=RECEIVED', { cookie: su })).json.items.map((x: any) => x.number)).toContain(t.json.number);
+    // the SIM list: a remote sale sees the warehouses' cards only
+    const remote = await call('GET', '/sims/available?kind=PHYSICAL&warehouse=1&limit=50', { cookie: su });
+    expect(remote.json.items.every((s: any) => String(s.locationId).startsWith('WH-'))).toBe(true);
+    const shop = await call('GET', '/sims/available?kind=PHYSICAL&locationId=STORE-SG-001&limit=50', { cookie: su });
+    expect(shop.json.items.every((s: any) => s.locationId === 'STORE-SG-001')).toBe(true);
+  });
 });

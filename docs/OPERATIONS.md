@@ -142,3 +142,17 @@ Inventory has three views. **Stock** shows on-hand, reserved and available by lo
 - **Write off**: needs the `inventory:writeoff` permission and a reason (damaged, lost, expired, stolen, a stock count that came up short, or other with an explanation). Stock reserved for orders cannot be written off. Reducing stock is only possible this way, so every reduction has a reason in the history.
 
 The **Operations Support** role (`inventory-ops`) holds `inventory:write`, `inventory:writeoff` and `warehouse:manage`. Retail Store keeps `inventory:write` for its own store but not write-offs; grant `inventory:writeoff` to it under Users & roles if stores should write off their own stock. Stock movements made by orders (reserving, shipping, returns) are not part of this history.
+
+## Moving stock between warehouses and stores
+
+Inventory → **Transfers** (permission `inventory:transfer`: Operations Support and store managers). Stock is never in two places or in none:
+
+1. **Request.** Choose where it comes from and where it goes, then add products (SKU and quantity) and/or SIM cards (a number to take that many free cards from the sender, or the card numbers). Nothing moves yet; the quantity must be free at the sender (stock reserved for orders cannot be moved). A SIM card in a request is held, so it cannot be sold meanwhile.
+2. **Dispatch** (by the sender). The stock leaves the sender now and belongs to no place until it arrives. A SIM card on the road cannot be sold, swapped in or moved again.
+3. **Receive** (by the receiver). Enter what arrived. Less than was sent is recorded as a discrepancy (a *short on arrival* line in the history), and a SIM card that did not arrive is written off as lost in transit.
+
+A request can be **cancelled**; a transfer on the road can be **sent back**, which returns the stock to the sender. A store user can request transfers into or out of their own store, dispatch from it and receive into it, and nothing else. Every step is in the stock history (*Transferred out*, *Transferred in*, *Short on arrival*) and the audit log.
+
+API: `GET /api/inventory/transfers`, `POST /api/inventory/transfers` (`{from, to, lines: [{sku, quantity}], sims: {count | iccids}, note}`), `POST …/{id}/dispatch`, `…/receive` (`{received: {SKU: n}, iccids}`), `…/cancel`, and `GET /api/inventory/transfer-places`.
+
+**Where an order takes its SIM from.** A sale made at a store takes its physical SIM cards from that store's stock (a store seller's own store; for an administrator, the store chosen on the order). A sale that is not made at a store (call centre, self-serve, dealer) takes them from the warehouses, and a store's card is refused there. The card list in the new-order flow follows the same rule.
