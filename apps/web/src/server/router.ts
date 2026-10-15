@@ -666,7 +666,7 @@ north('POST', '/v1/services/:id/transfer-ownership', 'ownership:transfer', async
   if (b.currentAccountId && b.currentAccountId !== svc.accountId) throw new DomainError('REJECTED', 'currentAccountId is not the account this service is on.');
   return created(await core.transferOwnershipNorth(db, params.id!, b, northActor(principal)));
 }, { idempotent: true });
-north('POST', '/v1/services/:id/status', 'subscriber:status', ({ db, params, body, principal }) => core.setStatusNorth(db, params.id!, z.object({ action: z.enum(core.STATUS_ACTIONS), reason: z.string().max(60).optional(), months: z.number().int().optional(), until: date.optional(), unbilledUsageMinor: z.number().int().min(0).optional() }).parse(body), northActor(principal), channelOfPrincipal(principal)), { idempotent: true });
+north('POST', '/v1/services/:id/status', 'subscriber:status', ({ db, params, body, principal }) => core.setStatusNorth(db, params.id!, z.object({ action: z.enum(core.STATUS_ACTIONS), scenario: z.string().max(30).optional(), reason: z.string().max(60).optional(), months: z.number().int().optional(), until: date.optional(), unbilledUsageMinor: z.number().int().min(0).optional() }).parse(body), northActor(principal), channelOfPrincipal(principal)), { idempotent: true });
 north('POST', '/v1/services/:id/vas', 'vas:manage', ({ db, params, body, principal }) => core.manageVasNorth(db, params.id!, z.object({ action: z.enum(core.VAS_ACTIONS), offerId: z.string().max(80) }).parse(body), northActor(principal)), { idempotent: true });
 // a subscription is identified by the service it is on
 north('POST', '/v1/subscriptions/:id/change-plan', 'subscription:change', ({ db, params, body, principal }) => core.changePlanNorth(db, params.id!, z.object({ serviceId: z.string().max(60).optional(), targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']), addOns: z.array(z.string().max(80)).max(10).optional(), acceptContractTerms: z.boolean().optional() }).parse(body), northActor(principal)), { idempotent: true });
@@ -702,6 +702,21 @@ post('/settings/integration-hub/events/dispatch', 'settings:manage', ({ db }) =>
 get('/settings/integration-hub/deliveries', 'settings:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
 post('/settings/integration-hub/deliveries/:id/retry', 'settings:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));
 
+// ── Settings → Early termination: scenarios and the formulas behind the charge ──
+const etcRuleBody = z.object({
+  code: z.string().max(60).optional(), name: z.string().min(1).max(80), description: z.string().max(400).default(''), enabled: z.boolean().default(true), priority: z.number().int().default(100),
+  scenarios: z.array(z.string().max(30)).max(20).default([]), segments: z.array(z.string().max(60)).max(50).default([]), device: z.enum(['ANY', 'WITH_DEVICE', 'NO_DEVICE']).default('ANY'), vip: z.enum(['ANY', 'YES', 'NO']).default('ANY'),
+  minTerm: z.number().int().nullable().default(null), maxTerm: z.number().int().nullable().default(null), minElapsed: z.number().int().nullable().default(null), maxElapsed: z.number().int().nullable().default(null),
+  formula: z.string().min(1).max(500), minChargeMinor: z.number().int().default(0), maxChargeMinor: z.number().int().nullable().default(null), waiveLastMonths: z.number().int().default(0), deviceBalancePercent: z.number().int().default(100), applyVipMultiplier: z.boolean().default(true),
+});
+get('/settings/etc', 'settings:manage', async ({ db }) => ({ rules: await core.listEtcRules(db), scenarios: core.ETC_SCENARIOS, variables: core.ETC_VARIABLES, standard: core.STANDARD_ETC_RULES.map((r) => ({ code: r.code, name: r.name })) }));
+post('/settings/etc/rules', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveEtcRule(db, user.username, etcRuleBody.parse(body) as core.EtcRuleInput), { status: 201 }));
+patch('/settings/etc/rules/:id', 'settings:manage', ({ db, user, params, body }) => core.saveEtcRule(db, user.username, etcRuleBody.parse(body) as core.EtcRuleInput, params.id!));
+route('DELETE', '/settings/etc/rules/:id', 'settings:manage', ({ db, user, params }) => core.deleteEtcRule(db, user.username, params.id!));
+post('/settings/etc/standard', 'settings:manage', async ({ db, user }) => ({ ...(await core.seedStandardEtcRules(db, user.username)), rules: await core.listEtcRules(db) }));
+post('/settings/etc/check', 'settings:manage', ({ body }) => { const f = z.object({ formula: z.string().max(500) }).parse(body).formula; try { core.compileFormula(f); return { ok: true }; } catch (e) { return { ok: false, error: (e as Error).message }; } });
+post('/settings/etc/preview', 'settings:manage', ({ db, body }) => core.previewEtc(db, z.object({ scenario: z.enum(core.ETC_SCENARIOS.map((s) => s.id) as [core.EtcScenario, ...core.EtcScenario[]]), segment: z.string().max(60).optional(), vip: z.boolean().optional(), hasDevice: z.boolean().optional(), formula: z.string().max(500).optional(), ruleId: uuid.optional(),
+  figures: z.record(z.number()).default({}) }).parse(body) as Parameters<typeof core.previewEtc>[1]));
 // ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
 get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
 post('/accounts/:id/collections/run', ['billing:run'], async ({ db, user, params, body }) => {
@@ -874,7 +889,7 @@ const svcAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('resume') }),
   z.object({ action: z.literal('change-sim'), iccid: z.string() }), z.object({ action: z.literal('change-msisdn'), msisdn: z.string().optional() }),
   z.object({ action: z.literal('transfer'), toCustomerId: uuid, toAccountId: uuid.optional() }),
-  z.object({ action: z.literal('terminate'), reason: z.string().optional(), unbilledUsageMinor: z.number().int().min(0).optional(), refundDeposit: z.boolean().optional(), etcAdjust: etcAdjust.optional() }),
+  z.object({ action: z.literal('terminate'), reason: z.string().optional(), scenario: z.enum(core.ETC_SCENARIOS.map((x) => x.id) as [core.EtcScenario, ...core.EtcScenario[]]).optional(), unbilledUsageMinor: z.number().int().min(0).optional(), refundDeposit: z.boolean().optional(), etcAdjust: etcAdjust.optional() }),
   z.object({ action: z.literal('port-out'), recipientOperator: z.string(), portingCode: z.string().optional() }),
   z.object({ action: z.literal('complete-port-out'), reference: z.string().max(60).optional(), unbilledUsageMinor: z.number().int().min(0).optional() }), z.object({ action: z.literal('cancel-port-out') }),
 ]);
@@ -902,7 +917,7 @@ post('/services/:id/actions', null, async ({ db, user, params, body }) => {
     case 'transfer': return core.transferOwnership(db, id, a.toCustomerId, a.toAccountId, actor);
     case 'terminate': {
       if (a.etcAdjust) need(user, 'order:override'); // waiving or reducing a charge is an exception a supervisor approves
-      return life.terminateService(id, { reason: a.reason, unbilledUsageMinor: a.unbilledUsageMinor, refundDeposit: a.refundDeposit, etcAdjust: a.etcAdjust }, actor);
+      return life.terminateService(id, { reason: a.reason, scenario: a.scenario, unbilledUsageMinor: a.unbilledUsageMinor, refundDeposit: a.refundDeposit, etcAdjust: a.etcAdjust }, actor);
     }
     case 'port-out': return core.requestPortOut(db, id, a, actor);
     case 'complete-port-out': return core.completePortOut(db, id, actor, { reference: a.reference, unbilledUsageMinor: a.unbilledUsageMinor });
@@ -1157,12 +1172,12 @@ post('/billing/simulate/projection', sim, async ({ db, user, body }) => {
   return keep(db, user, 'PROJECTION', { ref: b.ref, months: b.months, from: b.from ?? null }, await core.projectAccount(db, b.ref, { months: b.months, from: b.from }), b);
 });
 post('/billing/simulate/termination', sim, async ({ db, user, body }) => {
-  const b = z.object({ ref: z.string().min(1).max(60), date: date.optional(), unbilledUsageMinor: z.number().int().min(0).max(1e12).optional(), refundDeposit: z.boolean().optional(),
+  const b = z.object({ ref: z.string().min(1).max(60), scenario: z.string().max(30).optional(), date: date.optional(), unbilledUsageMinor: z.number().int().min(0).max(1e12).optional(), refundDeposit: z.boolean().optional(),
     etcAdjust: z.object({ waive: z.boolean().optional(), percent: z.number().min(0).max(100).optional(), reason: z.string().max(300) }).optional(), ...saveFields }).parse(body);
   // Waiving or reducing the charge in a quote is the same decision as doing it, so it needs the same right.
   if (b.etcAdjust && !user.permissions.has('service:terminate')) throw forbidden('Only someone who may end a service can quote a waived or reduced charge.');
   return keep(db, user, 'TERMINATION', { ref: b.ref, date: b.date ?? null, unbilledUsageMinor: b.unbilledUsageMinor ?? 0, refundDeposit: !!b.refundDeposit, etcAdjust: b.etcAdjust ?? null },
-    await core.previewTermination(db, b.ref, { date: b.date, unbilledUsageMinor: b.unbilledUsageMinor, refundDeposit: b.refundDeposit, etcAdjust: b.etcAdjust }, user.username), b);
+    await core.previewTermination(db, b.ref, { scenario: b.scenario, date: b.date, unbilledUsageMinor: b.unbilledUsageMinor, refundDeposit: b.refundDeposit, etcAdjust: b.etcAdjust }, user.username), b);
 });
 post('/billing/simulate/plan-change', sim, async ({ db, user, body }) => {
   const b = z.object({ ref: z.string().min(1).max(60), newOfferId: z.string().min(1).max(80), effectiveDate: date.optional(), ...saveFields }).parse(body);

@@ -184,4 +184,9 @@ export interface EtcQuote {
   clawbackMinor?: number;
   /** A VIP number multiplies the charge: 15000 = 1.5x. */
   vipMultiplierBps?: number;
+  /** Set when a rule from Settings → Early termination worked the charge out. */
+  rule?: { id: string; code: string; name: string; formula: string };
+  scenario?: string;
+  /** Unpaid device instalments collected on top of the charge, by the rule's share. */
+  deviceBalanceMinor?: number;
 }

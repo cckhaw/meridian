@@ -6,7 +6,7 @@ import { addDays, addMonths, dayOf, diffDays, fmt, today, toDate, type DateStr }
 import type { Db, Queryable, Row } from './db.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { getLifecycleSettings } from './lifecycle-config.js';
-import { closingStatement, etcQuoteForService, type TerminationOptions } from './lifecycle.js';
+import { closingStatement, etcQuoteForService, scenarioOfTermination, type TerminationOptions } from './lifecycle.js';
 import { decodeCursor, encodeCursor, pageSize, type Page } from './paging.js';
 
 /**
@@ -110,7 +110,7 @@ export async function projectAccount(q: Queryable, ref: string, o: { months: num
 }
 
 // ───────────────────────── termination ─────────────────────────
-export interface TerminationPreviewInput { date?: string; unbilledUsageMinor?: number; etcAdjust?: TerminationOptions['etcAdjust']; refundDeposit?: boolean }
+export interface TerminationPreviewInput { scenario?: string; date?: string; unbilledUsageMinor?: number; etcAdjust?: TerminationOptions['etcAdjust']; refundDeposit?: boolean }
 
 /**
  * What a customer would owe if this service ended: the same calculation the termination itself uses (`closingStatement`), without ending anything.
@@ -123,10 +123,10 @@ export async function previewTermination(q: Queryable, ref: string, i: Terminati
   if (Number.isNaN(when.getTime())) throw invalid('The date is YYYY-MM-DD.');
   if (fmt(when) < today()) throw invalid('A termination cannot be dated in the past.');
   const cfg = await getLifecycleSettings(q);
-  const cs = await closingStatement(q, s, { unbilledUsageMinor: i.unbilledUsageMinor, etcAdjust: i.etcAdjust }, cfg, actor, when);
+  const cs = await closingStatement(q, s, { unbilledUsageMinor: i.unbilledUsageMinor, etcAdjust: i.etcAdjust, scenario: i.scenario as never }, cfg, actor, when);
   const acct = (await q.query('SELECT * FROM accounts WHERE id=$1', [s.accountId])).rows[0]!;
   const p = await priceDraft(q, acct, cs.lines);
-  const quote = s.contractTermMonths > 0 && s.contractStart ? await etcQuoteForService(q, s, when) : null;
+  const quote = s.contractTermMonths > 0 && s.contractStart ? await etcQuoteForService(q, s, when, { scenario: scenarioOfTermination({ scenario: i.scenario }) }) : null;
   const charges = (await q.query(`SELECT description, amount_minor, remaining_cycles FROM service_charges WHERE service_id=$1 AND kind='INSTALLMENT' AND remaining_cycles > 0`, [s.id])).rows;
   const instalmentBalance = charges.reduce((t, c) => t + Number(c.amountMinor) * c.remainingCycles, 0);
   const total = p.net + p.tax;
@@ -198,7 +198,7 @@ export async function simulatePlanChange(q: Queryable, ref: string, i: PlanChang
   const notes: string[] = [];
   const newTerm = Number(newO.r.data?.contract?.termMonths ?? 0);
   if (s.contractTermMonths > 0 && s.contractStart) {
-    const quote = await etcQuoteForService(q, s, toDate(eff));
+    const quote = await etcQuoteForService(q, s, toDate(eff), { scenario: 'PLAN_DOWNGRADE', newMonthlyFee: Math.round(newMonthly) });
     if (quote.chargeMinor > 0) notes.push(`The service is on a ${s.contractTermMonths}-month contract with ${quote.monthsRemaining} months to run: changing plan during it may be treated as a change of contract. Ending it on ${eff} would cost ${quote.chargeMinor} minor units.`);
   }
   if (newTerm > 0) notes.push(`${newO.r.name} comes with a ${newTerm}-month contract, which would start on ${eff}.`);

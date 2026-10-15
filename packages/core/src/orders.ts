@@ -539,7 +539,7 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
     if (!awaitingPort) await enqueueOcs(q, 'PROVISION', id); // into the charging system, with the SIM and number it was given above
     if (device) {
       await q.query('UPDATE services SET deal=$2 WHERE id=$1', [id, JSON.stringify({ deviceLineId: device.id, deviceOfferId: device.offerId, device: device.description, termMonths: device.deal.termMonths,
-        subsidyMinor: device.deal.subsidyMinor, waiveInLastMonths: device.deal.waiveInLastMonths ?? 1, currency: device.deal.currency })]);
+        subsidyMinor: device.deal.subsidyMinor, retailMinor: device.deal.retailMinor ?? 0, waiveInLastMonths: device.deal.waiveInLastMonths ?? 1, currency: device.deal.currency })]);
       if (device.payMode === 'INSTALLMENT') { // the device is paid for on the plan's bill
         const financed = device.netMinor + device.taxMinor - device.downPaymentMinor, n = device.installmentMonths as number, each = Math.floor(financed / n), rem = financed - each * n;
         if (financed > 0) await q.query(`INSERT INTO service_charges (shard_id, service_id, account_id, kind, description, amount_minor, remaining_cycles) VALUES ($1,$2,$3,'INSTALLMENT',$4,$5,$6)`,

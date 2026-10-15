@@ -168,7 +168,7 @@ export async function applyStep(db: Db, accountId: string, runId: number, action
       return db.tx(async (q) => {
         // What termination will cost: the overdue balance plus any early-termination charge on the contracts still running.
         let etc = 0;
-        for (const s of (await q.query(`SELECT * FROM services WHERE account_id=$1 AND status <> 'TERMINATED' AND contract_term_months > 0 AND contract_start IS NOT NULL`, [accountId])).rows) etc += (await etcQuoteForService(q, s, new Date(asOf))).chargeMinor;
+        for (const s of (await q.query(`SELECT * FROM services WHERE account_id=$1 AND status <> 'TERMINATED' AND contract_term_months > 0 AND contract_start IS NOT NULL`, [accountId])).rows) etc += (await etcQuoteForService(q, s, new Date(asOf), { scenario: 'NON_PAYMENT' })).chargeMinor;
         const terminateOn = cfg.dunning.find((s) => s.action === 'TERMINATE');
         await q.query('UPDATE accounts SET dunning_stage = GREATEST(dunning_stage, 4) WHERE id=$1', [accountId]);
         await queueOutbox(q, { kind: 'NOTIFY', instruction: 'FINAL_NOTICE', accountId, payload: { invoices, balanceMinor: od.balanceMinor, estimatedEtcMinor: etc, terminationInDays: terminateOn ? Math.max(0, terminateOn.day - diffDays(asOf, String(od.invoices[0]!.dueDate).slice(0, 10))) : null } });

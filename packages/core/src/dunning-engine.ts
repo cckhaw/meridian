@@ -131,7 +131,7 @@ async function notice(db: Db, ctx: DunningContext, run: Row, s: DunningRuleStep,
   let etc: string | undefined, terminationDate: string | undefined;
   if (s.params.final) {
     let total = 0;
-    for (const sv of (await db.query(`SELECT * FROM services WHERE account_id=$1 AND status <> 'TERMINATED' AND contract_term_months > 0 AND contract_start IS NOT NULL`, [ctx.accountId])).rows) total += (await etcQuoteForService(db, sv, new Date(asOf))).chargeMinor;
+    for (const sv of (await db.query(`SELECT * FROM services WHERE account_id=$1 AND status <> 'TERMINATED' AND contract_term_months > 0 AND contract_start IS NOT NULL`, [ctx.accountId])).rows) total += (await etcQuoteForService(db, sv, new Date(asOf), { scenario: 'NON_PAYMENT' })).chargeMinor;
     if (total > 0) etc = money(total, ctx.currency);
     const t = ladder.steps.find((x) => x.action === 'TERMINATE' && x.trigger.kind === 'DAYS_PAST_DUE');
     if (t && od.anchor && t.trigger.kind === 'DAYS_PAST_DUE') terminationDate = addDays(od.anchor, t.trigger.days);

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { EtcQuote } from '@meridian/types';
 import { audit } from './audit.js';
 import { etcQuoteForOffer } from './catalog.js';
+import { etcByRules, etcEngineActive, figuresForService, isScenario, type EtcScenario } from './etc-rules.js';
 import { quoteEtc } from './etc.js';
 import { issueInvoice, invoiceBalance, settle, type DraftLine } from './billing.js';
 import { postJournal } from './ledger.js';
@@ -192,7 +193,18 @@ export async function transferOwnership(db: Db, id: string, toCustomerId: string
 }
 
 /** The early-termination charge for a running service. A device bought on a contract with the plan carries its own terms; otherwise the plan's own contract applies. */
-export async function etcQuoteForService(q: Queryable, s: Row, when: Date): Promise<EtcQuote> {
+export async function etcQuoteForService(q: Queryable, s: Row, when: Date, o: { scenario?: EtcScenario; newMonthlyFee?: number } = {}): Promise<EtcQuote> {
+  // Settings → Early termination: when rules are on, the rule that fits the scenario works the charge out.
+  if (await etcEngineActive(q)) {
+    const byRule = await etcByRules(q, s, when, o.scenario ?? 'CUSTOMER_REQUEST', { newMonthlyFee: o.newMonthlyFee });
+    if (byRule) return byRule;
+  }
+  const quote = await etcQuoteByContract(q, s, when);
+  // Rules are on and none fits this case: the offer's own terms decide the charge, and the unpaid device instalments are collected.
+  if (await etcEngineActive(q)) { const { figures } = await figuresForService(q, s, when); if (figures.deviceBalance > 0) return { ...quote, deviceBalanceMinor: figures.deviceBalance, scenario: o.scenario ?? 'CUSTOMER_REQUEST' }; }
+  return quote;
+}
+async function etcQuoteByContract(q: Queryable, s: Row, when: Date): Promise<EtcQuote> {
   const d = s.deal as { termMonths: number; subsidyMinor: number; waiveInLastMonths?: number; currency: string } | null;
   // A VIP number comes with a stiffer charge for leaving early: the multiplier set for its tier when it was sold.
   const vip = (quote: EtcQuote): EtcQuote => (s.vipEtcBps && s.vipEtcBps !== 10000 && quote.chargeMinor > 0 ? { ...quote, chargeMinor: Math.round((quote.chargeMinor * s.vipEtcBps) / 10000), vipMultiplierBps: s.vipEtcBps } : quote);
@@ -202,8 +214,18 @@ export async function etcQuoteForService(q: Queryable, s: Row, when: Date): Prom
     contract: { termMonths: d.termMonths as 12 | 24 | 36, etc: { method: 'SUBSIDY_AMORTISED', waiveInLastMonths: d.waiveInLastMonths ?? 1 }, subsidy: { subsidyAmount: money, deviceRetailPrice: money } } }));
 }
 
+/** Why a contract is ending, for choosing the early termination rule. */
+export function scenarioOfTermination(o: { scenario?: string; reason?: string; ported?: boolean }): EtcScenario {
+  if (o.scenario && isScenario(o.scenario)) return o.scenario;
+  if (o.ported) return 'PORT_OUT';
+  if (/DUNNING|NON_PAYMENT|NONPAYMENT/i.test(o.reason ?? '')) return 'NON_PAYMENT';
+  return 'CUSTOMER_REQUEST';
+}
+
 export interface TerminationOptions {
   reason?: string;
+  /** Why the contract is ending, for the early termination rules (Settings → Early termination). Worked out from the reason when not given. */
+  scenario?: EtcScenario;
   date?: Date;
   /** Retention and VIP cases: waive the early-termination charge, or charge only a percentage of it. Needs a reason; audited. */
   etcAdjust?: { waive?: boolean; percent?: number; reason: string };
@@ -300,10 +322,11 @@ export async function closingStatement(q: Queryable, s: Row, o: TerminationOptio
   const id = s.id as string;
   const dayOfEnd = fmt(when);
   // Early termination charge
+  let deviceBalance = 0, ruleName: string | null = null;
   let quoted = 0, waived = false, recurringPart: number | null = null, clawbackPart: number | null = null, adjustedBy: string | null = null;
   if (s.contractTermMonths > 0 && s.contractStart) {
-    const quote = await etcQuoteForService(q, s, when);
-    quoted = quote.chargeMinor; waived = quote.waived; recurringPart = quote.recurringMinor ?? null; clawbackPart = quote.clawbackMinor ?? null;
+    const quote = await etcQuoteForService(q, s, when, { scenario: scenarioOfTermination(o) });
+    quoted = quote.chargeMinor; deviceBalance = quote.deviceBalanceMinor ?? 0; ruleName = quote.rule?.name ?? null; waived = quote.waived; recurringPart = quote.recurringMinor ?? null; clawbackPart = quote.clawbackMinor ?? null;
   }
   let etc = quoted;
   if (etc > 0) {
@@ -341,8 +364,9 @@ export async function closingStatement(q: Queryable, s: Row, o: TerminationOptio
   const usage = o.unbilledUsageMinor ?? 0;
   if (usage < 0 || !Number.isInteger(usage)) throw invalid('unbilledUsageMinor is a whole amount, zero or more');
   if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', stream: 'USAGE', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
-  if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', stream: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
-  return { quoted, etc, waived, recurringPart, clawbackPart, adjustedBy, lines, unbilledRecurring, usage };
+  if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', stream: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract${ruleName ? `; ${ruleName}` : ''})`, amountMinor: etc });
+  if (deviceBalance > 0) lines.push({ serviceId: id, kind: 'INSTALLMENT', stream: 'DEVICE_INSTALMENT', revenueAccount: GL.GOODS_REVENUE, taxInclusive: true, description: `Outstanding device instalments ${s.identifier}`, amountMinor: deviceBalance });
+  return { quoted, etc, waived, recurringPart, clawbackPart, adjustedBy, lines, unbilledRecurring, usage, deviceBalance, ruleName };
 }
 
 // ───────── MNP (mobile number portability) ─────────
