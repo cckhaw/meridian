@@ -421,6 +421,35 @@ get('/settings/store', 'settings:manage', async ({ db }) => ({
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
 post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body)));
+// ───────────────────────── data migration: exports, templates, jobs ─────────────────────────
+const migrationAny: Permission[] = ['migration:export', 'migration:import'];
+get('/migration/meta', migrationAny, async ({ db, user }) => ({
+  domains: core.DOMAINS, phases: core.PHASES, entities: await core.publishTemplates(db), canUnmask: user.permissions.has('settings:manage'), reasonMin: core.REASON_MIN,
+  canExport: user.permissions.has('migration:export'), canImport: user.permissions.has('migration:import'),
+}));
+get('/migration/templates/:entity', migrationAny, async ({ db, params, query }) => {
+  const def = core.entityById(params.entity!);
+  if (!def) throw new DomainError('NOT_FOUND', 'unknown data set');
+  const json = query.get('format') === 'json';
+  return json ? new Response(core.templateJson(def), { headers: { 'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="meridian-${def.id}-template.json"`, 'cache-control': 'no-store' } })
+    : csv(await core.templateCsv(db, def), `meridian-${def.id}-template.csv`);
+});
+post('/migration/exports', 'migration:export', async ({ db, user, body }) => {
+  const b = z.object({
+    entities: z.array(z.string().max(40)).max(40).optional(), domains: z.array(z.string().max(20)).max(10).optional(), format: z.enum(['CSV', 'JSON']), unmasked: z.boolean().optional(), reason: z.string().max(300).optional(),
+    maxRowsPerEntity: z.number().int().min(1).max(100_000_000).optional(), resume: z.record(z.string().max(300)).optional(), nest: z.boolean().optional(),
+  }).parse(body);
+  const job = await core.createExportJob(db, user.username, b, { canUnmask: user.permissions.has('settings:manage') });
+  return Response.json({ id: job.id, downloadUrl: `/api/migration/exports/${job.id}/download`, masked: job.masked }, { status: 201 });
+});
+/** The archive, built while it is sent. Once only: a second request is refused. */
+get('/migration/exports/:id/download', 'migration:export', async ({ db, user, params }) => {
+  const { stream, fileName } = await core.startExport(db, params.id!, user.username);
+  return new Response(stream, { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${fileName}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
+});
+get('/migration/jobs', migrationAny, ({ db, query }) => core.listMigrationJobs(db, { kind: str(query, 'kind'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/migration/jobs/:id', migrationAny, ({ db, params }) => core.getMigrationJob(db, params.id!));
+
 // ───────────────────────── charging system (OCS): connector, queue, retries ─────────────────────────
 get('/integrations/ocs', 'settings:manage', ({ db }) => core.ocsOverview(db));
 post('/integrations/ocs', 'settings:manage', async ({ db, user, body }) => {

@@ -83,6 +83,8 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'kyc:attest': ['Identity checks', 'Attest ID in person', 'Confirm a customer’s identity documents at the counter'],
   'kyc:review': ['Identity checks', 'Review ID checks', 'Approve or reject online ID verification'],
   'audit:read': ['Administration', 'Read the audit log', 'Who changed what'],
+  'migration:export': ['Administration', 'Export data', 'Download backups and migration extracts, with sensitive fields masked'],
+  'migration:import': ['Administration', 'Import data', 'Load customers, services and other data from files'],
   'user:manage': ['Administration', 'Manage users and roles', 'Create users and change what roles can do'],
   'settings:manage': ['Administration', 'Settings (super user only)', 'Regional, branding, gateways, API keys'],
 };

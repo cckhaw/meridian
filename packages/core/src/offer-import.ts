@@ -272,3 +272,18 @@ export async function offersTemplate(q: Queryable, o: { withOffers?: boolean } =
   }
   return [...head, ...rows].join('\r\n') + '\r\n';
 }
+
+/** The columns of an offers file, in order, for exports and for the template registry. */
+export const OFFER_FILE_COLUMNS: string[] = ORDER.map(([h]) => h);
+/** One keyset page of offers in the same layout the offers import reads (so an export can be edited and loaded back). */
+export async function offersExportPage(q: Queryable, after: string | null, limit: number): Promise<{ rows: Array<Record<string, string>>; next: string | null }> {
+  const regional = await getRegional(q);
+  const ids = (await q.query(`SELECT id FROM catalog_nodes WHERE level='OFFER' AND ($1::text IS NULL OR id > $1) ORDER BY id LIMIT $2`, [after, limit + 1])).rows.map((r) => r.id as string);
+  const more = ids.length > limit;
+  const rows: Array<Record<string, string>> = [];
+  for (const id of ids.slice(0, limit)) {
+    const r = offerRow(await getOffer(q, id), regional);
+    rows.push(Object.fromEntries(ORDER.map(([h, c]) => [h, r[c]])));
+  }
+  return { rows, next: more ? ids[limit - 1]! : null };
+}

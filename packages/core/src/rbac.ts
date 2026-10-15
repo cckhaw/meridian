@@ -38,6 +38,8 @@ const CORE_PERMISSIONS = [
   'dealer:read', 'dealer:manage', // dealers and their agents are master data kept in the CRM
   'store:manage', // retail stores are master data kept in the CRM; staff are bound to one when created
   'audit:read',
+  'migration:export', // download backups and migration extracts of the platform's data (sensitive fields masked)
+  'migration:import', // load data from files: templates, a check that changes nothing, then the load
   'user:manage',
   'store:assist', 'kyc:attest', 'kyc:review',
   'settings:manage', // super user only: regional format, branding, payment gateways, store-front API keys
@@ -82,7 +84,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'admin', label: 'Administrator', scope: 'staff', home: '/admin/users',
     summary: 'Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits.',
     permissions: ['dashboard:read', 'numbering:read', 'user:manage', 'audit:read', 'catalog:read', 'catalog:write', 'customer:search', 'customer:read', 'service:read', 'order:read',
-      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage'],
+      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage', 'migration:export', 'migration:import'],
   },
   'product-configurator': {
     id: 'product-configurator', label: 'Product Configurator', scope: 'staff', home: '/catalog',
@@ -197,6 +199,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
   { id: 'settings', label: 'Settings', href: '/admin/settings', icon: 'gear', anyOf: ['settings:manage'] },
   { id: 'integrations', label: 'Integration', href: '/admin/integrations', icon: 'plug', anyOf: ['settings:manage'] },
+  { id: 'migration', label: 'Data migration', href: '/admin/migration', icon: 'migration', anyOf: ['migration:export', 'migration:import'] },
   { id: 'audit', label: 'Audit log', href: '/admin/audit', icon: 'list', anyOf: ['audit:read'] },
 ];
 

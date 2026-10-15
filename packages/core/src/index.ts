@@ -97,3 +97,4 @@ export * from './ocs.js';
 export { OCS_COMMAND_LABEL, OCS_VENDORS, GENERIC_REST_EXAMPLE, TEMPLATE_VARS } from './ocs-vendors/index.js';
 export type { OcsConnector, OcsRequest, OcsResult, OcsCommandName } from './ocs-vendors/index.js';
 export * from './bulk-import.js';
+export * from './migration/index.js';

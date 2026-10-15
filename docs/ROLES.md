@@ -51,6 +51,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Settings |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Integration |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| Data migration | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Audit log | ✓ |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |
 
 ## Permission matrix
@@ -101,6 +102,8 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `dealer:manage` |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |
 | `store:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `audit:read` | ✓ |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |
+| `migration:export` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `migration:import` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `user:manage` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `store:assist` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
 | `kyc:attest` |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
