@@ -101,21 +101,21 @@ function SegmentForm({ segment, used, onClose, onDone }: { segment: any; used: b
 
 /** Settings → Bill cycles: which cycles a customer's account can be given, and the one a new account starts with. */
 export function BillCycleSettings() {
-  const { data, error, reload } = useApi<{ days: number[]; daily: boolean; defaultCycle: number | 'daily' }>('/settings/bill-cycles');
+  const { data, error, reload } = useApi<{ days: number[]; defaultCycle: number; defaultMode: 'FIXED' | 'NEXT' | 'PREVIOUS' }>('/settings/bill-cycles');
   const [days, setDays] = useState<number[] | null>(null);
-  const [daily, setDaily] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<string | null>(null);
   const [dflt, setDflt] = useState<string | null>(null);
   const save = useAction(reload);
   if (error) return <Alert>{error}</Alert>;
   if (!data) return <Spinner />;
-  const on = days ?? data.days, isDaily = daily ?? data.daily, def = dflt ?? String(data.defaultCycle);
+  const on = days ?? data.days, m = (mode ?? data.defaultMode) as 'FIXED' | 'NEXT' | 'PREVIOUS', def = dflt ?? String(data.defaultCycle);
   const toggle = (d: number) => setDays(on.includes(d) ? on.filter((x) => x !== d) : [...on, d].sort((a, b) => a - b));
-  const dirty = days !== null || daily !== null || dflt !== null;
-  const options = [...on.map(String), ...(isDaily ? ['daily'] : [])];
+  const dirty = days !== null || mode !== null || dflt !== null;
+  const ok = on.length > 0 && (m !== 'FIXED' || on.includes(Number(def)));
   return (
     <Card>
       <SectionTitle>Bill cycles</SectionTitle>
-      <p className="-mt-2 mb-4 text-subhead text-label2">A bill cycle is the day of the month an account is billed (or every day). The cycles switched on here are the ones offered when a customer or account is created. Accounts that already have a cycle keep it.</p>
+      <p className="-mt-2 mb-4 text-subhead text-label2">A bill cycle is the day of the month an account is billed. Switch on the days you use: those are the cycles offered when a customer or account is created. Accounts that already have a cycle keep it.</p>
       <fieldset>
         <legend className="mb-2 text-subhead font-medium">Monthly, on day</legend>
         <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
@@ -126,11 +126,19 @@ export function BillCycleSettings() {
           ))}
         </div>
       </fieldset>
-      <label className="mt-4 flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={isDaily} onChange={(e) => setDaily(e.target.checked)} /><span>Also offer a <strong>daily</strong> cycle</span></label>
-      <div className="mt-4 max-w-xs"><Field label="Default for a new account" hint="Used when nobody chooses one."><Select value={options.includes(def) ? def : ''} onChange={(e) => setDflt(e.target.value)}>
-        <option value="" disabled>Choose…</option>{on.map((d) => <option key={d} value={d}>Day {d}</option>)}{isDaily && <option value="daily">Daily</option>}</Select></Field></div>
+      <div className="mt-4 max-w-md space-y-3">
+        <Field label="Default for a new billing account" hint="Used when nobody chooses a cycle.">
+          <Select value={m} onChange={(e) => setMode(e.target.value)}>
+            <option value="FIXED">A chosen day</option>
+            <option value="NEXT">Next bill cycle date (after the account is created)</option>
+            <option value="PREVIOUS">Previous bill cycle date (before the account is created)</option>
+          </Select>
+        </Field>
+        {m === 'FIXED' && <Field label="Day"><Select value={on.includes(Number(def)) ? def : ''} onChange={(e) => setDflt(e.target.value)}><option value="" disabled>Choose…</option>{on.map((d) => <option key={d} value={d}>Day {d}</option>)}</Select></Field>}
+        {m !== 'FIXED' && <p className="text-footnote text-label2">Looks at the day of the month the billing account is created and picks, from the days switched on above, the {m === 'NEXT' ? 'next one after it' : 'previous one before it'}, going round the month when there is none. For example, with days 1, 15 and 25 on, an account created on the 10th gets day {m === 'NEXT' ? '15' : '1'}.</p>}
+      </div>
       {save.error && <div className="mt-3"><Alert>{save.error}</Alert></div>}{save.ok && !dirty && <div className="mt-3"><Alert tone="success">{save.ok}</Alert></div>}
-      <div className="mt-4"><Button disabled={!dirty || save.busy || !options.length || !options.includes(def)} onClick={async () => { const r = await save.run(() => post('/settings/bill-cycles', { days: on, daily: isDaily, defaultCycle: def === 'daily' ? 'daily' : Number(def) }), 'Saved'); if (r) { setDays(null); setDaily(null); setDflt(null); } }}>{save.busy ? 'Saving…' : 'Save bill cycles'}</Button></div>
+      <div className="mt-4"><Button disabled={!dirty || save.busy || !ok} onClick={async () => { const r = await save.run(() => post('/settings/bill-cycles', { days: on, defaultMode: m, defaultCycle: on.includes(Number(def)) ? Number(def) : on[0] }), 'Saved'); if (r) { setDays(null); setMode(null); setDflt(null); } }}>{save.busy ? 'Saving…' : 'Save bill cycles'}</Button></div>
     </Card>
   );
 }

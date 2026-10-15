@@ -6,6 +6,7 @@ import { GL } from '../config.js';
 import type { Db, Queryable } from '../db.js';
 import { hashIdDocument, maskIdDocument } from '../customers.js';
 import { postJournal } from '../ledger.js';
+import { defaultCycleDay, getBillCycles } from '../customer-config.js';
 import { getMarketSettings, marketDuplicates, marketFor } from '../settings.js';
 import { importOffers } from '../offer-import.js';
 import { getMatcher } from '../nrm.js';
@@ -187,8 +188,7 @@ const accounts: Importer = {
     const uuidKeys = refs.filter((r) => UUID.test(r)).map((r) => r.toLowerCase());
     const taken = new Set((uuidKeys.length ? (await q.query('SELECT id FROM accounts WHERE id = ANY($1::uuid[])', [uuidKeys])).rows : []).map((r) => r.id as string));
     const payerMap = new Map<string, string>(); // payer key -> id
-    const defaultDay = (await q.query(`SELECT value FROM settings WHERE key='billCycles'`)).rows[0]?.value?.defaultCycle;
-    const dayOfDefault = typeof defaultDay === 'string' ? Number(/(\d{1,2})/.exec(defaultDay)?.[1] ?? 1) : 1;
+    const dayOfDefault = defaultCycleDay(await getBillCycles(q));
     const batch = new Map<string, string>();
     const ins: Array<Record<string, unknown>> = [];
     for (const [i, row] of rows.entries()) {

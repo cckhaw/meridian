@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { checkCustomerDetails, DEFAULT_CUSTOMER_FIELDS, getBillCycles, resolveBillCycle, setBillCycles } from './customer-config.js';
+import { checkCustomerDetails, DEFAULT_CUSTOMER_FIELDS, defaultCycleDay, getBillCycles, resolveBillCycle, setBillCycles } from './customer-config.js';
 import { createAccount, createCustomer, getCustomer, updateCustomer } from './customers.js';
 import type { Db } from './db.js';
 import { getCustomerSettings, setCustomerSettings } from './segments.js';
@@ -46,15 +46,14 @@ describe('customer details are stored', () => {
 });
 
 describe('bill cycles', () => {
-  it('offer every day and daily at first, and the operator chooses which to keep and which is the default', async () => {
+  it('offer every day at first (never a daily cycle), and the operator chooses which to keep and which is the default', async () => {
     const d = await getBillCycles(db);
-    expect(d.days).toHaveLength(28); expect(d.daily).toBe(true); expect(d.defaultCycle).toBe(1);
+    expect(d.days).toHaveLength(28); expect(d.daily).toBe(false); expect(d.defaultCycle).toBe(1); expect(d.defaultMode).toBe('FIXED');
     await expect(setBillCycles(db, 'root', { days: [1, 29], daily: true, defaultCycle: 1 })).rejects.toThrow(/1 to 28/);
     await expect(setBillCycles(db, 'root', { days: [], daily: false, defaultCycle: 1 })).rejects.toThrow(/at least one/);
-    await expect(setBillCycles(db, 'root', { days: [1, 15], daily: false, defaultCycle: 'daily' })).rejects.toThrow(/default/);
     await expect(setBillCycles(db, 'root', { days: [1, 15], daily: false, defaultCycle: 7 })).rejects.toThrow(/default/);
     const s = await setBillCycles(db, 'root', { days: [25, 1, 15], daily: false, defaultCycle: 25 });
-    expect(s).toEqual({ days: [1, 15, 25], daily: false, defaultCycle: 25 });
+    expect(s).toEqual({ days: [1, 15, 25], daily: false, defaultCycle: 25, defaultMode: 'FIXED' });
     expect(await resolveBillCycle(db, undefined)).toBe(25);
     expect(await resolveBillCycle(db, 15)).toBe(15);
     await expect(resolveBillCycle(db, 7)).rejects.toThrow(/not offered/);
@@ -66,6 +65,25 @@ describe('bill cycles', () => {
     expect((await createAccount(db, customer.id, {})).billCycleDay).toBe(25);
     expect((await createAccount(db, customer.id, { billCycleDay: 15 })).billCycleDay).toBe(15);
     expect(await getCustomer(db, customer.id)).toBeTruthy();
-    await setBillCycles(db, 'root', { days: Array.from({ length: 28 }, (_, i) => i + 1), daily: true, defaultCycle: 1 });
+    await setBillCycles(db, 'root', { days: Array.from({ length: 28 }, (_, i) => i + 1), defaultCycle: 1 });
+  });
+
+  it('the default can follow the day the billing account is created: the next or the previous cycle date, going round the month', () => {
+    const s = { days: [1, 15, 25], daily: false, defaultCycle: 1 as number | 'daily' };
+    const day = (mode: 'NEXT' | 'PREVIOUS', d: string) => defaultCycleDay({ ...s, defaultMode: mode }, d);
+    expect([day('NEXT', '2026-10-10'), day('NEXT', '2026-10-15'), day('NEXT', '2026-10-27'), day('NEXT', '2026-10-31')]).toEqual([15, 25, 1, 1]);
+    expect([day('PREVIOUS', '2026-10-10'), day('PREVIOUS', '2026-10-15'), day('PREVIOUS', '2026-10-01'), day('PREVIOUS', '2026-10-31')]).toEqual([1, 1, 25, 25]);
+    expect(defaultCycleDay({ ...s, defaultMode: 'FIXED', defaultCycle: 15 }, '2026-10-10')).toBe(15);
+  });
+
+  it('saves the mode, needs no fixed day for it, and a new account follows it', async () => {
+    await expect(setBillCycles(db, 'root', { days: [1, 15], defaultCycle: 7, defaultMode: 'FIXED' })).rejects.toThrow(/default/);
+    const saved = await setBillCycles(db, 'root', { days: [1, 15, 25], defaultCycle: 7, defaultMode: 'NEXT' });
+    expect(saved).toMatchObject({ defaultMode: 'NEXT', defaultCycle: 1 });
+    const expected = defaultCycleDay(saved);
+    expect(await resolveBillCycle(db, undefined)).toBe(expected);
+    const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'Next Cycle', idDocument: 'S9012348A', account: false });
+    expect((await createAccount(db, customer.id, {})).billCycleDay).toBe(expected);
+    await setBillCycles(db, 'root', { days: Array.from({ length: 28 }, (_, i) => i + 1), defaultCycle: 1 });
   });
 });

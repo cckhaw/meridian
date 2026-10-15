@@ -5,7 +5,7 @@ import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, tsPage, type Page } from './paging.js';
 import { customerIdsMatching, parseQuery } from './search.js';
-import { getBillCycles, cycleToDay, type CustomerDetails } from './customer-config.js';
+import { getBillCycles, defaultCycleDay, type CustomerDetails } from './customer-config.js';
 import { assertSegmentUsable } from './segments.js';
 import { shardFor } from './shard.js';
 
@@ -65,7 +65,7 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
 export async function createAccount(q: Queryable, customerId: string, o: { name?: string; billCycleDay?: number | null; payerAccountId?: string }): Promise<Account> {
   const c = (await q.query('SELECT shard_id, market_code FROM customers WHERE id=$1', [customerId])).rows[0];
   if (!c) throw notFound('customer', customerId);
-  const day = o.billCycleDay === undefined ? cycleToDay((await getBillCycles(q)).defaultCycle) : o.billCycleDay; // the operator's default cycle unless one was chosen
+  const day = o.billCycleDay === undefined ? defaultCycleDay(await getBillCycles(q)) : o.billCycleDay; // the operator's default cycle unless one was chosen
   if (day !== null && (!Number.isInteger(day) || day < 1 || day > 28)) throw invalid('billCycleDay must be 1-28, or null for a daily cycle');
   const id = randomUUID();
   await q.query(
