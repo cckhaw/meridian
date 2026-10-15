@@ -63,7 +63,7 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
   const toggle = (id: string) => setPerms(perms.includes(id) ? perms.filter((p) => p !== id) : [...perms, id]);
   const setGroup = (items: PermInfo[], on: boolean) => setPerms(on ? [...new Set([...perms, ...items.filter((i) => !i.superuserOnly).map((i) => i.id)])] : perms.filter((p) => !items.some((i) => i.id === p)));
   return (
-    <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
       <nav aria-label="Roles" className="space-y-1">
         {top}
         {roles.map((r) => (

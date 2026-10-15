@@ -1,14 +1,16 @@
-import { FULFILMENT_MECHANICS, OFFER_TEMPLATES, TEMPLATES, type FulfilmentMechanic, type OfferTemplate } from '@meridian/types';
+import { FULFILMENT_MECHANICS, OFFER_TEMPLATES, ORDER_STEPS, TEMPLATES, switchesOf, switchProblems, type BehaviourSwitches, type FulfilmentMechanic, type OfferTemplate, type OrderStep } from '@meridian/types';
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
+import { getServiceKind, isBuiltinKind } from './service-kinds.js';
 
 /**
  * Catalog configuration: the offer types and fulfilment options an operator maintains in Settings → Catalog.
  * What a type or option does comes from its behaviour template / mechanic (fixed in code), so renaming or adding one can never leave the
  * platform not knowing how to sell, fulfil or bill it. The template and mechanic of an existing row never change.
  */
-export interface OfferType { id: string; name: string; description: string | null; template: OfferTemplate; status: 'ACTIVE' | 'INACTIVE'; sortOrder: number; isBuiltin: boolean }
+/** `template` is the preset a type started from; `behaviour` is what it does now (null: exactly the preset). `effective` is always the switches in force. */
+export interface OfferType { id: string; name: string; description: string | null; template: OfferTemplate; behaviour: BehaviourSwitches | null; effective: BehaviourSwitches; status: 'ACTIVE' | 'INACTIVE'; sortOrder: number; isBuiltin: boolean }
 export interface FulfilmentOption { id: string; name: string; description: string | null; mechanic: FulfilmentMechanic; tracksStock: boolean; status: 'ACTIVE' | 'INACTIVE'; sortOrder: number; isBuiltin: boolean }
 
 const text = (v: string | undefined | null, max: number, what: string) => { const t = v?.trim(); if (t && t.length > max) throw invalid(`${what} is too long (max ${max} characters)`); return t || null; };
@@ -24,35 +26,84 @@ async function codeFor(q: Queryable, table: 'offer_types' | 'fulfilment_options'
 }
 
 // ───────────────────────── offer types ─────────────────────────
+const TYPE_COLS = 'id, name, description, template, behaviour, status, sort_order, is_builtin';
+const withEffective = (r: Row): OfferType => ({ ...(r as OfferType), effective: { ...switchesOf(TEMPLATES[r.template as OfferTemplate]), ...(r.behaviour ?? {}) } });
+export async function getOfferType(q: Queryable, id: string): Promise<OfferType | null> {
+  const r = (await q.query(`SELECT ${TYPE_COLS} FROM offer_types WHERE id=$1`, [id])).rows[0];
+  return r ? withEffective(r) : null;
+}
+/** The offer types that can be picked in a step of the order wizard: those whose switches include it. */
+export async function kindsForStep(q: Queryable, step: string): Promise<string[]> {
+  if (!(ORDER_STEPS as readonly string[]).includes(step)) return [];
+  return kindsWhere(q, (b) => b.steps.includes(step as OrderStep));
+}
+/** The offer types whose switches satisfy a test (for example: sold outright). */
+export async function kindsWhere(q: Queryable, test: (b: BehaviourSwitches) => boolean): Promise<string[]> {
+  return (await q.query(`SELECT ${TYPE_COLS} FROM offer_types`)).rows.map(withEffective).filter((t) => test(t.effective)).map((t) => t.id);
+}
+
+/** Checks a set of switches the way the order engine will need them: coherent, and any service kind it names exists and is on. */
+async function checkSwitches(q: Queryable, b: BehaviourSwitches): Promise<void> {
+  const problems = switchProblems(b);
+  if (problems.length) throw invalid(problems.join(' '));
+  if (b.service && !isBuiltinKind(b.service)) {
+    const k = await getServiceKind(q, b.service);
+    if (!k) throw invalid(`unknown service kind ${b.service}`);
+    if (k.status !== 'ACTIVE') throw invalid(`the service kind ${k.name} is switched off`);
+  } else if (b.service && !(await q.query('SELECT 1 FROM service_kinds WHERE id=$1', [b.service])).rows.length) throw invalid(`unknown service kind ${b.service}`);
+}
+const cleanSwitches = (v: Partial<BehaviourSwitches> | undefined, base: BehaviourSwitches): BehaviourSwitches => {
+  const steps = (v?.steps ?? base.steps).filter((x, i, a) => a.indexOf(x) === i) as OrderStep[];
+  return { service: v?.service === undefined ? base.service : v.service || null, serviceNeedsFee: v?.serviceNeedsFee ?? base.serviceNeedsFee, goods: v?.goods ?? base.goods, outright: v?.outright ?? base.outright, contract: v?.contract ?? base.contract, needsPartner: v?.needsPartner ?? base.needsPartner, needsInstallation: v?.needsInstallation ?? base.needsInstallation, steps, exclusive: v?.exclusive ?? base.exclusive };
+};
 export async function listOfferTypes(q: Queryable, o: { activeOnly?: boolean; withUsage?: boolean } = {}): Promise<Array<OfferType & { offers?: number }>> {
-  const rows = (await q.query<OfferType & Row>(`SELECT id, name, description, template, status, sort_order, is_builtin FROM offer_types ${o.activeOnly ? `WHERE status='ACTIVE'` : ''} ORDER BY sort_order, name`)).rows;
+  const rows = (await q.query(`SELECT ${TYPE_COLS} FROM offer_types ${o.activeOnly ? `WHERE status='ACTIVE'` : ''} ORDER BY sort_order, name`)).rows.map(withEffective);
   if (!o.withUsage) return rows;
   const used = new Map((await q.query(`SELECT kind, count(*) AS n FROM catalog_nodes WHERE level='OFFER' GROUP BY kind`)).rows.map((r) => [r.kind as string, Number(r.n)]));
   return rows.map((r) => ({ ...r, offers: used.get(r.id) ?? 0 }));
 }
 
-export async function createOfferType(q: Queryable, actor: string, i: { name: string; description?: string; template: string }): Promise<OfferType> {
+export async function createOfferType(q: Queryable, actor: string, i: { name: string; description?: string; template: string; behaviour?: Partial<BehaviourSwitches> }): Promise<OfferType> {
   const name = text(i.name, 40, 'the name');
   if (!name) throw invalid('an offer type needs a name');
-  if (!(OFFER_TEMPLATES as readonly string[]).includes(i.template)) throw invalid('choose what the new type behaves like');
+  if (!(OFFER_TEMPLATES as readonly string[]).includes(i.template)) throw invalid('choose what the new type behaves like: the preset it starts from');
   if ((await q.query('SELECT 1 FROM offer_types WHERE lower(name)=lower($1)', [name])).rows.length) throw conflict(`there is already an offer type called ${name}`);
+  const preset = switchesOf(TEMPLATES[i.template as OfferTemplate]);
+  const behaviour = i.behaviour ? cleanSwitches(i.behaviour, preset) : null;
+  await checkSwitches(q, behaviour ?? preset);
   const id = await codeFor(q, 'offer_types', name);
   const order = Number((await q.query('SELECT COALESCE(max(sort_order),0) + 10 AS n FROM offer_types')).rows[0]!.n);
-  await q.query(`INSERT INTO offer_types (id, name, description, template, sort_order, created_by) VALUES ($1,$2,$3,$4,$5,$6)`, [id, name, text(i.description, 200, 'the description'), i.template, order, actor]);
-  await audit(q, actor, 'offer_type', id, 'create', { name, template: i.template });
-  return (await q.query<OfferType & Row>('SELECT id, name, description, template, status, sort_order, is_builtin FROM offer_types WHERE id=$1', [id])).rows[0]!;
+  await q.query(`INSERT INTO offer_types (id, name, description, template, behaviour, sort_order, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [id, name, text(i.description, 200, 'the description'), i.template, behaviour ? JSON.stringify(behaviour) : null, order, actor]);
+  await audit(q, actor, 'offer_type', id, 'create', { name, template: i.template, behaviour });
+  return (await getOfferType(q, id))!;
 }
 
-export async function updateOfferType(q: Queryable, actor: string, id: string, p: { name?: string; description?: string; status?: 'ACTIVE' | 'INACTIVE' }): Promise<OfferType> {
-  const cur = (await q.query<OfferType & Row>('SELECT id, name, description, template, status, sort_order, is_builtin FROM offer_types WHERE id=$1', [id])).rows[0];
+export async function updateOfferType(q: Queryable, actor: string, id: string, p: { name?: string; description?: string; status?: 'ACTIVE' | 'INACTIVE'; behaviour?: Partial<BehaviourSwitches> }): Promise<OfferType> {
+  const cur = await getOfferType(q, id);
   if (!cur) throw notFound('offer type', id);
   const name = p.name === undefined ? cur.name : text(p.name, 40, 'the name');
   if (!name) throw invalid('an offer type needs a name');
   if (name.toLowerCase() !== cur.name.toLowerCase() && (await q.query('SELECT 1 FROM offer_types WHERE lower(name)=lower($1)', [name])).rows.length) throw conflict(`there is already an offer type called ${name}`);
   if (p.status === 'INACTIVE' && cur.status === 'ACTIVE' && Number((await q.query(`SELECT count(*) AS n FROM offer_types WHERE status='ACTIVE'`)).rows[0]!.n) <= 1) throw rejected('at least one offer type must stay switched on');
-  await q.query('UPDATE offer_types SET name=$2, description=$3, status=$4, updated_at=now() WHERE id=$1', [id, name, p.description === undefined ? cur.description : text(p.description, 200, 'the description'), p.status ?? cur.status]);
+  let behaviour: BehaviourSwitches | null = cur.behaviour;
+  let restamp = false;
+  if (p.behaviour) {
+    if (cur.isBuiltin) throw rejected('the built-in types keep their behaviour. Add a new type, starting from this one, to change it.');
+    const next = cleanSwitches(p.behaviour, cur.effective);
+    const changed = (Object.keys(next) as Array<keyof BehaviourSwitches>).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(cur.effective[k]));
+    if (changed.length) {
+      await checkSwitches(q, next);
+      const offers = Number((await q.query(`SELECT count(*) AS n FROM catalog_nodes WHERE level='OFFER' AND kind=$1`, [id])).rows[0]!.n);
+      // What an order creates cannot change under offers that already exist; where an offer is picked and whether only one fits an order can.
+      const loose = changed.filter((k) => k !== 'steps' && k !== 'exclusive');
+      if (offers && loose.length) throw rejected(`${offers} offer${offers === 1 ? ' uses' : 's use'} this type, so only where it is picked and “one per order” can change now. Add a new type for different behaviour.`);
+      behaviour = next; restamp = offers > 0;
+    }
+  }
+  await q.query('UPDATE offer_types SET name=$2, description=$3, status=$4, behaviour=$5, updated_at=now() WHERE id=$1', [id, name, p.description === undefined ? cur.description : text(p.description, 200, 'the description'), p.status ?? cur.status, behaviour ? JSON.stringify(behaviour) : null]);
+  if (restamp && behaviour) await q.query(`UPDATE catalog_nodes SET data = jsonb_set(data, '{behaviour}', $2::jsonb) WHERE level='OFFER' AND kind=$1`, [id, JSON.stringify(behaviour)]);
   await audit(q, actor, 'offer_type', id, 'update', { ...p });
-  return (await q.query<OfferType & Row>('SELECT id, name, description, template, status, sort_order, is_builtin FROM offer_types WHERE id=$1', [id])).rows[0]!;
+  return (await getOfferType(q, id))!;
 }
 
 /** A type that no offer uses and that was not built in can be removed; otherwise switch it off. */
@@ -124,10 +175,10 @@ export async function prepareOffer<T extends { kind?: string; template?: string;
   q: Queryable, o: T, was?: { kind?: string; options?: string[] },
 ): Promise<T> {
   const kind = o.kind ?? '';
-  const type = (await q.query('SELECT id, name, template, status FROM offer_types WHERE id=$1', [kind])).rows[0];
+  const type = await getOfferType(q, kind);
   if (!type) throw invalid(`unknown offer type ${kind}`);
   if (type.status !== 'ACTIVE' && was?.kind !== kind) throw invalid(`the offer type ${type.name} is switched off`);
-  const out: T = { ...o, template: type.template };
+  const out: T = { ...o, template: type.template, behaviour: type.effective } as T;
   const ids = o.fulfilment?.options;
   if (ids) {
     const unique = [...new Set(ids)];
@@ -140,7 +191,11 @@ export async function prepareOffer<T extends { kind?: string; template?: string;
     const has = (m: string) => rows.some((r) => r.mechanic === m);
     out.fulfilment = { ...o.fulfilment, options: unique, requiresShipping: has('SHIP'), requiresCollection: has('COLLECT'), requiresInstallation: has('INSTALL'), requiresSimActivation: has('SIM'), inventorySkus: o.fulfilment?.inventorySkus ?? [] };
   }
-  if (TEMPLATES[type.template as OfferTemplate].needsInstallation && out.fulfilment && !out.fulfilment.requiresInstallation && ids) {
+  // A service kind that expires: the offer may set its own length (a 7-day pass beside a 30-day pass); otherwise the kind's default applies.
+  const sk = type.effective.service && !isBuiltinKind(type.effective.service) ? await getServiceKind(q, type.effective.service) : null;
+  const days = (o as { validityDays?: number }).validityDays;
+  if (sk?.expires) { if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) throw invalid('the validity is 1 to 3650 days'); } else delete (out as { validityDays?: number }).validityDays;
+  if (type.effective.needsInstallation && out.fulfilment && !out.fulfilment.requiresInstallation && ids) {
     throw invalid('fibre offers need an installation option');
   }
   return out;

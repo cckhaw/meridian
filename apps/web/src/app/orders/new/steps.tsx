@@ -9,7 +9,7 @@ import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
-import { DEVICE_KINDS, MONTHS, PRODUCT_KINDS, SWATCH, financeable, flatLines, isMobilePlan, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
+import { MONTHS, SWATCH, financeable, flatLines, isExclusive, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
@@ -53,17 +53,18 @@ function OfferCard({ o, chosen, onToggle, note, disabled }: { o: any; chosen: bo
   );
 }
 
-function OfferPicker({ w, kind, placeholder, noteFor }: { w: Wizard; kind: string; placeholder: string; noteFor?: (o: any) => string | undefined }) {
+function OfferPicker({ w, kind, step, outright, placeholder, noteFor }: { w: Wizard; kind?: string; step?: 'PLAN' | 'DEVICE'; outright?: boolean; placeholder: string; noteFor?: (o: any) => string | undefined }) {
   const multi = useMultiMarket();
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
-  const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}&kind=${kind}&q=${encodeURIComponent(term)}`);
+  const scope = `${kind ? `&kind=${kind}` : ''}${step ? `&step=${step}` : ''}${outright ? '&outright=1' : ''}`;
+  const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}${scope}&q=${encodeURIComponent(term)}`);
   // An order carries one mobile plan (a family plan brings its other lines as members), so once a plan is chosen the other plans wait until it is removed.
-  const planChosen = w.items.find((i) => isMobilePlan(i.offer));
-  const waits = (o: any) => isMobilePlan(o) && !!planChosen && planChosen.offer.id !== o.id;
+  const planChosen = w.items.find((i) => isExclusive(i.offer));
+  const waits = (o: any) => isExclusive(o) && !!planChosen && planChosen.offer.id !== o.id;
   const toggle = (o: any) => { if (!waits(o)) w.setItems((cur) => (cur.some((i) => i.offer.id === o.id) ? cur.filter((i) => i.offer.id !== o.id) : [...cur, newItem(o)])); };
   // When nothing is listed, find out whether offers exist in some other market, so the message can say why instead of pretending there are none.
-  const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term && multi ? `/catalog?limit=1&status=ACTIVE&kind=${kind}` : null);
+  const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term && multi ? `/catalog?limit=1&status=ACTIVE${scope}` : null);
   return (
     <>
       <SearchField label={placeholder} placeholder={placeholder} value={q} onChange={setQ} className="mb-3 sm:max-w-md" />
@@ -89,7 +90,7 @@ export function ProductStep({ w }: { w: Wizard }) {
     <>
       {!w.portal && <SellingPanel w={w} />}
       {w.kindHint && <p className="mb-3 text-subhead text-label2">Showing {label(w.kindHint.split(',')[0]!).toLowerCase()} only · <button className="text-accent" onClick={w.clearKindHint}>Show everything</button></p>}
-      <OfferPicker w={w} kind={w.quick ? 'PHYSICAL_GOOD' : w.kindHint ?? PRODUCT_KINDS} placeholder={w.quick ? 'Search goods' : 'Search plans and products'} noteFor={(o) => (o.fulfilment?.requiresInstallation ? 'Needs an installation visit' : undefined)} />
+      <OfferPicker w={w} outright={w.quick} kind={w.quick ? undefined : w.kindHint ?? undefined} step={w.quick || w.kindHint ? undefined : 'PLAN'} placeholder={w.quick ? 'Search goods' : 'Search plans and products'} noteFor={(o) => (o.fulfilment?.requiresInstallation ? 'Needs an installation visit' : undefined)} />
     </>
   );
 }
@@ -178,7 +179,7 @@ export function DeviceStep({ w }: { w: Wizard }) {
       {contractable.map((i) => <ContractChoice key={i.key} w={w} item={i} />)}
       {withVariants.map((i) => <VariantPicker key={i.key} w={w} item={i} />)}
       {withVariants.length === 0 && <p className="mb-4 rounded-card bg-surface px-4 py-5 text-subhead text-label2 shadow-card">The plans you chose do not come with a device. You can add one below, or continue.</p>}
-      <Section title="Add a device or accessory"><OfferPicker w={w} kind={DEVICE_KINDS} placeholder="Search devices" /></Section>
+      <Section title="Add a device or accessory"><OfferPicker w={w} step="DEVICE" placeholder="Search devices" /></Section>
     </>
   );
 }

@@ -345,6 +345,10 @@ describe('order wizard API, partial cancellation and returns', () => {
 
     const add = await call('GET', `/orders/addons?customerId=${c}&offers=plan-phone-24&channel=TELESALES`, { cookie: agent.cookie });
     expect(add.json.items.map((i: any) => i.offer.id)).toContain('device-care');
+    // devices and plans have their own steps: the add-ons step lists only offers of an add-on type
+    expect(add.json.items.every((i: any) => ['VAS', 'NON_TELCO_SUBSCRIPTION'].includes(i.offer.kind))).toBe(true);
+    expect(add.json.items.map((i: any) => i.offer.kind)).not.toContain('PHYSICAL_GOOD');
+    expect(add.json.items.map((i: any) => i.offer.kind)).not.toContain('WEARABLE');
     const none = await call('GET', `/orders/addons?customerId=${c}&offers=plan-sim-5g&channel=TELESALES`, { cookie: agent.cookie });
     expect(none.json.items.map((i: any) => i.offer.id)).not.toContain('device-care');
     const avail = await call('GET', '/catalog/plan-phone-24/availability', { cookie: agent.cookie });
@@ -1296,5 +1300,39 @@ describe('commission plans, ledger and payouts', () => {
     expect((await call('POST', `/commission/payouts/${payout.json.batch.id}/confirm`, { cookie: fin.cookie })).json.status).toBe('PAID');
     expect((await call('GET', '/commission/statements', { cookie: mine.cookie })).json.items[0].status).toBe('PAID');
     const rc = (await call('GET', '/gl/reconcile', { cookie: fin.cookie })).json; expect(rc.checks.filter((x: any) => !x.ok && /balances/.test(x.name))).toEqual([]);   // the AR control check is not asserted here: an earlier test posts invoice events straight to the ledger
+  });
+});
+
+describe('offer type switches and service kinds', () => {
+  it('the super user defines a service kind and a type that creates it; the catalog and the wizard lists follow the switches', async () => {
+    const admin = await root();
+    const cfg = await staff(['product-configurator']);
+    // reading is for the catalog team, changing is for the super user
+    expect((await call('POST', '/settings/service-kinds', { cookie: cfg.cookie, body: { name: 'Pass' } })).status).toBe(403);
+    expect((await call('GET', '/catalog-config', { cookie: cfg.cookie })).json.serviceKinds.map((k: any) => k.id)).toEqual(expect.arrayContaining(['MOBILE', 'SUBSCRIPTION']));
+    const kind = await call('POST', '/settings/service-kinds', { cookie: admin, body: { name: 'Event pass', identifierPrefix: 'EP-', expires: true, validityDays: 2, provisionSystems: ['GATE_SYSTEM'] } });
+    expect([kind.status, kind.json.id]).toEqual([200, 'EVENT_PASS']);
+    expect((await call('POST', '/settings/service-kinds', { cookie: admin, body: { name: 'Event pass' } })).status).toBe(409);
+    expect((await call('PATCH', '/settings/service-kinds/MOBILE', { cookie: admin, body: { name: 'Phone' } })).status).toBe(422);
+    expect((await call('PATCH', '/settings/service-kinds/EVENT_PASS', { cookie: admin, body: { description: 'Entry for one event' } })).json).toMatchObject({ description: 'Entry for one event', identifierPrefix: 'EP-', validityDays: 2 }); // what is left out is kept
+
+    const bad = await call('POST', '/settings/offer-types', { cookie: admin, body: { name: 'Nothing', template: 'VAS', behaviour: { service: null } } });
+    expect([bad.status, bad.json.error.code]).toEqual([400, 'INVALID']);
+    const type = await call('POST', '/settings/offer-types', { cookie: admin, body: { name: 'Event pass', template: 'VAS', behaviour: { service: 'EVENT_PASS', steps: ['ADDON'] } } });
+    expect(type.json).toMatchObject({ id: 'EVENT_PASS', effective: { service: 'EVENT_PASS', steps: ['ADDON'] } });
+    const types = (await call('GET', '/settings/catalog', { cookie: admin })).json;
+    expect(types.serviceKinds.find((k: any) => k.id === 'EVENT_PASS')).toMatchObject({ offerTypes: 1, services: 0 });
+
+    // an offer of the type carries its switches and its own validity; the add-ons list and the catalog step filter find it
+    const offer = await call('POST', '/catalog', { cookie: cfg.cookie, body: { level: 'OFFER', id: 'event-pass-1', name: 'Event pass', parentId: 'grp-sim-only', kind: 'EVENT_PASS', status: 'ACTIVE', markets: [], prices: [{ type: 'ONE_TIME', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [] }, validityDays: 1 } });
+    expect([offer.status, offer.json.validityDays, offer.json.behaviour.service]).toEqual([200, 1, 'EVENT_PASS']);
+    const addons = (await call('GET', '/orders/addons?channel=RETAIL_ASSISTED&offers=', { cookie: admin })).json.items.map((i: any) => i.offer.id);
+    expect(addons).toContain('event-pass-1');
+    expect((await call('GET', '/catalog?status=ACTIVE&step=ADDON&limit=100', { cookie: cfg.cookie })).json.items.map((o: any) => o.id)).toContain('event-pass-1');
+    expect((await call('GET', '/catalog?status=ACTIVE&step=PLAN&limit=100', { cookie: cfg.cookie })).json.items.map((o: any) => o.id)).not.toContain('event-pass-1');
+    expect((await call('GET', '/catalog?status=ACTIVE&outright=1&limit=100', { cookie: cfg.cookie })).json.items.every((o: any) => o.behaviour?.outright || o.kind === 'PHYSICAL_GOOD')).toBe(true);
+    // the type is locked for what an order creates now that an offer uses it
+    expect((await call('PATCH', '/settings/offer-types/EVENT_PASS', { cookie: admin, body: { behaviour: { goods: true } } })).status).toBe(422);
+    expect((await call('DELETE', '/settings/service-kinds/EVENT_PASS', { cookie: admin })).status).toBe(422);
   });
 });

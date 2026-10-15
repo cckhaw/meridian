@@ -77,7 +77,7 @@ export function CatalogBrowser() {
   if (nodeId && detailApi.loading && !detail) return <Spinner />;
   return (
     <>
-      <div className="grid gap-6 lg:grid-cols-[minmax(320px,380px)_1fr] lg:items-start">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)] lg:items-start">
         <aside className={`${showInspectorOnPhone ? 'hidden lg:block' : ''} min-w-0 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto lg:pr-1`}>
           <div className="mb-3 flex items-center justify-between gap-2 lg:hidden">
             <h1 className="min-w-0 truncate text-title1 font-bold tracking-tight">{location?.name ?? 'Product catalog'}</h1>

@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, LoadMore, SearchField, Select, Spinner, TableWrap, Td, Th } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Empty, Field, Input, LoadMore, SearchField, Select, Spinner, DataList } from '@meridian/ui';
 import { useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -23,22 +23,22 @@ export function ServicesTable({ customerId, accountId, onChange, title = true }:
   const done = () => { setSel(null); void list.reload(); onChange(); };
   return (
     <section aria-label="Services">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         {title ? <h3 className="px-1 text-footnote font-semibold uppercase tracking-wide text-label2">Services</h3> : <span />}
-        <SearchField label="Find service" placeholder="Number starts with…" value={q} onChange={setQ} className="w-56" />
+        <SearchField label="Find service" placeholder="Number starts with…" value={q} onChange={setQ} className="w-full max-w-56" />
       </div>
       {list.loading && list.items.length === 0 && <Spinner />}
       {!list.loading && list.items.length === 0 && <Empty>{term ? 'No services match.' : 'No services.'}</Empty>}
       {list.items.length > 0 && (
         <>
-          <TableWrap><thead><tr><Th>Number / ID</Th><Th>Offer</Th><Th>Status</Th><Th>Contract</Th><Th /></tr></thead><tbody>
-            {list.items.map((s: any) => (
-              <tr key={s.id}><Td className="font-mono">{s.identifier}</Td><Td>{s.offerName}</Td>
-                <Td><Badge tone={tone(s.status)}>{label(s.status)}</Badge>{s.suspendedReason && <div className="text-caption text-label2">{label(s.suspendedReason)}</div>}</Td>
-                <Td>{s.contractTermMonths ? `${s.contractTermMonths} mo from ${d(s.contractStart)}` : 'None'}</Td>
-                <Td right>{s.status !== 'TERMINATED' && can(...SERVICE_PERMS) && <Button variant="plain" className="!min-h-[36px] !px-3" onClick={() => setSel(s)}>Manage</Button>}</Td></tr>
-            ))}
-          </tbody></TableWrap>
+          <DataList label="Services" rows={list.items} rowKey={(s: any) => s.id}
+            columns={[
+              { key: 'id', label: 'Number / ID', primary: true, render: (s: any) => <span className="font-mono">{s.identifier}</span> },
+              { key: 'offer', label: 'Offer', render: (s: any) => s.offerName },
+              { key: 'st', label: 'Status', render: (s: any) => <><Badge tone={tone(s.status)}>{label(s.status)}</Badge>{s.suspendedReason && <div className="text-caption text-label2">{label(s.suspendedReason)}</div>}</> },
+              { key: 'contract', label: 'Contract', render: (s: any) => (s.contractTermMonths ? `${s.contractTermMonths} mo from ${d(s.contractStart)}` : 'None') },
+            ]}
+            actions={(s: any) => (s.status !== 'TERMINATED' && can(...SERVICE_PERMS) ? <Button variant="secondary" onClick={() => setSel(s)}>Manage</Button> : null)} />
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="services" />
         </>
       )}

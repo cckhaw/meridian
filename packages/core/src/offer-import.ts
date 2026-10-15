@@ -1,4 +1,4 @@
-import { fromPlain, toPlain, TEMPLATES, type OfferNode, type OfferTemplate, type RegionalSettings } from '@meridian/types';
+import { fromPlain, toPlain, TEMPLATES, type BehaviourSwitches, type OfferNode, type OfferTemplate, type RegionalSettings } from '@meridian/types';
 import { audit } from './audit.js';
 import { createNode, getOffer, moveNode, setStatus, updateNode, type NodeInput, type NodePatch } from './catalog.js';
 import { csvCell, parseCsv } from './csv.js';
@@ -46,7 +46,7 @@ const whole = (v: string, what: string, min: number, max: number): number => {
   return Number(v);
 };
 
-interface Ctx { multiple: boolean; defaultMarket: string; marketCodes: string[]; regional: RegionalSettings; types: Map<string, { template: OfferTemplate; active: boolean }>; options: Map<string, { mechanic: string; active: boolean }>; groups: Set<string> }
+interface Ctx { multiple: boolean; defaultMarket: string; marketCodes: string[]; regional: RegionalSettings; types: Map<string, { template: OfferTemplate; active: boolean; effective: BehaviourSwitches }>; options: Map<string, { mechanic: string; active: boolean }>; groups: Set<string> }
 
 /** What one CSV row asks for, as a new offer or as changes to an existing one. A blank cell on an existing offer means "leave as it is". */
 function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, existing: OfferNode | null, id: string): { input?: NodeInput; patch?: NodePatch; group?: string; status?: string; goLive?: string } {
@@ -55,14 +55,15 @@ function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, exist
   const group = cell('group'), typeId = cell('type');
   if (group && !ctx.groups.has(group)) bad(`Unknown group “${group}”. Use a group id from the template (the group, not a category or network type).`);
   let template: OfferTemplate | null = null;
+  let effective: BehaviourSwitches | undefined;
   if (typeId) {
     const t = ctx.types.get(typeId) ?? ctx.types.get(typeId.toUpperCase());
     if (!t) bad(`Unknown offer type “${typeId}”. Use one of the type ids listed in the template.`);
     if (!t!.active && (!existing || existing.kind !== typeId)) bad(`Offer type “${typeId}” is switched off.`);
-    template = t!.template;
-  } else if (existing) template = (ctx.types.get(existing.kind)?.template ?? (existing.template as OfferTemplate | undefined) ?? (existing.kind as OfferTemplate)) ?? null;
+    template = t!.template; effective = t!.effective;
+  } else if (existing) { effective = ctx.types.get(existing.kind)?.effective; template = (ctx.types.get(existing.kind)?.template ?? (existing.template as OfferTemplate | undefined) ?? (existing.kind as OfferTemplate)) ?? null; }
   else bad('Choose the offer type.');
-  const tpl = TEMPLATES[template!] ?? bad('This offer has an unknown type.');
+  const tpl = { ...(TEMPLATES[template!] ?? bad('This offer has an unknown type.')), ...(effective ?? {}) };
   const taxText = cell('tax');
   const tax = taxText ? yes(taxText) : null;
   if (taxText && tax === null) bad(`prices_include_tax: write yes or no (not “${taxText}”).`);
@@ -168,7 +169,7 @@ export async function importOffers(db: Db, text: string, o: { apply: boolean; ac
   const mset = await getMarketSettings(db);
   const ctx: Ctx = {
     regional, multiple: mset.multiple, defaultMarket: mset.defaultMarket, marketCodes: mset.markets.map((m) => m.code),
-    types: new Map((await listOfferTypes(db)).map((t) => [t.id, { template: t.template, active: t.status === 'ACTIVE' }])),
+    types: new Map((await listOfferTypes(db)).map((t) => [t.id, { template: t.template, active: t.status === 'ACTIVE', effective: t.effective }])),
     options: new Map((await listFulfilmentOptions(db)).map((f) => [f.id, { mechanic: f.mechanic, active: f.status === 'ACTIVE' }])),
     groups: new Set((await db.query(`SELECT id FROM catalog_nodes WHERE level='GROUP'`)).rows.map((r) => r.id as string)),
   };

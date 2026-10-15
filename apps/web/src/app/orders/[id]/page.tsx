@@ -35,7 +35,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
       {o.failureReason && <Alert>{label(o.state)}: {o.failureReason}</Alert>}
       {aerr && <div className="mt-3"><Alert>{aerr}</Alert></div>}
 
-      <div className="mt-4 grid gap-6 lg:grid-cols-[1fr_340px]">
+      <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div>
           <SectionTitle>Items</SectionTitle>
           <TableWrap><thead><tr><Th>Item</Th><Th right>Qty</Th><Th right>Net</Th><Th right>Tax</Th><Th right>Upfront</Th></tr></thead><tbody>

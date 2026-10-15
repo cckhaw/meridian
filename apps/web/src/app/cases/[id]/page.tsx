@@ -21,7 +21,7 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
       <p className="mb-4">Customer {can('customer:search') ? <Link className="text-accent" href={`/customers/${c.customerId}`}>{c.customerName}</Link> : c.customerName} · opened {dt(c.createdAt)}</p>
       {c.type === 'BILLING_REFUND' && <Alert tone="info">To refund, open the customer’s invoice and issue a credit note; mention this case number in the reason.</Alert>}
       {aerr && <Alert>{aerr}</Alert>}
-      <div className="mt-4 grid gap-6 lg:grid-cols-[1fr_320px]">
+      <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <Card>
           <h2 className="mb-3 text-title3 font-semibold">Notes</h2>
           <ul className="space-y-3">{c.notes.map((n: any, i: number) => <li key={i} className="rounded-control bg-surface2 p-3 text-subhead">{n.text}<div className="text-caption text-label2">{n.by} · {dt(n.at)}</div></li>)}{c.notes.length === 0 && <li className="text-label2">No notes yet.</li>}</ul>

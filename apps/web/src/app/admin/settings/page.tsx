@@ -5,7 +5,7 @@ import { Suspense, useState } from 'react';
 import { useApi } from '@/lib/api';
 import { AppearanceSettings } from './appearance';
 import { CancellationSettings } from './cancellation';
-import { FulfilmentSettings, OfferTypeSettings } from './catalog-config';
+import { FulfilmentSettings, OfferTypeSettings, ServiceKindSettings } from './catalog-config';
 import { BillCycleSettings, CustomerSettings } from './customers';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
@@ -69,7 +69,7 @@ function Settings() {
     <>
       <LargeTitle subtitle="Everything that shapes how Meridian behaves for your business. Only the super user can change these; every change is recorded in the audit log.">Settings</LargeTitle>
       {error && <Alert>{error}</Alert>}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,320px)_1fr] lg:items-start">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,320px)_minmax(0,1fr)] lg:items-start">
         {/* On a phone the menu and the section are separate screens; from lg up they sit side by side. */}
         <div className={`${current ? 'hidden lg:block' : 'block'} lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto`}>{menu}</div>
         <div className={`${current ? 'block' : 'hidden lg:block'} min-w-0`}>
@@ -102,6 +102,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;
+    case 'service-kinds': return <ServiceKindSettings />;
     case 'cancellation': return <CancellationSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;

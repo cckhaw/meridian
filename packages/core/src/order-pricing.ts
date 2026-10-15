@@ -249,7 +249,7 @@ export const cancellationTerms = (q: Queryable, kinds: GroupKind[], currency: st
 
 /** Add-ons this customer can actually buy with this basket: prerequisites met (by the basket or what they own), no conflicts, sold on this channel. */
 export async function eligibleAddons(q: Queryable, o: { customerId?: string | null; offerIds: string[]; channel: OrderChannel; marketCode: string; q?: string; limit?: number; cursor?: string }) {
-  const page = await pageOffers(q, { status: 'ACTIVE', market: o.marketCode, channel: o.channel, notKind: 'SIM_ONLY,SIM_DEVICE,FIBER,IOT_CONNECTIVITY', q: o.q, limit: o.limit ?? 24, cursor: o.cursor });
+  const page = await pageOffers(q, { status: 'ACTIVE', market: o.marketCode, channel: o.channel, step: 'ADDON', q: o.q, limit: o.limit ?? 24, cursor: o.cursor });
   const items: Array<{ offer: OfferNode; reason?: string }> = [];
   for (const offer of page.items as OfferNode[]) {
     if (o.offerIds.includes(offer.id)) continue;
