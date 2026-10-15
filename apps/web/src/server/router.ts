@@ -595,6 +595,13 @@ route('DELETE', '/settings/dunning-rules/:id', 'settings:manage', ({ db, user, p
 
 // ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
 get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
+post('/accounts/:id/collections/run', ['billing:run'], async ({ db, user, params, body }) => {
+  const b = z.object({ asOf: date.optional() }).parse(body ?? {});
+  const asOf = b.asOf ?? core.today();
+  const steps = await core.evaluateByRules(db, params.id!, asOf, { rules: await core.listDunningRules(db, { activeOnly: true }), actor: user.username });
+  return steps ? { legacy: false, applied: steps.map((r) => ({ stepId: r.stepId, name: r.name, action: r.action, status: r.status, reason: r.reason })) }
+    : { legacy: true, applied: (await core.evaluateDunningLadder(db, params.id!, asOf, { actor: user.username })).map((r) => ({ stepId: r.step, name: r.step, action: r.step, status: r.outcome.skipped ? 'SUPERSEDED' : 'APPLIED' })) };
+});
 post('/accounts/:id/arrangements', 'collections:manage', async ({ db, user, params, body }) => Response.json(await core.createArrangement(db, params.id!, z.object({ installments: z.array(z.object({ dueDate: z.string(), amountMinor: z.number().int() })).min(1).max(36), reason: z.string().max(300).optional(), graceDays: z.number().int().min(0).max(14).optional() }).parse(body), user.username), { status: 201 }));
 post('/arrangements/:id/cancel', 'collections:manage', async ({ db, user, params, body }) => core.cancelArrangement(db, params.id!, user.username, z.object({ reason: z.string().max(300).optional() }).parse(body ?? {}).reason));
 get('/collections/placements', 'collections:manage', ({ db, query }) => core.listPlacements(db, { status: str(query, 'status'), pending: query.get('pending') === '1', limit: num(query, 'limit') }));

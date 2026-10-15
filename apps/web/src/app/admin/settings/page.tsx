@@ -8,6 +8,7 @@ import { CancellationSettings } from './cancellation';
 import { FulfilmentSettings, OfferTypeSettings, ServiceKindSettings } from './catalog-config';
 import { BillCycleSettings, CustomerSettings } from './customers';
 import { CaseSettings } from './cases';
+import { DunningSettings } from './dunning';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
@@ -110,6 +111,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'service-types': return <ServiceKindSettings />;
     case 'cancellation': return <CancellationSettings />;
     case 'cases': return <CaseSettings />;
+    case 'dunning-rules': return <DunningSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;
     default: return <Empty>This section is not available yet.</Empty>;
