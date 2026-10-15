@@ -3,7 +3,7 @@
 CRM, order management, billing and finance for a telecom operator: customers and hierarchies, product catalog, orders and fulfilment,
 subscription lifecycle (suspension, dunning, termination, port-out), bill runs and invoices, double-entry ledger with SAP export, cases, inventory with warehouses and write-offs, role-based access with roles you define,
 an editable product hierarchy with dependencies between products, one-market or multi-market operation, regional/branding settings, and an independently hosted **self-service store-front**
-with KYC onboarding, Stripe payments and assisted in-store sales.
+with KYC onboarding, Stripe payments and assisted in-store sales. It also has rule-based dunning and collections, configurable early-termination formulas, device financing with a credit check, stock transfers between warehouses and stores, and a northbound integration layer (OAuth 2.0 / API keys, TM Forum APIs, signed webhooks and events) with an admin integration hub.
 
 Sign-in is required. Staff and customers see only the modules and records their **role** allows ([docs/ROLES.md](docs/ROLES.md)).
 
@@ -27,13 +27,39 @@ pnpm typecheck && pnpm test          # 649 tests; set TEST_DATABASE_URL=postgres
 Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD` and `MERIDIAN_ID_PEPPER`, deploy, and follow the
 [day-one runbook](docs/OPERATIONS.md). Meridian refuses to serve traffic if these are missing or weak.
 
+## Design principles
+
+- **Configure, don't deploy.** Business rules are data edited in **Settings** (dunning ladders, early-termination formulas, financing bands, cancellation terms, numbering, cases, integrations), versioned and audited. The environment holds only secrets and deployment wiring; see [Operating Meridian](docs/OPERATIONS.md#1-environment).
+- **Safe by default, opt-in to change.** New engines are off or inert until switched on (ETC rules, the credit check, dunning rules fall back to the older ladder), so an upgrade never changes prices or collections by itself.
+- **One place decides.** Price, eligibility and payment structure come from one pricing function that the quote, the order and the store-front all use. Clients never send money amounts.
+- **Money is integer minor units**; every change that other systems need goes through a transactional **outbox** (network, notifications, collections, GL, events) and is delivered with retries.
+- **Privacy by construction.** ID numbers are hashed or encrypted, never logged or returned; integration secrets are encrypted and write-only; consent is recorded before personal data leaves for a third party.
+- **Every action is permissioned and audited**, in the CRM and through the API (scopes, rate limits, idempotency keys, a call log).
+- **Plain-language, accessible UI** that works on a phone: Settings screens explain what a setting does before asking for it.
+
+## Configuration at a glance
+
+Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environment) and `.env.example`. Everything else is set in the CRM under **Settings** (needs `settings:manage`):
+
+| Settings section | What it controls | Read |
+|---|---|---|
+| Regional format, Markets, Appearance | Currency, tax, dates, markets, logo and themes | [CATALOG.md](docs/CATALOG.md) |
+| Customers and segments, Bill cycles | Customer fields and segments, the 28 bill cycles | [CUSTOMERS.md](docs/CUSTOMERS.md) |
+| Offer types, Fulfilment options, Service types | What an offer can be and how it is fulfilled and provisioned | [CATALOG.md](docs/CATALOG.md) |
+| Cancellation | Cooling-off and cancellation terms per order part | [ORDERS.md](docs/ORDERS.md) |
+| Early termination | Rules and formulas for the charge when a contract ends early | [LIFECYCLE.md](docs/LIFECYCLE.md) |
+| Device financing | Instalments over the contract, credit-check bands, fallback | [FINANCING.md](docs/FINANCING.md) |
+| Dunning rules | Ladders, late fees, QR links, arrangements, collections | [DUNNING.md](docs/DUNNING.md) |
+| Integration hub | OAuth clients, API keys, rate limits, webhooks, TMF 688, field service, network, finance and bureau endpoints, event topics | [INTEGRATION_API.md](docs/INTEGRATION_API.md) |
+| Cases, Donor operators, Numbers & SIMs | SLA matrix and taxonomy, port-in operators, number pools and VIP tiers | [CASES.md](docs/CASES.md), [NUMBERING.md](docs/NUMBERING.md) |
+
 ## Documentation
 
 - [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
 - [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies, bulk offer import, offer type switches and service types, markets
 - [Dunning and collections](docs/DUNNING.md): configurable rule-based ladders per market and customer type, late fees, QR payment links (PromptPay, PayNow, DuitNow, QRIS, QR Ph), exclusions, partial payments, payment arrangements, collection agency placements, Southeast Asia starter rules
 - [Device financing](docs/FINANCING.md): a device on a contract paid evenly over the contract with the plan bill, credit check through an integration (score bands or the bureau's upfront amount), consent, fallback
-- [Service lifecycle](docs/LIFECYCLE.md): voluntary suspension, credit-limit bars, the dunning ladder, termination and ETC, port-out
+- [Service lifecycle](docs/LIFECYCLE.md): voluntary suspension, credit-limit bars, the dunning ladder, termination and the early-termination charge (rules and formulas), port-out
 - [Finance: sub-ledger, SAP journals, reconciliation](docs/FINANCE.md): events into an immutable ledger, posting rules to SAP accounts, IDoc/flat/JSON/CSV export, daily close, reconciliation
 - [Cases: classification, SLA, lifecycle, interactions, watchdog, refunds, incidents](docs/CASES.md): the three-level case taxonomy, the SLA matrix, the case state machine with guards, the interaction registry, the SLA watchdog (sweep and Temporal workflow), refund approval by amount, master network incidents, field-service visits with a signed callback, and TM Forum views
 - [Billing: bill runs, governance, simulator, templates, print house](docs/BILLING.md): mock, review, exclusions and approval for every cycle, anomalies, selective and retry runs, dual control, the Temporal workflow; forecast bills, quote ending a service, preview a plan change; the bill template designer, legacy converter, PDF renderer and print-house package
@@ -48,7 +74,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 - [Orders: fulfilment, cancellation and returns](docs/ORDERS.md): fulfilment groups, points of no return, refunds, instalments, bundles
 - [Customers, segments and groups](docs/CUSTOMERS.md): customer → account → service, segments, moving customers, groups with principal and supplementary services
 - [Working with millions of records](docs/SCALE.md): paging, search and indexes behind every list
-- [Operating Meridian](docs/OPERATIONS.md): environment, runbook, payments, scale, upgrades
+- [Operating Meridian](docs/OPERATIONS.md): environment variables, runbook, payments, scale, upgrades, loading stock, warehouses and stock transfers
 - [Security model](docs/SECURITY.md): what is protected, and what still needs work
 - [Roles and permissions](docs/ROLES.md): the default roles (generated from the code that enforces them), and how to change them or add your own
 - [Architecture](docs/ARCHITECTURE.md)
