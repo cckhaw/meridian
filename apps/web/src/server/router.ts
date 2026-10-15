@@ -837,7 +837,7 @@ post('/accounts/:id/dunning', ['billing:run'], ({ db, user, params, body }) => {
   const b = z.object({ asOf: date.optional(), only: z.enum(core.DUNNING_ACTIONS).optional() }).parse(body ?? {});
   return core.evaluateDunningLadder(db, params.id!, b.asOf, { only: b.only, actor: user.username });
 });
-get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => {
+get('/accounts/:id/dunning', ['billing:read'], async ({ db, user, params }) => {
   const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId);
   const runs = (await db.query(`SELECT * FROM dunning_runs WHERE account_id=$1 ORDER BY id DESC LIMIT 10`, [params.id])).rows;
   const steps = runs.length ? (await db.query(`SELECT run_id, step, day_offset, applied_on, outcome FROM dunning_steps WHERE run_id = ANY($1::bigint[]) ORDER BY id`, [runs.map((r) => r.id)])).rows : [];
