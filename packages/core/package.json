@@ -8,7 +8,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "docs:roles": "tsx scripts-roles.mjs"
+    "docs:roles": "tsx scripts-roles.mjs",
+    "seed:dunning": "tsx scripts-seed-dunning.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",

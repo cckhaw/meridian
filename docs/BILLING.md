@@ -1,6 +1,6 @@
 # Billing: bill runs, governance, simulation and print output
 
-**Billing → Bill runs** (permissions `billing:read` to look, `billing:run` to prepare a run, `billing:approve` to approve it, `settings:manage` to change the rules) bills the 28 monthly cycles, the daily-cycle accounts, or chosen accounts, in four steps that cannot be skipped. This page describes what is built; the template and print-house engine is added by the next release.
+**Billing → Bill runs** (permissions `billing:read` to look, `billing:run` to prepare a run, `billing:approve` to approve it, `settings:manage` to change the rules) bills the 28 monthly cycles, or chosen accounts, in four steps that cannot be skipped. This page covers the bill runs, the simulator, and the template and print-house engine. A late fee is billed as its own invoice and overdue accounts are chased by the dunning rules: see [DUNNING.md](DUNNING.md).
 
 ## What it is made of
 

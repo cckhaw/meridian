@@ -37,7 +37,7 @@ Everything that must reach another system (policy control PCRF/PCF, HLR/HSS, SMS
 
 ## C. Dunning ladder
 
-D is the due date of the oldest unpaid invoice. The ladder is configurable (lifecycle settings); the default:
+D is the due date of the oldest unpaid invoice. **Dunning rules** ([DUNNING.md](DUNNING.md): ladders per market, customer type, segment, VIP and credit risk, with late fees, QR payment links, exclusions, partial-payment handling, payment arrangements and collections) take precedence. This single ladder, set in the lifecycle settings, is what an account follows when no active rule fits it, and an account already part-way down it finishes it. The default:
 
 | Day | Step | Effect |
 |---|---|---|

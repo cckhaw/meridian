@@ -53,6 +53,8 @@ The **financial sub-ledger** (`ledger.ts`, `sub-ledger.ts`, `coa.ts`, `sap-expor
 
 The **commission engine** (`commission-calculator.ts`, `commission.ts`, `commission-processor.ts`, migration `0027`) evaluates plans when an order completes, keeps an append-only earnings ledger, takes commission back on early churn, and settles monthly with GL postings. Details in [COMMISSION.md](COMMISSION.md).
 
+Dunning rules, the rule engine, late fees, payment arrangements and collection placements live in `packages/core` (`dunning-rules.ts`, `dunning-engine.ts`, `dunning-templates.ts`, `seed-dunning-rules.ts`, `collections.ts`, `emv-qr.ts`) on migration `0040`; see [DUNNING.md](DUNNING.md).
+
 Number Resource Management lives in `packages/core` (`nrm.ts`, `nrm-pools.ts`, `number-reservation.ts`, `vip-pattern-matcher.ts`, `order-numbering.ts`) on migrations `0020` and `0021`. Locks are database row locks with an optional Redis adapter; events go through the lifecycle outbox; IMSI recycling also runs as a Temporal workflow in `services/order-service`. Details in [NUMBERING.md](NUMBERING.md).
 
 ## Payments

@@ -1,3 +1,4 @@
+import { seedDunningRules } from './seed-dunning-rules.js';
 import type { OfferNode } from '@meridian/types';
 import { createNode } from './catalog.js';
 import { runBillCycle, payInvoice } from './billing.js';
@@ -202,4 +203,5 @@ export async function seedDemo(db: Db): Promise<void> {
   for (const i of invs.slice(0, 2)) await payInvoice(db, i.id, { method: 'CREDIT_CARD', reference: 'seed' }, 'seed');
   await createCase(db, { customerId: lim.customer.id, type: 'FIBER_ASSURANCE', subject: 'Intermittent fibre drops in the evening', priority: 'HIGH', note: 'Customer reports 3 drops this week.' }, 'seed');
   await createCase(db, { customerId: wei.customer.id, type: 'BILLING_REFUND', subject: 'Double charge for Netflix', note: 'Customer says Netflix was billed twice.' }, 'seed');
+  await seedDunningRules(db, { actor: 'seed' }); // the market's collections ladders, from here on (the demo overdue account above was chased by the Settings → Lifecycle ladder)
 }

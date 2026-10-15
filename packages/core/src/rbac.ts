@@ -36,6 +36,7 @@ const CORE_PERMISSIONS = [
   'inventory:writeoff', // take stock off the books with a reason: damaged, lost, expired, stolen, a count that came up short
   'warehouse:manage', // add, rename, switch off and remove warehouse locations
   'case:read', 'case:create', 'case:write',
+  'collections:manage', // agree payment arrangements, place debt with an agency, export the agency file
   'case:supervise', // run the SLA sweep, group cases into network incidents, take over any case
   'commission:read',
   'commission:configure', // plans, rules, slabs, claw-back policies, who earns by which plan, the dealer channel
@@ -99,7 +100,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'billing-ops': {
     id: 'billing-ops', label: 'Billing Operations', scope: 'staff', home: '/billing', creditLimitMinor: null,
     summary: 'Prepares bill runs (mock, review, exclusions) and runs dunning, records payments, issues credit notes, handles invoice queries. Approval of a bill run is for Finance or Revenue Assurance.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'billing:simulate', 'billing:template', 'billing:print', 'case:read', 'case:create', 'case:write'],
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'billing:simulate', 'billing:template', 'billing:print', 'collections:manage', 'case:read', 'case:create', 'case:write'],
   },
   'rating-charging': {
     id: 'rating-charging', label: 'Rating & Charging', scope: 'staff', home: '/catalog',
@@ -143,18 +144,18 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'customer-service', label: 'Customer Service', scope: 'staff', home: '/cases', creditLimitMinor: 20_000,
     summary: 'Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer', 'mnp:manage',
-      'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'catalog:read'],
+      'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'billing:simulate', 'collections:manage', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   'team-lead': {
     id: 'team-lead', label: 'Team Lead', scope: 'staff', home: '/cases', creditLimitMinor: 100_000,
     summary: 'Leads a support team: watches SLAs and escalations, groups cases into network incidents, approves refunds above an agent’s limit.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'mnp:manage', 'order:read', 'order:cancel',
-      'billing:read', 'billing:credit', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'case:supervise', 'catalog:read'],
+      'billing:read', 'billing:credit', 'billing:simulate', 'collections:manage', 'case:read', 'case:create', 'case:write', 'case:supervise', 'catalog:read'],
   },
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,
     summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables, and approval of bill runs.',
-    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:simulate', 'billing:template', 'billing:print', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
+    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:simulate', 'billing:template', 'billing:print', 'billing:credit', 'collections:manage', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
   },
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',

@@ -100,6 +100,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `case:read` | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |  | ✓ |  |
 | `case:create` |  |  | ✓ |  | ✓ | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |  |
 | `case:write` |  |  | ✓ |  |  | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |  |
+| `collections:manage` |  |  | ✓ |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |  |  |  |
 | `case:supervise` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |
 | `commission:read` | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |  | ✓ |  |  |  |  |
 | `commission:configure` |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |

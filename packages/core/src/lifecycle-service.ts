@@ -8,6 +8,9 @@ import { getLifecycleSettings, type DunningAction, type LifecycleSettings } from
 import { autoResumeDue, completePortOut, expireServices, etcQuoteForService, resumeService, suspendService, suspendVoluntary, terminateService, type LifecycleChannel, type TerminationOptions, type VoluntaryRequest } from './lifecycle.js';
 import { liftCreditRestrictions, logLifecycle, queueOutbox, restrictionOf, setBarLevel } from './lifecycle-state.js';
 import { postJournal } from './ledger.js';
+import { placeWithAgency } from './collections.js';
+import { hasActiveRules, listDunningRules, type DunningStepAction } from './dunning-rules.js';
+import { evaluateByRules } from './dunning-engine.js';
 import { getNumberingSettings, recycleExpired } from './nrm.js';
 import { NumberReservationService } from './number-reservation.js';
 import { expireStalePortIns } from './port-in.js';
@@ -65,7 +68,7 @@ export async function evaluateCreditLimit(db: Db, accountId: string, input: { un
 }
 
 // ───────────────────────── C. dunning ─────────────────────────
-export interface DunningStepResult { accountId: string; step: DunningAction; day: number; outcome: Record<string, unknown> }
+export interface DunningStepResult { accountId: string; step: DunningAction | DunningStepAction; day: number; outcome: Record<string, unknown>; /** Rule-driven ladders: the step's own name and what became of it. */ name?: string; status?: string }
 export interface DunningResult {
   asOf: DateStr; markedOverdue: number; evaluated: number; applied: DunningStepResult[];
   /** Accounts whose services were hard-barred / terminated in this run. */
@@ -75,7 +78,7 @@ export interface DunningResult {
 const BAR_RANK: Partial<Record<DunningAction, number>> = { SOFT_BAR: 1, HARD_BAR: 2, TERMINATE: 3 };
 
 /** The unpaid, past-due invoices of an account as of a date, and when the oldest was due (D). */
-async function overdueOf(q: Queryable, accountId: string, asOf: DateStr): Promise<{ invoices: Row[]; anchor: DateStr | null; balanceMinor: number }> {
+export async function overdueOf(q: Queryable, accountId: string, asOf: DateStr): Promise<{ invoices: Row[]; anchor: DateStr | null; balanceMinor: number }> {
   const invoices = (await q.query(
     `SELECT * FROM invoices WHERE account_id=$1 AND status IN ('ISSUED','OVERDUE') AND due_date < $2::date AND total_minor - paid_minor - credited_minor > 0 ORDER BY due_date`, [accountId, asOf])).rows;
   const anchor = invoices[0] ? String(invoices[0].dueDate).slice(0, 10) : null;
@@ -113,7 +116,7 @@ export async function evaluateDunningLadder(db: Db, accountId: string, asOf: Dat
     const rank = BAR_RANK[step.action] ?? 0;
     const superseded = (rank > 0 && rank < topBar) || ((step.action === 'REMIND' || step.action === 'FINAL_NOTICE') && lastNotice(step.action) !== step && topBar > 0 && false);
     const outcome = superseded ? { skipped: 'a harsher step was due at the same time' } : await applyStep(db, accountId, run.id as number, step.action, od, asOf, actor, cfg);
-    await db.query(`INSERT INTO dunning_steps (run_id, step, day_offset, applied_on, outcome) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (run_id, step) DO NOTHING`, [run.id, step.action, step.day, asOf, JSON.stringify(outcome)]);
+    await db.query(`INSERT INTO dunning_steps (run_id, step, step_key, step_name, status, day_offset, applied_on, outcome) VALUES ($1,$2,$2,$2,$6,$3,$4,$5) ON CONFLICT DO NOTHING`, [run.id, step.action, step.day, asOf, JSON.stringify(outcome), superseded ? 'SUPERSEDED' : 'APPLIED']);
     await db.query('UPDATE dunning_runs SET last_step=$2 WHERE id=$1', [run.id, step.action]);
     results.push({ accountId, step: step.action, day: step.day, outcome });
     if (step.action === 'TERMINATE' && !superseded) break;
@@ -122,7 +125,7 @@ export async function evaluateDunningLadder(db: Db, accountId: string, asOf: Dat
   return results;
 }
 
-async function applyStep(db: Db, accountId: string, runId: number, action: DunningAction, od: { invoices: Row[]; balanceMinor: number }, asOf: DateStr, actor: string, cfg: LifecycleSettings): Promise<Record<string, unknown>> {
+export async function applyStep(db: Db, accountId: string, runId: number, action: DunningAction, od: { invoices: Row[]; balanceMinor: number }, asOf: DateStr, actor: string, cfg: LifecycleSettings): Promise<Record<string, unknown>> {
   const invoices = od.invoices.map((i) => i.number as string);
   switch (action) {
     case 'REMIND':
@@ -201,9 +204,7 @@ async function handOverDebt(q: Queryable, accountId: string, cfg: LifecycleSetti
     await audit(q, actor, 'account', accountId, 'DEBT_WRITTEN_OFF', { balanceMinor: total });
     return { debt: 'WRITTEN_OFF', balanceMinor: total };
   }
-  await q.query(`UPDATE invoices SET collections_at = now() WHERE id = ANY($1::uuid[])`, [open.map((i) => i.id)]);
-  await queueOutbox(q, { kind: 'COLLECTIONS', instruction: 'HAND_OVER', accountId, payload: { balanceMinor: total, invoices: open.map((i) => i.number) } });
-  await audit(q, actor, 'account', accountId, 'DEBT_TO_COLLECTIONS', { balanceMinor: total });
+  await placeWithAgency(q, accountId, { writtenOff: false, actor });   // the debt is placed with the agency, and waits in the next file for it
   return { debt: 'COLLECTIONS', balanceMinor: total };
 }
 
@@ -213,9 +214,18 @@ export async function runDunning(db: Db, asOf: DateStr = today()): Promise<Dunni
   const marked = await db.query(`UPDATE invoices SET status='OVERDUE' WHERE status='ISSUED' AND due_date < $1::date AND total_minor - paid_minor - credited_minor > 0`, [asOf]);
   out.markedOverdue = marked.rowCount;
   const accounts = (await db.query(`SELECT DISTINCT account_id FROM invoices WHERE status='OVERDUE' AND due_date < $1::date AND total_minor - paid_minor - credited_minor > 0 ORDER BY account_id LIMIT 5000`, [asOf])).rows;
+  const rules = (await hasActiveRules(db)) ? await listDunningRules(db, { activeOnly: true }) : [];
   for (const a of accounts) {
     out.evaluated++;
     try {
+      // A rule that fits the customer decides; with no rule (or a run begun under the old ladder) the ladder in Settings → Lifecycle does.
+      const byRule = rules.length ? await evaluateByRules(db, a.accountId as string, asOf, { rules }) : null;
+      if (byRule) {
+        for (const r of byRule) out.applied.push({ accountId: r.accountId, step: r.action, day: r.day, outcome: r.outcome, name: r.name, status: r.status });
+        if (byRule.some((r) => r.status === 'APPLIED' && (r.action === 'HARD_BAR' || r.action === 'TERMINATE'))) out.suspendedAccounts++;
+        if (byRule.some((r) => r.status === 'APPLIED' && r.action === 'TERMINATE')) { out.terminatedAccounts++; out.flaggedForReview++; }
+        continue;
+      }
       const steps = await evaluateDunningLadder(db, a.accountId as string, asOf);
       out.applied.push(...steps);
       if (steps.some((s) => s.step === 'HARD_BAR' || s.step === 'TERMINATE') && !steps.some((s) => s.outcome.skipped)) out.suspendedAccounts++;
