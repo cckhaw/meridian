@@ -40,7 +40,7 @@ const GROUPS: Array<{ label: string; ids: string[] }> = [
   { label: 'Customers & service', ids: ['customers', 'orders', 'cases', 'mnp', 'kyc'] },
   { label: 'Money', ids: ['billing', 'finance', 'commission'] },
   { label: 'Products & stock', ids: ['catalog', 'inventory'] },
-  { label: 'Administration', ids: ['users', 'settings', 'audit'] },
+  { label: 'Administration', ids: ['users', 'settings', 'integrations', 'audit'] },
 ];
 function grouped(nav: NavItem[]): Array<{ label: string; items: NavItem[] }> {
   const used = new Set<string>();
@@ -239,4 +239,4 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
 }
 
 /** Modules that have their own icon (anything else falls back to the icon name the server sent). */
-const ID_ICON: Record<string, true> = { overview: true, customers: true, sell: true, dealers: true, stores: true, orders: true, billing: true, cases: true, kyc: true, mnp: true, catalog: true, inventory: true, finance: true, commission: true, users: true, settings: true, audit: true, account: true };
+const ID_ICON: Record<string, true> = { overview: true, customers: true, sell: true, dealers: true, stores: true, orders: true, billing: true, cases: true, kyc: true, mnp: true, catalog: true, inventory: true, finance: true, commission: true, users: true, settings: true, integrations: true, audit: true, account: true };

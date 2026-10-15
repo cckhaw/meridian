@@ -28,7 +28,7 @@ It is an ordinary Next.js app. Required **server-side** environment variables (n
 | Variable | Purpose |
 |---|---|
 | `MERIDIAN_API_URL` | CRM API base, e.g. `https://crm.example.com/api` |
-| `MERIDIAN_API_KEY` | a key created in the CRM under **Settings → Store-front → API keys** |
+| `MERIDIAN_API_KEY` | a key created in the CRM under **Integration → Online store-front → API keys** |
 
 On Vercel: create a second project from the same repository, set *Root Directory* to `apps/storefront`, add the two variables, deploy. Locally: `pnpm --filter @meridian/storefront dev` (port 3100) with the two variables set; the CRM runs on 3000.
 
@@ -83,7 +83,7 @@ Gateways implement one interface (`packages/core/src/gateways.ts`): `configured(
 
 1. Server environment: `MERIDIAN_STRIPE_SECRET_KEY` (`sk_…`), `MERIDIAN_STRIPE_PUBLISHABLE_KEY` (`pk_…`), `MERIDIAN_STRIPE_WEBHOOK_SECRET` (`whsec_…`).
 2. Stripe Dashboard → Developers → Webhooks → endpoint `https://<crm>/api/webhooks/gateway/stripe`, events `payment_intent.succeeded` and `payment_intent.payment_failed`.
-3. Settings → Store-front → switch Stripe on (and choose a default).
+3. Integration → Online store-front → switch Stripe on (and choose a default).
 
 Safety properties: the amount charged is the order total computed in the CRM; the webhook must carry a valid `Stripe-Signature` (HMAC-SHA256, 5-minute tolerance); the reported amount and currency must equal the payment intent or the event is refused and audited; every event id is processed once (replays are ignored); an already-paid order is never captured twice. Card numbers never reach Meridian or the store-front (Stripe’s Payment Element runs in Stripe’s iframe; the store-front’s CSP allows only `js.stripe.com` and Stripe frames).
 

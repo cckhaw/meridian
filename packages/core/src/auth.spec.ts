@@ -17,7 +17,7 @@ describe('role matrix', () => {
   it('only references real permissions and every module is reachable by some role', () => {
     for (const id of ROLE_IDS) for (const p of ROLES[id].permissions) expect(ALL_PERMISSIONS).toContain(p);
     // Settings is the one module reserved for the environment-defined super user (see the test below).
-    for (const m of MODULES.filter((x) => x.id !== 'settings')) expect(ROLE_IDS.some((r) => m.anyOf.some((p) => ROLES[r].permissions.includes(p))), m.id).toBe(true);
+    for (const m of MODULES.filter((x) => x.id !== 'settings' && x.id !== 'integrations')) expect(ROLE_IDS.some((r) => m.anyOf.some((p) => ROLES[r].permissions.includes(p))), m.id).toBe(true);
   });
   it('keeps settings:manage (currency, branding, payment gateways, API keys) with the super user only', () => {
     for (const id of ROLE_IDS) expect(ROLES[id].permissions as string[], id).not.toContain('settings:manage');

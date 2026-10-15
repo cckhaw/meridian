@@ -50,6 +50,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | Commission | ✓ |  |  |  |  |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  |
 | Users & roles | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Settings |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| Integration |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Audit log | ✓ |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ | ✓ |  |
 
 ## Permission matrix
