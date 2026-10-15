@@ -124,3 +124,4 @@ export * from './emv-qr.js';
 export * from './integration-hub.js';
 export * from './oauth.js';
 export * from './gateway.js';
+export * from './subscriber-ops.js';

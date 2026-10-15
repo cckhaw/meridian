@@ -652,6 +652,28 @@ const TMF688 = '/tmf-api/eventManagement/v4';
 north('POST', `${TMF688}/hub`, 'event:subscribe', async ({ db, principal, body }) => Response.json(await core.registerTmfListener(db, principal.ref, z.object({ callback: z.string().max(500), query: z.string().max(500).optional() }).parse(body)), { status: 201 }));
 north('DELETE', `${TMF688}/hub/:id`, 'event:subscribe', async ({ db, principal, params }) => { await core.unregisterTmfListener(db, principal.ref, params.id!); return new Response(null, { status: 204 }); });
 
+// ── Northbound: subscriber lifecycle and subscription operations (TMF 638 / 637 / 652) ──
+const northActor = (p: core.GatewayPrincipal) => `northbound:${p.ref}`;
+const channelOfPrincipal = (p: core.GatewayPrincipal): 'STAFF' | 'SELF_SERVE' => (p.channel === 'SELF_CARE' || p.channel === 'STOREFRONT' ? 'SELF_SERVE' : 'STAFF');
+const created = (body: unknown) => Response.json(body, { status: 201 });
+north('GET', '/v1/services/:id', 'subscriber:read', async ({ db, params }) => core.tmfService(db, (await core.resolveService(db, params.id!)).id as string));
+north('POST', '/v1/services/:id/otp', 'sim:swap', ({ db, params, principal }) => core.issueOtp(db, params.id!, northActor(principal)), { idempotent: true });
+north('POST', '/v1/services/:id/change-sim', 'sim:swap', async ({ db, params, body, principal }) => created(await core.changeSimNorth(db, params.id!, z.object({ newIccid: z.string().max(20).optional(), esim: z.boolean().optional(), reason: z.enum(core.SIM_SWAP_REASONS), otpToken: z.string().max(60).optional() }).parse(body), northActor(principal))), { idempotent: true });
+north('POST', '/v1/services/:id/change-msisdn', 'msisdn:change', async ({ db, params, body, principal }) => created(await core.changeMsisdnNorth(db, params.id!, z.object({ targetMsisdn: z.string().max(20).optional(), acceptCharge: z.boolean().optional() }).parse(body ?? {}), northActor(principal))), { idempotent: true });
+north('POST', '/v1/services/:id/transfer-ownership', 'ownership:transfer', async ({ db, params, body, principal }) => {
+  const b = z.object({ currentAccountId: uuid.optional(), toCustomerId: uuid, toAccountId: uuid.optional(), creditCheckAuthorised: z.boolean() }).parse(body);
+  const svc = await core.resolveService(db, params.id!);
+  if (b.currentAccountId && b.currentAccountId !== svc.accountId) throw new DomainError('REJECTED', 'currentAccountId is not the account this service is on.');
+  return created(await core.transferOwnershipNorth(db, params.id!, b, northActor(principal)));
+}, { idempotent: true });
+north('POST', '/v1/services/:id/status', 'subscriber:status', ({ db, params, body, principal }) => core.setStatusNorth(db, params.id!, z.object({ action: z.enum(core.STATUS_ACTIONS), reason: z.string().max(60).optional(), months: z.number().int().optional(), until: date.optional(), unbilledUsageMinor: z.number().int().min(0).optional() }).parse(body), northActor(principal), channelOfPrincipal(principal)), { idempotent: true });
+north('POST', '/v1/services/:id/vas', 'vas:manage', ({ db, params, body, principal }) => core.manageVasNorth(db, params.id!, z.object({ action: z.enum(core.VAS_ACTIONS), offerId: z.string().max(80) }).parse(body), northActor(principal)), { idempotent: true });
+// a subscription is identified by the service it is on
+north('POST', '/v1/subscriptions/:id/change-plan', 'subscription:change', ({ db, params, body, principal }) => core.changePlanNorth(db, params.id!, z.object({ serviceId: z.string().max(60).optional(), targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']), addOns: z.array(z.string().max(80)).max(10).optional(), acceptContractTerms: z.boolean().optional() }).parse(body), northActor(principal)), { idempotent: true });
+north('DELETE', '/v1/subscriptions/:id/change-plan', 'subscription:change', async ({ db, params, principal }) => { await core.cancelPendingPlanChange(db, params.id!, northActor(principal)); return new Response(null, { status: 204 }); });
+get('/settings/integration-hub/operations', 'settings:manage', ({ db }) => core.getNorthSettings(db));
+post('/settings/integration-hub/operations', 'settings:manage', ({ db, user, body }) => core.setNorthSettings(db, user.username, z.object({ simSwapOtpRequired: z.boolean().optional(), otpTtlMinutes: z.number().int().optional(), simSwapFeeMinor: z.number().int().optional(), numberChangeFeeMinor: z.number().int().optional(), ownershipTransferFeeMinor: z.number().int().optional(), planChangeFeeMinor: z.number().int().optional() }).parse(body)));
+
 // ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
 get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
 post('/accounts/:id/collections/run', ['billing:run'], async ({ db, user, params, body }) => {
