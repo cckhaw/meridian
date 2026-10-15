@@ -58,6 +58,8 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'billing:credit': ['Billing', 'Issue credit notes', 'Refunds and credits, up to the credit limit'],
   'billing:run': ['Billing', 'Run billing', 'Mock, review and exclude in bill runs, run dunning'],
   'billing:simulate': ['Billing', 'Simulate billing', 'Forecast future bills, quote the cost of ending a service, preview a plan change (changes nothing)'],
+  'billing:template': ['Billing', 'Design bill templates', 'Design, convert from legacy formats, and publish the layout of customer bills'],
+  'billing:print': ['Billing', 'Print bills', 'Produce bill PDFs and print-house packages (batch PDFs, control files, manifest)'],
   'billing:approve': ['Billing', 'Approve bill runs', 'Approve a mocked bill run so invoices are issued (a second person when dual control is on)'],
   'finance:read': ['Finance', 'See the ledger', 'Ledger, reconciliation and receivables'],
   'finance:export': ['Finance', 'Export journals', 'SAP journal export'],

@@ -1629,4 +1629,25 @@ describe('offer type switches and service types', () => {
     expect((await call('PATCH', '/settings/offer-types/EVENT_PASS', { cookie: admin, body: { behaviour: { goods: true } } })).status).toBe(422);
     expect((await call('DELETE', '/settings/service-kinds/EVENT_PASS', { cookie: admin })).status).toBe(422);
   });
+  it('bill templates: design, convert a legacy template, preview, publish; PDFs and print packages need their own rights', async () => {
+    const su = await root();
+    const cs = await staff(['customer-service']);
+    expect((await call('GET', '/billing/templates', { cookie: cs.cookie })).status).toBe(403);
+    expect((await call('GET', '/billing/print/jobs', { cookie: cs.cookie })).status).toBe(403);
+    const meta = (await call('GET', '/billing/templates/meta', { cookie: su })).json;
+    expect(meta.tokens.some((t: any) => t.token === 'invoice.number')).toBe(true);
+    expect(meta.tokens[0].get).toBeUndefined();
+    const conv = await call('POST', '/billing/templates/convert', { cookie: su, body: { format: 'HTML', content: '<h1>Bill {{invoice_no}}</h1><p>Hi ${customer_name}</p>' } });
+    expect(conv.status).toBe(200);
+    expect(conv.json.problems).toEqual([]);
+    expect((await call('POST', '/billing/templates/convert', { cookie: su, body: { format: 'HTML', content: '' } })).status).toBe(400);
+    const made = await call('POST', '/billing/templates/import', { cookie: su, body: { name: 'Legacy A', format: 'HTML', content: '<h1>Bill {{invoice_no}}</h1>' } });
+    expect(made.status).toBe(201);
+    const pv = await call('POST', '/billing/templates/preview', { cookie: su, body: { template: made.json.draft } });
+    expect([pv.status, pv.headers.get('content-type'), pv.text.slice(0, 4)]).toEqual([200, 'application/pdf', '%PDF']);
+    const pub = await call('POST', `/billing/templates/${made.json.id}/publish`, { cookie: su, body: { note: 'first' } });
+    expect([pub.json.version, pub.json.isDefault]).toEqual([1, true]);
+    expect((await call('POST', '/billing/print/jobs', { cookie: su })).status).toBe(405);
+    expect((await call('GET', '/billing/print/package', { cookie: su })).status).toBe(400); // nothing chosen to print
+  });
 });

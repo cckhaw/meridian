@@ -49,7 +49,7 @@ export default function InvoicePage({ params }: { params: Promise<{ id: string }
           <div className="flex justify-between border-t border-separator pt-2 text-title3 font-semibold"><dt>Balance due</dt><dd className="tabular-nums">{money(i.balanceMinor, i.currency)}</dd></div>
         </dl>
         {i.payments.length > 0 && <div className="mt-6 text-footnote text-label2">{i.payments.map((p: any) => <p key={p.id}>{dt(p.createdAt)} · {label(p.method)} · {p.status === 'REFUNDED' ? 'refund' : 'payment'} {money(p.amountMinor, i.currency)}</p>)}</div>}
-        <Button variant="secondary" className="mt-6 print:hidden" onClick={() => window.print()}>Print / save as PDF</Button>
+        <div className="mt-6 flex flex-wrap gap-2 print:hidden"><Button variant="secondary" onClick={() => window.print()}>Print this page</Button><a className="inline-flex min-h-tap items-center rounded-control bg-accent px-4 text-subhead font-semibold text-[rgb(var(--accent-label))]" href={`/api/invoices/${id}/pdf`} target="_blank" rel="noreferrer">Download the PDF bill</a></div>
       </article>
 
       <aside className="space-y-4 print:hidden">

@@ -26,6 +26,8 @@ export * from './roles-config.js';
 export * from './billing.js';
 export * from './bill-runs.js';
 export * from './billing-simulation.js';
+export * from './billing-templates.js';
+export * from './print-house.js';
 export * from './cases.js';
 export * from './catalog.js';
 export * from './config.js';
@@ -100,3 +102,7 @@ export { OCS_COMMAND_LABEL, OCS_VENDORS, GENERIC_REST_EXAMPLE, TEMPLATE_VARS } f
 export type { OcsConnector, OcsRequest, OcsResult, OcsCommandName } from './ocs-vendors/index.js';
 export * from './bulk-import.js';
 export * from './migration/index.js';
+export { BLOCK_TYPES, defaultTemplate, PAGE_SIZES_MM, sampleInvoice, STREAMS as BILL_STREAMS, TOKENS as BILL_TOKENS, validateTemplate } from './billing-docs/schema.js';
+export type { Block, InvoiceDoc, TemplateSchema } from './billing-docs/schema.js';
+export { DEFAULT_PRINT_PROFILE, SCREEN_PROFILE, type PrintProfile } from './billing-docs/pdf.js';
+export type { ConversionReport } from './billing-docs/legacy.js';
