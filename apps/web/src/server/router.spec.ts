@@ -1940,4 +1940,23 @@ describe('offer type switches and service types', () => {
     const shop = await call('GET', '/sims/available?kind=PHYSICAL&locationId=STORE-SG-001&limit=50', { cookie: su });
     expect(shop.json.items.every((s: any) => s.locationId === 'STORE-SG-001')).toBe(true);
   });
+  it('early termination rules: administrator settings, formulas are checked, the standard set loads, and a charge can be tried', async () => {
+    const su = await root();
+    const bo = await staff(['billing-ops']);
+    expect((await call('GET', '/settings/etc', { cookie: bo.cookie })).status).toBe(403);
+    expect((await call('POST', '/settings/etc/check', { cookie: su, body: { formula: 'monthlyFee * remaining' } })).json.ok).toBe(true);
+    expect((await call('POST', '/settings/etc/check', { cookie: su, body: { formula: 'bogus + 1' } })).json).toMatchObject({ ok: false, error: expect.stringMatching(/Unknown name/) });
+    const std = await call('POST', '/settings/etc/standard', { cookie: su });
+    expect(std.json.created.length).toBe(8);
+    const bad = await call('POST', '/settings/etc/rules', { cookie: su, body: { name: 'Bad', formula: 'nope', scenarios: ['CUSTOMER_REQUEST'] } });
+    expect(bad.status).toBe(400);
+    const made = await call('POST', '/settings/etc/rules', { cookie: su, body: { name: 'Flat fee', formula: '5000', scenarios: ['CUSTOMER_REQUEST'], priority: 900, device: 'NO_DEVICE' } });
+    expect(made.status).toBe(201);
+    const view = (await call('GET', '/settings/etc', { cookie: su })).json;
+    expect(view.rules.length).toBe(9);
+    expect(view.variables.map((v: any) => v.name)).toContain('deviceBalance');
+    const tried = await call('POST', '/settings/etc/preview', { cookie: su, body: { scenario: 'CUSTOMER_REQUEST', figures: { term: 24, elapsed: 6, monthlyFee: 6000 } } });
+    expect(tried.json.quote).toMatchObject({ chargeMinor: 5000, rule: { name: 'Flat fee' } });
+    expect((await call('DELETE', `/settings/etc/rules/${made.json.id}`, { cookie: su })).json.ok).toBe(true);
+  });
 });

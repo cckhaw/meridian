@@ -9,6 +9,7 @@ import { FulfilmentSettings, OfferTypeSettings, ServiceKindSettings } from './ca
 import { BillCycleSettings, CustomerSettings } from './customers';
 import { CaseSettings } from './cases';
 import { DunningSettings } from './dunning';
+import { EtcSettings } from './etc';
 import { IntegrationHubSettings } from './integration-hub';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
@@ -113,6 +114,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'cancellation': return <CancellationSettings />;
     case 'cases': return <CaseSettings />;
     case 'dunning-rules': return <DunningSettings />;
+    case 'early-termination': return <EtcSettings />;
     case 'integrations': return <IntegrationHubSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;

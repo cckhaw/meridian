@@ -63,6 +63,20 @@ ETC = remaining months × monthly recurring fee   +   unamortised device subsidy
 
 On termination the number rests in **quarantine** for 90 days (configurable) before it can be recycled, the SIM is released, and `DEPROVISION` goes to HLR/HSS/PCRF. The daily job releases numbers that have rested.
 
+### Early termination charge rules (Settings → Early termination)
+
+The charge for ending a contract early is worked out by **rules**, one per situation, each with a **formula** you write. A rule says when it applies (the situation, the customer segment, VIP or not, a device on the contract or plan only, the contract length and the months already served) and what to charge. The rule with the highest priority that fits is used.
+
+* **Situations** (scenarios): the customer ends the contract early; the number is ported out; we terminate for non-payment; a move to a cheaper plan during the contract; transfer to a new owner; relocation where we have no service; death, serious illness or hardship; a persistent fault on our side; force majeure or a regulatory change. Termination chooses its situation from how it happens (a port-out is `PORT_OUT`, a dunning termination `NON_PAYMENT`, otherwise `CUSTOMER_REQUEST`) or from the `scenario` the caller gives.
+* **Formulas** are arithmetic over named values, never code: `term`, `elapsed`, `remaining` (months), `monthlyFee`, `subsidy`, `retailPrice`, `deviceBalance` (instalments not yet billed), `deviceInstalment`, `newMonthlyFee` (plan change only) and `vipMultiplier`, with `+ - * / %`, comparisons, `&& || !`, `condition ? a : b`, parentheses and `min`, `max`, `round`, `floor`, `ceil`, `abs`, `clamp(x, lo, hi)`, `pct(x, percent)`. A formula is checked as you type and when it is saved. Amounts are in the smallest currency unit. Example: `subsidy * remaining / term + monthlyFee * remaining * 0.25`.
+* **Limits**: a least and a most charge, no charge in the last N months, whether a VIP number's multiplier applies, and the **share of the unpaid device instalments collected** on the final bill (as its own line, *Outstanding device instalments*).
+* **Try it** on the same page shows which rule fits some figures and what it would charge; nothing is saved.
+* **Standard set**: eight rules for the usual situations to start from. Add them with one click; rules you have changed are kept.
+* **Where it applies**: the termination itself and its closing invoice, the termination and port-out quotes in the billing simulator, the plan-change preview, and the estimate in the final notice of the dunning ladder.
+* **While no rule is switched on**, the contract terms on each offer decide, exactly as before, and unpaid device instalments are not collected. With rules on and none fitting a case, the offer's terms decide the charge and the unpaid instalments are collected in full.
+
+API: `GET/POST /api/settings/etc/rules`, `PATCH/DELETE /api/settings/etc/rules/{id}`, `POST /api/settings/etc/standard`, `/check` and `/preview`; `settings:manage`.
+
 ## E. Port-out
 
 `POST /mnp/port-out/confirmation { serviceId | identifier, reference, unbilledUsageMinor }` when the national clearinghouse confirms. The service is terminated at once with a closing invoice (recurring until today, usage not yet billed, ETC), the account's deposit is applied to it and the rest refunded when this was the last service (`POST /accounts/:id/deposit` takes deposits), the SIM and network resources are released, and the number is **not** recycled: it belongs to the other operator. The call is idempotent, so the clearinghouse can retry.

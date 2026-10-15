@@ -234,7 +234,7 @@ export async function transferOwnershipNorth(db: Db, ref: string, i: TransferInp
     if (to.shardId !== s.shardId) throw rejected('Cross-shard transfers go through the shard migration job.');
     // the departing owner's closing bill: what has not been billed yet (the contract continues with the new owner, so no early-termination charge)
     const when = new Date();
-    const closing = await closingStatement(q, s, { etcAdjust: { waive: true, reason: 'Ownership transfer: the contract continues with the new owner' } }, await getLifecycleSettings(q), actor, when);
+    const closing = await closingStatement(q, s, { scenario: 'OWNERSHIP_TRANSFER', etcAdjust: { waive: true, reason: 'Ownership transfer: the contract continues with the new owner' } }, await getLifecycleSettings(q), actor, when);
     const d = today();
     const fee = cfg.ownershipTransferFeeMinor;
     const lines = [...closing.lines, ...(fee > 0 ? [{ serviceId: s.id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, description: `Ownership transfer fee ${s.identifier}`, amountMinor: fee, taxInclusive: true } as DraftLine] : [])];
@@ -254,7 +254,7 @@ export async function transferOwnershipNorth(db: Db, ref: string, i: TransferInp
 
 // ───────────────────────── status ─────────────────────────
 export const STATUS_ACTIONS = ['SUSPEND', 'RESUME', 'SOFT_BAR', 'HARD_BAR', 'TERMINATE'] as const;
-export interface StatusInput { action: (typeof STATUS_ACTIONS)[number]; reason?: string; months?: number; until?: string; unbilledUsageMinor?: number }
+export interface StatusInput { action: (typeof STATUS_ACTIONS)[number]; /** For TERMINATE: why the contract ends (an early termination scenario). */ scenario?: string; reason?: string; months?: number; until?: string; unbilledUsageMinor?: number }
 
 export async function setStatusNorth(db: Db, ref: string, i: StatusInput, actor: string, channel: 'STAFF' | 'SELF_SERVE' = 'STAFF') {
   if (!(STATUS_ACTIONS as readonly string[]).includes(i.action)) throw invalid(`The action is one of ${STATUS_ACTIONS.join(', ')}.`);
@@ -295,7 +295,7 @@ export async function setStatusNorth(db: Db, ref: string, i: StatusInput, actor:
       event = 'SERVICE_BARRED'; break;
     }
     case 'TERMINATE':
-      await terminateService(db, id, { reason: i.reason ?? 'CUSTOMER_REQUEST', unbilledUsageMinor: i.unbilledUsageMinor }, actor);
+      await terminateService(db, id, { reason: i.reason ?? 'CUSTOMER_REQUEST', scenario: i.scenario as never, unbilledUsageMinor: i.unbilledUsageMinor }, actor);
       event = 'SERVICE_TERMINATED'; break;
   }
   await db.tx(async (q) => { const s = (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!; await emitEvent(q, event, s, { action: i.action, reason: i.reason ?? null, status: s.status, barLevel: s.barLevel }); });
