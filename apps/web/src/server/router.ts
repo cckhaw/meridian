@@ -112,6 +112,19 @@ get('/dealers/:id/agents', 'dealer:read', ({ db, user, params, query }) => { dea
 post('/dealers/:id/agents', 'dealer:manage', ({ db, user, params, body }) => core.createAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)) }).parse(body)));
 patch('/dealer-agents/:id', 'dealer:manage', ({ db, user, params, body }) => core.updateAgent(db, user.username, params.id!, z.object({ name: z.string().min(1).max(120), email: blank(z.string().email().max(200)), phone: blank(z.string().max(40)), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
 
+// ── bulk loading and downloading of dealers, agents and stores (CSV: a template, the current data, a check that changes nothing, then the load) ──
+const importBody = z.object({ csv: z.string().min(1).max(2_000_000), apply: z.boolean().default(false) });
+const staffOnly = (u: SessionUser) => { if (u.scope.dealerId) throw forbidden('Dealers are managed by the operator’s staff.'); };
+get('/dealers/import-template', 'dealer:manage', async ({ db, user }) => { staffOnly(user); return csv(await core.dealersFile(db, { channel: user.permissions.has('commission:configure') }), 'meridian-dealers-import-template.csv'); });
+get('/dealers/export', 'dealer:manage', async ({ db, user }) => { staffOnly(user); return csv(await core.dealersFile(db, { withData: true, actor: user.username, channel: user.permissions.has('commission:configure') }), 'meridian-dealers-export.csv'); });
+post('/dealers/import', 'dealer:manage', ({ db, user, body }) => { staffOnly(user); const b = importBody.parse(body); return core.importDealers(db, b.csv, { apply: b.apply, actor: user.username, channel: user.permissions.has('commission:configure') }); }, { maxBody: 2_500_000 });
+get('/dealer-agents/import-template', 'dealer:manage', async ({ db }) => csv(await core.agentsFile(db, {}), 'meridian-agents-import-template.csv'));
+get('/dealer-agents/export', 'dealer:manage', async ({ db, user }) => csv(await core.agentsFile(db, { withData: true, actor: user.username, dealerId: user.scope.dealerId ?? null }), 'meridian-agents-export.csv'));
+post('/dealer-agents/import', 'dealer:manage', ({ db, user, body }) => { const b = importBody.parse(body); return core.importAgents(db, b.csv, { apply: b.apply, actor: user.username, dealerId: user.scope.dealerId ?? null }); }, { maxBody: 2_500_000 });
+get('/stores/import-template', 'store:manage', async ({ db }) => csv(await core.storesFile(db, {}), 'meridian-stores-import-template.csv'));
+get('/stores/export', 'store:manage', async ({ db, user }) => csv(await core.storesFile(db, { withData: true, actor: user.username }), 'meridian-stores-export.csv'));
+post('/stores/import', 'store:manage', ({ db, user, body }) => { const b = importBody.parse(body); return core.importStores(db, b.csv, { apply: b.apply, actor: user.username }); }, { maxBody: 2_500_000 });
+
 // ───────────────────────── retail stores (master data kept in the CRM) ─────────────────────────
 const storeBody = z.object({ name: z.string().min(1).max(120), address: blank(z.string().max(300)), phone: blank(z.string().max(40)), marketCode: blank(z.string().length(2)) });
 // Whoever sets up staff or sells over a counter needs to find a store; only store:manage may change one.

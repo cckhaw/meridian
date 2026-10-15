@@ -1,19 +1,22 @@
 'use client';
 import { Alert, Badge, Button, DataList, Empty, Field, Input, LargeTitle, LoadMore, Modal, SearchField, Spinner } from '@meridian/ui';
 import { useState } from 'react';
+import { BulkImport } from '@/components/bulk-import';
 import { del, patch, post, useAction, useDebounced, usePaged } from '@/lib/api';
 
 export default function Stores() {
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
   const [editing, setEditing] = useState<any>(null); // a store, or {} for a new one
+  const [bulk, setBulk] = useState(false);
   const list = usePaged<any>(`/stores?limit=25&q=${encodeURIComponent(term)}`);
   return (
     <>
       <LargeTitle subtitle="The retail stores your staff sell from. Create a store here, then choose it when you create a store user under Users & roles.">Stores</LargeTitle>
-      <div className="mb-4 flex items-center gap-3">
-        <SearchField label="Search stores" placeholder="Store id or name starts with…" value={q} onChange={setQ} className="md:max-w-sm md:flex-1" />
-        <span className="flex-1" />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <SearchField label="Search stores" placeholder="Store id or name starts with…" value={q} onChange={setQ} className="w-full md:w-auto md:max-w-sm md:flex-1" />
+        <span className="hidden flex-1 md:block" />
+        <Button variant="secondary" className="whitespace-nowrap" onClick={() => setBulk(true)}>Import / export</Button>
         <Button onClick={() => setEditing({})}>New store</Button>
       </div>
       {list.error && <Alert>{list.error}</Alert>}{list.loading && list.items.length === 0 && <Spinner />}
@@ -31,6 +34,7 @@ export default function Stores() {
           <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="stores" />
         </>
       )}
+      {bulk && <BulkImport title="Import or export stores" onClose={() => setBulk(false)} onDone={() => void list.reload()} tabs={[{ id: 'stores', label: 'Stores', noun: ['store', 'stores'], templateHref: '/api/stores/import-template', exportHref: '/api/stores/export', importPath: '/stores/import' }]} />}
       {editing && <StoreForm store={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void list.reload(); }} />}
     </>
   );

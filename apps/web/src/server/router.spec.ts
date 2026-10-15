@@ -569,6 +569,47 @@ describe('settings and branding', () => {
     await call('POST', '/integrations/ocs', { cookie: su, body: { vendor: 'simulator', enabled: false } });
   });
 
+  it('dealers, agents and stores can be downloaded, filled in and loaded in bulk, within each person’s rights', async () => {
+    const su = await root();
+    const H = 'dealer_id,name,contact_name,email,phone,status,tier,parent_dealer_id,bank_account_name,bank_account_no,bank_code,sap_vendor_no';
+    for (const [p, h] of [['/dealers/import-template', 'dealer_id,name'], ['/dealer-agents/import-template', 'agent_id,dealer_id'], ['/stores/import-template', 'store_id,name']] as const) {
+      const r = await call('GET', p, { cookie: su });
+      expect(r.status, p).toBe(200);
+      expect(r.text).toContain(h);
+    }
+    expect((await call('GET', '/dealers/import-template')).status).toBe(401);
+    const desk = await staff(['dealer-desk']); // manages dealers, but cannot configure commission
+    const post = (path: string, cookie: string, csv: string, apply: boolean) => call('POST', path, { cookie, body: { csv, apply } });
+    const file = `${H}\n,Bulk Dealer One,Ann,ann@bulk.example,+6590000001,,MASTER_DISTRIBUTOR,,Bulk One Pte,0099887766,DBS,V777\n`;
+    expect((await post('/dealers/import', desk.cookie, file, false)).json.rows[0].message).toMatch(/permission to configure commission/);
+    const check = await post('/dealers/import', su, file, false);
+    expect(check.json).toMatchObject({ applied: false, canApply: true });
+    const done = await post('/dealers/import', su, file, true);
+    const id = done.json.rows[0].id as string;
+    expect(id).toMatch(/^DLR-\d{5}$/);
+    const full = await call('GET', '/dealers/export', { cookie: su });
+    expect(full.text).toContain(`${id},Bulk Dealer One`);
+    expect(full.text).toContain('0099887766');
+    const deskExport = await call('GET', '/dealers/export', { cookie: desk.cookie });
+    expect(deskExport.text).toContain(`${id},Bulk Dealer One`);
+    expect(deskExport.text).not.toContain('0099887766'); // bank details only for those who may configure commission
+
+    const ag = await post('/dealer-agents/import', desk.cookie, `agent_id,dealer_id,name,email,phone,status\n,${id},Bulk Agent,,,\n`, true);
+    expect(ag.json.rows[0].id).toBe(`${id}-A001`);
+    const own = await staff(['dealer'], { dealerId: id }); // a dealer's own login cannot manage master data, so it gets nothing here
+    for (const p of ['/dealers/export', '/dealer-agents/export', '/dealers/import-template']) expect((await call('GET', p, { cookie: own.cookie })).status, p).toBe(403);
+    expect((await post('/dealers/import', own.cookie, file, false)).status).toBe(403);
+    expect((await post('/dealer-agents/import', own.cookie, 'agent_id,dealer_id,name\n,x,y\n', false)).status).toBe(403);
+
+    const stores = await post('/stores/import', su, 'store_id,name,address,phone,status,market_code\n,Bulk Store,1 Test Road,,,\n', true);
+    const sid = stores.json.rows[0].id as string;
+    expect((await call('GET', '/stores/export', { cookie: su })).text).toContain(`${sid},Bulk Store`);
+    const retail = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    expect((await call('GET', '/stores/export', { cookie: retail.cookie })).status).toBe(403);
+    expect((await post('/stores/import', retail.cookie, 'store_id,name\n,X\n', false)).status).toBe(403);
+    expect((await post('/stores/import', su, 'store_id,name\n,Bulk Store\n', true)).status).toBe(400); // the name is taken
+  });
+
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {
     const admin = await staff(['admin']);
     expect((await call('GET', '/integrations', { cookie: admin.cookie })).status).toBe(403);

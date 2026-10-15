@@ -2,6 +2,7 @@
 import { Alert, Badge, Button, Card, DataList, Empty, Field, Input, LargeTitle, LoadMore, Modal, SearchField, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { patch, post, useAction, useDebounced, usePaged } from '@/lib/api';
+import { BulkImport } from '@/components/bulk-import';
 import { useAuth } from '@/lib/auth';
 
 export default function Dealers() {
@@ -11,13 +12,15 @@ export default function Dealers() {
   const term = useDebounced(q.trim());
   const [editing, setEditing] = useState<any>(null); // a dealer, or {} for a new one
   const [open, setOpen] = useState<any>(null);       // the dealer whose agents are shown
+  const [bulk, setBulk] = useState(false);
   const list = usePaged<any>(`/dealers?limit=25&q=${encodeURIComponent(term)}`);
   return (
     <>
       <LargeTitle subtitle="Partner dealers and the agents who sell for them. Orders placed on a dealer’s behalf name both.">Dealers</LargeTitle>
-      <div className="mb-4 flex items-center gap-3">
-        <SearchField label="Search dealers" placeholder="Dealer id or name starts with…" value={q} onChange={setQ} className="md:max-w-sm md:flex-1" />
-        <span className="flex-1" />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <SearchField label="Search dealers" placeholder="Dealer id or name starts with…" value={q} onChange={setQ} className="w-full md:w-auto md:max-w-sm md:flex-1" />
+        <span className="hidden flex-1 md:block" />
+        {manage && <Button variant="secondary" className="whitespace-nowrap" onClick={() => setBulk(true)}>Import / export</Button>}
         {manage && <Button onClick={() => setEditing({})}>New dealer</Button>}
       </div>
       {list.error && <Alert>{list.error}</Alert>}{list.loading && list.items.length === 0 && <Spinner />}
@@ -36,6 +39,10 @@ export default function Dealers() {
         </>
       )}
       {editing && <DealerForm dealer={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void list.reload(); }} />}
+      {bulk && <BulkImport title="Import or export dealers and agents" onClose={() => setBulk(false)} onDone={() => void list.reload()} tabs={[
+        { id: 'dealers', label: 'Dealers', noun: ['dealer', 'dealers'], templateHref: '/api/dealers/import-template', exportHref: '/api/dealers/export', importPath: '/dealers/import', help: <>Each dealer row also carries where it sits in the channel (tier and parent) and how it is paid (bank and SAP vendor). Those columns need the permission to configure commission, and so does downloading the bank details. Load parent dealers before their sub-dealers.</> },
+        { id: 'agents', label: 'Agents', noun: ['agent', 'agents'], templateHref: '/api/dealer-agents/import-template', exportHref: '/api/dealer-agents/export', importPath: '/dealer-agents/import', help: <>Every agent row names its dealer by <code>dealer_id</code>. An agent stays with its dealer.</> },
+      ]} />}
       {open && <Agents dealer={open} manage={manage} onClose={() => { setOpen(null); void list.reload(); }} />}
     </>
   );
