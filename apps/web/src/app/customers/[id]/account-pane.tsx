@@ -42,6 +42,7 @@ export function AccountPane({ accountId, serviceId, canBilling, onChange, onClea
               <p className="font-mono text-title3 font-semibold">{svc.data.identifier}</p>
               <p className="text-subhead text-label2">{svc.data.offerName} · <Badge tone={tone(svc.data.status)}>{label(svc.data.status)}</Badge>{svc.data.contractTermMonths ? ` · ${svc.data.contractTermMonths}-month contract from ${d(svc.data.contractStart)}` : ' · no contract'}</p>
               {svc.data.status !== 'TERMINATED' && <ServicePanel service={svc.data} accounts={[]} onClose={onClearService} onDone={refresh} />}
+              {svc.data.status !== 'TERMINATED' && can('billing:simulate') && <p className="mt-3 text-footnote"><Link className="font-medium text-accent" href={`/billing/simulate?service=${encodeURIComponent(svc.data.identifier)}`}>Quote ending this service, or forecast its bills →</Link></p>}
             </Card>
           )}
         </section>

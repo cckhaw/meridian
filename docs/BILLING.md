@@ -1,6 +1,6 @@
 # Billing: bill runs, governance, simulation and print output
 
-**Billing → Bill runs** (permissions `billing:read` to look, `billing:run` to prepare a run, `billing:approve` to approve it, `settings:manage` to change the rules) bills the 28 monthly cycles, the daily-cycle accounts, or chosen accounts, in four steps that cannot be skipped. This page describes what is built; the simulation engine and the template and print-house engine are added by the next two releases.
+**Billing → Bill runs** (permissions `billing:read` to look, `billing:run` to prepare a run, `billing:approve` to approve it, `settings:manage` to change the rules) bills the 28 monthly cycles, the daily-cycle accounts, or chosen accounts, in four steps that cannot be skipped. This page describes what is built; the template and print-house engine is added by the next release.
 
 ## What it is made of
 
@@ -10,7 +10,8 @@
 | The governed run: mock, review, exclusions, approval, production, in resumable slices | `packages/core/src/bill-runs.ts` |
 | Tables: `bill_cycle_configs` (the 28 cycles), `bill_runs`, `bill_run_items`, `bill_run_exclusions`, `invoices.bill_run_id` | migration `0034_bill_runs.sql` |
 | The same four stages as a durable Temporal workflow with deadlines and signals | `services/order-service/src/workflows/bill-run-governance.workflow.ts` |
-| Screens and API | `apps/web/src/app/billing/runs`, `/api/billing/runs*`, `/api/billing/cycles`, `/api/billing/exclusions` |
+| The billing simulator: forecasts, termination quotes, plan-change previews, saved simulations | `packages/core/src/billing-simulation.ts`, tables `simulation_runs`, `simulation_ledger` (migration `0035`) |
+| Screens and API | `apps/web/src/app/billing/runs`, `apps/web/src/app/billing/simulate`, `/api/billing/runs*`, `/api/billing/cycles`, `/api/billing/exclusions`, `/api/billing/simulate/*`, `/api/billing/simulations*` |
 
 ## The four stages
 
@@ -43,6 +44,16 @@ A run is a list of items, one per account, created in one statement when the run
 ## Settings and the 28 cycles
 
 *Cycles and rules* (super user): governance on/off, dual control, the spike and drop percentages, the large-bill limit, how old a mock may be, and per cycle: on/off and its own second-approver rule. A cycle that is off cannot be run.
+
+## The billing simulator
+
+**Billing → Billing simulator** (permission `billing:simulate`: Billing Operations, Call Center, Customer Service, Finance and Revenue Assurance) answers forward-looking questions with the **same code that bills and ends services**, and changes nothing: no invoice, ledger line, instalment, service or account is touched (a test checks this). An answer can be **saved** (a quote an agent gave, a forecast Finance keeps) with who ran it and when; saved answers are scratch data that nothing else reads (`purgeSimulations` removes those older than 90 days). There is a shortcut on a service in the customer view.
+
+* **Forecast bills** (up to 60 months, or 60 days for a daily-cycle account). Starting at the account's next unbilled bill date, each bill is built by the real cycle-bill code as if the earlier bills had been issued: the plans, the device instalments (an instalment with fewer bills left than the month being forecast has finished), tax, and the **device balance still owed after each bill**, falling to nothing at the **final instalment**, which is called out with the bill that finishes it. For each bill it also shows **what it would cost to end every contract on that date** (the early-termination charge by the contract's own rule, so it falls as the contract runs down and is nothing at the end). The first forecast bill is exactly the bill the next run would issue (tested to the cent). A forecast holds today's prices, contracts and charges: price changes, new services, plan changes and usage are not known.
+* **Ending a service.** The amount the customer would owe: the early-termination charge (with the free window, VIP multiplier, segment exemption, and a waiver or a percentage with its reason), the recurring charge not yet billed up to the end date, usage not yet billed (entered by the agent: the charging system's figure is not read), tax, and, optionally, the deposit applied and refunded. `payNowMinor` is the figure to quote. It is the same function the termination uses (`closingStatement`), and a test ends the service for real and checks the amounts match to the cent. Quoting a **waived or reduced** charge needs the right to end services (`service:terminate`), because it is the same decision. **Note:** ending a service cancels the device instalments still to come, as the termination always has (the early-termination charge is the only charge); the preview states this with the amount so nobody is surprised, and Finance may want to decide whether the remaining balance should be collected.
+* **Plan change.** For a service changing plan on a date: the statement that covers the date (the next bill date after it, in arrears) shows the old plan pro-rated up to the date and the new plan from it, compared with leaving things as they are, and the statement after it. It warns about a downgrade, a contract that would restart, and the early-termination exposure on the current contract. It is a preview: changing a plan in the live system is not built by this release.
+
+Simulation answers are stored one row per bill in `simulation_ledger`, partitioned by the account's bill cycle day (28 partitions, daily-cycle accounts in `00`), so a cycle's simulations live and can be dropped together.
 
 ## Not built, and design notes
 

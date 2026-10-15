@@ -976,6 +976,31 @@ post('/billing/exclusions', 'billing:run', async ({ db, user, body }) => Respons
 post('/billing/exclusions/:id/remove', 'billing:run', async ({ db, user, params }) => { await core.removeExclusion(db, user.username, Number(params.id)); return { ok: true }; });
 /** For a scheduler: works on whatever mock or production runs are waiting, so a big run goes on with nobody watching. */
 post('/billing/run-due', 'billing:run', ({ db }) => core.runDueBillRuns(db));
+// ───────────────────────── billing simulation: forecasts, termination quotes, plan-change previews (change nothing; may be saved) ─────────────────────────
+const sim = ['billing:simulate'] as Permission[];
+const saveFields = { save: z.boolean().optional(), title: z.string().max(120).optional() };
+/** Runs a simulation and, when asked, keeps it with the person who ran it. */
+const keep = async (db: Db, user: SessionUser, kind: core.SimulationKind, params: Record<string, unknown>, result: Record<string, unknown>, b: { save?: boolean; title?: string }) =>
+  Response.json(b.save ? { ...result, saved: await core.saveSimulation(db, user.username, kind, params, result as never, b.title) } : result);
+post('/billing/simulate/projection', sim, async ({ db, user, body }) => {
+  const b = z.object({ ref: z.string().min(1).max(60), months: z.number().int().min(1).max(core.PROJECTION_MAX_MONTHS), from: date.optional(), ...saveFields }).parse(body);
+  return keep(db, user, 'PROJECTION', { ref: b.ref, months: b.months, from: b.from ?? null }, await core.projectAccount(db, b.ref, { months: b.months, from: b.from }), b);
+});
+post('/billing/simulate/termination', sim, async ({ db, user, body }) => {
+  const b = z.object({ ref: z.string().min(1).max(60), date: date.optional(), unbilledUsageMinor: z.number().int().min(0).max(1e12).optional(), refundDeposit: z.boolean().optional(),
+    etcAdjust: z.object({ waive: z.boolean().optional(), percent: z.number().min(0).max(100).optional(), reason: z.string().max(300) }).optional(), ...saveFields }).parse(body);
+  // Waiving or reducing the charge in a quote is the same decision as doing it, so it needs the same right.
+  if (b.etcAdjust && !user.permissions.has('service:terminate')) throw forbidden('Only someone who may end a service can quote a waived or reduced charge.');
+  return keep(db, user, 'TERMINATION', { ref: b.ref, date: b.date ?? null, unbilledUsageMinor: b.unbilledUsageMinor ?? 0, refundDeposit: !!b.refundDeposit, etcAdjust: b.etcAdjust ?? null },
+    await core.previewTermination(db, b.ref, { date: b.date, unbilledUsageMinor: b.unbilledUsageMinor, refundDeposit: b.refundDeposit, etcAdjust: b.etcAdjust }, user.username), b);
+});
+post('/billing/simulate/plan-change', sim, async ({ db, user, body }) => {
+  const b = z.object({ ref: z.string().min(1).max(60), newOfferId: z.string().min(1).max(80), effectiveDate: date.optional(), ...saveFields }).parse(body);
+  return keep(db, user, 'PLAN_CHANGE', { ref: b.ref, newOfferId: b.newOfferId, effectiveDate: b.effectiveDate ?? null }, await core.simulatePlanChange(db, b.ref, { newOfferId: b.newOfferId, effectiveDate: b.effectiveDate }), b);
+});
+get('/billing/simulations', sim, ({ db, query }) => core.listSimulations(db, { kind: str(query, 'kind'), accountId: str(query, 'accountId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/billing/simulations/:id', sim, ({ db, params }) => core.getSimulation(db, params.id!));
+post('/billing/simulations/:id/delete', sim, async ({ db, user, params }) => { await core.deleteSimulation(db, user.username, params.id!); return { ok: true }; });
 /** The plain "bill this date" call skips review and approval, so it is refused while governance is on (the default). */
 post('/billing/run', 'billing:run', async ({ db, user, body }) => { if ((await core.getBillRunSettings(db)).enforceGovernance) throw new DomainError('REJECTED', 'Bill cycles are run from Billing → Bill runs, with a mock, a review and an approval. (A super user can switch this off in the bill-run settings.)'); const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
 /** Housekeeping for the store-front: closes stale sign-ups and releases orders whose online payment never arrived. Safe to run often (hourly is plenty). */
