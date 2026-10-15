@@ -3,11 +3,12 @@ import { Alert, Badge, Button, Card, DataList, Field, LargeTitle, SectionTitle, 
 import { useEffect, useMemo, useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
 import { dt } from '@/lib/format';
+import { ImportPanel } from './import-panel';
 
-interface Entity { id: string; label: string; domain: string; phase: number; description: string; importable: boolean; dependsOn: string[]; version: string; columns: number; required: string[]; note: string | null }
+interface Entity { rollback?: boolean; id: string; label: string; domain: string; phase: number; description: string; importable: boolean; dependsOn: string[]; version: string; columns: number; required: string[]; note: string | null }
 interface Meta { domains: Array<{ id: string; label: string; description: string }>; phases: Array<{ phase: number; label: string }>; entities: Entity[]; canUnmask: boolean; reasonMin: number; canExport: boolean; canImport: boolean }
 interface Job { id: string; kind: 'EXPORT' | 'IMPORT'; entity: string | null; entities: string[]; format: string; status: string; masked: boolean; fileName: string | null; rowsTotal: number | null; rowsDone: number; rowsError: number; percent: number; stage: string | null; summary: any; createdBy: string; createdAt: string; finishedAt: string | null }
-type Tab = 'export' | 'templates' | 'jobs';
+type Tab = 'export' | 'import' | 'templates' | 'jobs';
 
 const STATUS: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
   PENDING: { label: 'Waiting', tone: 'neutral' }, VALIDATING: { label: 'Checking', tone: 'warning' }, VALIDATED: { label: 'Checked', tone: 'neutral' }, IMPORTING: { label: 'Loading', tone: 'warning' },
@@ -28,9 +29,10 @@ export default function Migration() {
   const m = meta.data;
   return (
     <>
-      <LargeTitle subtitle="Back up and move the platform’s data: export what you need as spreadsheets or JSON, and get the exact templates for loading data from another system.">Data migration</LargeTitle>
-      <div className="mb-5"><Segmented label="Data migration" value={tab} onChange={setTab} options={[{ value: 'export', label: 'Export' }, { value: 'templates', label: 'Templates' }, { value: 'jobs', label: active ? 'Jobs ●' : 'Jobs' }]} /></div>
+      <LargeTitle subtitle="Move data in and out: export what you need as spreadsheets or JSON, get the exact templates, and load data from another system in phases, checked first and tracked as jobs.">Data migration</LargeTitle>
+      <div className="mb-5"><Segmented label="Data migration" value={tab} onChange={setTab} options={[{ value: 'export', label: 'Export' }, ...(m.canImport ? [{ value: 'import' as Tab, label: 'Import' }] : []), { value: 'templates', label: 'Templates' }, { value: 'jobs', label: active ? 'Jobs ●' : 'Jobs' }]} /></div>
       {tab === 'export' && <ExportPanel meta={m} onStarted={() => { void jobs.reload(); }} jobs={jobs.data?.items ?? []} />}
+      {tab === 'import' && m.canImport && <ImportPanel entities={m.entities} phases={m.phases} />}
       {tab === 'templates' && <Templates meta={m} />}
       {tab === 'jobs' && <Jobs jobs={jobs.data?.items ?? []} error={jobs.error} loading={jobs.loading && !jobs.data} />}
     </>
@@ -131,7 +133,7 @@ function Templates({ meta }: { meta: Meta }) {
                 { key: 'req', label: 'Required', render: (e: Entity) => <span className="font-mono text-caption text-label2">{e.required.join(', ') || '—'}</span> },
                 { key: 'dep', label: 'Load first', render: (e: Entity) => <span className="text-footnote text-label2">{e.dependsOn.length ? e.dependsOn.map((d) => meta.entities.find((x) => x.id === d)?.label ?? d).join(', ') : '—'}</span> },
                 { key: 'v', label: 'Version', render: (e: Entity) => <span className="font-mono text-caption">{e.version}</span> },
-                { key: 'i', label: 'Use', render: (e: Entity) => (e.importable ? <span className="text-footnote text-label2">Export and template</span> : <Badge>Export only</Badge>) },
+                { key: 'i', label: 'Use', render: (e: Entity) => (e.importable ? <span className="text-footnote text-label2">Export, template and import</span> : <Badge>Export only</Badge>) },
               ]}
               actions={(e: Entity) => (<><a className={link} href={`/api/migration/templates/${e.id}`}>CSV</a><a className={link} href={`/api/migration/templates/${e.id}?format=json`}>JSON</a></>)} />
           </Card>

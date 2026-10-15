@@ -653,6 +653,41 @@ describe('settings and branding', () => {
     expect((await call('GET', `/migration/jobs/${made.json.id}`, { cookie: admin.cookie })).json.id).toBe(made.json.id);
   });
 
+  it('data migration import: upload in pieces, check, see the report, load, and only people with the import permission may', async () => {
+    const admin = await staff(['admin']);
+    const retail = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    const file = Buffer.from('msisdn,state\n+6592000001,AVAILABLE\n+6592000002,AVAILABLE\n+6592000002,AVAILABLE\n');
+    expect((await call('POST', '/migration/uploads', { cookie: retail.cookie, body: { fileName: 'n.csv', totalBytes: file.length } })).status).toBe(403);
+    expect((await call('POST', '/migration/uploads', { cookie: admin.cookie, body: { fileName: 'n.exe', totalBytes: 10 } })).status).toBe(400);
+    const up = await call('POST', '/migration/uploads', { cookie: admin.cookie, body: { fileName: 'n.csv', totalBytes: file.length } });
+    expect(up.status).toBe(201);
+    expect(up.json).toMatchObject({ mode: 'chunked', chunks: 1 });
+    expect((await call('POST', `/migration/uploads/${up.json.id}/complete`, { cookie: admin.cookie })).status).toBe(400); // a piece is missing
+    expect((await call('POST', `/migration/uploads/${up.json.id}/chunks/0`, { cookie: admin.cookie, body: { data: file.subarray(0, 5).toString('base64') } })).status).toBe(400); // wrong size
+    expect((await call('POST', `/migration/uploads/${up.json.id}/chunks/0`, { cookie: admin.cookie, body: { data: file.toString('base64') } })).status).toBe(200);
+    const done = await call('POST', `/migration/uploads/${up.json.id}/complete`, { cookie: admin.cookie });
+    expect(done.json.uploads[0]).toMatchObject({ id: up.json.id, format: 'CSV' });
+    expect((await call('POST', '/migration/imports', { cookie: retail.cookie, body: { uploadId: up.json.id, entity: 'msisdns' } })).status).toBe(403);
+    expect((await call('POST', '/migration/imports', { cookie: admin.cookie, body: { uploadId: up.json.id, entity: 'service_types' } })).status).toBe(400); // export only
+    const job = await call('POST', '/migration/imports', { cookie: admin.cookie, body: { uploadId: up.json.id, entity: 'msisdns', onError: 'SKIP', errorThresholdPercent: 50 } });
+    expect(job.status).toBe(201);
+    let state = (await call('POST', `/migration/jobs/${job.json.id}/run`, { cookie: admin.cookie })).json;
+    for (let i = 0; i < 20 && state.status !== 'VALIDATED'; i++) state = (await call('POST', `/migration/jobs/${job.json.id}/run`, { cookie: admin.cookie })).json;
+    expect(state.status).toBe('VALIDATED');
+    expect(state.summary.validation).toMatchObject({ rows: 3, errors: 1, canStart: true });
+    const report = await call('GET', `/migration/jobs/${job.json.id}/report.csv`, { cookie: admin.cookie });
+    expect(report.text).toContain('DUPLICATE_KEY');
+    expect((await call('GET', `/migration/jobs/${job.json.id}/report.csv`, { cookie: retail.cookie })).status).toBe(403);
+    expect((await call('POST', `/migration/jobs/${job.json.id}/start`, { cookie: retail.cookie })).status).toBe(403);
+    expect((await call('POST', `/migration/jobs/${job.json.id}/start`, { cookie: admin.cookie })).json.status).toBe('IMPORTING');
+    for (let i = 0; i < 20 && state.status !== 'COMPLETED'; i++) state = (await call('POST', `/migration/jobs/${job.json.id}/run`, { cookie: admin.cookie })).json;
+    expect(state).toMatchObject({ status: 'COMPLETED', rowsOk: 2, percent: 100 });
+    expect((await call('POST', `/migration/jobs/${job.json.id}/rollback`, { cookie: admin.cookie })).json.status).toBe('ROLLING_BACK');
+    for (let i = 0; i < 20 && state.status !== 'ROLLED_BACK'; i++) state = (await call('POST', `/migration/jobs/${job.json.id}/run`, { cookie: admin.cookie })).json;
+    expect(state.status).toBe('ROLLED_BACK');
+    expect((await call('POST', '/migration/run', { cookie: admin.cookie })).status).toBe(403); // the scheduler endpoint needs billing:run
+  });
+
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {
     const admin = await staff(['admin']);
     expect((await call('GET', '/integrations', { cookie: admin.cookie })).status).toBe(403);
