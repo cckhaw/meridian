@@ -210,7 +210,7 @@ export function AddonsStep({ w }: { w: Wizard }) {
       {hints.map(({ r, missing }) => (
         <div key={r.id} className="mb-3 flex items-center justify-between gap-3 rounded-card bg-accent/8 p-4 text-subhead">
           <span>{r.name}. Add <strong>{label(missing[0].split(':')[1]).toLowerCase()}</strong> to get it.</span>
-          {missing[0].startsWith('kind:') && <Button variant="secondary" className="shrink-0 !min-h-[36px] !px-3 !text-subhead" onClick={() => w.jumpTo('product', { kind: missing[0].slice(5) })}>Choose</Button>}
+          {missing[0].startsWith('kind:') && <Button variant="secondary" className="shrink-0 !min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={() => w.jumpTo('product', { kind: missing[0].slice(5) })}>Choose</Button>}
         </div>
       ))}
       <SearchField label="Search add-ons" placeholder="Search add-ons" value={q} onChange={setQ} className="mb-3 sm:max-w-md" />

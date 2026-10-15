@@ -40,8 +40,8 @@ export default function Bundles() {
                 <p className="text-footnote text-label2">When an order has {r.when.map(kindName).join(' + ')}: {r.percentBps !== undefined ? `${r.percentBps / 100}%` : money(r.amountMinor)} off {kindName(r.target)}</p>
               </div>
               {edit && <span className="flex gap-2">
-                <Button variant="secondary" className="!min-h-[36px] !px-3 !text-subhead" onClick={() => act.run(() => patch(`/bundle-rules/${r.id}`, { ...r, status: r.status === 'ACTIVE' ? 'RETIRED' : 'ACTIVE' }))}>{r.status === 'ACTIVE' ? 'Retire' : 'Make live'}</Button>
-                <Button variant="destructive" className="!min-h-[36px] !px-3 !text-subhead" onClick={() => { if (confirm(`Delete “${r.name}”? Orders already placed keep their discount.`)) void act.run(() => del(`/bundle-rules/${r.id}`)); }}>Delete</Button>
+                <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={() => act.run(() => patch(`/bundle-rules/${r.id}`, { ...r, status: r.status === 'ACTIVE' ? 'RETIRED' : 'ACTIVE' }))}>{r.status === 'ACTIVE' ? 'Retire' : 'Make live'}</Button>
+                <Button variant="destructive" className="!min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={() => { if (confirm(`Delete “${r.name}”? Orders already placed keep their discount.`)) void act.run(() => del(`/bundle-rules/${r.id}`)); }}>Delete</Button>
               </span>}
             </li>
           ))}

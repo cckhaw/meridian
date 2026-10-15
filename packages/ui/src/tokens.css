@@ -80,3 +80,15 @@ body { background: rgb(var(--bg-grouped)); color: rgb(var(--label)); }
 .push-back { animation: push-back 300ms cubic-bezier(0.32, 0.72, 0, 1) both; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .push-fwd, .push-back, .sheet-in { animation: fade-in 160ms ease both; } }
+
+/* ── Touch targets: on phones and tablets (or any touch screen) every control is at least 44pt, as the HIG asks. Text-only links keep their look
+      but get an invisible hit area around them, so dense lists stay compact and are still easy to hit. ── */
+@media (max-width: 1023px), (pointer: coarse) {
+  button:not([class*='text-footnote']:not([class*='bg-'])):not([class*='text-caption']:not([class*='bg-'])):not([class*='h-7']):not([class*='h-6']),
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='hidden']) { min-height: var(--tap); }
+  :where(button, a)[class*='text-footnote']:not([class*='bg-']):not([class*='absolute']):not([class*='fixed']):not([class*='relative']),
+  :where(button, a)[class*='text-caption']:not([class*='bg-']):not([class*='absolute']):not([class*='fixed']):not([class*='relative']) { position: relative; }
+  :where(button, a)[class*='text-footnote']:not([class*='bg-'])::after,
+  :where(button, a)[class*='text-caption']:not([class*='bg-'])::after { content: ''; position: absolute; inset: -12px -8px; }
+}

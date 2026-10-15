@@ -134,8 +134,8 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
         <div className="rail-hide min-w-0"><p className="truncate text-subhead font-medium">{user.name}</p><p className="truncate text-caption text-label2">{user.roles.join(' · ')}</p></div>
       </div>
       <div className="rail-col mt-2 flex gap-1.5">
-        <button onClick={onChangePassword} aria-label="Change password" title={rail ? 'Change password' : undefined} className={`flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote hover:opacity-80 ${focusRing}`}><Icon name="key" size={15} /><span className="rail-hide">Password</span></button>
-        <button onClick={onSignOut} aria-label="Sign out" title={rail ? 'Sign out' : undefined} className={`flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote text-danger hover:opacity-80 ${focusRing}`}><Icon name="signout" size={15} /><span className="rail-hide">Sign out</span></button>
+        <button onClick={onChangePassword} aria-label="Change password" title={rail ? 'Change password' : undefined} className={`flex min-h-[34px] max-lg:min-h-tap flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote hover:opacity-80 ${focusRing}`}><Icon name="key" size={15} /><span className="rail-hide">Password</span></button>
+        <button onClick={onSignOut} aria-label="Sign out" title={rail ? 'Sign out' : undefined} className={`flex min-h-[34px] max-lg:min-h-tap flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote text-danger hover:opacity-80 ${focusRing}`}><Icon name="signout" size={15} /><span className="rail-hide">Sign out</span></button>
       </div>
     </div>
   );

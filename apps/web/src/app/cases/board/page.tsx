@@ -28,7 +28,7 @@ export default function Board() {
       {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
 
       {sup && <>
-        <SectionTitle action={<Button variant="plain" className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(async () => { const r = await post('/cases/sla-sweep'); return r; }, 'Checked every open case')}>Check now</Button>}>Service levels</SectionTitle>
+        <SectionTitle action={<Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(async () => { const r = await post('/cases/sla-sweep'); return r; }, 'Checked every open case')}>Check now</Button>}>Service levels</SectionTitle>
         {!board.data ? <Spinner /> : board.data.breached.length + board.data.warning.length === 0 ? <Empty>Nothing is past its service level or close to it.</Empty> : (
           <TableWrap><thead><tr><Th>Case</Th><Th>Subject</Th><Th>Severity</Th><Th>Assigned</Th><Th>State</Th><Th>Due</Th></tr></thead><tbody>
             {[...board.data.breached.map((k: any) => ({ ...k, late: true })), ...board.data.warning.map((k: any) => ({ ...k, late: false }))].map((k: any) => (
@@ -46,7 +46,7 @@ export default function Board() {
         <Card className="mt-4"><h3 className="mb-2 text-subhead font-semibold">Nodes with several fault cases</h3>
           <ul className="space-y-2">{suggestions.data.items.map((s: any) => (
             <li key={s.postalNode} className="flex flex-wrap items-center gap-3 rounded-control bg-surface2 px-3 py-2 text-subhead"><span className="font-mono">{s.postalNode}</span><span>{s.cases} cases since {dt(s.oldestAt)}</span>
-              <Button className="ml-auto !min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post('/cases/incidents', { postalNode: s.postalNode, issueTypeId: s.issueTypeId, subject: `Network incident at ${s.postalNode}: ${s.cases} customers affected` }), 'Incident created')}>Group into an incident</Button></li>))}</ul></Card>)}
+              <Button className="ml-auto !min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post('/cases/incidents', { postalNode: s.postalNode, issueTypeId: s.issueTypeId, subject: `Network incident at ${s.postalNode}: ${s.cases} customers affected` }), 'Incident created')}>Group into an incident</Button></li>))}</ul></Card>)}
       {sup && meta.data && (
         <Card className="mt-4 space-y-3"><h3 className="text-subhead font-semibold">Open an incident</h3>
           <div className="grid gap-3 sm:grid-cols-2"><Field label="Postal node" hint="The postcode or node code of the fault"><Input value={f.postalNode} onChange={(e) => setF({ ...f, postalNode: e.target.value })} className="font-mono" maxLength={20} /></Field>
@@ -62,9 +62,9 @@ export default function Board() {
             <li key={r.id} className="rounded-control bg-surface p-3 text-subhead shadow-card">
               <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{money(r.amountMinor, r.currency)}</span><span className="text-label2">on {r.invoiceNumber} · {r.customerName}</span><Link className="font-mono text-accent" href={`/cases/${r.caseId}`}>{r.caseNumber}</Link><Badge tone="warning">{r.tierLabel}</Badge></div>
               <div className="text-footnote text-label2">{r.reason} · asked by {r.requestedBy}, {dt(r.requestedAt)}</div>
-              <div className="mt-2 flex flex-wrap items-center gap-2"><Input aria-label="Decision note" placeholder="Note (needed to reject)" value={note} onChange={(e) => setNote(e.target.value)} className="!min-h-[36px] max-w-xs" />
-                <Button className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'APPROVE', note }), 'Approved and credited')}>Approve</Button>
-                <Button variant="secondary" className="!min-h-[36px]" disabled={act.busy || note.trim().length < 3} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'REJECT', note }), 'Rejected')}>Reject</Button></div></li>))}</ul>)}
+              <div className="mt-2 flex flex-wrap items-center gap-2"><Input aria-label="Decision note" placeholder="Note (needed to reject)" value={note} onChange={(e) => setNote(e.target.value)} className="!min-h-[36px] max-lg:!min-h-tap max-w-xs" />
+                <Button className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'APPROVE', note }), 'Approved and credited')}>Approve</Button>
+                <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy || note.trim().length < 3} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'REJECT', note }), 'Rejected')}>Reject</Button></div></li>))}</ul>)}
       </>}
     </>
   );

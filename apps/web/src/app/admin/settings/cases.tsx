@@ -92,9 +92,9 @@ function SlaMatrix() {
         <tbody>{TIERS.flatMap((t) => SEVERITIES.map((s) => data.items.find((r) => r.tier === t && r.severity === s)).filter(Boolean)).map((r: any) => (
           <tr key={key(r)} className="border-t border-separator">
             <td className="py-2 pr-3">{label(r.tier)}</td><td className="py-2 pr-3">{label(r.severity)}</td>
-            <td className="py-2 pr-3"><Input aria-label={`${r.tier} ${r.severity} first response`} type="number" min={1} className="!min-h-[36px] w-28" value={val(r).fr} onChange={(e) => set(r, 'fr', e.target.value)} /><span className="ml-2 text-caption text-label2">{human(Number(val(r).fr) || 0)}</span></td>
-            <td className="py-2 pr-3"><Input aria-label={`${r.tier} ${r.severity} resolution`} type="number" min={1} className="!min-h-[36px] w-28" value={val(r).res} onChange={(e) => set(r, 'res', e.target.value)} /><span className="ml-2 text-caption text-label2">{human(Number(val(r).res) || 0)}</span></td>
-            <td className="py-2"><Input aria-label={`${r.tier} ${r.severity} warning`} type="number" min={1} max={99} className="!min-h-[36px] w-20" value={val(r).warn} onChange={(e) => set(r, 'warn', e.target.value)} /></td></tr>))}</tbody></table></div>
+            <td className="py-2 pr-3"><Input aria-label={`${r.tier} ${r.severity} first response`} type="number" min={1} className="!min-h-[36px] max-lg:!min-h-tap w-28" value={val(r).fr} onChange={(e) => set(r, 'fr', e.target.value)} /><span className="ml-2 text-caption text-label2">{human(Number(val(r).fr) || 0)}</span></td>
+            <td className="py-2 pr-3"><Input aria-label={`${r.tier} ${r.severity} resolution`} type="number" min={1} className="!min-h-[36px] max-lg:!min-h-tap w-28" value={val(r).res} onChange={(e) => set(r, 'res', e.target.value)} /><span className="ml-2 text-caption text-label2">{human(Number(val(r).res) || 0)}</span></td>
+            <td className="py-2"><Input aria-label={`${r.tier} ${r.severity} warning`} type="number" min={1} max={99} className="!min-h-[36px] max-lg:!min-h-tap w-20" value={val(r).warn} onChange={(e) => set(r, 'warn', e.target.value)} /></td></tr>))}</tbody></table></div>
       {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}{act.ok && !Object.keys(edit).length && <div className="mt-3"><Alert tone="success">{act.ok}</Alert></div>}
       <div className="mt-4"><Button disabled={act.busy || !Object.keys(edit).length} onClick={() => void save()}>Save service levels</Button></div>
     </Card>

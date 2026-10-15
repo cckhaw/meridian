@@ -16,7 +16,7 @@ export function InteractionsPanel({ customerId, onChange }: { customerId: string
   const act = useAction(async () => { await list.reload(); onChange(); });
   return (
     <>
-      <SectionTitle action={can('case:create') ? <Button variant="plain" className="!min-h-[36px]" onClick={() => setOpen(!open)}>{open ? 'Close' : 'Log an interaction'}</Button> : undefined}>Interactions</SectionTitle>
+      <SectionTitle action={can('case:create') ? <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" onClick={() => setOpen(!open)}>{open ? 'Close' : 'Log an interaction'}</Button> : undefined}>Interactions</SectionTitle>
       {open && (
         <Card className="mb-4"><form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => post('/interactions', { customerId, ...f }))) { setOpen(false); setF({ ...f, subject: '', summary: '' }); } }}>
           <Field label="Channel"><Select value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value })}>{(meta.data?.channels ?? ['CALL_CENTER']).map((ch: string) => <option key={ch} value={ch}>{label(ch)}</option>)}</Select></Field>

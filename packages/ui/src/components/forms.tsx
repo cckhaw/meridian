@@ -108,7 +108,7 @@ export function Spinner({ label = 'Loading' }: { label?: string }) {
 }
 export const Empty = ({ children }: { children: ReactNode }) => <p className="rounded-card bg-surface px-4 py-8 text-center text-subhead text-label2 shadow-card">{children}</p>;
 export const SectionTitle = ({ children, action }: { children: ReactNode; action?: ReactNode }) => (
-  <div className="mb-3 mt-8 flex items-center justify-between gap-3 first:mt-0"><h2 className="text-title3 font-semibold">{children}</h2>{action}</div>
+  <div className="mb-3 mt-8 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 first:mt-0"><h2 className="min-w-0 text-title3 font-semibold">{children}</h2>{action && <div className="shrink-0 [&_button]:whitespace-nowrap">{action}</div>}</div>
 );
 
 /**
