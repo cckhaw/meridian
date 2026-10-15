@@ -27,7 +27,7 @@ A customer normally comes into being with their first order, so the order wizard
 
 Always asked: **Full name / Company name**, **ID document** (NRIC, passport or business registration), the segment and the bill cycle. For every other detail the administrator chooses **Hidden**, **Optional** or **Required**: e-mail, phone, date of birth, gender, address, postcode, city, state or region, and country. A hidden detail is not shown, not asked and not stored; a required one must be filled in, whether the form is used on the Customers page or in the order wizard (the API enforces it too). Everything starts as optional. The details a customer has are shown under their name on the customer page.
 
-**Bill cycles** are a list in Settings: the days of the month (1 to 28) and/or daily that a new customer or account can be given, and the default a new account starts with. Switching a cycle off removes it from the drop-down and from the API; accounts already on it keep it.
+**Bill cycles** are a list in Settings: the days of the month (1 to 28) that a new customer or account can be given (there is no daily cycle), and the default a new account starts with: a **fixed day** chosen from the list, or based on the date the billing account is created, the **next bill cycle date** (the next switched-on day after it) or the **previous bill cycle date** (the latest switched-on day before it). Switching a cycle off removes it from the drop-down and from the API; accounts already on it keep it.
 
 The online shop keeps the date of birth and address a shopper gave for identity verification on the customer it creates.
 

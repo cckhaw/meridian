@@ -18,6 +18,22 @@ Meridian refuses to serve traffic in production unless it is configured safely: 
 | `MERIDIAN_LOCK_AFTER_FAILURES` / `_LOCK_MINUTES` | no | Lock an account after 5 failures for 15 minutes. |
 | `MERIDIAN_LOGIN_IP_LIMIT` / `_USER_LIMIT` | no | Failed sign-ins per 15 minutes per address (30) and per username (10), including usernames that do not exist. |
 | `PG_POOL_MAX` | no | Connections per instance. Use 1-3 on serverless platforms. |
+| `MERIDIAN_LOGICAL_SHARDS` | no | Logical shards (default 16, matching the partitions the migrations create). Read [SCALE.md](SCALE.md) before raising it. |
+| `MERIDIAN_DASHBOARD_TTL` | no | Seconds the dashboard figures are cached (default 30 in production, 0 = always live elsewhere). |
+| `MERIDIAN_SAP_COMPANY_CODE`, `MERIDIAN_SAP_TOKEN` | no | Default company code written to the SAP journal export (default `1000`), and the bearer token for REST delivery ([FINANCE.md](FINANCE.md)). |
+| `MERIDIAN_OCS_*` | no | Tokens for the charging-system REST connector. You choose the name (it must start with `MERIDIAN_OCS_`, for example `MERIDIAN_OCS_TOKEN`) and enter it in Settings; the secret is never stored in the database ([OCS.md](OCS.md)). |
+| `MERIDIAN_WFM_WEBHOOK_SECRET`, `MERIDIAN_WFM_*` | no | The secret (16+ characters) the field-service system signs its callbacks with, and the token for the field-service REST connector. The names are set in Settings → Cases and must start with `MERIDIAN_WFM_` ([CASES.md](CASES.md)). |
+| `MERIDIAN_MIGRATION_S3_*`, `MERIDIAN_MIGRATION_DB_MAX_MB` | no | Object storage for large data-migration uploads, and the size limit when uploads go through the database (default 256 MB) ([MIGRATION.md](MIGRATION.md#object-storage-optional)). |
+| `MERIDIAN_ALLOW_EMBEDDED_DB` | no | Production only: `true` allows the in-memory demo database when `DATABASE_URL` is unset. Never for real data; everything is lost on restart. |
+| `MERIDIAN_ALLOW_DEMO_DATA` | no | Production only: `true` allows `MERIDIAN_SEED=demo` (fake customers). Never for real data. |
+| `MERIDIAN_DATA_DIR` | no | Development only: persist the embedded database to this folder. Ignored when `DATABASE_URL` is set. |
+| `MERIDIAN_API_URL`, `MERIDIAN_API_KEY` | store-front | Where the store-front finds the CRM's store API and the key it uses ([STOREFRONT.md](STOREFRONT.md)). |
+| `TEMPORAL_ADDRESS` | order-service | Temporal server address for the order, billing, case and dunning workflows (default `localhost:7233`). The CRM works without Temporal. |
+| `MONGO_URL` | catalog-service | MongoDB connection string for the catalog service (default `mongodb://localhost:27017/meridian_catalog`). |
+| `PORT` | services | Listen port of `catalog-service` (default 4001) and `order-service` (default 4002). |
+| `TEST_DATABASE_URL` | tests | Runs the core test suite on real Postgres instead of the embedded database. |
+
+Dunning needs no variables of its own: its pay page address, QR merchant details and credit-bureau name are set in Settings ([DUNNING.md](DUNNING.md#qr-payment-links)).
 
 See `.env.example`.
 
