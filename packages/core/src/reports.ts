@@ -1,4 +1,4 @@
-import { ACTIVE_SQL } from './cases.js';
+import { ACTIVE_SQL, slaView } from './cases.js';
 import type { OfferNode } from '@meridian/types';
 import { monthlyFee } from './catalog.js';
 import { GL, GL_NAMES } from './config.js';
@@ -39,7 +39,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
     q.query(`SELECT o.id, o.number, o.state, o.channel, o.total_minor, o.currency, o.created_at,
         (SELECT string_agg(ol.description, ', ') FROM order_lines ol WHERE ol.order_id = o.id) AS summary FROM orders o WHERE o.customer_id=$1 ORDER BY o.created_at DESC LIMIT 10`, [id]),
     q.query(`SELECT i.id, i.number, i.status, i.issue_date, i.due_date, i.total_minor, i.currency, i.total_minor - i.paid_minor - i.credited_minor AS balance_minor FROM invoices i WHERE i.customer_id=$1 ORDER BY i.issue_date DESC, i.number DESC LIMIT 10`, [id]),
-    q.query(`SELECT id, number, type, status, priority, subject, created_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
+    q.query(`SELECT id, number, type, status, priority, severity, tier, assignee, subject, category_path, created_at, resolution_due, first_response_due, first_response_at, sla_resolution_minutes, sla_warn_percent, sla_paused_at, resolved_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
     listChildren(q, id, { limit: 10 }),
     q.query(`SELECT count(*) AS n FROM service_groups WHERE customer_id=$1 AND status='ACTIVE'`, [id]),
     customerLineage(q, id),
@@ -50,7 +50,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
   const b = balance.rows[0]!;
   const childCount = (await q.query('SELECT count(*) AS n FROM customers WHERE parent_customer_id=$1', [id])).rows[0]!.n;
   return {
-    customer, accounts: accounts.items, accountCount: acctCount.rows[0]!.n, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows,
+    customer, accounts: accounts.items, accountCount: acctCount.rows[0]!.n, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows.map((k) => ({ ...k, sla: slaView(k) })),
     children: children.items, childCount, groupCount: groupCount.rows[0]!.n, ancestors: lineage.ancestors,
     outstandingMinor: b.outstanding, overdueMinor: b.overdue,
     recommendations: await recommend(q, id, b.overdue),

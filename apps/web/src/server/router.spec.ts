@@ -1650,4 +1650,32 @@ describe('offer type switches and service types', () => {
     expect((await call('POST', '/billing/print/jobs', { cookie: su })).status).toBe(405);
     expect((await call('GET', '/billing/print/package', { cookie: su })).status).toBe(400); // nothing chosen to print
   });
+  it('cases: classification, SLA, lifecycle rules and interactions over the API', async () => {
+    const su = await root();
+    const agent = await staff(['call-center']);
+    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Case Carla', idDocument: 'S1234567D' } })).json.customer;
+    const meta = (await call('GET', '/cases/meta', { cookie: agent.cookie })).json;
+    expect(meta.taxonomy.length).toBeGreaterThan(3);
+    expect(meta.transitions.NEW).toEqual(['IN_PROGRESS']);
+    expect((await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: cust.id, subject: '' } })).status).toBe(400);
+    const call1 = (await call('POST', '/interactions', { cookie: agent.cookie, body: { customerId: cust.id, channel: 'CALL_CENTER', direction: 'INBOUND', subject: 'Fibre red light', sessionRef: 'c-1' } })).json;
+    const kase = (await call('POST', `/interactions/${call1.id}/case`, { cookie: agent.cookie, body: { issueTypeId: 'broadband.down.los' } })).json;
+    expect([kase.severity, kase.status, kase.channel]).toEqual(['CRITICAL_OUTAGE', 'NEW', 'CALL_CENTER']);
+    expect((await call('POST', `/cases/${kase.id}/status`, { cookie: agent.cookie, body: { status: 'RESOLVED', resolution: 'x' } })).status).toBe(422);
+    expect((await call('POST', `/cases/${kase.id}/status`, { cookie: agent.cookie, body: { status: 'IN_PROGRESS' } })).json.assignee).toBe(agent.username);
+    expect((await call('POST', `/cases/${kase.id}/status`, { cookie: agent.cookie, body: { status: 'PENDING_DISPATCH' } })).status).toBe(200);
+    expect((await call('POST', `/cases/${kase.id}/status`, { cookie: agent.cookie, body: { status: 'DISPATCHED' } })).status).toBe(422);
+    const tl = (await call('GET', `/cases/${kase.id}/timeline`, { cookie: agent.cookie })).json.items;
+    expect(tl.map((t: any) => t.kind)).toEqual(expect.arrayContaining(['status', 'created', 'attached']));
+    expect((await call('GET', `/interactions?caseId=${kase.id}`, { cookie: agent.cookie })).json.items).toHaveLength(1);
+    // classification and the SLA matrix are administrator settings
+    expect((await call('GET', '/settings/cases/sla', { cookie: agent.cookie })).status).toBe(403);
+    const node = await call('POST', '/settings/cases/taxonomy', { cookie: su, body: { name: 'Wi-Fi extender' } });
+    expect(node.status).toBe(201);
+    expect((await call('DELETE', `/settings/cases/taxonomy/${encodeURIComponent(node.json.id)}`, { cookie: su })).json.ok).toBe(true);
+    expect((await call('POST', '/settings/cases/sla', { cookie: su, body: { rows: [{ tier: 'VIP', severity: 'MINOR_INQUIRY', firstResponseMinutes: 500, resolutionMinutes: 100, warnPercent: 80 }] } })).status).toBe(400);
+    // only an administrator can make a customer VIP
+    expect((await call('PATCH', `/customers/${cust.id}`, { cookie: agent.cookie, body: { vip: true } })).status).toBe(403);
+    expect((await call('PATCH', `/customers/${cust.id}`, { cookie: su, body: { vip: true } })).json.vip).toBe(true);
+  });
 });
