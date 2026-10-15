@@ -33,7 +33,7 @@ export default function Users() {
           <button className="ml-3 text-accent" onClick={() => setSecret(null)}>Dismiss</button>
         </Alert></div>
       )}
-      <div className="mb-4 flex items-center gap-3"><SearchField label="Search users" placeholder="Username starts with…" value={q} onChange={setQ} className="md:max-w-sm md:flex-1" /><span className="flex-1" /><Button className="shrink-0 whitespace-nowrap" onClick={() => { setCreating(!creating); setEditing(null); }}>{creating ? 'Close' : 'New user'}</Button></div>
+      <div className="mb-4 flex items-center gap-3"><SearchField label="Search users" placeholder="Search users" value={q} onChange={setQ} className="md:max-w-sm md:flex-1" /><span className="flex-1" /><Button className="shrink-0 whitespace-nowrap" onClick={() => { setCreating(!creating); setEditing(null); }}>{creating ? 'Close' : 'New user'}</Button></div>
       {creating && <UserForm roles={roleList} onDone={(r) => { setCreating(false); if (r?.temporaryPassword) setSecret({ who: r.user.username, password: r.temporaryPassword }); void users.reload(); }} />}
       {editing && <EditUser user={editing} roles={roleList} onDone={() => { setEditing(null); void users.reload(); }} />}
       {act.error && <Alert>{act.error}</Alert>}
