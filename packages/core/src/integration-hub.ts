@@ -2,6 +2,7 @@ import { audit } from './audit.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound } from './errors.js';
 import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
+import { resetEventGate } from './events.js';
 
 /**
  * Integration hub: the settings behind the northbound API gateway and the outside systems Meridian talks to, in six groups. Secrets entered here are encrypted
@@ -216,13 +217,16 @@ export async function saveHubWebhook(q: Queryable, actor: string, i: HubWebhookI
       secret_enc = CASE WHEN $13::boolean THEN $14 ELSE secret_enc END, updated_at=now() WHERE id=$1 RETURNING *`, [id, ...args, enc !== undefined, enc ?? null]);
     if (!r.rows[0]) throw notFound('webhook', id);
     await audit(q, actor, 'webhook', id, 'UPDATE', { kind: i.kind, name });
+    resetEventGate();
     return webhookOf(r.rows[0]);
   }
   const r = await q.query(`INSERT INTO webhook_subscriptions (kind, name, target_url, auth_kind, provider, events, query, retry_max, retry_backoff_seconds, status, client_id, secret_enc, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`, [...args, enc ?? null, actor]);
   await audit(q, actor, 'webhook', r.rows[0]!.id, 'CREATE', { kind: i.kind, name });
+  resetEventGate();
   return webhookOf(r.rows[0]!);
 }
 export async function deleteHubWebhook(q: Queryable, actor: string, id: string) {
+  resetEventGate();
   const r = await q.query('DELETE FROM webhook_subscriptions WHERE id=$1', [id]);
   if (!r.rowCount) throw notFound('webhook', id);
   await audit(q, actor, 'webhook', id, 'DELETE');
@@ -235,11 +239,19 @@ export async function inboundWebhookKey(q: Queryable, provider: string): Promise
 }
 
 // TM Forum 688 (Event Management): a client registers a listener with a callback and a query.
+/** A callback a client supplied may not point at the deployment's own network. */
+export function privateHostProblem(url: string): string | null {
+  let u: URL; try { u = new URL(url); } catch { return null; }
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const priv = h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local') || h === '::1' || /^(127|10|0)\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || h.startsWith('fe80:');
+  return priv && prod() ? 'The callback cannot be an address inside a private network.' : null;
+}
 export interface TmfHub { id: string; callback: string; query?: string }
 export async function registerTmfListener(q: Queryable, clientRef: string, i: { callback: string; query?: string }): Promise<TmfHub> {
-  const p = hubUrlProblem(i.callback, 'The callback'); if (p) throw invalid(p);
+  const p = hubUrlProblem(i.callback, 'The callback') ?? privateHostProblem(i.callback); if (p) throw invalid(p);
   if (prod() && !i.callback.startsWith('https://')) throw invalid('The callback must use https://.');
   const events = [...(i.query ?? '').matchAll(/eventType=([A-Za-z]+)/g)].map((m) => m[1]!);
+  resetEventGate();
   const count = Number((await q.query(`SELECT count(*) AS n FROM webhook_subscriptions WHERE kind='TMF688' AND client_id=$1`, [clientRef])).rows[0]!.n);
   if (count >= 20) throw conflict('A client can hold 20 subscriptions. Remove one first.');
   const r = (await q.query(`INSERT INTO webhook_subscriptions (kind, name, target_url, auth_kind, events, query, client_id, created_by) VALUES ('TMF688',$1,$2,'NONE',$3,$4,$5,$5) RETURNING *`,
@@ -260,9 +272,11 @@ export async function saveTopicMapping(q: Queryable, actor: string, i: { eventTy
   if (!/^[A-Za-z0-9._-]{1,120}$/.test(i.topic)) throw invalid('A topic name is letters, digits, dots, dashes and underscores (up to 120).');
   const r = (await q.query(`INSERT INTO event_topic_mappings (event_type, topic, enabled, updated_by) VALUES ($1,$2,$3,$4) ON CONFLICT (event_type, topic) DO UPDATE SET enabled=EXCLUDED.enabled, updated_by=EXCLUDED.updated_by, updated_at=now() RETURNING id, event_type, topic, enabled`, [i.eventType, i.topic, i.enabled ?? true, actor])).rows[0]!;
   await audit(q, actor, 'event_topic', r.id, 'SET', { eventType: i.eventType, topic: i.topic, enabled: r.enabled });
+  resetEventGate();
   return r as unknown as TopicMapping;
 }
 export async function deleteTopicMapping(q: Queryable, actor: string, id: string) {
+  resetEventGate();
   const r = await q.query('DELETE FROM event_topic_mappings WHERE id=$1', [id]);
   if (!r.rowCount) throw notFound('mapping', id);
   await audit(q, actor, 'event_topic', id, 'DELETE');

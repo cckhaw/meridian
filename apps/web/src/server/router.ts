@@ -98,7 +98,7 @@ open('POST', '/v1/cases/webhooks/wfm-callback', async ({ db, raw, req }) => {
  * MERIDIAN_PAYMENT_WEBHOOK_SECRET, sent as `x-meridian-signature: sha256=<hex>`. Replays are harmless: confirmation is idempotent per reference.
  */
 open('POST', '/webhooks/payment', async ({ db, raw, req }) => {
-  const secret = process.env.MERIDIAN_PAYMENT_WEBHOOK_SECRET;
+  const secret = process.env.MERIDIAN_PAYMENT_WEBHOOK_SECRET || (await core.inboundWebhookKey(db, 'payment'));   // the environment, or an inbound key named "payment" in the Integration hub
   if (!secret || secret.length < 16) throw new DomainError('NOT_FOUND', 'not found'); // disabled unless configured
   const sig = (req.headers.get('x-meridian-signature') ?? '').replace(/^sha256=/, '');
   const want = createHmac('sha256', secret).update(raw).digest();
@@ -673,6 +673,34 @@ north('POST', '/v1/subscriptions/:id/change-plan', 'subscription:change', ({ db,
 north('DELETE', '/v1/subscriptions/:id/change-plan', 'subscription:change', async ({ db, params, principal }) => { await core.cancelPendingPlanChange(db, params.id!, northActor(principal)); return new Response(null, { status: 204 }); });
 get('/settings/integration-hub/operations', 'settings:manage', ({ db }) => core.getNorthSettings(db));
 post('/settings/integration-hub/operations', 'settings:manage', ({ db, user, body }) => core.setNorthSettings(db, user.username, z.object({ simSwapOtpRequired: z.boolean().optional(), otpTtlMinutes: z.number().int().optional(), simSwapFeeMinor: z.number().int().optional(), numberChangeFeeMinor: z.number().int().optional(), ownershipTransferFeeMinor: z.number().int().optional(), planChangeFeeMinor: z.number().int().optional() }).parse(body)));
+
+// ── Northbound: ordering, billing and payments (TMF 622 / 670 / 676) ──
+const northOrderBody = () => z.object({
+  channel: z.enum(Object.keys(core.NORTH_ORDER_CHANNELS) as [core.NorthOrderChannel, ...core.NorthOrderChannel[]]),
+  customerId: uuid.optional(), accountId: uuid.optional(),
+  customer: z.object({ segment: z.enum(['CONSUMER', 'ENTERPRISE', 'IOT']), displayName: z.string().min(1).max(120), idDocument: z.string().min(3).max(40), email: z.string().email().max(200).optional(), phone: z.string().max(40).optional(), dateOfBirth: z.string().max(10).optional(), gender: z.string().max(20).optional(), marketCode: z.string().length(2).optional(), address: addressInput.optional() }).optional(),
+  lines: z.array(lineBody).min(1).max(50),
+  payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), captured: z.boolean().optional() }),
+  delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), address: z.string().max(500).optional(), pickupStoreId: z.string().max(50).optional() }).optional(),
+  installationSlot: z.string().max(40).optional(), storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
+});
+north('POST', '/v1/orders', 'order:create', async ({ db, body, principal }) => created(await core.createOrderNorth(db, northOrderBody().parse(body) as core.NorthOrderInput, northActor(principal), principal.scopes)), { idempotent: true });
+north('GET', '/v1/orders', 'order:read', ({ db, query }) => core.listOrdersNorth(db, { customerId: str(query, 'customerId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+north('GET', '/v1/orders/:id', 'order:read', ({ db, params }) => core.getOrderNorth(db, params.id!));
+north('POST', '/v1/orders/:id/cancel', 'order:cancel', ({ db, params, body, principal }) => { const b = z.object({ reason: z.string().min(1).max(300), channel: z.enum(Object.keys(core.NORTH_ORDER_CHANNELS) as [core.NorthOrderChannel, ...core.NorthOrderChannel[]]).optional() }).parse(body); return core.cancelOrderNorth(db, params.id!, b.reason, northActor(principal), b.channel ?? (principal.channel === 'SELF_CARE' ? 'SELF_CARE' : 'STAFF')); }, { idempotent: true });
+north('GET', '/v1/accounts/:id/invoices', 'billing:read', ({ db, params, query }) => core.listInvoicesNorth(db, params.id!, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+/** A pre-signed invoice download: valid for 15 minutes, no login. */
+open('GET', '/v1/invoices/:id/pdf', async ({ db, params, query }) => {
+  core.verifyInvoiceUrl(params.id!, Number(query.get('exp')), query.get('sig') ?? '');
+  const r = await core.invoicePdf(db, params.id!, {});
+  return pdfResponse(r.pdf, `${r.number}.pdf`);
+}, { noCsrf: true });
+north('POST', '/v1/payments', 'payment:create', async ({ db, body, principal }) => created(await core.createPaymentNorth(db, z.object({ accountId: uuid.optional(), invoiceId: uuid.optional(), orderId: uuid.optional(), amountMinor: z.number().int().positive(), method: z.enum(['CASH', 'CREDIT_CARD', 'QR']), reference: z.string().min(3).max(100), topUp: z.boolean().optional() }).parse(body), northActor(principal))), { idempotent: true });
+
+// ── Event delivery: dispatch now, recent deliveries, retry ──
+post('/settings/integration-hub/events/dispatch', 'settings:manage', ({ db }) => core.dispatchEvents(db));
+get('/settings/integration-hub/deliveries', 'settings:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
+post('/settings/integration-hub/deliveries/:id/retry', 'settings:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));
 
 // ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
 get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
@@ -1570,6 +1598,7 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
     console.error(`[north] ${req.method} ${p}`, e);
     return out(tmfFail(500, 'INTERNAL', 'INTERNAL', 'unexpected server error'));
   } finally {
+    if (req.method !== 'GET' && status < 300) void core.dispatchEvents(db, { limit: 50 }).catch(() => {});
     void core.logGatewayCall(db, { clientRef: principal?.ref, channel: principal?.channel, method: req.method, path: p, status, scope: rt.north!.scope, idempotencyKey: idemKey, ms: Date.now() - started, detail }).catch(() => {});
   }
 }
