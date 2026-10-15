@@ -69,3 +69,5 @@ Charging-system (OCS) provisioning has its own guide: [OCS.md](OCS.md).
 ## Not covered
 
 Nothing in the code calls these, so they are not listed as integrations: single sign-on (sign-in is local, with the super user in the environment), e-invoicing or tax-authority filing, and address or postcode lookup. Say if you need one and it becomes an entry.
+
+Credentials and addresses for these connections, the northbound API credentials, rate limits and webhooks are managed in **Settings → Integration hub**; see [INTEGRATION_API.md](INTEGRATION_API.md).

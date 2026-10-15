@@ -1808,4 +1808,53 @@ describe('offer type switches and service types', () => {
     expect((await call('PATCH', `/customers/${cust.id}`, { cookie: bo.cookie, body: { creditRisk: 'HIGH' } })).status).toBe(403);
     expect((await call('PATCH', `/customers/${cust.id}`, { cookie: su, body: { creditRisk: 'HIGH' } })).json.creditRisk).toBe('HIGH');
   });
+  it('integration hub: OAuth clients get tokens, the gateway enforces scopes, rate limits and the TM Forum error shape, and TMF 688 listeners register', async () => {
+    const su = await root();
+    const bo = await staff(['billing-ops']);
+    expect((await call('GET', '/settings/integration-hub', { cookie: bo.cookie })).status).toBe(403);
+    const hub = await call('GET', '/settings/integration-hub', { cookie: su });
+    expect(hub.json.groups).toHaveLength(6);
+    expect(hub.json.scopes.map((x: any) => x.id)).toContain('sim:swap');
+    const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Self-care app', channel: 'SELF_CARE', scopes: ['subscriber:read', 'event:subscribe'] } });
+    expect(made.status).toBe(201);
+    const { clientId, clientSecret } = { clientId: made.json.client.clientId, clientSecret: made.json.clientSecret };
+    // the token endpoint takes JSON, a form, or HTTP Basic, and reports errors the OAuth way
+    const bad = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: clientId, client_secret: 'nope' } });
+    expect([bad.status, bad.json.error]).toEqual([401, 'invalid_client']);
+    const tok = await call('POST', '/v1/oauth/token', { origin: null, headers: { 'content-type': 'application/x-www-form-urlencoded' }, raw: `grant_type=client_credentials&client_id=${clientId}&client_secret=${encodeURIComponent(clientSecret)}` });
+    expect([tok.status, tok.json.token_type, tok.json.scope]).toEqual([200, 'Bearer', 'subscriber:read event:subscribe']);
+    const basic = await call('POST', '/v1/oauth/token', { origin: null, headers: { authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}` }, body: { grant_type: 'client_credentials', scope: 'subscriber:read' } });
+    expect(basic.json.scope).toBe('subscriber:read');
+    const auth = { authorization: `Bearer ${tok.json.access_token}` };
+    const me = await call('GET', '/v1/me', { origin: null, headers: auth });
+    expect([me.status, me.json.channel, me.headers.get('x-ratelimit-limit')]).toEqual([200, 'SELF_CARE', '100']);
+    const noAuth = await call('GET', '/v1/me', { origin: null });
+    expect([noAuth.status, noAuth.json.code, noAuth.json['@type']]).toEqual([401, 'UNAUTHORIZED', 'Error']);
+    // TM Forum 688: register and remove a listener; a credential without the scope is refused
+    const reg = await call('POST', '/tmf-api/eventManagement/v4/hub', { origin: null, headers: auth, body: { callback: 'https://listener.example.com/cb', query: 'eventType=ServiceOrderStateChangeEvent' } });
+    expect([reg.status, reg.json.callback]).toEqual([201, 'https://listener.example.com/cb']);
+    expect((await call('DELETE', `/tmf-api/eventManagement/v4/hub/${reg.json.id}`, { origin: null, headers: auth })).status).toBe(204);
+    const only = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Read only', scopes: ['subscriber:read'] } });
+    const t2 = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: only.json.client.clientId, client_secret: only.json.clientSecret } });
+    const denied = await call('POST', '/tmf-api/eventManagement/v4/hub', { origin: null, headers: { authorization: `Bearer ${t2.json.access_token}` }, body: { callback: 'https://x.example.com' } });
+    expect([denied.status, denied.json.code]).toEqual([403, 'FORBIDDEN']);
+    // rate limit from the hub settings
+    expect((await call('POST', '/settings/integration-hub/rate-limits', { cookie: su, body: { channel: 'DEFAULT', perMinute: 2 } })).status).toBe(200);
+    const h2 = { authorization: `Bearer ${t2.json.access_token}` };
+    await call('GET', '/v1/me', { origin: null, headers: h2 }); await call('GET', '/v1/me', { origin: null, headers: h2 });
+    const limited = await call('GET', '/v1/me', { origin: null, headers: h2 });
+    expect([limited.status, limited.json.reason]).toEqual([429, 'RATE_LIMIT_EXCEEDED']);
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
+    // the call log, and revoking a client cuts its tokens off
+    expect((await call('GET', '/settings/integration-hub/calls', { cookie: su })).json.length).toBeGreaterThan(3);
+    await call('POST', `/settings/integration-hub/oauth-clients/${made.json.client.id}/revoke`, { cookie: su });
+    expect((await call('GET', '/v1/me', { origin: null, headers: auth })).status).toBe(401);
+    // API keys can carry northbound scopes, a channel, and require signed requests
+    const key = await call('POST', '/settings/api-clients', { cookie: su, body: { name: 'Partner', scopes: ['order:read'], channel: 'PARTNER_PORTAL', signRequests: true } });
+    expect(key.json.hmacSecret).toBeTruthy();
+    expect((await call('GET', '/v1/me', { origin: null, headers: { authorization: `Bearer ${key.json.key}` } })).status).toBe(401);          // unsigned
+    // webhooks and endpoints keep secrets out of every response
+    const ep = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'finance', kind: 'SAP_FICO', name: 'SAP', url: 'https://sap.example.com/api', secret: 'super-secret-value' } });
+    expect([ep.status, ep.json.hasSecret, JSON.stringify(ep.json).includes('super-secret')]).toEqual([201, true, false]);
+  });
 });

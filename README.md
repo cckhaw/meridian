@@ -19,7 +19,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 604 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 612 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -40,6 +40,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 - [Bulk import and export](docs/BULK_IMPORT.md): dealers, agents and stores as spreadsheets: templates, current data, check then load
 - [Charging system (OCS)](docs/OCS.md): per-vendor connectors that create subscribers and plans in the OCS, with retries
 - [Integrations](docs/INTEGRATIONS.md): every external system Meridian connects to, grouped by function, with status
+- [Integration hub and northbound API](docs/INTEGRATION_API.md): OAuth 2.0 clients and API keys, scopes, per-channel rate limits, idempotency, TM Forum errors and TMF 688 subscriptions, webhooks, and the settings for field service, core network, finance and events
 - [Dealer and agent commission](docs/COMMISSION.md): channel hierarchy, plans with volume bands, claw-backs, statements, payouts, GL posting
 - [Numbers, SIM cards and order numbers](docs/NUMBERING.md): `YYYYMMDD-NNNNN` order numbers, SIM and number choice, VIP tiers, pool loading, reservations, recycling
 - [Group plans, family lines and port-in](docs/FAMILY_PLANS.md): group plans, how a group is created (order or plan change), member limits, bringing numbers from other operators
