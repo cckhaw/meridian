@@ -125,18 +125,27 @@ export async function setSla(q: Queryable, actor: string, rows: SlaRow[]): Promi
 }
 
 // ───────────────────────── case settings ─────────────────────────
-export interface CaseSettings { autoCloseHours: number; reopenDays: number; customerResponseHours: number }
-export const DEFAULT_CASE_SETTINGS: CaseSettings = { autoCloseHours: 72, reopenDays: 14, customerResponseHours: 72 };
+export interface CaseSettings {
+  autoCloseHours: number; reopenDays: number; customerResponseHours: number;
+  /** A new case at a postal node that has an open master incident is attached to it. */
+  incidentAutoLink: boolean;
+  /** Group cases into a master incident by themselves: when this many network cases from one postal node open within the window. Off unless switched on. */
+  incidentAutoCreate: boolean; incidentThreshold: number; incidentWindowMinutes: number;
+}
+export const DEFAULT_CASE_SETTINGS: CaseSettings = { autoCloseHours: 72, reopenDays: 14, customerResponseHours: 72, incidentAutoLink: true, incidentAutoCreate: false, incidentThreshold: 5, incidentWindowMinutes: 60 };
 export async function getCaseSettings(q: Queryable): Promise<CaseSettings> {
   const v = (await q.query(`SELECT value FROM settings WHERE key='cases'`)).rows[0]?.value as Partial<CaseSettings> | undefined;
   return { ...DEFAULT_CASE_SETTINGS, ...(v ?? {}) };
 }
-export async function setCaseSettings(q: Queryable, actor: string, s: CaseSettings): Promise<CaseSettings> {
-  for (const [k, max] of [['autoCloseHours', 24 * 90], ['reopenDays', 365], ['customerResponseHours', 24 * 90]] as const) {
-    const n = s[k]; if (!Number.isInteger(n) || n < 1 || n > max) throw invalid(`${k} is a whole number from 1 to ${max}.`);
+export async function setCaseSettings(q: Queryable, actor: string, s: Partial<CaseSettings>): Promise<CaseSettings> {
+  const v: CaseSettings = { ...(await getCaseSettings(q)), ...s };
+  for (const [k, max] of [['autoCloseHours', 24 * 90], ['reopenDays', 365], ['customerResponseHours', 24 * 90], ['incidentThreshold', 1000], ['incidentWindowMinutes', 24 * 60]] as const) {
+    const n = v[k]; if (!Number.isInteger(n) || n < 1 || n > max) throw invalid(`${k} is a whole number from 1 to ${max}.`);
   }
-  await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('cases', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(s), actor]);
-  await audit(q, actor, 'settings', 'cases', 'update', { ...s });
-  return s;
+  if (v.incidentThreshold < 2) throw invalid('A network incident needs at least 2 cases.');
+  v.incidentAutoLink = !!v.incidentAutoLink; v.incidentAutoCreate = !!v.incidentAutoCreate;
+  await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('cases', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(v), actor]);
+  await audit(q, actor, 'settings', 'cases', 'update', { ...v });
+  return v;
 }
 export type { Row };

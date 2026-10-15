@@ -1,4 +1,6 @@
 import { audit } from './audit.js';
+import { maybeLinkToIncident, resolveIncidentChildren } from './case-incidents.js';
+import { pendingRefundCount } from './case-refunds.js';
 import { getCaseSettings, issueType, PRIORITY_OF, SEVERITIES, slaFor, TIERS, type CaseType, type Severity, type Tier, CASE_TYPES } from './case-taxonomy.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
@@ -104,16 +106,24 @@ export async function createCase(q: Queryable, i: NewCase, actor = 'system') {
   await caseLog(q, c.id, actor, 'CREATED', { detail: { issueType: it.id, severity, tier, firstResponseDue: c.firstResponseDue, resolutionDue: c.resolutionDue } });
   await audit(q, actor, 'case', c.id, 'CREATED', { type: it.caseType, severity, tier });
   if (i.interactionIds?.length) await bindInteractions(q, c.id, i.interactionIds, actor);
+  await maybeLinkToIncident(q, c);
   return getCase(q, c.id);
 }
 
 export const caseLog = (q: Queryable, caseId: string, actor: string, action: string, o: { from?: string; to?: string; detail?: Record<string, unknown> } = {}) =>
   q.query(`INSERT INTO case_audit_log (case_id, actor, action, from_status, to_status, detail) VALUES ($1,$2,$3,$4,$5,$6)`, [caseId, actor, action, o.from ?? null, o.to ?? null, JSON.stringify(o.detail ?? {})]);
 
-/** A message for the customer, delivered by the notification adapter (SMS, WhatsApp, e-mail). */
-export const notifyCustomer = (q: Queryable, c: Row, instruction: string, message: string, extra: Record<string, unknown> = {}) =>
+/** A message for the supervisors (team leads), delivered by the notification adapter. Names the case's team so it can be routed. */
+export const notifySupervisors = (q: Queryable, c: Row, instruction: string, message: string, extra: Record<string, unknown> = {}) =>
   q.query(`INSERT INTO lifecycle_outbox (kind, service_id, instruction, payload) VALUES ('NOTIFY', $1, $2, $3)`,
+    [c.serviceId ?? null, instruction, JSON.stringify({ to: 'SUPERVISORS', team: c.team ?? null, caseId: c.id, caseNumber: c.number, message, ...extra })]);
+
+/** A message for the customer, delivered by the notification adapter (SMS, WhatsApp, e-mail). */
+export const notifyCustomer = async (q: Queryable, c: Row, instruction: string, message: string, extra: Record<string, unknown> = {}) => {
+  if (!c.customerId) return;                    // a network incident has no customer to tell
+  await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, instruction, payload) VALUES ('NOTIFY', $1, $2, $3)`,
     [c.serviceId ?? null, instruction, JSON.stringify({ customerId: c.customerId, caseId: c.id, caseNumber: c.number, message, ...extra })]);
+};
 
 // ───────────────────────── moving a case through its lifecycle ─────────────────────────
 export interface TransitionOptions { actor?: string; note?: string; resolution?: string; reason?: string; /** Moves made by a timer or by the field-service system. */ system?: boolean }
@@ -146,6 +156,7 @@ export async function transitionCase(q: Queryable, id: string, to: CaseStatus, o
   if (to === 'RESOLVED') {
     const resolution = (o.resolution ?? o.note ?? '').trim();
     if (resolution.length < 3) throw invalid('Say how the case was resolved.');
+    if (await pendingRefundCount(q, id)) throw rejected('A refund on this case is waiting for approval. Wait for the decision, or withdraw the request, before resolving it.');
     add(`resolution = ?`, resolution); add(`resolved_at = now()`); add(`auto_close_at = now() + make_interval(hours => ${settings.autoCloseHours})`);
     if (!c.firstResponseAt) add(`first_response_at = now()`);
   } else if (to !== 'CLOSED_AUTO' && to !== 'CLOSED_VERIFIED') add(`auto_close_at = NULL`);
@@ -166,6 +177,10 @@ export async function transitionCase(q: Queryable, id: string, to: CaseStatus, o
   if (text && to !== 'RESOLVED') await q.query(`UPDATE cases SET notes = notes || $2::jsonb WHERE id=$1`, [id, JSON.stringify([{ at: now.toISOString(), by: actor, text }])]);
   await caseLog(q, id, actor, 'STATUS', { from, to, detail: { ...(o.resolution ? { resolution: o.resolution } : {}), ...(text ? { note: text } : {}), ...(o.system ? { system: true } : {}) } });
   await audit(q, actor, 'case', id, 'STATUS', { from, to });
+  if (to === 'RESOLVED' && c.isMaster) {
+    const kids = await resolveIncidentChildren(q, c, (o.resolution ?? o.note ?? '').trim(), settings.autoCloseHours);
+    if (kids.length) await caseLog(q, id, actor, 'INCIDENT_CASES_RESOLVED', { detail: { count: kids.length } });
+  }
   if (to === 'RESOLVED') await notifyCustomer(q, c, 'CASE_RESOLVED', `Case ${c.number} has been resolved: ${(o.resolution ?? o.note ?? '').trim()}. If it is not fixed, tell us within ${settings.reopenDays} days and we will look again.`);
   else if (MESSAGES[to]) await notifyCustomer(q, c, `CASE_${to}`, MESSAGES[to]!(c));
   return getCase(q, id);
@@ -232,7 +247,7 @@ export async function resolveCasesOfService(q: Queryable, serviceId: string, typ
 // ───────────────────────── reading ─────────────────────────
 const withSla = (c: Row) => ({ ...c, sla: slaView(c) });
 
-export async function listCases(q: Queryable, f: { customerId?: string; status?: string; type?: string; severity?: string; assignee?: string; unassigned?: boolean; issueTypeId?: string; breached?: boolean; q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
+export async function listCases(q: Queryable, f: { customerId?: string; status?: string; type?: string; severity?: string; assignee?: string; unassigned?: boolean; issueTypeId?: string; breached?: boolean; masters?: boolean; masterCaseId?: string; postalNode?: string; q?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
   const limit = pageSize(f.limit);
   const { params, p } = sqlBuilder();
   const where: string[] = [];
@@ -242,6 +257,9 @@ export async function listCases(q: Queryable, f: { customerId?: string; status?:
   if (f.severity) where.push(`k.severity = ${p(f.severity)}`);
   if (f.assignee) where.push(`k.assignee = ${p(f.assignee)}`); else if (f.unassigned) where.push(`k.assignee IS NULL`);
   if (f.issueTypeId) where.push(`k.issue_type_id = ${p(f.issueTypeId)}`);
+  if (f.masters) where.push('k.is_master');
+  if (f.masterCaseId) where.push(`k.master_case_id = ${p(f.masterCaseId)}`);
+  if (f.postalNode) where.push(`k.postal_node = ${p(f.postalNode.trim().toUpperCase())}`);
   if (f.breached) where.push(`k.status IN ${ACTIVE_SQL} AND k.sla_paused_at IS NULL AND k.resolution_due < now()`);
   // Search: a case number prefix, otherwise whoever the customer is.
   const text = (f.q ?? '').trim();
@@ -250,15 +268,19 @@ export async function listCases(q: Queryable, f: { customerId?: string; status?:
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(k.created_at, k.id) < (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
   const rows = (await q.query(
-    `SELECT k.*, k.created_at::text AS cursor_ts, c.display_name AS customer_name FROM cases k JOIN customers c ON c.id = k.customer_id
+    `SELECT k.*, k.created_at::text AS cursor_ts, c.display_name AS customer_name FROM cases k LEFT JOIN customers c ON c.id = k.customer_id
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY k.created_at DESC, k.id DESC LIMIT ${p(limit + 1)}`, params)).rows;
   const page = tsPage(rows as Array<Row & { id: string; cursorTs: string }>, limit);
   return { ...page, items: page.items.map(withSla) };
 }
 
 export const getCase = async (q: Queryable, id: string): Promise<Row> => {
-  const c = (await q.query('SELECT k.*, c.display_name AS customer_name FROM cases k JOIN customers c ON c.id = k.customer_id WHERE k.id=$1', [id])).rows[0];
+  const c = (await q.query('SELECT k.*, c.display_name AS customer_name FROM cases k LEFT JOIN customers c ON c.id = k.customer_id WHERE k.id=$1', [id])).rows[0];
   if (!c) throw notFound('case', id);
+  if (c.isMaster) {
+    const n = (await q.query(`SELECT count(*) AS total, count(*) FILTER (WHERE status IN ${ACTIVE_SQL}) AS open FROM cases WHERE master_case_id=$1`, [id])).rows[0]!;
+    return { ...withSla(c), childCount: Number(n.total), childOpenCount: Number(n.open) };
+  }
   return withSla(c);
 };
 

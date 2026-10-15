@@ -275,7 +275,12 @@ export async function settle(q: Queryable, invoiceId: string) {
 
 /** Credit note. If the invoice was already (over)paid, the excess is refunded to the customer. */
 export async function creditInvoice(db: Db, invoiceId: string, amountMinor: number, reason: string, actor = 'system', caseId?: string) {
-  return db.tx(async (q) => {
+  return db.tx((q) => creditInvoiceIn(q, invoiceId, amountMinor, reason, actor, caseId));
+}
+
+/** The credit note itself, inside a transaction the caller owns (a refund approval claims its request and credits in one transaction). */
+export async function creditInvoiceIn(q: Queryable, invoiceId: string, amountMinor: number, reason: string, actor = 'system', caseId?: string) {
+  {
     const inv = (await q.query('SELECT * FROM invoices WHERE id=$1 FOR UPDATE', [invoiceId])).rows[0];
     if (!inv) throw notFound('invoice', invoiceId);
     if (inv.status === 'VOID') throw rejected('invoice is void');
@@ -304,7 +309,7 @@ export async function creditInvoice(db: Db, invoiceId: string, amountMinor: numb
     await audit(q, actor, 'invoice', invoiceId, 'CREDIT_NOTE', { amountMinor, reason, refunded: Math.max(excess, 0) });
     if (caseId) await q.query(`UPDATE cases SET notes = notes || $2::jsonb, updated_at = now() WHERE id=$1`, [caseId, JSON.stringify([{ at: new Date().toISOString(), by: actor, text: `Credit note ${amountMinor} issued on ${inv.number}: ${reason}` }])]);
     return getInvoice(q, invoiceId);
-  });
+  }
 }
 
 export { fmt, toDate };
