@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-/** The integration hub lives in the Integration menu; this address is the short link to it. */
+/** The Integration menu holds every outside connection; this address is the short link to it. */
 export default function IntegrationsRedirect() {
-  redirect('/admin/integrations?view=hub');
+  redirect('/admin/integrations?section=api-access');
 }

@@ -1,213 +1,176 @@
 'use client';
-import { Alert, Badge, Card, LargeTitle, SearchField, Segmented, Spinner } from '@meridian/ui';
-import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Alert, Badge, Card, Empty, LargeTitle, SearchField, Spinner } from '@meridian/ui';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useApi } from '@/lib/api';
-import { dt } from '@/lib/format';
-import { useRouter } from 'next/navigation';
-import { IntegrationHubSettings } from './integration-hub';
-import { OcsPanel } from './ocs';
-import { KycPanel, PaymentsPanel, StorefrontPanel } from './storefront';
+import { Deliveries, Events, Gateway, Webhooks, useHub, type Hub } from './integration-hub';
+import { GROUPS, SECTIONS, searchSections, sectionById, type IntegrationSection } from './sections';
+import { Count, STATUS, SystemList, type Item, type Overview } from './systems';
 
-type Status = 'CONNECTED' | 'NEEDS_SETUP' | 'LISTENING' | 'WAITING' | 'MANUAL' | 'STAND_IN' | 'REMOTE';
-interface Item {
-  id: string; group: string; name: string; with: string; summary: string; maturity: 'BUILT' | 'OUTBOX' | 'ENDPOINT' | 'MANUAL' | 'STUB'; direction: 'OUT' | 'IN' | 'BOTH'; keywords?: string; doc?: string;
-  env?: Array<{ name: string; purpose: string; on: string; required?: boolean }>;
-  endpoints?: Array<{ method: string; path: string; purpose: string; auth: string }>;
-  outbox?: { kind: string; instructions: string[] };
-  needs: string[]; configure?: { label: string; href: string };
-  state: { status: Status; detail: string; env: Array<{ name: string; set: boolean | null }>; pending: number; delivered: number; lastDeliveredAt: string | null; oldestPendingAt: string | null };
-}
-interface Overview { groups: string[]; items: Item[]; outbox: Array<{ kind: string; instruction: string; pending: number; delivered: number }> }
-
-const STATUS: Record<Status, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger'; bucket: 'working' | 'action' | 'hand' }> = {
-  CONNECTED: { label: 'Connected', tone: 'success', bucket: 'working' },
-  REMOTE: { label: 'Set elsewhere', tone: 'success', bucket: 'working' },
-  LISTENING: { label: 'Ready for calls', tone: 'neutral', bucket: 'working' },
-  NEEDS_SETUP: { label: 'Needs setup', tone: 'warning', bucket: 'action' },
-  WAITING: { label: 'Needs a connector', tone: 'warning', bucket: 'action' },
-  MANUAL: { label: 'By hand', tone: 'neutral', bucket: 'hand' },
-  STAND_IN: { label: 'Stand-in', tone: 'neutral', bucket: 'hand' },
-};
-const MATURITY: Record<Item['maturity'], string> = {
-  BUILT: 'Built in: needs configuring', OUTBOX: 'Meridian queues instructions; a connector delivers them', ENDPOINT: 'Meridian offers an API; the other system calls it',
-  MANUAL: 'No connector: done by hand', STUB: 'Interface exists; a stand-in answers',
-};
-const DIRECTION: Record<Item['direction'], string> = { OUT: 'Meridian sends', IN: 'Meridian receives', BOTH: 'Both ways' };
-const FILTERS = [{ value: 'all', label: 'All' }, { value: 'action', label: 'Needs action' }, { value: 'working', label: 'Working' }, { value: 'hand', label: 'By hand' }] as const;
-
+/**
+ * Integration: one menu of sections on the left (grouped by what you are trying to do, searchable) and the chosen section on the right, the same way Settings works.
+ * On a phone the menu is the first screen and a section slides in over it. The section is in the address (?section=…) so it can be linked and Back works.
+ */
 export default function IntegrationPage() {
-  return <Suspense fallback={<Spinner />}><IntegrationShell /></Suspense>;
+  return <Suspense fallback={<Spinner />}><Integration /></Suspense>;
 }
 
-/** Everything about outside connections lives here: the status of each connection, and the hub where credentials, API access, webhooks and endpoints are set up. */
-function IntegrationShell() {
-  const sp = useSearchParams();
+const itemsOf = (ov: Overview | null | undefined, s: IntegrationSection): Item[] => (ov?.items ?? []).filter((i) => s.groups?.includes(i.group));
+const needsAction = (i: Item) => STATUS[i.state.status].bucket === 'action';
+
+function Integration() {
   const router = useRouter();
-  const view = sp.get('view') === 'hub' ? 'hub' : 'connections';
-  const go = (v: 'connections' | 'hub') => router.replace(v === 'hub' ? '/admin/integrations?view=hub' : '/admin/integrations');
-  return (
-    <>
-      <div className="mb-4"><Segmented label="Integration" value={view} options={[{ value: 'connections', label: 'Connections' }, { value: 'hub', label: 'Integration hub' }]} onChange={go} /></div>
-      {view === 'hub' ? <><LargeTitle subtitle="API credentials, rate limits, webhooks, field service, core network, finance and event subscriptions. Secrets are encrypted and never shown again.">Integration hub</LargeTitle><IntegrationHubSettings /></> : <Integrations />}
-    </>
-  );
-}
-
-function Integrations() {
-  const { data, error, loading } = useApi<Overview>('/integrations');
-  const target = useSearchParams().get('item');
+  const path = usePathname();
+  const sp = useSearchParams();
+  const current = sectionById(sp.get('section'));
+  const target = sp.get('item');
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]['value']>('all');
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const ov = useApi<Overview>('/integrations');
+  const hub = useHub();
+  const open = (id: string | null, item?: string) => router.push(id ? `${path}?section=${id}${item ? `&item=${item}` : ''}` : path, { scroll: false });
 
+  // Older addresses still land in the right place: ?item=stripe finds the section that holds it, ?view=hub is API access.
   useEffect(() => {
-    if (!target || !data) return;
-    setOpen((s) => new Set(s).add(target));
-    setQ(''); setFilter('all');
-    const t = setTimeout(() => document.getElementById(`int-${target}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 80);
-    return () => clearTimeout(t);
-  }, [target, data]);
+    if (sp.get('view') === 'hub' && !sp.get('section')) router.replace(`${path}?section=api-access`);
+    if (target && !sp.get('section') && ov.data) {
+      const it = ov.data.items.find((i) => i.id === target);
+      const sec = it && SECTIONS.find((s) => s.groups?.includes(it.group));
+      router.replace(sec ? `${path}?section=${sec.id}&item=${target}` : path);
+    }
+  }, [sp, target, ov.data, router, path]);
 
-  const counts = useMemo(() => {
-    const c = { working: 0, action: 0, hand: 0 };
-    for (const i of data?.items ?? []) c[STATUS[i.state.status].bucket]++;
-    return c;
-  }, [data]);
-  const shown = useMemo(() => {
+  const attention = (s: IntegrationSection) => itemsOf(ov.data, s).filter(needsAction).length;
+  const found = searchSections(q);
+  // Searching also finds a system by name, e.g. "SAP" or "Kafka", and takes you to its section.
+  const byName = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return (data?.items ?? []).filter((i) => (filter === 'all' || STATUS[i.state.status].bucket === filter)
-      && words.every((w) => `${i.name} ${i.with} ${i.group} ${i.summary} ${i.keywords ?? ''}`.toLowerCase().includes(w)));
-  }, [data, q, filter]);
-  const toggle = (id: string) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    if (!words.length) return [] as Item[];
+    return (ov.data?.items ?? []).filter((i) => words.every((w) => `${i.name} ${i.with} ${i.summary} ${i.keywords ?? ''}`.toLowerCase().includes(w)));
+  }, [q, ov.data]);
+  const hitSections = new Set([...found.map((s) => s.id), ...byName.map((i) => SECTIONS.find((s) => s.groups?.includes(i.group))?.id).filter(Boolean) as string[]]);
+
+  const menu = (
+    <nav aria-label="Integration sections" className="space-y-5">
+      <SearchField label="Search integrations" placeholder="Search: SAP, SMS, Kafka, courier…" value={q} onChange={setQ} />
+      {hitSections.size === 0 && <Empty>Nothing matches “{q}”.</Empty>}
+      {GROUPS.map((g) => {
+        const items = SECTIONS.filter((s) => s.group === g && hitSections.has(s.id));
+        if (!items.length) return null;
+        return (
+          <div key={g}>
+            <h2 className="mb-1.5 px-3 text-footnote font-semibold uppercase tracking-wide text-label2">{g}</h2>
+            <ul className="overflow-hidden rounded-card bg-surface shadow-card">
+              {items.map((s) => {
+                const on = current?.id === s.id, n = attention(s);
+                return (
+                  <li key={s.id} className="border-b border-separator last:border-0">
+                    <button onClick={() => open(s.id)} aria-current={on ? 'page' : undefined}
+                      className={`flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${on ? 'bg-accent/10' : 'hover:bg-surface2'}`}>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block ${on ? 'font-semibold text-accent' : 'font-medium'}`}>{s.label}</span>
+                        <span className="block truncate text-footnote text-label2">{s.description}</span>
+                      </span>
+                      {n > 0 && <Badge tone="warning">{n} to set up</Badge>}
+                      <span aria-hidden className="text-label2 lg:hidden">›</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </nav>
+  );
 
   return (
     <>
-      <LargeTitle subtitle="Every connection between Meridian and another system: what it is for, how it connects, what you have to provide, and whether it is working. Only the super user sees this page. Keys are shown as set or not set, never their value.">Integration</LargeTitle>
-      {error && <Alert>{error}</Alert>}
-      {loading && !data && <Spinner />}
-      {data && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-3 gap-3">
-            <Count n={counts.working} label="Working" tone="text-success" />
-            <Count n={counts.action} label="Need action" tone="text-warning" />
-            <Count n={counts.hand} label="By hand or stand-in" tone="text-label2" />
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="sm:flex-1"><SearchField label="Search integrations" placeholder="Search: SAP, SMS, courier, HLR…" value={q} onChange={setQ} /></div>
-            <Segmented label="Show" value={filter} options={[...FILTERS]} onChange={setFilter} />
-          </div>
-          {shown.length === 0 && <Card><p className="text-subhead text-label2">No integration matches.</p></Card>}
-          {data.groups.map((g) => {
-            const items = shown.filter((i) => i.group === g);
-            if (!items.length) return null;
-            return (
-              <section key={g} aria-labelledby={`g-${g}`}>
-                <h2 id={`g-${g}`} className="mb-1.5 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">{g}</h2>
-                <ul className="space-y-3">
-                  {items.map((i) => <li key={i.id}><Row item={i} open={open.has(i.id)} onToggle={() => toggle(i.id)} origin={origin} /></li>)}
-                </ul>
-              </section>
-            );
-          })}
+      <LargeTitle subtitle="Everything that connects Meridian to other systems: the systems it talks to, the channels and partners that call it, and the events it shares. Only the super user sees this. Keys are never shown after they are saved.">Integration</LargeTitle>
+      {(ov.error || hub.error) && <Alert>{ov.error ?? hub.error}</Alert>}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,330px)_minmax(0,1fr)] lg:items-start">
+        <div className={`${current ? 'hidden lg:block' : 'block'} lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto`}>{menu}</div>
+        <div className={`${current ? 'block' : 'hidden lg:block'} min-w-0`}>
+          {current ? (
+            <div key={current.id} className="push-fwd">
+              <button onClick={() => open(null)} className="mb-3 inline-flex min-h-tap items-center gap-1 text-subhead text-accent lg:hidden"><span aria-hidden>‹</span> Integration</button>
+              <header className="mb-4">
+                <p className="text-footnote font-medium uppercase tracking-wide text-label2">{current.group}</p>
+                <h2 className="text-title1 font-bold tracking-tight">{current.label}</h2>
+                <p className="mt-1 text-subhead text-label2">{current.description}</p>
+              </header>
+              {(ov.loading && !ov.data) || (hub.loading && !hub.data) ? <Spinner /> : ov.data && hub.data && <SectionBody s={current} ov={ov.data} hub={hub.data} reload={async () => { await Promise.all([ov.reload(), hub.reload()]); }} target={target} open={open} />}
+            </div>
+          ) : (
+            <div className="hidden lg:block"><OverviewPanel ov={ov.data} open={open} /></div>
+          )}
         </div>
-      )}
+      </div>
     </>
   );
 }
 
-function Count({ n, label, tone }: { n: number; label: string; tone: string }) {
-  return <div className="rounded-card bg-surface p-3 shadow-card sm:p-4"><div className={`text-title1 font-bold tabular-nums ${tone}`}>{n}</div><div className="text-footnote text-label2">{label}</div></div>;
+function SectionBody({ s, ov, hub, reload, target, open }: { s: IntegrationSection; ov: Overview; hub: Hub; reload: () => void | Promise<void>; target: string | null; open: (id: string | null) => void }) {
+  switch (s.id) {
+    case 'overview': return <OverviewPanel ov={ov} open={open} />;
+    case 'api-access': return <Gateway h={hub} reload={reload} />;
+    case 'callbacks': return <Webhooks h={hub} reload={reload} only="INBOUND" />;
+    case 'webhooks': return <Webhooks h={hub} reload={reload} only="OUTBOUND" />;
+    case 'deliveries': return <Deliveries />;
+    case 'streams': return (
+      <div className="space-y-6">
+        <SystemList items={itemsOf(ov, s)} hub={hub} reload={reload} target={target} />
+        <Events h={hub} reload={reload} />
+      </div>
+    );
+    default: return <SystemList items={itemsOf(ov, s)} hub={hub} reload={reload} target={target} />;
+  }
 }
 
-function Row({ item: i, open, onToggle, origin }: { item: Item; open: boolean; onToggle: () => void; origin: string }) {
-  const st = STATUS[i.state.status];
-  const panel = `int-panel-${i.id}`;
+/** The landing view: how healthy the connections are, what needs doing first, and how the area is organised. */
+function OverviewPanel({ ov, open }: { ov: Overview | null | undefined; open: (id: string | null) => void }) {
+  const failed = useApi<any[]>('/settings/integration-hub/deliveries?status=FAILED&limit=20');
+  if (!ov) return <Spinner />;
+  const counts = { working: 0, action: 0, hand: 0 };
+  for (const i of ov.items) counts[STATUS[i.state.status].bucket]++;
+  const todo = ov.items.filter(needsAction);
+  const sectionOf = (i: Item) => SECTIONS.find((s) => s.groups?.includes(i.group));
   return (
-    <div id={`int-${i.id}`} className="scroll-mt-4 overflow-hidden rounded-card bg-surface shadow-card">
-      <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={panel}
-        className="flex min-h-[64px] w-full items-start gap-3 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
-        <span className="min-w-0 flex-1">
-          <span className="block font-semibold">{i.name}</span>
-          <span className="block text-footnote text-label2">{i.with}</span>
-          <span className="mt-1 block text-subhead text-label2">{i.state.detail}</span>
-        </span>
-        <span className="flex shrink-0 flex-col items-end gap-1.5">
-          <Badge tone={st.tone}>{st.label}</Badge>
-          {i.state.pending > 0 && <span className="text-caption text-label2">{i.state.pending} waiting</span>}
-          <span aria-hidden className={`text-label2 transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
-        </span>
-      </button>
-      {open && (
-        <div id={panel} className="space-y-4 border-t border-separator px-4 py-4 text-subhead">
-          <p>{i.summary}</p>
-          <dl className="grid gap-x-6 gap-y-1 text-footnote sm:grid-cols-2">
-            <div><dt className="inline text-label2">How it works: </dt><dd className="inline">{MATURITY[i.maturity]}</dd></div>
-            <div><dt className="inline text-label2">Direction: </dt><dd className="inline">{DIRECTION[i.direction]}</dd></div>
-          </dl>
-
-          <Block title="What you need to do">
-            <ul className="list-disc space-y-1 pl-5">{i.needs.map((n) => <li key={n}>{n}</li>)}</ul>
-          </Block>
-
-          {i.state.env.length > 0 && (
-            <Block title="Settings in the environment">
-              <ul className="divide-y divide-separator rounded-control bg-surface2">
-                {i.env!.map((v, n) => {
-                  const set = i.state.env[n]?.set;
-                  return (
-                    <li key={v.name} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:gap-3">
-                      <div className="min-w-0 sm:flex-1"><code className="break-all text-footnote font-medium">{v.name}</code><div className="text-footnote text-label2">{v.purpose}</div></div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-caption text-label2">on {v.on === 'web' ? 'this portal' : `the ${v.on}`}{v.required ? ', required' : ''}</span>
-                        {set === null ? <Badge>Not visible here</Badge> : <Badge tone={set ? 'success' : v.required ? 'warning' : 'neutral'}>{set ? 'Set' : 'Not set'}</Badge>}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </Block>
-          )}
-
-          {i.endpoints && i.endpoints.length > 0 && (
-            <Block title={i.direction === 'OUT' ? 'API a connector uses' : 'API the other system calls'}>
-              <ul className="space-y-2">
-                {i.endpoints.map((e) => (
-                  <li key={`${e.method} ${e.path}`} className="rounded-control bg-surface2 px-3 py-2">
-                    <div className="flex items-start gap-2"><span className="shrink-0 rounded bg-label/10 px-1.5 py-0.5 text-caption font-semibold">{e.method}</span><code className="min-w-0 break-all text-footnote">{origin}{e.path}</code></div>
-                    <div className="mt-1 text-footnote text-label2">{e.purpose}. <span className="whitespace-nowrap">Auth: {e.auth}.</span></div>
-                  </li>
-                ))}
-              </ul>
-            </Block>
-          )}
-
-          {i.outbox && (
-            <Block title={`Instructions Meridian queues (${i.outbox.kind})`}>
-              <div className="flex flex-wrap gap-1.5">{i.outbox.instructions.map((x) => <code key={x} className="rounded bg-surface2 px-2 py-0.5 text-footnote">{x}</code>)}</div>
-              <p className="mt-2 text-footnote text-label2">
-                {i.state.pending} waiting, {i.state.delivered} delivered{i.state.lastDeliveredAt ? `, last delivered ${dt(i.state.lastDeliveredAt)}` : ''}{i.state.oldestPendingAt ? `. Oldest waiting since ${dt(i.state.oldestPendingAt)}` : ''}.
-              </p>
-            </Block>
-          )}
-
-          {i.id === 'storefront' && <StorefrontPanel />}
-          {i.id === 'stripe' && <PaymentsPanel />}
-          {i.id === 'ekyc' && <KycPanel />}
-          {i.id === 'ocs' && <OcsPanel />}
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-footnote">
-            {i.configure && !['storefront', 'stripe', 'ekyc', 'ocs'].includes(i.id) && <Link href={i.configure.href} className="inline-flex min-h-[32px] items-center text-accent">{i.configure.label} ›</Link>}
-            {i.doc && <span className="text-label2">Guide: docs/{i.doc}</span>}
-          </div>
-        </div>
+    <div className="space-y-6">
+      <div className="grid grid-cols-3 gap-3">
+        <Count n={counts.working} label="Working" tone="text-success" />
+        <Count n={counts.action} label="Need setup" tone="text-warning" />
+        <Count n={counts.hand} label="By hand or stand-in" tone="text-label2" />
+      </div>
+      {(failed.data?.length ?? 0) > 0 && (
+        <Alert tone="danger"><button type="button" className="text-left underline" onClick={() => open('deliveries')}>{failed.data!.length} event deliveries failed. Review them in the delivery queue.</button></Alert>
       )}
+      <section aria-label="To do first">
+        <h2 className="mb-2 text-title3 font-semibold">{todo.length ? 'To set up' : 'Nothing needs setup'}</h2>
+        {todo.length === 0 ? <Card><p className="text-subhead text-label2">Every connection that Meridian can run itself is working or set up. Systems marked “by hand” or “stand-in” need a connector to be built before they run on their own.</p></Card> : (
+          <ul className="overflow-hidden rounded-card bg-surface shadow-card">
+            {todo.map((i) => (
+              <li key={i.id} className="border-b border-separator last:border-0">
+                <button onClick={() => { const s = sectionOf(i); if (s) open(s.id); }} className="flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
+                  <span className="min-w-0 flex-1"><span className="block truncate font-medium">{i.name}</span><span className="block truncate text-footnote text-label2">{i.state.detail}</span></span>
+                  <Badge tone="warning">{STATUS[i.state.status].label}</Badge><span aria-hidden className="text-label2">›</span>
+                </button>
+              </li>))}
+          </ul>)}
+      </section>
+      <section aria-label="How this is organised">
+        <h2 className="mb-2 text-title3 font-semibold">How this is organised</h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[
+            ['Systems Meridian connects to', 'Meridian calls them: network, payments, identity and credit, field service, messaging. Each system shows its status and its connection details together.', 'network'],
+            ['Channels and partners', 'They call Meridian: the store-front, apps and partners using API credentials, and callbacks from payment providers and couriers.', 'api-access'],
+            ['Events Meridian shares', 'Meridian tells others what happened: webhooks, event streams, TM Forum subscriptions, and the queue they go through.', 'webhooks'],
+            ['Platform', 'What Meridian runs on: database, workflow engine, scheduler, and the keys that protect data.', 'platform'],
+          ].map(([t, d, id]) => (
+            <button key={t} onClick={() => open(id!)} className="rounded-card bg-surface p-4 text-left shadow-card transition hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+              <span className="block font-semibold">{t}</span><span className="mt-1 block text-subhead text-label2">{d}</span>
+            </button>))}
+        </div>
+      </section>
     </div>
   );
-}
-
-function Block({ title, children }: { title: string; children: ReactNode }) {
-  return <div><h3 className="mb-1.5 text-footnote font-semibold uppercase tracking-wide text-label2">{title}</h3>{children}</div>;
 }

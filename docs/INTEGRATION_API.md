@@ -62,7 +62,7 @@ All of these are under `/api/v1`, need the scope shown and `X-Idempotency-Key`, 
 | `POST /v1/subscriptions/{id}/change-plan` | `subscription:change` | `{targetOfferId, effective: IMMEDIATE/NEXT_BILL_CYCLE, addOns?, acceptContractTerms?}`. A subscription is identified by its service. The new plan must be on sale and of the same kind of service; a cheaper plan on a running contract needs `acceptContractTerms`. IMMEDIATE moves now, pro-rates this period (billed on the next bill as an adjustment), updates the charging system and the contract, and adds the add-ons; NEXT_BILL_CYCLE schedules it for the account's next bill date and it takes effect the day after, in the daily job. `DELETE` on the same path cancels a scheduled change. |
 | `POST /v1/services/{id}/vas` | `vas:manage` | `{action: ADD/REMOVE, offerId}` for roaming passes, boosters, insurance and partner subscriptions. A value-added service is its own subscription tied to the service; provisioning goes to the PCRF and OCS through the outbox, and partner offers also raise a `VAS_CHANGED` event with the partner code for the partner webhook. |
 
-**Integration → Integration hub → API gateway → Rules for subscriber operations** sets whether a SIM swap needs the password, how long it lasts, and the fees (SIM replacement, number change, ownership transfer, plan change).
+**Integration → API access → Rules for subscriber operations** sets whether a SIM swap needs the password, how long it lasts, and the fees (SIM replacement, number change, ownership transfer, plan change).
 
 ## Ordering, billing and payments
 

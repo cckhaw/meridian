@@ -14,12 +14,10 @@ import { getStoreSettings } from './store-settings.js';
  * Nothing in this file returns a secret: environment variables are reported as set or not set, never by value.
  */
 export type IntegrationGroup =
-  | 'Online store-front' | 'Payments' | 'Network and SIM provisioning' | 'Number portability (MNP)' | 'Logistics and delivery' | 'Customer messaging'
-  | 'Finance and SAP' | 'Credit and collections' | 'Identity and compliance' | 'Charging and usage' | 'Platform and events';
+  | 'Network, numbers and charging' | 'Payments and finance' | 'Identity, credit and collections' | 'Field service and logistics' | 'Customer messaging' | 'Online store-front' | 'Events and streaming' | 'Platform';
 
 export const INTEGRATION_GROUPS: IntegrationGroup[] = [
-  'Online store-front', 'Payments', 'Network and SIM provisioning', 'Number portability (MNP)', 'Logistics and delivery', 'Customer messaging',
-  'Finance and SAP', 'Credit and collections', 'Identity and compliance', 'Charging and usage', 'Platform and events',
+  'Network, numbers and charging', 'Payments and finance', 'Identity, credit and collections', 'Field service and logistics', 'Customer messaging', 'Online store-front', 'Events and streaming', 'Platform',
 ];
 
 /**
@@ -96,7 +94,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Payments ─────────────
   {
-    id: 'stripe', group: 'Payments', name: 'Stripe', with: 'Stripe (card payments for the store-front and the CRM)',
+    id: 'stripe', group: 'Payments and finance', name: 'Stripe', with: 'Stripe (card payments for the store-front and the CRM)',
     summary: 'In the store-front the customer pays by card in the browser. In the CRM, staff send the customer a Stripe payment link from the order and the customer pays on their own phone. Either way the order is confirmed only by Stripe’s signed webhook, and card numbers never reach Meridian. You choose below where Stripe is used: store-front, CRM or both.',
     maturity: 'BUILT', direction: 'BOTH',
     env: [
@@ -109,7 +107,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Where Stripe is used', href: '/admin/integrations?item=stripe' }, doc: 'STOREFRONT.md', keywords: 'stripe card payment gateway online pay',
   },
   {
-    id: 'payment-webhook', group: 'Payments', name: 'Payment provider webhook and terminals', with: 'A payment provider, bank terminal or QR scheme that confirms payments',
+    id: 'payment-webhook', group: 'Payments and finance', name: 'Payment provider webhook and terminals', with: 'A payment provider, bank terminal or QR scheme that confirms payments',
     summary: 'For any provider other than Stripe: it calls a signed webhook when a payment succeeds. Without it (manual mode), staff record the terminal’s approval or receipt number by hand.',
     maturity: 'ENDPOINT', direction: 'IN',
     env: [
@@ -123,7 +121,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Network and SIM provisioning ─────────────
   {
-    id: 'ocs', group: 'Network and SIM provisioning', name: 'Charging system (OCS)', with: 'Your real-time rating and charging system (voice, SMS and data)',
+    id: 'ocs', group: 'Network, numbers and charging', name: 'Charging system (OCS)', with: 'Your real-time rating and charging system (voice, SMS and data)',
     summary: 'When a plan that has an OCS plan code starts, changes plan, is barred or restored, gets a new SIM or number, or ends, Meridian queues a vendor-neutral command and a connector for your OCS vendor delivers it: create the subscriber, subscribe the plan, and so on. Each vendor has its own connector, so Meridian does not depend on any one OCS. Jobs for a subscriber are delivered in order and retried when the OCS is down; one that cannot be delivered is kept for you to retry.',
     maturity: 'BUILT', direction: 'OUT',
     env: [{ name: 'MERIDIAN_OCS_TOKEN', purpose: 'Token for the generic REST connector (the name is yours to choose; it must start with MERIDIAN_OCS_)', on: 'web', secret: true }],
@@ -132,7 +130,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'OCS.md', keywords: 'ocs charging rating real time online voice sms data subscriber provisioning huawei ericsson amdocs oracle optiva vendor connector plan',
   },
   {
-    id: 'wfm', group: 'Logistics and delivery', name: 'Field service (workforce management)', with: 'Your field-service system: Salesforce Field Service, Oracle Field Service Cloud, TOA, or a partner’s dispatch tool',
+    id: 'wfm', group: 'Field service and logistics', name: 'Field service (workforce management)', with: 'Your field-service system: Salesforce Field Service, Oracle Field Service Cloud, TOA, or a partner’s dispatch tool',
     summary: 'When a fault needs a technician, an agent asks the system which windows are free for the skills the issue needs, holds one while on the call, and turns it into a job. The system reports the visit (assigned, on the way, on site, done, customer not at home, needs another time) by calling Meridian’s signed callback URL, and Meridian moves the case and tells the customer by SMS or WhatsApp.',
     maturity: 'BUILT', direction: 'BOTH',
     env: [{ name: 'MERIDIAN_WFM_WEBHOOK_SECRET', purpose: 'The secret the field-service system signs its callbacks with (at least 16 characters; the name is set in Settings → Cases)', on: 'web', secret: true }, { name: 'MERIDIAN_WFM_TOKEN', purpose: 'Token for the REST connector (the name is yours to choose; it must start with MERIDIAN_WFM_)', on: 'web', secret: true }],
@@ -141,7 +139,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'CASES.md', keywords: 'wfm field service workforce technician truck roll dispatch appointment slot visit salesforce toa oracle engineer callback webhook',
   },
   {
-    id: 'network-provisioning', group: 'Network and SIM provisioning', name: 'Network provisioning (HLR/HSS, policy control)', with: 'The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service kind',
+    id: 'network-provisioning', group: 'Network, numbers and charging', name: 'Network provisioning (HLR/HSS, policy control)', with: 'The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service kind',
     summary: 'When a service is barred, restored, changes plan or number, or ends, Meridian queues an instruction in the same transaction as the change; for service types that are set to tell the network when they start (your own types by default, built-in ones when you switch it on) it also queues the start. A connector you deploy delivers it to the network and acknowledges it. (Charging-system provisioning has its own card above.)',
     maturity: 'OUTBOX', direction: 'OUT',
     outbox: NET(['PROVISION', 'DEPROVISION', 'PLAN_CHANGE', 'MSISDN_SWAP', 'ACTIVATE_PORTED_IN', 'THROTTLE_DATA', 'BAR_OUTGOING', 'BAR_ALL', 'RESTORE']), endpoints: POLL,
@@ -149,14 +147,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Service types (systems and instructions)', href: '/admin/settings?section=service-types' }, doc: 'LIFECYCLE.md', keywords: 'hlr hss pcrf pcf provisioning network activate bar restore sim core',
   },
   {
-    id: 'esim', group: 'Network and SIM provisioning', name: 'eSIM profile server (SM-DP+)', with: 'Your SM-DP+ (GSMA eSIM profile server)',
+    id: 'esim', group: 'Network, numbers and charging', name: 'eSIM profile server (SM-DP+)', with: 'Your SM-DP+ (GSMA eSIM profile server)',
     summary: 'Creating an eSIM profile reserves an ICCID and IMSI and asks the SM-DP+ for the activation code. Today a stand-in generates a sample code; the real server replaces it behind the same one-method interface.',
     maturity: 'STUB', direction: 'OUT',
     needs: ['Implement createProfile({ iccid, imsi }) against your SM-DP+ (ES2+ interface)', 'Pass it where eSIM profiles are issued (nrm-pools.ts: issueEsimProfile)'],
     configure: { label: 'Numbers & SIMs', href: '/numbering' }, doc: 'NUMBERING.md', keywords: 'esim sm-dp+ smdp profile activation code lpa',
   },
   {
-    id: 'sim-supplier', group: 'Network and SIM provisioning', name: 'SIM and number batch files', with: 'Your SIM vendor (ICCID, IMSI, eSIM codes) and your numbering plan',
+    id: 'sim-supplier', group: 'Network, numbers and charging', name: 'SIM and number batch files', with: 'Your SIM vendor (ICCID, IMSI, eSIM codes) and your numbering plan',
     summary: 'SIM batches and number ranges arrive as files from the vendor and the regulator. Staff check and load them as CSV; nothing is fetched automatically.',
     maturity: 'MANUAL', direction: 'IN',
     needs: ['Ask the vendor for the batch file in the CSV layout of the template', 'Load it in Numbers & SIMs (check first, then load)'],
@@ -165,7 +163,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Number portability ─────────────
   {
-    id: 'mnp-port-in', group: 'Number portability (MNP)', name: 'Port-in (numbers coming to us)', with: 'The national porting clearinghouse and the donor operators',
+    id: 'mnp-port-in', group: 'Network, numbers and charging', name: 'Port-in (numbers coming to us)', with: 'The national porting clearinghouse and the donor operators',
     summary: 'An order with a number to bring in files a port-in request. Meridian queues PORT_IN_REQUEST for the clearinghouse connector (or a Temporal workflow that does the same). The clearinghouse’s decision and completion come back through the MNP endpoints.',
     maturity: 'OUTBOX', direction: 'BOTH',
     outbox: NET(['PORT_IN_REQUEST']),
@@ -178,7 +176,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Donor operators', href: '/admin/settings?section=donor-operators' }, doc: 'NUMBERING.md', keywords: 'mnp porting port in clearinghouse donor operator number portability',
   },
   {
-    id: 'mnp-port-out', group: 'Number portability (MNP)', name: 'Port-out (numbers leaving us)', with: 'The national porting clearinghouse and the recipient operators',
+    id: 'mnp-port-out', group: 'Network, numbers and charging', name: 'Port-out (numbers leaving us)', with: 'The national porting clearinghouse and the recipient operators',
     summary: 'Staff record a port-out request. When the clearinghouse confirms the number has moved, the confirmation call ends the service: final bill, early-termination charge, deposit refund and SIM release.',
     maturity: 'ENDPOINT', direction: 'IN',
     endpoints: [{ method: 'POST', path: '/api/mnp/port-out/confirmation', purpose: 'The clearinghouse confirmed the move: { serviceId or msisdn, reference }; safe to repeat', auth: 'Service account with mnp:manage' }],
@@ -188,7 +186,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Logistics ─────────────
   {
-    id: 'courier', group: 'Logistics and delivery', name: 'Courier and delivery tracking', with: 'Courier or last-mile delivery partner',
+    id: 'courier', group: 'Field service and logistics', name: 'Courier and delivery tracking', with: 'Courier or last-mile delivery partner',
     summary: 'Staff mark an order shipped and type the tracking number; the order moves to Shipped and Delivered by hand. The order workflow’s shipGoods step is a stand-in that invents a tracking number. A courier connector would book the shipment and report status back.',
     maturity: 'MANUAL', direction: 'OUT',
     endpoints: [{ method: 'POST', path: '/api/orders/:id/actions', purpose: 'Actions ship ({ trackingNumber }), deliver, collect, return: a courier webhook handler calls these', auth: 'Service account with order permissions' }],
@@ -196,7 +194,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Fulfilment options', href: '/admin/settings?section=fulfilment' }, doc: 'ORDERS.md', keywords: 'courier logistics delivery shipping tracking parcel last mile 3pl',
   },
   {
-    id: 'installation', group: 'Logistics and delivery', name: 'Installation and field service', with: 'Field-service or technician scheduling system',
+    id: 'installation', group: 'Field service and logistics', name: 'Installation and field service', with: 'Field-service or technician scheduling system',
     summary: 'Fibre and similar offers need an installation. Staff schedule it and mark it done in the order. The workflow’s bookInstallation step is a stand-in; a field-service system would offer slots and report completion.',
     maturity: 'MANUAL', direction: 'OUT',
     endpoints: [{ method: 'POST', path: '/api/orders/:id/actions', purpose: 'Actions schedule_installation, complete_installation', auth: 'Service account with order permissions' }],
@@ -204,7 +202,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'ORDERS.md', keywords: 'installation technician field service fibre dispatch appointment',
   },
   {
-    id: 'warehouse', group: 'Logistics and delivery', name: 'Warehouse and stock files', with: 'Warehouse management system or supplier stock files',
+    id: 'warehouse', group: 'Field service and logistics', name: 'Warehouse and stock files', with: 'Warehouse management system or supplier stock files',
     summary: 'Stock arrives by CSV, is moved between locations and written off in Inventory. No warehouse system is connected.',
     maturity: 'MANUAL', direction: 'IN',
     needs: ['Export stock from the warehouse system in the template layout', 'Load it in Inventory (check first, then load)'],
@@ -223,7 +221,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Finance and SAP ─────────────
   {
-    id: 'sap', group: 'Finance and SAP', name: 'SAP general ledger export', with: 'SAP S/4HANA or ECC (through Integration Suite, an API gateway, or file load)',
+    id: 'sap', group: 'Payments and finance', name: 'SAP general ledger export', with: 'SAP S/4HANA or ECC (through Integration Suite, an API gateway, or file load)',
     summary: 'The sub-ledger turns business events into balanced journals, maps them to SAP accounts, cost centres and tax codes, and exports them in batches (FLAT, IDoc, JSON or CSV). Delivery is manual download, or REST to your endpoint. SFTP and RFC need a connector deployed with the integration.',
     maturity: 'BUILT', direction: 'OUT',
     env: [
@@ -234,7 +232,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Finance → SAP settings', href: '/finance' }, doc: 'FINANCE.md', keywords: 'sap gl general ledger journal export idoc posting account cost centre erp',
   },
   {
-    id: 'ledger-ingest', group: 'Finance and SAP', name: 'Billing and charging events into the ledger', with: 'Rating, charging and billing systems, or an event bus',
+    id: 'ledger-ingest', group: 'Payments and finance', name: 'Billing and charging events into the ledger', with: 'Rating, charging and billing systems, or an event bus',
     summary: 'Other systems post business events (invoice generated, payment success, adjustment, refund) to Meridian’s sub-ledger. Bad events are kept as dead letters and never dropped; they can be retried.',
     maturity: 'ENDPOINT', direction: 'IN',
     endpoints: [
@@ -245,7 +243,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Finance', href: '/finance' }, doc: 'FINANCE.md', keywords: 'ledger events ingest kafka sub-ledger dead letter billing charging rating',
   },
   {
-    id: 'commission-payouts', group: 'Finance and SAP', name: 'Dealer and agent payout files', with: 'Your bank (dealer transfers) and payroll (staff)',
+    id: 'commission-payouts', group: 'Payments and finance', name: 'Dealer and agent payout files', with: 'Your bank (dealer transfers) and payroll (staff)',
     summary: 'Closing a month issues statements; Finance downloads the payout CSV, pays it through the bank or payroll, then confirms in Meridian. The file is generic; it needs mapping to your bank’s format.',
     maturity: 'MANUAL', direction: 'OUT',
     endpoints: [{ method: 'GET', path: '/api/commission/payouts/:id/file', purpose: 'Download the payout file', auth: 'commission:settle' }, { method: 'POST', path: '/api/commission/payouts/:id/confirm', purpose: 'Mark paid once the bank has paid', auth: 'commission:settle' }],
@@ -255,21 +253,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Credit and collections ─────────────
   {
-    id: 'credit-bureau', group: 'Credit and collections', name: 'Credit check', with: 'A credit bureau or internal scoring service',
-    summary: 'The order workflow has a credit-check step before a postpaid order proceeds. Today a stand-in approves every order. Meridian’s own checks (credit limits per role, deposits, bars) do not call anything outside.',
-    maturity: 'STUB', direction: 'OUT',
-    needs: ['Choose the bureau or scoring service', 'Implement the creditCheck(orderId) activity in the order service and return { approved }'],
-    doc: 'ORDERS.md', keywords: 'credit check bureau score underwriting risk',
-  },
-  {
-    id: 'device-credit-bureau', group: 'Credit and collections', name: 'Credit profile for device financing', with: 'A credit bureau (REST) that scores a customer from their ID number',
-    summary: 'A device on a contract is paid over the contract. With the credit check on, Meridian sends the customer’s ID number (with their consent; only a hash is kept) to the bureau. A score comes back and the score bands set the upfront payment, or the bureau returns the upfront amount itself. Without a bureau, or when it fails, the fallback share applies (or the sale stops, as you choose). A built-in simulator lets you try the flow.',
+    id: 'credit-bureau', group: 'Identity, credit and collections', name: 'Credit bureau', with: 'A credit bureau (REST) that scores a customer from their ID number',
+    summary: 'The credit bureau behind device financing (and, later, the order workflow’s credit-check step, where a stand-in still approves every order today). A device on a contract is paid over the contract. With the credit check on, Meridian sends the customer’s ID number (with their consent; only a hash is kept) to the bureau. A score comes back and the score bands set the upfront payment, or the bureau returns the upfront amount itself. Without a bureau, or when it fails, the fallback share applies (or the sale stops, as you choose). A built-in simulator lets you try the flow.',
     maturity: 'BUILT', direction: 'OUT',
-    needs: ['Add the bureau under Integration → Integration hub → Finance (kind: credit bureau): address, key, and the names of the ID field and the score or upfront field in its answer', 'Set the score bands and what to do when the bureau fails in Settings → Device financing, then use “Try it”'],
+    needs: ['Add the bureau below (kind: credit bureau): address, key, and the names of the ID field and the score or upfront field in its answer', 'Set the score bands and what to do when the bureau fails in Settings → Device financing, then use “Try it”'],
     configure: { label: 'Settings → Device financing', href: '/admin/settings?section=device-financing' }, doc: 'FINANCING.md', keywords: 'device financing credit check bureau score upfront payment dup instalment consent id number',
   },
   {
-    id: 'collections', group: 'Credit and collections', name: 'Collections agency and write-offs', with: 'A collections agency and the finance system',
+    id: 'collections', group: 'Identity, credit and collections', name: 'Collections agency and write-offs', with: 'A collections agency and the finance system',
     summary: 'When an account is written off, Meridian queues a COLLECTIONS hand-over (balance and invoices) and a GL write-off instruction.',
     maturity: 'OUTBOX', direction: 'OUT',
     outbox: { kind: 'COLLECTIONS', instructions: ['HAND_OVER'] }, endpoints: POLL,
@@ -279,14 +270,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Identity and compliance ─────────────
   {
-    id: 'ekyc', group: 'Identity and compliance', name: 'Identity verification (eKYC)', with: 'An eKYC vendor (document check, liveness, registry lookup)',
+    id: 'ekyc', group: 'Identity, credit and collections', name: 'Identity verification (eKYC)', with: 'An eKYC vendor (document check, liveness, registry lookup)',
     summary: 'Online applicants upload ID documents and a compliance officer reviews them (or, in automatic mode, clean applications are approved by the rules alone). In the CRM, staff sight the original ID in person. The rules below apply to the store-front, the CRM or both, as marked. No eKYC vendor is called today; automatic mode is meant to sit behind one.',
     maturity: 'MANUAL', direction: 'OUT',
     needs: ['Choose an eKYC vendor', 'Add a connector that verifies the document and selfie and feeds the result into the same checks', 'Keep automatic approval off until it exists'],
     configure: { label: 'Identity rules', href: '/admin/integrations?item=ekyc' }, doc: 'STOREFRONT.md', keywords: 'ekyc kyc identity verification liveness document id vendor compliance',
   },
   {
-    id: 'secrets', group: 'Identity and compliance', name: 'Keys that protect customer data', with: 'Your secrets store',
+    id: 'secrets', group: 'Platform', name: 'Keys that protect customer data', with: 'Your secrets store',
     summary: 'The ID pepper hashes ID documents for duplicate detection; the data key encrypts identity data at rest (AES-256-GCM, falls back to the pepper). The super-user login lives only in the environment. Losing the data key makes the data unreadable.',
     maturity: 'BUILT', direction: 'IN',
     env: [
@@ -301,7 +292,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Charging and usage ─────────────
   {
-    id: 'rating-gateway', group: 'Charging and usage', name: 'Online charging gateway (Diameter Gy / 5G CHF)', with: 'The packet core and online charging (OCS/CHF)',
+    id: 'rating-gateway', group: 'Network, numbers and charging', name: 'Online charging gateway (Diameter Gy / 5G CHF)', with: 'The packet core and online charging (OCS/CHF)',
     summary: 'The rating-gateway service is the hot path for balance reservations during sessions. It is a scaffold with an in-memory balance store; a Redis-backed store and the Diameter or Nchf front end are not built.',
     maturity: 'STUB', direction: 'BOTH',
     needs: ['Choose the protocol (Gy or Nchf) and the balance store', 'Feed balances from Meridian (usage, allowances) and send usage records to billing'],
@@ -310,7 +301,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Platform and events ─────────────
   {
-    id: 'database', group: 'Platform and events', name: 'PostgreSQL database', with: 'PostgreSQL or AlloyDB',
+    id: 'database', group: 'Platform', name: 'PostgreSQL database', with: 'PostgreSQL or AlloyDB',
     summary: 'The system of record. Without DATABASE_URL the portal runs on an embedded demo database that is lost on restart (refused in production).',
     maturity: 'BUILT', direction: 'BOTH',
     env: [
@@ -321,7 +312,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'OPERATIONS.md', keywords: 'database postgres postgresql alloydb neon pool backup',
   },
   {
-    id: 'temporal', group: 'Platform and events', name: 'Workflow engine (Temporal)', with: 'Temporal server',
+    id: 'temporal', group: 'Platform', name: 'Workflow engine (Temporal)', with: 'Temporal server',
     summary: 'The order service runs the order, port-in, dunning and number-recycling workflows. Their steps call other systems (credit check, payment capture, inventory, shipping, notifications, clearinghouse) through activities that are stand-ins until real connectors replace them.',
     maturity: 'STUB', direction: 'BOTH',
     env: [{ name: 'TEMPORAL_ADDRESS', purpose: 'Temporal frontend address, default localhost:7233', on: 'order-service', required: true }],
@@ -329,7 +320,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'ARCHITECTURE.md', keywords: 'temporal workflow order service worker activity saga',
   },
   {
-    id: 'event-bus', group: 'Platform and events', name: 'Event bus (Kafka)', with: 'Kafka or another message bus',
+    id: 'event-bus', group: 'Events and streaming', name: 'Event bus (Kafka)', with: 'Kafka or another message bus',
     summary: 'Workflows publish domain events by topic and key; today the publisher is a stand-in that logs. Inbound, the ledger accepts events over HTTP, so a Kafka consumer can post each message.',
     maturity: 'STUB', direction: 'BOTH',
     outbox: { kind: 'EVENT', instructions: ['VIP_NUMBER_AUCTION_WON', 'RECONCILIATION_MISMATCH'] },
@@ -337,7 +328,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'ARCHITECTURE.md', keywords: 'kafka event bus publish topic stream message broker',
   },
   {
-    id: 'catalog-store', group: 'Platform and events', name: 'Catalog service database (MongoDB)', with: 'MongoDB',
+    id: 'catalog-store', group: 'Platform', name: 'Catalog service database (MongoDB)', with: 'MongoDB',
     summary: 'The catalog service (NestJS) keeps its own document store. The portal’s own catalog lives in PostgreSQL.',
     maturity: 'BUILT', direction: 'BOTH',
     env: [{ name: 'MONGO_URL', purpose: 'MongoDB connection string', on: 'catalog-service', required: true, secret: true }],
@@ -345,14 +336,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'ARCHITECTURE.md', keywords: 'mongo mongodb catalog service document',
   },
   {
-    id: 'outbox', group: 'Platform and events', name: 'Message outbox (adapter interface)', with: 'Any connector you build for the integrations marked “Outbox”',
+    id: 'outbox', group: 'Platform', name: 'Message outbox (adapter interface)', with: 'Any connector you build for the integrations marked “Outbox”',
     summary: 'Meridian never calls the network, messaging or collections systems inside a customer transaction. It writes an instruction in the same transaction and a connector delivers it later and acknowledges it, so nothing is lost or sent twice.',
     maturity: 'ENDPOINT', direction: 'OUT', endpoints: POLL,
     needs: ['Create a service account for each connector with billing:run', 'Make delivery idempotent: an instruction may be read again until acknowledged'],
     doc: 'OPERATIONS.md', keywords: 'outbox adapter connector queue instruction ack service account',
   },
   {
-    id: 'scheduler', group: 'Platform and events', name: 'Scheduled jobs', with: 'A scheduler (cron, Vercel Cron, Kubernetes CronJob, Temporal schedule)',
+    id: 'scheduler', group: 'Platform', name: 'Scheduled jobs', with: 'A scheduler (cron, Vercel Cron, Kubernetes CronJob, Temporal schedule)',
     summary: 'Nothing in Meridian runs itself. Schedule the bill run, the daily lifecycle job (suspensions, dunning, number recycling, SAP close, commission) and, if you use them, the others. All are safe to re-run.',
     maturity: 'ENDPOINT', direction: 'IN',
     endpoints: [

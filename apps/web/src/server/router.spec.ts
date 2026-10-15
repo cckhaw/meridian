@@ -805,7 +805,7 @@ describe('settings and branding', () => {
     expect(r.status).toBe(200);
     const ids = r.json.items.map((i: any) => i.id);
     expect(ids).toEqual(expect.arrayContaining(['storefront', 'stripe', 'sap', 'mnp-port-in', 'network-provisioning', 'courier', 'notifications']));
-    expect(r.json.groups).toEqual(expect.arrayContaining(['Payments', 'Number portability (MNP)', 'Logistics and delivery']));
+    expect(r.json.groups).toEqual(expect.arrayContaining(['Payments and finance', 'Network, numbers and charging', 'Field service and logistics']));
     expect(JSON.stringify(r.json)).not.toMatch(/local-dev-only|sk_(live|test)_[A-Za-z0-9]{8,}/);
     expect((await call('GET', '/auth/me', { cookie: su })).json.user.modules.some((m: any) => m.id === 'integrations')).toBe(true);
     expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'integrations')).toBe(false);
