@@ -12,7 +12,7 @@ export interface IntegrationSection {
   groups?: string[];
 }
 
-export const GROUPS = ['Start here', 'Systems Meridian connects to', 'Channels and partners that connect to Meridian', 'Events Meridian shares', 'Platform'] as const;
+export const GROUPS = ['Start here', 'Systems Meridian connects to', 'Channels and partners', 'Events Meridian shares', 'Platform'] as const;
 
 export const SECTIONS: IntegrationSection[] = [
   { id: 'overview', group: 'Start here', label: 'Overview', description: 'What works, what needs setup, what is failing', keywords: 'overview health status attention failing needs setup summary dashboard' },
@@ -27,9 +27,9 @@ export const SECTIONS: IntegrationSection[] = [
     keywords: 'field service workforce wfm dispatch technician installation appointment slot courier delivery tracking warehouse stock files logistics' },
   { id: 'messaging', group: 'Systems Meridian connects to', label: 'Customer messaging', description: 'SMS, email and push notifications', groups: ['Customer messaging'], keywords: 'sms email push notification message whatsapp gateway template' },
 
-  { id: 'storefront', group: 'Channels and partners that connect to Meridian', label: 'Online store-front', description: 'The self-serve shop and its access to Meridian', groups: ['Online store-front'], keywords: 'store front storefront shop online self serve api key kyc stripe checkout' },
-  { id: 'api-access', group: 'Channels and partners that connect to Meridian', label: 'API access', description: 'Who may call Meridian’s APIs, with what rights and how often', keywords: 'api oauth client credentials token api key scope rate limit throttle idempotency call log audit subscriber operations sim swap otp northbound partner channel' },
-  { id: 'callbacks', group: 'Channels and partners that connect to Meridian', label: 'Inbound callbacks', description: 'Keys that prove a callback from a payment provider, courier or dealer is genuine', keywords: 'inbound webhook callback verification key hmac signature payment courier dealer provider secret' },
+  { id: 'storefront', group: 'Channels and partners', label: 'Online store-front', description: 'The self-serve shop and its access to Meridian', groups: ['Online store-front'], keywords: 'store front storefront shop online self serve api key kyc stripe checkout' },
+  { id: 'api-access', group: 'Channels and partners', label: 'API access', description: 'Who may call Meridian’s APIs, with what rights and how often', keywords: 'api oauth client credentials token api key scope rate limit throttle idempotency call log audit subscriber operations sim swap otp northbound partner channel' },
+  { id: 'callbacks', group: 'Channels and partners', label: 'Inbound callbacks', description: 'Keys that prove a callback from a payment provider, courier or dealer is genuine', keywords: 'inbound webhook callback verification key hmac signature payment courier dealer provider secret' },
 
   { id: 'webhooks', group: 'Events Meridian shares', label: 'Webhooks', description: 'Addresses Meridian posts events to, signed and retried', keywords: 'outbound webhook partner callback event hmac bearer retry backoff signed' },
   { id: 'streams', group: 'Events Meridian shares', label: 'Event streams and subscriptions', description: 'The event bus, topics, and systems subscribed through TM Forum 688', groups: ['Events and streaming'], keywords: 'event bus kafka topic stream tmf 688 tmf688 subscription listener hub notification mapping' },

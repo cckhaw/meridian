@@ -67,7 +67,7 @@ function Integration() {
                     <button onClick={() => open(s.id)} aria-current={on ? 'page' : undefined}
                       className={`flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${on ? 'bg-accent/10' : 'hover:bg-surface2'}`}>
                       <span className="min-w-0 flex-1">
-                        <span className={`block truncate ${on ? 'font-semibold text-accent' : 'font-medium'}`}>{s.label}</span>
+                        <span className={`block ${on ? 'font-semibold text-accent' : 'font-medium'}`}>{s.label}</span>
                         <span className="block truncate text-footnote text-label2">{s.description}</span>
                       </span>
                       {n > 0 && <Badge tone="warning">{n} to set up</Badge>}
@@ -162,7 +162,7 @@ function OverviewPanel({ ov, open }: { ov: Overview | null | undefined; open: (i
         <div className="grid gap-3 sm:grid-cols-2">
           {[
             ['Systems Meridian connects to', 'Meridian calls them: network, payments, identity and credit, field service, messaging. Each system shows its status and its connection details together.', 'network'],
-            ['Channels and partners that connect to Meridian', 'They call Meridian: the store-front, apps and partners using API credentials, and callbacks from payment providers and couriers.', 'api-access'],
+            ['Channels and partners', 'They call Meridian: the store-front, apps and partners using API credentials, and callbacks from payment providers and couriers.', 'api-access'],
             ['Events Meridian shares', 'Meridian tells others what happened: webhooks, event streams, TM Forum subscriptions, and the queue they go through.', 'webhooks'],
             ['Platform', 'What Meridian runs on: database, workflow engine, scheduler, and the keys that protect data.', 'platform'],
           ].map(([t, d, id]) => (

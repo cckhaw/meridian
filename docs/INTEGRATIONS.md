@@ -6,7 +6,7 @@
 |---|---|---|
 | Start here | Overview | What works, what needs setup, what is failing |
 | Systems Meridian connects to | Network, numbers and charging · Payments and finance · Identity, credit and collections · Field service and logistics · Customer messaging | Meridian calls them. Each system is one card: status, what it is for, what to provide, and its address and credentials (*Connection details*) together |
-| Channels and partners that connect to Meridian | Online store-front · API access · Inbound callbacks | They call Meridian: the shop, apps and partners with OAuth clients or API keys, and callbacks from payment providers and couriers |
+| Channels and partners | Online store-front · API access · Inbound callbacks | They call Meridian: the shop, apps and partners with OAuth clients or API keys, and callbacks from payment providers and couriers |
 | Events Meridian shares | Webhooks · Event streams and subscriptions · Delivery queue | Meridian tells others what happened |
 | Platform | Platform and keys | The database, workflow engine, scheduler, outbox and the keys that protect data |
 
