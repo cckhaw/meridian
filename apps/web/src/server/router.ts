@@ -1186,6 +1186,35 @@ post('/cases', 'case:create', async ({ db, user, body }) => {
   if (user.scope.customerId && (b.type === 'MNP_PORT_OUT' || b.severity || b.priority || b.interactionIds)) throw forbidden();   // a customer opens a case; staff decide how severe it is
   return core.createCase(db, { ...b, customerId }, user.username);
 });
+// ── SLA watchdog, supervisors' board, refund approvals, network incidents ──
+const superv = ['case:supervise'] as Permission[];
+const actorOf = (user: SessionUser) => ({ username: user.username, roles: user.roles as string[], isSuperuser: user.isSuperuser });
+/** One tick of a case's watchdog, as the Temporal workflow calls it: does what is due, says what comes next. */
+post('/cases/:id/sla-tick', superv, async ({ db, params, body }) => {
+  const b = z.object({ now: z.string().max(40).optional() }).parse(body ?? {});
+  const r = await core.fireDueCaseTimers(db, params.id!, b.now ? new Date(b.now) : new Date());
+  return { fired: r.fired, nextAt: r.timers.nextAt, closed: r.timers.closed };
+});
+/** What a scheduler runs every minute or so: everything with an SLA step due, and (when switched on) the grouping of busy nodes into incidents. */
+post('/cases/sla-sweep', superv, async ({ db, user }) => ({ ...(await core.sweepCaseSla(db)), incidents: (await core.correlateCases(db, user.username)).created }));
+get('/cases/sla-board', superv, ({ db }) => core.slaBoard(db));
+get('/cases/incidents/suggestions', superv, async ({ db }) => ({ items: await core.suggestIncidents(db) }));
+get('/cases/incidents', 'case:read', ({ db, query }) => core.listCases(db, { masters: true, status: str(query, 'status') ?? 'ACTIVE', limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/cases/incidents', superv, async ({ db, user, body }) => {
+  const b = z.object({ postalNode: z.string().min(1).max(20), issueTypeId: z.string().max(120), subject: z.string().max(200).optional(), severity: severity.optional(), note: z.string().max(2000).optional(), caseIds: z.array(uuid).max(5000).optional(), adoptOpen: z.boolean().optional() }).parse(body);
+  return Response.json(await core.createMasterIncident(db, b, user.username), { status: 201 });
+});
+get('/cases/:id/children', 'case:read', ({ db, params, query }) => core.listIncidentChildren(db, params.id!, { limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/cases/:id/children', superv, ({ db, user, params, body }) => core.linkCases(db, params.id!, z.object({ caseIds: z.array(uuid).max(5000).optional(), adoptNode: z.boolean().optional() }).parse(body), user.username));
+post('/cases/:id/unlink', superv, ({ db, user, params }) => core.unlinkCase(db, params.id!, user.username));
+get('/cases/:id/refunds', 'case:read', async ({ db, user, params }) => { assertCustomer(user, (await core.getCase(db, params.id!)).customerId); return { items: await core.listRefunds(db, params.id!), tiers: await core.getRefundTiers(db) }; });
+post('/cases/:id/refunds', 'case:write', ({ db, user, params, body }) => core.requestRefund(db, params.id!, z.object({ invoiceId: uuid, amountMinor: z.number().int().positive().max(1e12), reason: z.string().min(3).max(300) }).parse(body), actorOf(user)));
+get('/refunds/pending', 'case:write', async ({ db, user }) => ({ items: await core.listRefundsToDecide(db, actorOf(user)) }));
+post('/refunds/:id/decision', 'case:write', ({ db, user, params, body }) => core.decideRefund(db, params.id!, z.object({ decision: z.enum(['APPROVE', 'REJECT']), note: z.string().max(300).optional() }).parse(body), actorOf(user)));
+post('/refunds/:id/cancel', 'case:write', ({ db, user, params }) => core.cancelRefund(db, params.id!, actorOf(user)));
+get('/settings/cases/refund-tiers', 'settings:manage', async ({ db }) => ({ items: await core.getRefundTiers(db), roles: (await core.listRoles(db)).map((r: { id: string; label: string }) => ({ id: r.id, label: r.label })) }));
+post('/settings/cases/refund-tiers', 'settings:manage', async ({ db, user, body }) => ({ items: await core.setRefundTiers(db, user.username, z.object({ tiers: z.array(z.object({ label: z.string().max(40), maxMinor: z.number().int().nullable(), roleIds: z.array(z.string().max(40)).max(20) })).max(6) }).parse(body).tiers) }));
+
 get('/cases/:id', 'case:read', async ({ db, user, params }) => { const c = await core.getCase(db, params.id!); assertCustomer(user, c.customerId); return c; });
 get('/cases/:id/timeline', 'case:read', async ({ db, user, params }) => { assertCustomer(user, (await core.getCase(db, params.id!)).customerId); return { items: await core.caseTimeline(db, params.id!) }; });
 patch('/cases/:id', 'case:write', ({ db, user, params, body }) => core.updateCase(db, params.id!, z.object({ status: z.string().optional(), priority: z.string().optional(), note: caseNote.optional(), resolution: z.string().max(2000).optional(), reason: z.string().max(500).optional() }).parse(body), user.username));
@@ -1222,7 +1251,7 @@ route('DELETE', '/settings/cases/taxonomy/:id', 'settings:manage', ({ db, user, 
 get('/settings/cases/sla', 'settings:manage', async ({ db }) => ({ items: await core.listSla(db) }));
 post('/settings/cases/sla', 'settings:manage', async ({ db, user, body }) => ({ items: await core.setSla(db, user.username, z.object({ rows: z.array(z.object({ tier: z.enum(core.TIERS), severity, firstResponseMinutes: z.number().int(), resolutionMinutes: z.number().int(), warnPercent: z.number().int() })).min(1).max(9) }).parse(body).rows) }));
 get('/settings/cases', 'settings:manage', ({ db }) => core.getCaseSettings(db));
-post('/settings/cases', 'settings:manage', ({ db, user, body }) => core.setCaseSettings(db, user.username, z.object({ autoCloseHours: z.number().int(), reopenDays: z.number().int(), customerResponseHours: z.number().int() }).parse(body)));
+post('/settings/cases', 'settings:manage', ({ db, user, body }) => core.setCaseSettings(db, user.username, z.object({ autoCloseHours: z.number().int().optional(), reopenDays: z.number().int().optional(), customerResponseHours: z.number().int().optional(), incidentAutoLink: z.boolean().optional(), incidentAutoCreate: z.boolean().optional(), incidentThreshold: z.number().int().optional(), incidentWindowMinutes: z.number().int().optional() }).parse(body)));
 get('/inventory', 'inventory:read', ({ db, user, query }) => core.listStock(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/inventory/locations', 'inventory:read', async ({ db, user }) => ({ items: user.scope.storeId ? [user.scope.storeId] : await core.listStockLocations(db), warehouses: user.scope.storeId ? [] : (await core.listWarehouses(db)).filter((w) => w.status === 'ACTIVE').map((w) => ({ id: w.id, name: w.name })) }));
 const ownStore = (user: SessionUser, locationId: string) => { if (user.scope.storeId && locationId !== user.scope.storeId) throw forbidden('You can only work on your own store’s stock.'); };

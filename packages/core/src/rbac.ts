@@ -36,6 +36,7 @@ const CORE_PERMISSIONS = [
   'inventory:writeoff', // take stock off the books with a reason: damaged, lost, expired, stolen, a count that came up short
   'warehouse:manage', // add, rename, switch off and remove warehouse locations
   'case:read', 'case:create', 'case:write',
+  'case:supervise', // run the SLA sweep, group cases into network incidents, take over any case
   'commission:read',
   'commission:configure', // plans, rules, slabs, claw-back policies, who earns by which plan, the dealer channel
   'commission:settle', // approve earnings, close the month, issue statements, create and confirm payout files
@@ -57,7 +58,7 @@ export const isPermission = (p: string): p is Permission => (ALL_PERMISSIONS as 
 
 export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
-  'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'inventory-ops',
+  'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'team-lead', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'inventory-ops',
 ] as const;
 export type BuiltinRoleId = (typeof ROLE_IDS)[number];
 /** A role id: one of the built-in roles, or the id of a role an administrator created. */
@@ -143,6 +144,12 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     summary: 'Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer', 'mnp:manage',
       'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'catalog:read'],
+  },
+  'team-lead': {
+    id: 'team-lead', label: 'Team Lead', scope: 'staff', home: '/cases', creditLimitMinor: 100_000,
+    summary: 'Leads a support team: watches SLAs and escalations, groups cases into network incidents, approves refunds above an agent’s limit.',
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'mnp:manage', 'order:read', 'order:cancel',
+      'billing:read', 'billing:credit', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'case:supervise', 'catalog:read'],
   },
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,

@@ -108,3 +108,6 @@ export { DEFAULT_PRINT_PROFILE, SCREEN_PROFILE, type PrintProfile } from './bill
 export type { ConversionReport } from './billing-docs/legacy.js';
 export * from './case-taxonomy.js';
 export * from './interactions.js';
+export * from './case-sla.js';
+export * from './case-incidents.js';
+export * from './case-refunds.js';

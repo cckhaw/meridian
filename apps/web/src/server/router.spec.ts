@@ -1678,4 +1678,44 @@ describe('offer type switches and service types', () => {
     expect((await call('PATCH', `/customers/${cust.id}`, { cookie: agent.cookie, body: { vip: true } })).status).toBe(403);
     expect((await call('PATCH', `/customers/${cust.id}`, { cookie: su, body: { vip: true } })).json.vip).toBe(true);
   });
+  it('cases: SLA sweep, network incidents and tiered refund approval need the right people', async () => {
+    const su = await root();
+    const agent = await staff(['call-center']);
+    const lead = await staff(['team-lead']);
+    const fin = await staff(['finance']);
+    expect((await call('POST', '/cases/sla-sweep', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('GET', '/cases/sla-board', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('POST', '/cases/sla-sweep', { cookie: lead.cookie })).json).toMatchObject({ errors: [] });
+    // two fault cases at one node, grouped into an incident, resolved together
+    const mk = async (name: string) => (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: name, idDocument: `S${Math.random().toString().slice(2, 9)}A`, address: { line1: '1 Road', postcode: 'RT9999' } } })).json.customer;
+    const [c1, c2] = [await mk('Node One'), await mk('Node Two')];
+    const k1 = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c1.id, issueTypeId: 'broadband.down.los', subject: 'down' } })).json;
+    const k2 = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c2.id, issueTypeId: 'broadband.down.los', subject: 'down too' } })).json;
+    expect((await call('POST', '/cases/incidents', { cookie: agent.cookie, body: { postalNode: 'RT9999', issueTypeId: 'broadband.down.cut' } })).status).toBe(403);
+    const inc = await call('POST', '/cases/incidents', { cookie: lead.cookie, body: { postalNode: 'RT9999', issueTypeId: 'broadband.down.cut' } });
+    expect([inc.status, inc.json.linked, inc.json.incident.childCount]).toEqual([201, 2, 2]);
+    expect((await call('GET', '/cases/incidents', { cookie: agent.cookie })).json.items.map((x: any) => x.number)).toContain(inc.json.incident.number);   // not swallowed by /cases/:id
+    expect((await call('GET', `/cases/${inc.json.incident.id}/children`, { cookie: agent.cookie })).json.items).toHaveLength(2);
+    await call('POST', `/cases/${inc.json.incident.id}/status`, { cookie: lead.cookie, body: { status: 'IN_PROGRESS' } });
+    expect((await call('POST', `/cases/${inc.json.incident.id}/status`, { cookie: lead.cookie, body: { status: 'RESOLVED', resolution: 'Cable replaced' } })).json.status).toBe('RESOLVED');
+    expect([(await call('GET', `/cases/${k1.id}`, { cookie: agent.cookie })).json.status, (await call('GET', `/cases/${k2.id}`, { cookie: agent.cookie })).json.status]).toEqual(['RESOLVED', 'RESOLVED']);
+    // refunds: the agent's own limit, then a team lead, never the asker
+    const c3 = await mk('Refund Rita');
+    const acct = (await db.query('SELECT id, shard_id FROM accounts WHERE customer_id=$1', [c3.id])).rows[0]!;
+    const inv = (await db.query(`INSERT INTO invoices (shard_id, number, account_id, customer_id, kind, period_start, period_end, issue_date, due_date, status, currency, net_minor, tax_minor, total_minor)
+      VALUES ($1,$2,$3,$4,'CYCLE','2026-09-01','2026-09-30','2026-10-01','2026-10-15','ISSUED','SGD',27500,2475,29975) RETURNING id`, [acct.shardId, `RT-${Math.random().toString(36).slice(2, 8)}`, acct.id, c3.id])).rows[0]!;
+    const dispute = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c3.id, type: 'BILLING_REFUND', subject: 'Overcharged' } })).json;
+    const small = await call('POST', `/cases/${dispute.id}/refunds`, { cookie: agent.cookie, body: { invoiceId: inv.id, amountMinor: 1500, reason: 'Duplicate' } });
+    expect(small.json.status).toBe('EXECUTED');
+    const big = await call('POST', `/cases/${dispute.id}/refunds`, { cookie: agent.cookie, body: { invoiceId: inv.id, amountMinor: 8000, reason: 'Down for a week' } });
+    expect([big.json.status, big.json.tierLabel]).toEqual(['PENDING', 'Team lead']);
+    expect((await call('GET', '/refunds/pending', { cookie: agent.cookie })).json.items).toHaveLength(0);
+    expect((await call('POST', `/refunds/${big.json.id}/decision`, { cookie: agent.cookie, body: { decision: 'APPROVE' } })).status).toBe(403);
+    expect((await call('GET', '/refunds/pending', { cookie: lead.cookie })).json.items.map((x: any) => x.id)).toContain(big.json.id);
+    expect((await call('POST', `/refunds/${big.json.id}/decision`, { cookie: lead.cookie, body: { decision: 'APPROVE', note: 'ok' } })).json.status).toBe('EXECUTED');
+    expect((await call('GET', `/cases/${dispute.id}/refunds`, { cookie: agent.cookie })).json.items).toHaveLength(2);
+    expect((await call('GET', '/settings/cases/refund-tiers', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('POST', '/settings/cases/refund-tiers', { cookie: su, body: { tiers: [{ label: 'Only', maxMinor: 100, roleIds: ['finance'] }] } })).status).toBe(400);
+    void fin;
+  });
 });
