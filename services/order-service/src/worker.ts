@@ -1,6 +1,7 @@
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { stubActivities } from './activities/index.js';
 import { stubBillRunActivities } from './activities/bill-run.js';
+import { stubCaseSlaActivities } from './activities/case-sla.js';
 import { stubDunningActivities } from './activities/dunning.js';
 import { stubNrmActivities } from './activities/nrm.js';
 import { stubPortInActivities } from './activities/port-in.js';
@@ -11,6 +12,6 @@ const worker = await Worker.create({
   connection,
   taskQueue: TASK_QUEUE,
   workflowsPath: new URL('./workflows/index.ts', import.meta.url).pathname,
-  activities: { ...stubActivities, ...stubDunningActivities, ...stubBillRunActivities(), ...stubNrmActivities, ...stubPortInActivities } as unknown as Record<string, (...a: never[]) => unknown>,
+  activities: { ...stubActivities, ...stubDunningActivities, ...stubBillRunActivities(), ...stubCaseSlaActivities, ...stubNrmActivities, ...stubPortInActivities } as unknown as Record<string, (...a: never[]) => unknown>,
 });
 await worker.run();

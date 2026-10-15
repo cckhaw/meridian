@@ -2,7 +2,7 @@
 import { Alert, Badge, Button, Card, Field, Input, SectionTitle, Select, Spinner } from '@meridian/ui';
 import { useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
-import { label } from '@/lib/format';
+import { label, step, toInput, toMinor } from '@/lib/format';
 
 const SEVERITIES = ['CRITICAL_OUTAGE', 'MAJOR_DEGRADATION', 'MINOR_INQUIRY'];
 const TIERS = ['VIP', 'ENTERPRISE', 'STANDARD'];
@@ -16,6 +16,8 @@ export function CaseSettings() {
       <Taxonomy />
       <SlaMatrix />
       <Closing />
+      <Incidents />
+      <RefundTiers />
     </div>
   );
 }
@@ -115,6 +117,51 @@ function Closing() {
       </div>
       {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}{act.ok && !Object.keys(v).length && <div className="mt-3"><Alert tone="success">{act.ok}</Alert></div>}
       <div className="mt-4"><Button disabled={act.busy || !Object.keys(v).length} onClick={async () => { if (await act.run(() => post('/settings/cases', { autoCloseHours: Number(cur.autoCloseHours), reopenDays: Number(cur.reopenDays), customerResponseHours: Number(cur.customerResponseHours) }), 'Saved')) setV({}); }}>Save</Button></div>
+    </Card>
+  );
+}
+
+function Incidents() {
+  const { data, error, reload } = useApi<any>('/settings/cases');
+  const act = useAction(reload);
+  const [v, setV] = useState<Record<string, any>>({});
+  if (error) return <Alert>{error}</Alert>;
+  if (!data) return <Spinner />;
+  const cur = { incidentAutoLink: v.incidentAutoLink ?? data.incidentAutoLink, incidentAutoCreate: v.incidentAutoCreate ?? data.incidentAutoCreate, incidentThreshold: v.incidentThreshold ?? String(data.incidentThreshold), incidentWindowMinutes: v.incidentWindowMinutes ?? String(data.incidentWindowMinutes) };
+  return (
+    <Card>
+      <SectionTitle>Network incidents</SectionTitle>
+      <p className="-mt-2 mb-3 text-subhead text-label2">When a node fails, many customers report it. A master incident stands for the fault; each customer&apos;s case hangs from it, and resolving the incident resolves them all and tells each customer.</p>
+      <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={cur.incidentAutoLink} onChange={(e) => setV({ ...v, incidentAutoLink: e.target.checked })} /><span>A new fault case at a node with an open incident joins it</span></label>
+      <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={cur.incidentAutoCreate} onChange={(e) => setV({ ...v, incidentAutoCreate: e.target.checked })} /><span>Open an incident by itself when several fault cases come from one node</span></label>
+      {cur.incidentAutoCreate && <div className="mt-2 grid max-w-md gap-3 sm:grid-cols-2"><Field label="Number of cases"><Input type="number" min={2} value={cur.incidentThreshold} onChange={(e) => setV({ ...v, incidentThreshold: e.target.value })} /></Field><Field label="Within (minutes)"><Input type="number" min={1} value={cur.incidentWindowMinutes} onChange={(e) => setV({ ...v, incidentWindowMinutes: e.target.value })} /></Field></div>}
+      {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}{act.ok && !Object.keys(v).length && <div className="mt-3"><Alert tone="success">{act.ok}</Alert></div>}
+      <div className="mt-4"><Button disabled={act.busy || !Object.keys(v).length} onClick={async () => { if (await act.run(() => post('/settings/cases', { incidentAutoLink: cur.incidentAutoLink, incidentAutoCreate: cur.incidentAutoCreate, incidentThreshold: Number(cur.incidentThreshold), incidentWindowMinutes: Number(cur.incidentWindowMinutes) }), 'Saved')) setV({}); }}>Save</Button></div>
+    </Card>
+  );
+}
+
+function RefundTiers() {
+  const { data, error, reload } = useApi<{ items: any[]; roles: Array<{ id: string; label: string }> }>('/settings/cases/refund-tiers');
+  const act = useAction(reload);
+  const [rows, setRows] = useState<Array<{ label: string; max: string; roles: string }> | null>(null);
+  if (error) return <Alert>{error}</Alert>;
+  if (!data) return <Spinner />;
+  const cur = rows ?? data.items.map((t) => ({ label: t.label, max: t.maxMinor === null ? '' : toInput(t.maxMinor), roles: t.roleIds.join(', ') }));
+  const set = (i: number, k: 'label' | 'max' | 'roles', val: string) => setRows(cur.map((r, j) => (j === i ? { ...r, [k]: val } : r)));
+  const body = () => ({ tiers: cur.map((r, i) => ({ label: r.label, maxMinor: i === cur.length - 1 ? null : toMinor(r.max || '0'), roleIds: r.roles.split(/[,\s]+/).map((x: string) => x.trim()).filter(Boolean) })) });
+  return (
+    <Card>
+      <SectionTitle>Refund approval</SectionTitle>
+      <p className="-mt-2 mb-3 text-subhead text-label2">A refund on a billing dispute is approved by the lowest tier whose limit covers it. Someone in a tier can approve up to that tier&apos;s limit, and anything below. A refund within the asker&apos;s own limit is credited at once; otherwise someone else in a high enough tier must approve it. The top tier has no limit.</p>
+      <div className="space-y-3">{cur.map((r, i) => (
+        <div key={i} className="grid gap-3 rounded-control bg-surface2 p-3 sm:grid-cols-[1fr_9rem_2fr]">
+          <Field label="Tier"><Input value={r.label} onChange={(e) => set(i, 'label', e.target.value)} maxLength={40} /></Field>
+          <Field label="Up to">{i === cur.length - 1 ? <Input value="No limit" disabled /> : <Input type="number" min="0" step={step()} value={r.max} onChange={(e) => set(i, 'max', e.target.value)} />}</Field>
+          <Field label="Roles" hint={i === 0 ? `Role ids: ${data.roles.map((x) => x.id).join(', ')}` : undefined}><Input value={r.roles} onChange={(e) => set(i, 'roles', e.target.value)} className="font-mono" /></Field>
+        </div>))}</div>
+      {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}{act.ok && !rows && <div className="mt-3"><Alert tone="success">{act.ok}</Alert></div>}
+      <div className="mt-4"><Button disabled={act.busy || !rows} onClick={async () => { if (await act.run(() => post('/settings/cases/refund-tiers', body()), 'Saved')) setRows(null); }}>Save approval tiers</Button></div>
     </Card>
   );
 }

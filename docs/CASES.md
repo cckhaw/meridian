@@ -10,7 +10,12 @@
 | Classification tree, SLA matrix, closing rules | `packages/core/src/case-taxonomy.ts` |
 | The interaction registry | `packages/core/src/interactions.ts` |
 | Tables: `case_taxonomy`, `case_sla_config`, `cases` (extended), `customer_interactions`, `case_audit_log`, `customers.vip` | migration `0037_case_management.sql` |
-| Screens | `apps/web/src/app/cases`, the Cases and Interactions sections of a customer, **Settings → Cases** |
+| The SLA watchdog (timers, the steps, the sweep, the supervisors' board) | `packages/core/src/case-sla.ts` |
+| Network incidents (master cases) | `packages/core/src/case-incidents.ts` |
+| Refund approval by amount | `packages/core/src/case-refunds.ts` |
+| The watchdog as a durable workflow | `services/order-service/src/workflows/case-sla.workflow.ts`, `activities/case-sla.ts`, `api/case-sla.controller.ts` |
+| More tables and columns | migration `0038_case_sla_refunds_incidents.sql` (`case_refund_requests`, master and escalation columns on `cases`) |
+| Screens | `apps/web/src/app/cases`, `apps/web/src/app/cases/board`, the Cases and Interactions sections of a customer, **Settings → Cases** |
 | API | `/api/cases*`, `/api/interactions*`, `/api/settings/cases*` |
 
 ## Classification
@@ -47,6 +52,43 @@ Port-out cases still follow the port-out: a confirmed port-out resolves them, a 
 
 Every touchpoint is logged on a channel (`CALL_CENTER`, `RETAIL_POS`, `WHATSAPP`, `WEB_SELF_SERVE`, `MOBILE_APP`, `EMAIL`, `IN_STORE`) with its direction. A telephony or chat system can send its own session id, and a resend is ignored (one row per channel and session). An interaction may be attached to a case afterwards (many interactions to one case, only the same customer's, each on one case at a time), or a case can be opened straight from one, which carries over the customer, service, subject and channel.
 
+## The SLA watchdog
+
+For each open case the watchdog does five things, each once and in order (`fireDueCaseTimers`, idempotent, so a retry never doubles a notice):
+
+| When | What |
+|---|---|
+| The first response is overdue | supervisors are told |
+| The resolution clock passes the warning percentage (80% by default) | supervisors are told |
+| The resolution time passes | the case is **breached**, escalated one level and re-prioritised (at least High), supervisors are told |
+| It is half as late again | second escalation (Urgent), supervisors are told |
+| A resolved case reaches its closing time, or a case waiting for the customer reaches the response window | the case closes itself (`CLOSED_AUTO`) |
+
+A paused case (waiting for the customer) cannot breach. Escalation re-prioritises the case but does not change its severity or re-price its SLA. Supervisor messages go to the outbox as `NOTIFY` with `to: SUPERVISORS` and the case's team.
+
+Two ways to run it, both calling the same function: **the sweep** (`POST /api/cases/sla-sweep`, one indexed query for cases with something due; point a scheduler at it every minute or so, as with bill runs), and **one Temporal workflow per case** (`caseSlaWorkflow`: sleeps on a durable timer to the next deadline, wakes at once on a `caseChanged` signal, ends when the case closes; started with `POST /meridian-api/cases/:id/sla`). The workflow passes its own clock to each tick so a replay gives the same answers. The CRM does not call Temporal itself: a deployment that wants durable timers starts a watchdog when a case opens and signals it when the case's deadlines change. Without the signal a watchdog wakes at its old deadline and then follows the new one, and the sweep is the safety net.
+
+The **supervisor board** (`/cases/board`, permission `case:supervise`) lists cases past their SLA or close to it, with their escalation level.
+
+## Refund approval
+
+On a billing-dispute case an agent asks for a refund against one of the customer's invoices. The **tiers** (Settings → Cases) say how much each group of roles may approve; the defaults are Agent (call center, customer service) up to 20.00, Team lead (new `team-lead` role) up to 100.00, and Finance manager (finance, billing operations) above that, with no limit. (Defaults are in minor units, so they read as 20.00 and 100.00 for a two-decimal currency.) The request needs the **lowest tier whose limit covers it**; someone in a tier can approve that tier's amounts and anything below.
+
+* Within the asker's own tier: the invoice is credited at once.
+* Above it: the request waits. Anyone at or above the required tier, **other than the person who asked**, can approve or reject (a reason is needed to reject); the asker can withdraw it. Approving claims the request and issues the credit note in **one transaction**, so two approvers cannot both pay it.
+* The amount may not exceed what is left to credit on the invoice, counting other waiting requests.
+* A case cannot be resolved while a refund on it is waiting.
+* The supervisor board lists the requests a person may decide.
+
+## Network incidents (master cases)
+
+A **master incident** stands for a network fault at a postal node (a case's node is its customer's postcode, or one entered). It belongs to the network, not a customer, runs on the VIP row of the SLA matrix, and numbers as `INC-…`. Customer fault cases at the node are its **children**.
+
+* A supervisor opens an incident for a node (it adopts the open fault cases there), attaches more cases, or removes one.
+* **Suggestions**: nodes where several (5 by default) fault cases opened within an hour and are not on an incident. The operator can let the system open those incidents by itself (off by default).
+* A new fault case at a node with an open incident joins it as it is created (switchable); each customer is told that the fault is known and being worked on.
+* **Resolving the master resolves every open child** in one set-based statement: each child's audit trail shows the move from the state it was in (waiting for the customer, waiting for dispatch, …), its SLA pause is released, and each customer is told. Children already resolved or closed are left alone. Linking is set-based too, so an incident with thousands of cases is as quick as one with three.
+
 ## Not built here
 
-The SLA watchdog, escalation, refund approvals and master incidents are in part 2; field dispatch, the work-force webhook and the TM Forum interfaces in part 3. Business-hours calendars, and per-queue routing rules beyond manual assignment, are not modelled.
+Field dispatch (and cancelling the technician booking of children resolved with an incident), the work-force webhook and the TM Forum interfaces in part 3. Business-hours calendars, and per-queue routing rules beyond manual assignment, are not modelled; refund approval is by amount, not by reason code.

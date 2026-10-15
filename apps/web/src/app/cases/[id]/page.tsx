@@ -2,10 +2,12 @@
 import { Alert, Badge, Button, Card, Field, Input, LargeTitle, Modal, Select, Spinner, Textarea } from '@meridian/ui';
 import Link from 'next/link';
 import { use, useState } from 'react';
-import { post, useAction, useApi } from '@/lib/api';
+import { post, useAction, useApi, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { dt, label } from '@/lib/format';
+import { dt, label, money, step, toMinor } from '@/lib/format';
 import { CaseBadges, SlaPill, sevTone } from '../parts';
+
+const ESC = ['', 'Escalated', 'Escalated twice'];
 
 /** Moves a person may make by hand, and what each needs them to say. */
 const NEEDS: Record<string, { title: string; field: 'resolution' | 'reason' | 'note' | null; hint?: string }> = {
@@ -43,9 +45,10 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
   return (
     <>
       <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{label(c.type)}</Badge><CaseBadges c={c} />{c.tier !== 'STANDARD' && <Badge tone="warning">{label(c.tier)}</Badge>}<SlaPill sla={c.sla} /></span>}>{c.number} · {c.subject}</LargeTitle>
-      <p className="mb-1">Customer {can('customer:search') ? <Link className="text-accent" href={`/customers/${c.customerId}`}>{c.customerName}</Link> : c.customerName} · opened {dt(c.createdAt)}{c.assignee && <> · assigned to <strong>{c.assignee}</strong>{c.team && ` (${c.team})`}</>}</p>
+      <p className="mb-1">{c.customerId ? <>Customer {can('customer:search') ? <Link className="text-accent" href={`/customers/${c.customerId}`}>{c.customerName}</Link> : c.customerName}</> : 'Network incident'} · opened {dt(c.createdAt)}{c.assignee && <> · assigned to <strong>{c.assignee}</strong>{c.team && ` (${c.team})`}</>}</p>
       {c.categoryPath && <p className="mb-4 text-footnote text-label2">{c.categoryPath}</p>}
-      {c.type === 'BILLING_REFUND' && <Alert tone="info">To refund, open the customer’s invoice and issue a credit note; mention this case number in the reason.</Alert>}
+      {c.escalationLevel > 0 && <Alert tone="danger">{ESC[c.escalationLevel]}: this case went past its SLA and was moved up to {label(c.priority)} priority. Supervisors have been told.</Alert>}
+      {c.isMaster && <Alert tone="info">This is a network incident at <strong>{c.postalNode}</strong>: {c.childCount} customer case{c.childCount === 1 ? '' : 's'} ({c.childOpenCount} open) hang from it. Resolving it resolves them all and tells each customer.</Alert>}
       {c.masterCaseId && <Alert tone="info">This case is part of a wider network incident: <Link className="font-medium text-accent" href={`/cases/${c.masterCaseId}`}>see the master case</Link>.</Alert>}
       {act.error && <Alert>{act.error}</Alert>}
       <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -59,6 +62,8 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
             {can('case:write') && !closed && <form className="mt-4 space-y-3" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => post(`/cases/${id}/notes`, { text: note }))) setNote(''); }}>
               <Field label="Add note"><Textarea rows={3} required value={note} onChange={(e) => setNote(e.target.value)} /></Field><Button type="submit" disabled={act.busy}>Add note</Button></form>}
           </Card>
+          {c.type === 'BILLING_REFUND' && c.customerId && <Refunds c={c} onChange={refresh} />}
+          {c.isMaster && <IncidentCases c={c} onChange={refresh} />}
           <Card>
             <div className="mb-3 flex items-center justify-between"><h2 className="text-title3 font-semibold">Interactions on this case</h2>{can('case:create') && <Button variant="plain" className="!min-h-[36px]" onClick={() => setLogOpen(!logOpen)}>{logOpen ? 'Close' : 'Log an interaction'}</Button>}</div>
             {logOpen && <form className="mb-4 grid gap-3 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => post('/interactions', { customerId: c.customerId, caseId: id, ...li }))) { setLogOpen(false); setLi({ ...li, subject: '', summary: '' }); } }}>
@@ -109,5 +114,68 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
           <div className="flex gap-2"><Button disabled={act.busy || (need?.field === 'resolution' || need?.field === 'reason' ? text.trim().length < 3 : false)} onClick={() => void submitMove()}>Confirm</Button><Button variant="secondary" onClick={() => setMove(null)}>Cancel</Button></div></div>
       </Modal>}
     </>
+  );
+}
+
+/** Refunds on a billing dispute: ask, and (for someone in a high enough tier) approve or reject what others asked. */
+function Refunds({ c, onChange }: { c: any; onChange: () => Promise<void> }) {
+  const { can } = useAuth();
+  const data = useApi(`/cases/${c.id}/refunds`);
+  const pending = useApi(can('case:write') ? '/refunds/pending' : null);
+  const invoices = useApi(`/invoices?customerId=${c.customerId}&limit=20`);
+  const act = useAction(async () => { await Promise.all([data.reload(), pending.reload(), onChange()]); });
+  const [f, setF] = useState({ invoiceId: '', amount: '', reason: '' });
+  const [note, setNote] = useState('');
+  const mine = new Set((pending.data?.items ?? []).map((r: any) => r.id));
+  const tiers: any[] = data.data?.tiers ?? [];
+  const closed = !['NEW', 'IN_PROGRESS', 'PENDING_CUSTOMER', 'PENDING_THIRD_PARTY', 'PENDING_DISPATCH', 'DISPATCHED', 'REOPENED'].includes(c.status);
+  const inv = (invoices.data?.items ?? []).find((i: any) => i.id === f.invoiceId);
+  const minor = f.amount ? toMinor(f.amount) : 0;
+  const need = tiers.find((t) => t.maxMinor === null || minor <= t.maxMinor);
+  return (
+    <Card>
+      <h2 className="mb-3 text-title3 font-semibold">Refunds</h2>
+      {(data.data?.items ?? []).length === 0 ? <p className="mb-3 text-subhead text-label2">None asked for on this case.</p> : (
+        <ul className="mb-4 space-y-2">{data.data.items.map((r: any) => (
+          <li key={r.id} className="rounded-control bg-surface2 p-3 text-subhead">
+            <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{money(r.amountMinor, r.currency)}</span><span className="text-label2">on {r.invoiceNumber}</span><Badge tone={r.status === 'EXECUTED' ? 'success' : r.status === 'PENDING' ? 'warning' : 'neutral'}>{r.status === 'EXECUTED' ? 'Refunded' : label(r.status)}</Badge>{r.status === 'PENDING' && <span className="text-footnote text-label2">needs {r.tierLabel}</span>}</div>
+            <div className="text-footnote text-label2">{r.reason}</div>
+            <div className="text-caption text-label2">asked by {r.requestedBy} · {dt(r.requestedAt)}{r.decidedBy && <> · {r.status === 'EXECUTED' ? 'approved' : r.status === 'REJECTED' ? 'rejected' : 'withdrawn'} by {r.decidedBy}{r.decisionNote && `: ${r.decisionNote}`}</>}</div>
+            {r.status === 'PENDING' && can('case:write') && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {mine.has(r.id) && <><Input aria-label="Decision note" placeholder="Note (needed to reject)" value={note} onChange={(e) => setNote(e.target.value)} className="!min-h-[36px] max-w-xs" />
+                  <Button className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'APPROVE', note }), 'Approved and credited')}>Approve</Button>
+                  <Button variant="secondary" className="!min-h-[36px]" disabled={act.busy || note.trim().length < 3} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'REJECT', note }), 'Rejected')}>Reject</Button></>}
+                <Button variant="plain" className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/cancel`), 'Withdrawn')}>Withdraw</Button>
+              </div>)}
+          </li>))}</ul>)}
+      {can('case:write') && !closed && (
+        <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => post(`/cases/${c.id}/refunds`, { invoiceId: f.invoiceId, amountMinor: minor, reason: f.reason }), 'Refund requested')) setF({ invoiceId: f.invoiceId, amount: '', reason: '' }); }}>
+          <Field label="Invoice"><Select required value={f.invoiceId} onChange={(e) => setF({ ...f, invoiceId: e.target.value })}><option value="">Choose…</option>{(invoices.data?.items ?? []).map((i: any) => <option key={i.id} value={i.id}>{i.number} · {money(i.totalMinor, i.currency)}</option>)}</Select></Field>
+          <Field label="Amount" hint={need ? `Approved by: ${need.label}${need.maxMinor !== null ? ` (up to ${money(need.maxMinor, inv?.currency)})` : ''}` : undefined}><Input required type="number" step={step()} min="0" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></Field>
+          <div className="sm:col-span-2"><Field label="Reason"><Input required minLength={3} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
+          <div className="sm:col-span-2"><Button type="submit" disabled={act.busy || !f.invoiceId || !minor}>Ask for refund</Button> <span className="ml-2 text-footnote text-label2">Within your own limit it is credited at once; above it, it waits for approval.</span></div>
+        </form>)}
+      {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}{act.ok && <div className="mt-3"><Alert tone="success">{act.ok}</Alert></div>}
+    </Card>
+  );
+}
+
+/** The customer cases hanging from a network incident. */
+function IncidentCases({ c, onChange }: { c: any; onChange: () => Promise<void> }) {
+  const { can } = useAuth();
+  const kids = usePaged(`/cases/${c.id}/children?limit=20`);
+  const act = useAction(async () => { await kids.reload(); await onChange(); });
+  const open = !['RESOLVED', 'CLOSED_AUTO', 'CLOSED_VERIFIED'].includes(c.status);
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between"><h2 className="text-title3 font-semibold">Customer cases ({c.childCount})</h2>
+        {can('case:supervise') && open && <Button variant="secondary" className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/cases/${c.id}/children`, { adoptNode: true }), 'Attached')}>Attach open cases at {c.postalNode}</Button>}</div>
+      {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+      {kids.items.length === 0 ? <p className="text-subhead text-label2">No cases yet.</p> : <ul className="space-y-1">{kids.items.map((k: any) => (
+        <li key={k.id} className="flex flex-wrap items-center gap-2 rounded-control bg-surface2 px-3 py-2 text-subhead"><Link className="font-mono text-accent" href={`/cases/${k.id}`}>{k.number}</Link><span className="min-w-0 flex-1 truncate">{k.customerName} · {k.subject}</span><Badge>{label(k.status)}</Badge>
+          {can('case:supervise') && open && <button type="button" className="text-footnote text-danger" onClick={() => void act.run(() => post(`/cases/${k.id}/unlink`), 'Removed from the incident')}>Remove</button>}</li>))}</ul>}
+      {kids.hasMore && <Button variant="plain" className="mt-2" onClick={kids.loadMore} disabled={kids.loadingMore}>Show more</Button>}
+    </Card>
   );
 }
