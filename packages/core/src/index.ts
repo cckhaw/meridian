@@ -121,3 +121,6 @@ export * from './dunning-templates.js';
 export * from './seed-dunning-rules.js';
 export * from './collections.js';
 export * from './emv-qr.js';
+export * from './integration-hub.js';
+export * from './oauth.js';
+export * from './gateway.js';

@@ -55,6 +55,8 @@ The **commission engine** (`commission-calculator.ts`, `commission.ts`, `commiss
 
 Dunning rules, the rule engine, late fees, payment arrangements and collection placements live in `packages/core` (`dunning-rules.ts`, `dunning-engine.ts`, `dunning-templates.ts`, `seed-dunning-rules.ts`, `collections.ts`, `emv-qr.ts`) on migration `0040`; see [DUNNING.md](DUNNING.md).
 
+The northbound API gateway and the integration hub (`integration-hub.ts`, `oauth.ts`, `gateway.ts`, migration `0041`) are described in [INTEGRATION_API.md](INTEGRATION_API.md).
+
 Number Resource Management lives in `packages/core` (`nrm.ts`, `nrm-pools.ts`, `number-reservation.ts`, `vip-pattern-matcher.ts`, `order-numbering.ts`) on migrations `0020` and `0021`. Locks are database row locks with an optional Redis adapter; events go through the lifecycle outbox; IMSI recycling also runs as a Temporal workflow in `services/order-service`. Details in [NUMBERING.md](NUMBERING.md).
 
 ## Payments

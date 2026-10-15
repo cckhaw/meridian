@@ -21,6 +21,8 @@ interface Route {
   noCsrf?: boolean;
   /** Authenticated by an API key (`Authorization: Bearer mk_…`), for the externally hosted store-front, instead of a browser session. */
   client?: boolean;
+  /** Northbound API (/api/v1, /api/tmf-api): OAuth token or API key, scope, per-channel rate limit, and (when `idempotent`) a mandatory X-Idempotency-Key. */
+  north?: { scope: string | null; idempotent?: boolean };
   /** Larger request bodies (document uploads). */
   maxBody?: number;
   handler: Handler | ((c: PublicCtx) => Promise<unknown | Response> | unknown);
@@ -325,6 +327,9 @@ route('DELETE', '/settings/logo', 'settings:manage', async ({ db, user }) => bra
  */
 const clientRoute = (method: string, path: string, h: (c: PublicCtx & { client: core.ApiClient }) => unknown, extra: Partial<Route> = {}) =>
   route(method, path, null, h as unknown as Handler, { client: true, ...extra });
+/** A northbound route. `scope` null = any authenticated credential; `idempotent` makes X-Idempotency-Key mandatory. */
+const north = (method: string, path: string, scope: string | null, h: (c: PublicCtx & { principal: core.GatewayPrincipal }) => unknown, o: { idempotent?: boolean } = {}) =>
+  route(method, path, null, h as unknown as Handler, { north: { scope, idempotent: o.idempotent }, noCsrf: true });
 const selfAccess = (c: { client: core.ApiClient; req: Request }): core.AppAccess => ({ channel: 'SELF_SERVE', clientId: c.client.id, token: c.req.headers.get('x-application-token') ?? undefined });
 const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional(), attachTo: z.string().max(80).optional(), dealTermMonths: z.number().int().optional() })).min(1).max(10) });
 const personalSchema = z.object({
@@ -593,6 +598,60 @@ get('/settings/dunning-rules/:id', 'settings:manage', ({ db, params }) => core.g
 patch('/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params, body }) => core.saveDunningRule(db, user.username, dunRule.parse(body) as core.DunningRuleInput, params.id!));
 route('DELETE', '/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params }) => core.deleteDunningRule(db, user.username, params.id!));
 
+// ───────────────────────── integration hub (Settings → Integrations) ─────────────────────────
+const hubGroup = z.enum(core.HUB_GROUPS);
+const endpointBody = z.object({ group: hubGroup, kind: z.string().max(40), name: z.string().min(1).max(80), url: z.string().max(500).nullish(), fallbackUrl: z.string().max(500).nullish(), timeoutMs: z.number().int().optional(), config: z.record(z.unknown()).optional(), enabled: z.boolean().optional(), secret: z.string().max(20000).optional() });
+const webhookBody = z.object({ kind: z.enum(['OUTBOUND', 'INBOUND', 'TMF688']), name: z.string().min(1).max(80), targetUrl: z.string().max(500).nullish(), authKind: z.enum(['NONE', 'BEARER', 'HMAC']).optional(), secret: z.string().max(2000).optional(), provider: z.string().max(60).nullish(), events: z.array(z.string().max(60)).max(40).optional(), query: z.string().max(500).nullish(), retryMax: z.number().int().optional(), retryBackoffSeconds: z.number().int().optional(), status: z.enum(['ACTIVE', 'PAUSED', 'FAILED']).optional() });
+const scopeList = z.array(z.string().max(40)).max(40);
+const hubView = async (db: Db) => ({
+  groups: core.HUB_GROUPS, endpointKinds: core.HUB_ENDPOINT_KINDS, endpoints: await core.listHubEndpoints(db),
+  oauthClients: await core.listOAuthClients(db), apiKeys: await core.listApiClients(db), rateLimits: await core.listRateRules(db), webhooks: await core.listHubWebhooks(db), topics: await core.listTopicMappings(db),
+  eventTypes: core.HUB_EVENT_TYPES, channels: core.HUB_CHANNELS, scopes: core.NORTHBOUND_SCOPES.map((id) => ({ id, label: core.SCOPE_LABEL[id] })),
+});
+get('/settings/integration-hub', 'settings:manage', ({ db }) => hubView(db));
+get('/settings/integration-hub/calls', 'settings:manage', ({ db, query }) => core.listGatewayCalls(db, { clientRef: str(query, 'clientRef'), limit: num(query, 'limit') }));
+post('/settings/integration-hub/endpoints', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveHubEndpoint(db, user.username, endpointBody.parse(body) as core.HubEndpointInput), { status: 201 }));
+patch('/settings/integration-hub/endpoints/:id', 'settings:manage', ({ db, user, params, body }) => core.saveHubEndpoint(db, user.username, endpointBody.parse(body) as core.HubEndpointInput, params.id!));
+route('DELETE', '/settings/integration-hub/endpoints/:id', 'settings:manage', ({ db, user, params }) => core.deleteHubEndpoint(db, user.username, params.id!));
+post('/settings/integration-hub/oauth-clients', 'settings:manage', async ({ db, user, body }) => Response.json(await core.createOAuthClient(db, user.username, z.object({ name: z.string().min(1).max(80), channel: z.string().max(31).optional(), scopes: scopeList, tokenTtlSeconds: z.number().int().optional() }).parse(body)), { status: 201, headers: { 'cache-control': 'no-store' } }));   // the secret is shown once
+patch('/settings/integration-hub/oauth-clients/:id', 'settings:manage', ({ db, user, params, body }) => core.updateOAuthClient(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), channel: z.string().max(31).optional(), scopes: scopeList.optional(), tokenTtlSeconds: z.number().int().optional() }).parse(body)));
+post('/settings/integration-hub/oauth-clients/:id/rotate', 'settings:manage', async ({ db, user, params, body }) => Response.json(await core.rotateOAuthSecret(db, user.username, params.id!, z.object({ graceMinutes: z.number().int().optional() }).parse(body ?? {}).graceMinutes), { headers: { 'cache-control': 'no-store' } }));
+post('/settings/integration-hub/oauth-clients/:id/revoke', 'settings:manage', ({ db, user, params }) => core.revokeOAuthClient(db, user.username, params.id!));
+post('/settings/integration-hub/rate-limits', 'settings:manage', ({ db, user, body }) => { const b = z.object({ channel: z.string().max(31), perMinute: z.number().int(), enabled: z.boolean().optional() }).parse(body); return core.saveRateRule(db, user.username, b.channel, b.perMinute, b.enabled); });
+route('DELETE', '/settings/integration-hub/rate-limits/:channel', 'settings:manage', ({ db, user, params }) => core.deleteRateRule(db, user.username, params.channel!));
+post('/settings/integration-hub/webhooks', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveHubWebhook(db, user.username, webhookBody.parse(body) as core.HubWebhookInput), { status: 201 }));
+patch('/settings/integration-hub/webhooks/:id', 'settings:manage', ({ db, user, params, body }) => core.saveHubWebhook(db, user.username, webhookBody.parse(body) as core.HubWebhookInput, params.id!));
+route('DELETE', '/settings/integration-hub/webhooks/:id', 'settings:manage', ({ db, user, params }) => core.deleteHubWebhook(db, user.username, params.id!));
+post('/settings/integration-hub/topics', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveTopicMapping(db, user.username, z.object({ eventType: z.string().max(40), topic: z.string().max(120), enabled: z.boolean().optional() }).parse(body)), { status: 201 }));
+route('DELETE', '/settings/integration-hub/topics/:id', 'settings:manage', ({ db, user, params }) => core.deleteTopicMapping(db, user.username, params.id!));
+
+// ───────────────────────── northbound API gateway (/api/v1, /api/tmf-api) ─────────────────────────
+/**
+ * OAuth 2.0 token endpoint (client credentials). Credentials in the body (JSON or form) or as HTTP Basic. Errors follow RFC 6749: {error, error_description}.
+ */
+open('POST', '/v1/oauth/token', async ({ db, body, req }) => {
+  const b = (body ?? {}) as Record<string, string>;
+  let clientId = b.client_id, clientSecret = b.client_secret;
+  const basic = /^Basic\s+(\S+)$/i.exec(req.headers.get('authorization') ?? '')?.[1];
+  if (basic) { const [id, ...rest] = Buffer.from(basic, 'base64').toString().split(':'); clientId = decodeURIComponent(id ?? ''); clientSecret = decodeURIComponent(rest.join(':')); }
+  try {
+    const t = await core.issueToken(db, { grantType: b.grant_type, clientId, clientSecret, scope: b.scope });
+    return new Response(JSON.stringify(t), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store', pragma: 'no-cache' } });
+  } catch (e) {
+    if (e instanceof DomainError) {
+      const error = (e.details as { error?: string } | undefined)?.error ?? 'invalid_request';
+      return new Response(JSON.stringify({ error, error_description: e.message }), { status: error === 'invalid_client' ? 401 : 400, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...(error === 'invalid_client' ? { 'www-authenticate': 'Basic realm="meridian"' } : {}) } });
+    }
+    throw e;
+  }
+}, { noCsrf: true });
+/** Who am I: the credential, its channel and scopes. Handy for a partner testing a connection. */
+north('GET', '/v1/me', null, ({ principal }) => ({ credential: principal.ref, kind: principal.kind, channel: principal.channel, scopes: principal.scopes }));
+// TM Forum 688 (Event Management): register and remove a listener.
+const TMF688 = '/tmf-api/eventManagement/v4';
+north('POST', `${TMF688}/hub`, 'event:subscribe', async ({ db, principal, body }) => Response.json(await core.registerTmfListener(db, principal.ref, z.object({ callback: z.string().max(500), query: z.string().max(500).optional() }).parse(body)), { status: 201 }));
+north('DELETE', `${TMF688}/hub/:id`, 'event:subscribe', async ({ db, principal, params }) => { await core.unregisterTmfListener(db, principal.ref, params.id!); return new Response(null, { status: 204 }); });
+
 // ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
 get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
 post('/accounts/:id/collections/run', ['billing:run'], async ({ db, user, params, body }) => {
@@ -608,8 +667,8 @@ get('/collections/placements', 'collections:manage', ({ db, query }) => core.lis
 post('/collections/placements/:id/recall', 'collections:manage', ({ db, user, params, body }) => core.recallPlacement(db, params.id!, user.username, z.object({ reason: z.string().min(1).max(300) }).parse(body).reason));
 post('/collections/export', 'collections:manage', async ({ db, user, body }) => { const r = await core.exportAgencyFile(db, user.username, z.object({ limit: z.number().int().min(1).max(5000).optional() }).parse(body ?? {})); return csv(r.csv, `meridian-collections-${r.batchId}.csv`, { 'x-batch-id': r.batchId, 'x-count': String(r.count) }); });
 post('/settings/api-clients', 'settings:manage', async ({ db, user, body }) => {
-  const r = await core.createApiClient(db, user.username, z.object({ name: z.string().min(1).max(60) }).parse(body));
-  return Response.json({ client: r.client, key: r.key }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
+  const r = await core.createApiClient(db, user.username, z.object({ name: z.string().min(1).max(60), scopes: z.array(z.string().max(40)).max(40).optional(), channel: z.string().max(31).optional(), expiresAt: z.string().max(40).nullish(), signRequests: z.boolean().optional() }).parse(body) as Parameters<typeof core.createApiClient>[2]);
+  return Response.json({ client: r.client, key: r.key, ...(r.hmacSecret ? { hmacSecret: r.hmacSecret } : {}) }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
 });
 route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, user, params }) => { await core.revokeApiClient(db, user.username, params.id!); return { ok: true }; });
 
@@ -1443,6 +1502,56 @@ async function sweepScheduled(db: Db) {
   try { await core.activateDueNodes(db); } catch (e) { console.error('[catalog] scheduled activation failed', (e as Error).message); }
 }
 
+/** TM Forum error payload (TMF630 guidelines): code, reason, message, status. */
+function tmfFail(status: number, code: string, reason: string, message: string, extra: Record<string, string> = {}) {
+  return new Response(JSON.stringify({ code, reason, message, status: String(status), '@type': 'Error' }), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
+}
+const TMF_CODE: Record<string, string> = { NOT_FOUND: 'NOT_FOUND', INVALID: 'INVALID_REQUEST', CONFLICT: 'CONFLICT', REJECTED: 'UNPROCESSABLE', FORBIDDEN: 'FORBIDDEN', UNAUTHENTICATED: 'UNAUTHORIZED', RATE_LIMITED: 'TOO_MANY_REQUESTS' };
+
+/** One northbound call: authenticate, check the scope, apply the channel's rate limit, run (once per idempotency key when the route asks), and log it. Errors use the TM Forum shape. */
+async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, who: (u: string) => void): Promise<Response> {
+  const started = Date.now();
+  const req = base.req, db = base.db;
+  let principal: core.GatewayPrincipal | null = null;
+  let status = 500; let idemKey: string | null = null; let detail: Record<string, unknown> | undefined;
+  const out = (res: Response) => { status = res.status; return res; };
+  try {
+    if (rt.north!.scope !== undefined) {
+      principal = await core.authenticateNorthbound(db, { authorization: req.headers.get('authorization'), signature: req.headers.get('x-meridian-signature'), raw: base.raw });
+      who(principal.ref);
+      if (rt.north!.scope) core.requireScope(principal, rt.north!.scope);
+    }
+    const headers: Record<string, string> = {};
+    if (principal) { const rl = await core.checkRateLimit(db, principal.ref, principal.channel); if (rl.limit) { headers['x-ratelimit-limit'] = String(rl.limit); headers['x-ratelimit-remaining'] = String(rl.remaining); } }
+    const run = async () => {
+      const o = await (rt.handler as (c: PublicCtx & { principal: core.GatewayPrincipal | null }) => unknown)({ ...base, principal } as never);
+      if (o instanceof Response) return { status: o.status, body: o.status === 204 ? null : await o.json().catch(() => null) };
+      return { status: 200, body: o ?? { ok: true } };
+    };
+    let result: { status: number; body: unknown; replayed?: boolean };
+    if (rt.north!.idempotent && req.method !== 'GET') {
+      idemKey = req.headers.get(core.IDEMPOTENCY_HEADER);
+      if (!idemKey) return out(tmfFail(400, 'INVALID_REQUEST', 'MISSING_IDEMPOTENCY_KEY', 'Send an X-Idempotency-Key header (a UUID) so a retry cannot repeat this action.'));
+      result = await core.withIdempotency(db, principal!.ref, idemKey, core.requestHash(req.method, p, base.raw), run);
+      if (result.replayed) headers['idempotent-replay'] = 'true';
+    } else result = await run();
+    headers['content-type'] = 'application/json'; headers['cache-control'] = 'no-store';
+    return out(new Response(result.status === 204 || result.body === null ? null : JSON.stringify(result.body), { status: result.status, headers }));
+  } catch (e) {
+    if (e instanceof core.GatewayRateLimited) return out(tmfFail(429, 'TOO_MANY_REQUESTS', 'RATE_LIMIT_EXCEEDED', e.message, { 'retry-after': String(e.retryAfterSeconds) }));
+    if (e instanceof DomainError) {
+      detail = { code: e.code };
+      const why = Array.isArray(e.details) && e.details.every((d) => typeof d === 'string') && e.details.length ? `: ${(e.details as string[]).join('; ')}` : '';
+      return out(tmfFail(e.status, TMF_CODE[e.code] ?? 'ERROR', e.code, e.message + why));
+    }
+    if (e instanceof ZodError) return out(tmfFail(400, 'INVALID_REQUEST', 'VALIDATION', e.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ')));
+    console.error(`[north] ${req.method} ${p}`, e);
+    return out(tmfFail(500, 'INTERNAL', 'INTERNAL', 'unexpected server error'));
+  } finally {
+    void core.logGatewayCall(db, { clientRef: principal?.ref, channel: principal?.channel, method: req.method, path: p, status, scope: rt.north!.scope, idempotencyKey: idemKey, ms: Date.now() - started, detail }).catch(() => {});
+  }
+}
+
 export async function dispatch(req: Request, path: string[]): Promise<Response> {
   const started = Date.now();
   const url = new URL(req.url);
@@ -1476,13 +1585,15 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
     if (mutating) {
       raw = await req.text();
       if (raw.length > (rt.maxBody ?? MAX_BODY)) return done(fail(413, 'TOO_LARGE', 'request body too large'));
-      if (raw) { try { body = JSON.parse(raw); } catch { return done(fail(400, 'INVALID', 'request body is not valid JSON')); } }
+      if (raw && (req.headers.get('content-type') ?? '').startsWith('application/x-www-form-urlencoded')) body = Object.fromEntries(new URLSearchParams(raw));   // the OAuth token endpoint
+      else if (raw) { try { body = JSON.parse(raw); } catch { return done(fail(400, 'INVALID', 'request body is not valid JSON')); } }
     }
     // Liveness must not depend on the database.
     const db = p === '/health' ? (undefined as unknown as Db) : await getDb();
     if (p !== '/health') await sweepScheduled(db);
     const base = { db, params, query: url.searchParams, body, req };
 
+    if (rt.north) return done(await northCall(rt, { ...base, user: null, raw }, p, (u) => { userName = u; }));
     if (rt.client) {
       const client = await core.authenticateApiKey(db, req.headers.get('authorization'));
       userName = `client:${client.name}`;
