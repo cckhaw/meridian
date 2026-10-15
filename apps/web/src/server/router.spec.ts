@@ -745,6 +745,57 @@ describe('settings and branding', () => {
     expect((await call('POST', '/billing/run-due', { cookie: billing.cookie })).status).toBe(200);
   });
 
+  it('billing simulator: agents can forecast and quote, a waived quote needs the right to end services, answers can be saved, and nothing is changed', async () => {
+    const callCentre = await staff(['call-center']);
+    const service = await staff(['customer-service']);
+    const retail = await staff(['product-configurator']);
+    const su = await root();
+    const c = await customer(su);
+    const acct = (await call('GET', `/customers/${c}/accounts`, { cookie: su })).json.items[0].id;
+    const o = (await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: c, accountId: acct, lines: [{ offerId: 'plan-phone-24' }], payment: { method: 'CASH', confirmed: true } } })).json;
+    await call('POST', `/orders/${o.id}/actions`, { cookie: su, body: { type: 'ship' } });
+    await call('POST', `/orders/${o.id}/actions`, { cookie: su, body: { type: 'deliver' } });
+    const svc = (await db.query('SELECT id, identifier FROM services WHERE order_id=$1', [o.id])).rows[0]!;
+    await db.query(`UPDATE services SET activated_at = now() - interval '100 days' WHERE id=$1`, [svc.id]);
+    const invoices = Number((await db.query('SELECT count(*) AS n FROM invoices')).rows[0]!.n);
+
+    expect((await call('POST', '/billing/simulate/projection', { cookie: retail.cookie, body: { ref: acct, months: 6 } })).status).toBe(403);
+    expect((await call('POST', '/billing/simulate/projection', { body: { ref: acct, months: 6 } })).status).toBe(401);
+    const proj = await call('POST', '/billing/simulate/projection', { cookie: callCentre.cookie, body: { ref: svc.identifier, months: 12 } });
+    expect(proj.status).toBe(200);
+    expect(proj.json.months).toHaveLength(12);
+    expect(proj.json.account.id).toBe(acct);
+    expect((await call('POST', '/billing/simulate/projection', { cookie: callCentre.cookie, body: { ref: acct, months: 99 } })).status).toBe(400);
+
+    const quote = await call('POST', '/billing/simulate/termination', { cookie: callCentre.cookie, body: { ref: svc.id, unbilledUsageMinor: 300 } });
+    expect(quote.status).toBe(200);
+    expect(quote.json.etc.chargeMinor).toBeGreaterThan(0);
+    expect(quote.json.payNowMinor).toBe(quote.json.invoiceTotalMinor);
+    // quoting a waiver is deciding one: the call-centre agent may not, customer service may
+    const waiver = { ref: svc.id, etcAdjust: { waive: true, reason: 'Retention offer accepted' } };
+    expect((await call('POST', '/billing/simulate/termination', { cookie: callCentre.cookie, body: waiver })).status).toBe(403);
+    const waived = await call('POST', '/billing/simulate/termination', { cookie: service.cookie, body: waiver });
+    expect(waived.status).toBe(200);
+    expect(waived.json.etc.chargeMinor).toBe(0);
+
+    const change = await call('POST', '/billing/simulate/plan-change', { cookie: callCentre.cookie, body: { ref: svc.id, newOfferId: 'plan-sim-5g' } });
+    expect(change.status).toBe(200);
+    expect(change.json.to.offerId).toBe('plan-sim-5g');
+    expect((await call('POST', '/billing/simulate/plan-change', { cookie: callCentre.cookie, body: { ref: svc.id, newOfferId: 'plan-phone-24' } })).status).toBe(400); // same plan
+
+    const kept = await call('POST', '/billing/simulate/termination', { cookie: callCentre.cookie, body: { ref: svc.id, save: true, title: 'Quote to the customer' } });
+    expect(kept.json.saved).toMatchObject({ kind: 'TERMINATION', title: 'Quote to the customer' });
+    const list = (await call('GET', '/billing/simulations?kind=TERMINATION', { cookie: callCentre.cookie })).json.items;
+    expect(list[0].summary.payNowMinor).toBe(kept.json.payNowMinor);
+    expect((await call('GET', `/billing/simulations/${kept.json.saved.id}`, { cookie: callCentre.cookie })).json.rows).toHaveLength(1);
+    expect((await call('GET', '/billing/simulations', { cookie: retail.cookie })).status).toBe(403);
+    expect((await call('POST', `/billing/simulations/${kept.json.saved.id}/delete`, { cookie: callCentre.cookie })).status).toBe(200);
+
+    // none of it changed anything
+    expect(Number((await db.query('SELECT count(*) AS n FROM invoices')).rows[0]!.n)).toBe(invoices);
+    expect((await db.query('SELECT status FROM services WHERE id=$1', [svc.id])).rows[0]!.status).toBe('ACTIVE');
+  });
+
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {
     const admin = await staff(['admin']);
     expect((await call('GET', '/integrations', { cookie: admin.cookie })).status).toBe(403);

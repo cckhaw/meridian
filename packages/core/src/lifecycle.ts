@@ -240,49 +240,7 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
     await releaseFromGroup(q, actor, id); // a principal with supplementary services must be handed over first
     await q.query(`UPDATE service_suspensions SET ended_on=$2, end_reason='TERMINATED' WHERE service_id=$1 AND ended_on IS NULL`, [id, dayOfEnd]);
 
-    // Early termination charge
-    let quoted = 0, waived = false, recurringPart: number | null = null, clawbackPart: number | null = null, adjustedBy: string | null = null;
-    if (s.contractTermMonths > 0 && s.contractStart) {
-      const quote = await etcQuoteForService(q, s, when);
-      quoted = quote.chargeMinor; waived = quote.waived; recurringPart = quote.recurringMinor ?? null; clawbackPart = quote.clawbackMinor ?? null;
-    }
-    let etc = quoted;
-    if (etc > 0) {
-      const seg = (await q.query('SELECT segment FROM customers WHERE id=$1', [s.customerId])).rows[0]?.segment as string | undefined;
-      if (o.etcAdjust) {
-        if (!o.etcAdjust.reason?.trim()) throw invalid('A reason is needed to waive or reduce the early termination charge.');
-        const pct = o.etcAdjust.waive ? 0 : o.etcAdjust.percent;
-        if (pct === undefined || !Number.isFinite(pct) || pct < 0 || pct > 100) throw invalid('The percentage of the charge to collect is 0 to 100.');
-        etc = Math.round((etc * pct) / 100); adjustedBy = `${actor}: ${o.etcAdjust.reason.trim()}`;
-      } else if (seg && cfg.termination.waiveEtcSegments.includes(seg)) {
-        etc = 0; adjustedBy = `segment ${seg} is exempt from early termination charges`;
-      }
-      if (etc === 0) waived = true;
-    }
-
-    // Closing invoice: what has not been billed yet, then the ETC
-    const lines: DraftLine[] = [];
-    let unbilledRecurring = 0;
-    if (s.activatedAt) {
-      const lastEnd = (await q.query(`SELECT max(period_end)::text AS d FROM invoices WHERE account_id=$1 AND kind='CYCLE'`, [s.accountId])).rows[0]?.d as string | null;
-      const activated = fmt(new Date(s.activatedAt));
-      const from = lastEnd && addDays(lastEnd, 1) > activated ? addDays(lastEnd, 1) : activated;
-      if (dayOfEnd >= from) {
-        const offerRow = (await q.query('SELECT name, data FROM catalog_nodes WHERE id=$1', [s.offerId])).rows[0];
-        const fee = offerRow ? monthlyFee({ id: s.offerId, name: offerRow.name, ...offerRow.data } as never) : null;
-        if (fee) {
-          const days = diffDays(dayOfEnd, from) + 1;
-          const off = (await voluntarySuspendedDays(q, { serviceId: id }, from, dayOfEnd)).get(id) ?? 0;
-          const monthly = fee.amount.amountMinor / (fee.periodMonths ?? 1);
-          unbilledRecurring = Math.min(Math.round(monthly), Math.round((monthly * Math.max(0, days - off)) / 30));
-          if (unbilledRecurring > 0) lines.push({ serviceId: id, kind: 'RECURRING', stream: offerRow?.data?.partnerCode ? 'THIRD_PARTY' : 'SUBSCRIPTION', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: fee.taxInclusive, description: `${offerRow!.name} ${s.identifier} until termination (${from} to ${dayOfEnd})`, amountMinor: unbilledRecurring });
-        }
-      }
-    }
-    const usage = o.unbilledUsageMinor ?? 0;
-    if (usage < 0 || !Number.isInteger(usage)) throw invalid('unbilledUsageMinor is a whole amount, zero or more');
-    if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', stream: 'USAGE', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
-    if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', stream: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
+    const { quoted, etc, waived, recurringPart, clawbackPart, adjustedBy, lines, unbilledRecurring, usage } = await closingStatement(q, s, o, cfg, actor, when);
 
     await releaseResourcesOnTermination(q, s, { ported: o.ported, date: dayOfEnd, actor, reason: o.reason ?? 'terminated' }); // the SIM, IMSI and number go back to their pools on their own terms
     await q.query(`UPDATE services SET status='TERMINATED', terminated_at=$2, terminated_reason=$3, suspended_reason=NULL, suspension_kind=NULL, suspend_until=NULL, bar_level='HARD', iccid=NULL, version=version+1, updated_at=now() WHERE id=$1`, [id, when.toISOString(), o.reason ?? 'unspecified']);
@@ -334,6 +292,56 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
       unbilledRecurringMinor: unbilledRecurring, unbilledUsageMinor: usage, depositAppliedMinor: applied, depositRefundedMinor: refunded,
     };
   });
+}
+
+/** Everything that is owed when a service ends: the early-termination charge (with any waiver or adjustment), what has not been billed yet, and usage not yet billed. It reads and writes nothing, so a preview and the real termination are the same calculation. */
+export async function closingStatement(q: Queryable, s: Row, o: TerminationOptions, cfg: Awaited<ReturnType<typeof getLifecycleSettings>>, actor: string, when: Date) {
+  const id = s.id as string;
+  const dayOfEnd = fmt(when);
+  // Early termination charge
+  let quoted = 0, waived = false, recurringPart: number | null = null, clawbackPart: number | null = null, adjustedBy: string | null = null;
+  if (s.contractTermMonths > 0 && s.contractStart) {
+    const quote = await etcQuoteForService(q, s, when);
+    quoted = quote.chargeMinor; waived = quote.waived; recurringPart = quote.recurringMinor ?? null; clawbackPart = quote.clawbackMinor ?? null;
+  }
+  let etc = quoted;
+  if (etc > 0) {
+    const seg = (await q.query('SELECT segment FROM customers WHERE id=$1', [s.customerId])).rows[0]?.segment as string | undefined;
+    if (o.etcAdjust) {
+      if (!o.etcAdjust.reason?.trim()) throw invalid('A reason is needed to waive or reduce the early termination charge.');
+      const pct = o.etcAdjust.waive ? 0 : o.etcAdjust.percent;
+      if (pct === undefined || !Number.isFinite(pct) || pct < 0 || pct > 100) throw invalid('The percentage of the charge to collect is 0 to 100.');
+      etc = Math.round((etc * pct) / 100); adjustedBy = `${actor}: ${o.etcAdjust.reason.trim()}`;
+    } else if (seg && cfg.termination.waiveEtcSegments.includes(seg)) {
+      etc = 0; adjustedBy = `segment ${seg} is exempt from early termination charges`;
+    }
+    if (etc === 0) waived = true;
+  }
+
+  // Closing invoice: what has not been billed yet, then the ETC
+  const lines: DraftLine[] = [];
+  let unbilledRecurring = 0;
+  if (s.activatedAt) {
+    const lastEnd = (await q.query(`SELECT max(period_end)::text AS d FROM invoices WHERE account_id=$1 AND kind='CYCLE'`, [s.accountId])).rows[0]?.d as string | null;
+    const activated = fmt(new Date(s.activatedAt));
+    const from = lastEnd && addDays(lastEnd, 1) > activated ? addDays(lastEnd, 1) : activated;
+    if (dayOfEnd >= from) {
+      const offerRow = (await q.query('SELECT name, data FROM catalog_nodes WHERE id=$1', [s.offerId])).rows[0];
+      const fee = offerRow ? monthlyFee({ id: s.offerId, name: offerRow.name, ...offerRow.data } as never) : null;
+      if (fee) {
+        const days = diffDays(dayOfEnd, from) + 1;
+        const off = (await voluntarySuspendedDays(q, { serviceId: id }, from, dayOfEnd)).get(id) ?? 0;
+        const monthly = fee.amount.amountMinor / (fee.periodMonths ?? 1);
+        unbilledRecurring = Math.min(Math.round(monthly), Math.round((monthly * Math.max(0, days - off)) / 30));
+        if (unbilledRecurring > 0) lines.push({ serviceId: id, kind: 'RECURRING', stream: offerRow?.data?.partnerCode ? 'THIRD_PARTY' : 'SUBSCRIPTION', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: fee.taxInclusive, description: `${offerRow!.name} ${s.identifier} until termination (${from} to ${dayOfEnd})`, amountMinor: unbilledRecurring });
+      }
+    }
+  }
+  const usage = o.unbilledUsageMinor ?? 0;
+  if (usage < 0 || !Number.isInteger(usage)) throw invalid('unbilledUsageMinor is a whole amount, zero or more');
+  if (usage > 0) lines.push({ serviceId: id, kind: 'ADJUSTMENT', stream: 'USAGE', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Usage not yet billed ${s.identifier}`, amountMinor: usage });
+  if (etc > 0) lines.push({ serviceId: id, kind: 'ETC', stream: 'ETC', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: false, description: `Early termination charge ${s.identifier} (${s.contractTermMonths}-month contract)`, amountMinor: etc });
+  return { quoted, etc, waived, recurringPart, clawbackPart, adjustedBy, lines, unbilledRecurring, usage };
 }
 
 // ───────── MNP (mobile number portability) ─────────

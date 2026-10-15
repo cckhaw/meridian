@@ -50,6 +50,7 @@ function Billing() {
 }
 
 function Runs({ onDone }: { onDone: () => void }) {
+  const { can } = useAuth();
   const [asOf, setAsOf] = useState(todayStr());
   const gov = useApi<{ enforceGovernance: boolean }>('/billing/runs/settings');
   const bill = useAction(onDone), dun = useAction(onDone);
@@ -61,7 +62,7 @@ function Runs({ onDone }: { onDone: () => void }) {
         <Card>
           <h2 className="text-title3 font-semibold">Bill runs</h2>
           <p className="mb-3 text-subhead text-label2">Each cycle is billed in four steps: a <strong>mock</strong> (nothing is invoiced), a <strong>review</strong> with exclusions, an <strong>approval</strong>, then the real run.</p>
-          <Link className="inline-flex min-h-tap items-center rounded-control bg-accent px-4 text-subhead font-semibold text-accent-label" href="/billing/runs">Open bill runs</Link>
+          <div className="flex flex-wrap gap-2"><Link className="inline-flex min-h-tap items-center rounded-control bg-accent px-4 text-subhead font-semibold text-[rgb(var(--accent-label))]" href="/billing/runs">Open bill runs</Link>{can('billing:simulate') && <Link className="inline-flex min-h-tap items-center rounded-control bg-surface2 px-4 text-subhead font-medium text-accent" href="/billing/simulate">Billing simulator</Link>}</div>
         </Card>
       ) : (
       <Card>

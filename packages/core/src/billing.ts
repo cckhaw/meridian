@@ -90,7 +90,7 @@ export async function runBillCycle(db: Db, asOf: DateStr = today(), opts: { acco
 }
 
 /** What a cycle bill of this account would hold, read-only: the period, the lines, and the instalment charges it would use up. `exists` when the period is already billed. */
-export interface CycleDraft { exists: boolean; periodStart: DateStr; periodEnd: DateStr; lines: DraftLine[]; chargeIds: string[] }
+export interface CycleDraft { exists: boolean; periodStart: DateStr; periodEnd: DateStr; lines: DraftLine[]; chargeIds: string[]; /** The instalment charges the bill includes, with how many bills each had left. */ charges: Array<{ id: string; serviceId: string | null; kind: string; amountMinor: number; remainingCycles: number }> }
 
 /** Bills one account for the cycle ending the day before `asOf`, in the caller's transaction. */
 export async function billAccount(q: Queryable, a: Row, asOf: DateStr, o: { billRunId?: string } = {}): Promise<Row | null | 'EXISTS'> {
@@ -103,12 +103,16 @@ export async function billAccount(q: Queryable, a: Row, asOf: DateStr, o: { bill
   return inv;
 }
 
-export async function draftCycleBill(q: Queryable, a: Row, asOf: DateStr): Promise<CycleDraft> {
+/**
+ * With `monthOffset` the draft is a forecast: the bill that falls that many bills after the next one, as if none of the bills in between had changed anything. A period already billed does
+ * not stop it, and an instalment charge with fewer bills left than that is finished by then.
+ */
+export async function draftCycleBill(q: Queryable, a: Row, asOf: DateStr, o: { monthOffset?: number } = {}): Promise<CycleDraft> {
   const daily = a.billCycleDay === null;
   const periodStart = daily ? addDays(asOf, -1) : addMonths(asOf, -1);
   const periodEnd = addDays(asOf, -1);
   const exists = (await q.query(`SELECT 1 FROM invoices WHERE account_id=$1 AND kind='CYCLE' AND period_start=$2 AND period_end=$3`, [a.id, periodStart, periodEnd])).rows.length;
-  if (exists) return { exists: true, periodStart, periodEnd, lines: [], chargeIds: [] };
+  if (exists && o.monthOffset === undefined) return { exists: true, periodStart, periodEnd, lines: [], chargeIds: [], charges: [] };
   const days = diffDays(periodEnd, periodStart) + 1;
   const lines: DraftLine[] = [];
 
@@ -187,12 +191,14 @@ export async function draftCycleBill(q: Queryable, a: Row, asOf: DateStr): Promi
   }
   // Instalments and one-off adjustments
   const chargeIds: string[] = [];
-  const charges = (await q.query(`SELECT * FROM service_charges WHERE account_id=$1 AND remaining_cycles > 0 ORDER BY created_at`, [a.id])).rows;
+  const charges = (await q.query(`SELECT * FROM service_charges WHERE account_id=$1 AND remaining_cycles > $2 ORDER BY created_at`, [a.id, o.monthOffset ?? 0])).rows;
+  const used: CycleDraft['charges'] = [];
   for (const c of charges) {
+    used.push({ id: c.id, serviceId: c.serviceId, kind: c.kind, amountMinor: Number(c.amountMinor), remainingCycles: c.remainingCycles });
     lines.push({ serviceId: c.serviceId, kind: c.kind === 'INSTALLMENT' ? 'INSTALLMENT' : 'ADJUSTMENT', stream: 'DEVICE_INSTALMENT', revenueAccount: GL.GOODS_REVENUE, taxInclusive: c.taxInclusive, description: c.description, amountMinor: c.amountMinor });
     chargeIds.push(c.id as string);
   }
-  return { exists: false, periodStart, periodEnd, lines, chargeIds };
+  return { exists: false, periodStart, periodEnd, lines, chargeIds, charges: used };
 }
 
 // ───────────────────────── payments, credit notes, dunning ─────────────────────────

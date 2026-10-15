@@ -79,6 +79,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `billing:pay` |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |  |  |  |  |  |  |
 | `billing:credit` |  |  | ✓ |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |
 | `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `billing:simulate` |  |  | ✓ |  |  | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |
 | `billing:approve` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:export` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |

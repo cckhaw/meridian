@@ -21,6 +21,7 @@ const CORE_PERMISSIONS = [
   'order:read', 'order:payment', 'order:fulfil', 'order:cancel',
   'order:override', // approve a cancellation or return the policy would only allow with a supervisor's say-so
   'billing:read', 'billing:pay', 'billing:credit', 'billing:run',
+  'billing:simulate', // forecast bills, quote what ending a service would cost, preview a plan change: nothing is changed
   'billing:approve', // approve a mocked bill run so it can be billed for real; with dual control, a second person from the one who asked for it
   'finance:read', 'finance:export',
   'finance:configure', // posting rules (SAP accounts, cost centres, profit centres) and the SAP connection settings
@@ -95,7 +96,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'billing-ops': {
     id: 'billing-ops', label: 'Billing Operations', scope: 'staff', home: '/billing', creditLimitMinor: null,
     summary: 'Prepares bill runs (mock, review, exclusions) and runs dunning, records payments, issues credit notes, handles invoice queries. Approval of a bill run is for Finance or Revenue Assurance.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'case:read', 'case:create', 'case:write'],
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'billing:simulate', 'case:read', 'case:create', 'case:write'],
   },
   'rating-charging': {
     id: 'rating-charging', label: 'Rating & Charging', scope: 'staff', home: '/catalog',
@@ -111,7 +112,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'call-center', label: 'Call Center Agent', scope: 'staff', home: '/customers',
     summary: 'Handles customer queries on the Customer 360: profile, services, orders, bills, cases. Can suspend/resume, change SIM or number, take payments.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'order:read', ...ch('CALL_CENTER'), 'numbering:select',
-      'order:payment', 'billing:read', 'billing:pay', 'case:read', 'case:create', 'case:write', 'catalog:read'],
+      'order:payment', 'billing:read', 'billing:pay', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   telesales: {
     id: 'telesales', label: 'Telesales Agent', scope: 'staff', home: '/orders/new?channel=TELESALES',
@@ -139,12 +140,12 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'customer-service', label: 'Customer Service', scope: 'staff', home: '/cases', creditLimitMinor: 20_000,
     summary: 'Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer', 'mnp:manage',
-      'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'case:read', 'case:create', 'case:write', 'catalog:read'],
+      'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,
     summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables, and approval of bill runs.',
-    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
+    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:simulate', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
   },
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',
@@ -164,7 +165,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'revenue-assurance': {
     id: 'revenue-assurance', label: 'Revenue Assurance', scope: 'staff', home: '/finance',
     summary: 'Checks that billing, payments and the ledger agree, and approves a bill run once its mock has been reviewed (otherwise read-only).',
-    permissions: ['dashboard:read', 'finance:read', 'billing:read', 'billing:approve', 'audit:read', 'customer:search', 'customer:read'],
+    permissions: ['dashboard:read', 'finance:read', 'billing:read', 'billing:approve', 'billing:simulate', 'audit:read', 'customer:search', 'customer:read'],
   },
 };
 
