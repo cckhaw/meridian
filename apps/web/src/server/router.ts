@@ -1001,6 +1001,43 @@ post('/billing/simulate/plan-change', sim, async ({ db, user, body }) => {
 get('/billing/simulations', sim, ({ db, query }) => core.listSimulations(db, { kind: str(query, 'kind'), accountId: str(query, 'accountId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/billing/simulations/:id', sim, ({ db, params }) => core.getSimulation(db, params.id!));
 post('/billing/simulations/:id/delete', sim, async ({ db, user, params }) => { await core.deleteSimulation(db, user.username, params.id!); return { ok: true }; });
+// ───────────────────────── bill templates, legacy conversion, PDFs and print-house packages ─────────────────────────
+const tpl = ['billing:template'] as Permission[];
+const printing = ['billing:print'] as Permission[];
+const template = z.custom<core.TemplateSchema>((v) => !!v && typeof v === 'object' && (v as { version?: unknown }).version === 1, 'A template with version 1.');
+const profileIn = z.object({ bleedMm: z.number().min(0).max(10), slugMm: z.number().min(0).max(20), cropMarks: z.boolean(), colorMode: z.enum(['RGB', 'CMYK']) }).partial();
+const pdfResponse = (pdf: Uint8Array, name: string, inline = true) => new Response(new Uint8Array(pdf), { headers: { 'content-type': 'application/pdf', 'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${name}"`, 'cache-control': 'no-store', 'content-length': String(pdf.length) } });
+/** What the designer needs to know: the tokens a block can use, the kinds of block, the page sizes, the print profile defaults. */
+get('/billing/templates/meta', tpl, () => ({ tokens: core.BILL_TOKENS.map(({ get: _g, ...t }) => t), blockTypes: core.BLOCK_TYPES, pageSizes: core.PAGE_SIZES_MM, streams: core.BILL_STREAMS, defaultTemplate: core.defaultTemplate(), printProfile: core.DEFAULT_PRINT_PROFILE }));
+get('/billing/templates', tpl, ({ db }) => core.listTemplates(db));
+post('/billing/templates', tpl, async ({ db, user, body }) => Response.json(await core.createTemplate(db, user.username, z.object({ name: z.string().max(80), description: z.string().max(300).optional(), template: template.optional(), copyFrom: uuid.optional() }).parse(body)), { status: 201 }));
+get('/billing/templates/:id', tpl, ({ db, params }) => core.getTemplate(db, params.id!));
+post('/billing/templates/:id', tpl, ({ db, user, params, body }) => core.saveDraft(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), description: z.string().max(300).optional(), template: template.optional() }).parse(body)));
+post('/billing/templates/:id/publish', tpl, ({ db, user, params, body }) => core.publishTemplate(db, user.username, params.id!, z.object({ note: z.string().max(300).optional() }).parse(body ?? {}).note));
+post('/billing/templates/:id/default', tpl, ({ db, user, params }) => core.setDefaultTemplate(db, user.username, params.id!));
+post('/billing/templates/:id/delete', tpl, ({ db, user, params }) => core.deleteTemplate(db, user.username, params.id!));
+/** Converts a legacy HTML/CSS, JSON or XML template and shows what was carried over, without keeping anything. */
+const legacy = z.object({ format: z.enum(['HTML', 'JSON', 'XML']), content: z.string().min(1).max(2_000_000), tokenMap: z.record(z.string().max(60), z.string().max(60)).optional() });
+post('/billing/templates/convert', tpl, ({ body }) => { const r = core.convertTemplate(legacy.parse(body)); return { ...r, problems: core.validateTemplate(r.template) }; });
+post('/billing/templates/import', tpl, async ({ db, user, body }) => Response.json(await core.importLegacy(db, user.username, legacy.extend({ name: z.string().max(80) }).parse(body)), { status: 201 }));
+/** A PDF of a template (as being edited) with made-up data, or with a real invoice's. */
+post('/billing/templates/preview', tpl, async ({ db, body }) => { const b = z.object({ template, invoiceId: uuid.optional(), print: z.boolean().optional(), profile: profileIn.optional() }).parse(body);
+  const r = await core.previewTemplatePdf(db, { template: b.template, invoiceId: b.invoiceId, profile: b.print ? { ...core.DEFAULT_PRINT_PROFILE, ...b.profile } : undefined });
+  return pdfResponse(r.pdf, 'preview.pdf'); });
+get('/billing/templates/samples/invoices', tpl, ({ db, query }) => core.listTemplateSamples(db, str(query, 'cursor'), num(query, 'limit')));
+/** One issued invoice as a PDF, with the default (or a named) template. */
+get('/invoices/:id/pdf', ['billing:read'] as Permission[], async ({ db, params, query }) => { const r = await core.invoicePdf(db, params.id!, { templateId: str(query, 'templateId'), version: num(query, 'version') }); return pdfResponse(r.pdf, `${r.number}.pdf`); });
+/** A print-house package (batch PDFs, control files, manifest) built as it downloads. GET so a plain link downloads it. */
+get('/billing/print/package', printing, async ({ db, user, query }) => {
+  const num2 = (k: string) => { const v = str(query, k); return v === undefined || v === '' ? undefined : Number(v); };
+  const { stream, filename } = await core.exportPrintPackage(db, user.username, {
+    selection: { billRunId: str(query, 'billRunId') || undefined, issuedFrom: str(query, 'from') || undefined, issuedTo: str(query, 'to') || undefined },
+    templateId: str(query, 'templateId') || undefined, templateVersion: num2('version'), batchSize: num2('batchSize'), insertAll: str(query, 'insert') === '1', mailClass: str(query, 'mailClass') || undefined,
+    profile: { ...(num2('bleed') !== undefined ? { bleedMm: num2('bleed')! } : {}), ...(num2('slug') !== undefined ? { slugMm: num2('slug')! } : {}), ...(str(query, 'crop') ? { cropMarks: str(query, 'crop') === '1' } : {}), ...(str(query, 'color') ? { colorMode: str(query, 'color') === 'CMYK' ? 'CMYK' as const : 'RGB' as const } : {}) },
+  });
+  return new Response(stream, { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
+});
+get('/billing/print/jobs', printing, ({ db, query }) => core.listPrintJobs(db, num(query, 'limit')));
 /** The plain "bill this date" call skips review and approval, so it is refused while governance is on (the default). */
 post('/billing/run', 'billing:run', async ({ db, user, body }) => { if ((await core.getBillRunSettings(db)).enforceGovernance) throw new DomainError('REJECTED', 'Bill cycles are run from Billing → Bill runs, with a mock, a review and an approval. (A super user can switch this off in the bill-run settings.)'); const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
 /** Housekeeping for the store-front: closes stale sign-ups and releases orders whose online payment never arrived. Safe to run often (hourly is plenty). */

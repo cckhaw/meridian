@@ -22,6 +22,8 @@ const CORE_PERMISSIONS = [
   'order:override', // approve a cancellation or return the policy would only allow with a supervisor's say-so
   'billing:read', 'billing:pay', 'billing:credit', 'billing:run',
   'billing:simulate', // forecast bills, quote what ending a service would cost, preview a plan change: nothing is changed
+  'billing:template', // design, convert and publish the bill templates
+  'billing:print', // produce print-house packages and single PDFs of issued bills
   'billing:approve', // approve a mocked bill run so it can be billed for real; with dual control, a second person from the one who asked for it
   'finance:read', 'finance:export',
   'finance:configure', // posting rules (SAP accounts, cost centres, profit centres) and the SAP connection settings
@@ -96,7 +98,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'billing-ops': {
     id: 'billing-ops', label: 'Billing Operations', scope: 'staff', home: '/billing', creditLimitMinor: null,
     summary: 'Prepares bill runs (mock, review, exclusions) and runs dunning, records payments, issues credit notes, handles invoice queries. Approval of a bill run is for Finance or Revenue Assurance.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'billing:simulate', 'case:read', 'case:create', 'case:write'],
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'billing:simulate', 'billing:template', 'billing:print', 'case:read', 'case:create', 'case:write'],
   },
   'rating-charging': {
     id: 'rating-charging', label: 'Rating & Charging', scope: 'staff', home: '/catalog',
@@ -145,7 +147,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,
     summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables, and approval of bill runs.',
-    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:simulate', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
+    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:simulate', 'billing:template', 'billing:print', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
   },
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',
