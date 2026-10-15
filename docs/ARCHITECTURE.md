@@ -29,7 +29,7 @@
 - `@meridian/core` talks to one `Db` interface (`db.ts`): `pg` when `DATABASE_URL` is set, otherwise embedded Postgres (PGlite). Migrations in
   `packages/db/migrations` are embedded into `migrations.generated.ts` (`pnpm --filter @meridian/db embed`) so bundles carry no loose SQL files.
 - Orders run as an in-process state machine inside one DB transaction (`orders.ts`): a decline or stock-out ends in FAILED with compensation
-  (refund, release) committed, never a half-written order. The Temporal workflows in `services/order-service` (orders, and the dunning ladder) model the same states for a
+  (refund, release) committed, never a half-written order. The Temporal workflows in `services/order-service` (orders, and the dunning ladders) model the same states for a
   deployment that wants durable timers and human-in-the-loop steps; they are not wired to the web app.
 - **Global identifiers**: `services` is sharded, so its unique index only holds per shard. MSISDNs and circuit ids are claimed in `identifier_registry`
   in the same transaction. (A test caught this: two customers on different shards could otherwise hold the same number.)

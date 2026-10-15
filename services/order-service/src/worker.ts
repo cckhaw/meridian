@@ -3,6 +3,7 @@ import { stubActivities } from './activities/index.js';
 import { stubBillRunActivities } from './activities/bill-run.js';
 import { stubCaseSlaActivities } from './activities/case-sla.js';
 import { stubDunningActivities } from './activities/dunning.js';
+import { stubDunningLadderActivities } from './activities/dunning-ladder.js';
 import { stubNrmActivities } from './activities/nrm.js';
 import { stubPortInActivities } from './activities/port-in.js';
 import { TASK_QUEUE } from './api/orders.controller.js';
@@ -12,6 +13,6 @@ const worker = await Worker.create({
   connection,
   taskQueue: TASK_QUEUE,
   workflowsPath: new URL('./workflows/index.ts', import.meta.url).pathname,
-  activities: { ...stubActivities, ...stubDunningActivities, ...stubBillRunActivities(), ...stubCaseSlaActivities, ...stubNrmActivities, ...stubPortInActivities } as unknown as Record<string, (...a: never[]) => unknown>,
+  activities: { ...stubActivities, ...stubDunningActivities, ...stubDunningLadderActivities, ...stubBillRunActivities(), ...stubCaseSlaActivities, ...stubNrmActivities, ...stubPortInActivities } as unknown as Record<string, (...a: never[]) => unknown>,
 });
 await worker.run();

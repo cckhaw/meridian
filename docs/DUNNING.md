@@ -14,9 +14,27 @@ The older single ladder in **Settings → Lifecycle** ([LIFECYCLE.md](LIFECYCLE.
 | QR payment codes (EMVCo merchant-presented) | `packages/core/src/emv-qr.ts` |
 | Payment arrangements, agency placements, agency file | `packages/core/src/collections.ts`; tables `payment_arrangements`, `collection_placements` |
 | Southeast Asia starter rules | `packages/core/src/seed-dunning-rules.ts` |
-| API | `/api/settings/dunning-rules*`, `/api/accounts/:id/collections`, `/api/accounts/:id/arrangements`, `/api/arrangements/:id/cancel`, `/api/collections/*` |
+| Settings page | `apps/web/src/app/admin/settings/dunning.tsx` |
+| Temporal workflow | `services/order-service/src/workflows/dunning-ladder.workflow.ts`, `activities/dunning-ladder.ts`, `api/dunning-ladder.controller.ts` |
+| API | `/api/settings/dunning-rules*`, `/api/accounts/:id/collections` (and `/collections/run`), `/api/accounts/:id/arrangements`, `/api/arrangements/:id/cancel`, `/api/collections/*` |
 
-Not built yet (next release): the drag-and-drop ladder builder page at **Settings → Dunning rules**, and the Temporal `DunningLadderWorkflow`. Until then rules are managed through the API (or installed from the starter set), and the existing `dunningWorkflow` in `services/order-service` keeps running the older ladder.
+## Settings → Dunning rules
+
+**Settings → Back office → Dunning rules** (short link `/settings/dunning-rules`; `settings:manage`) is where rules are built.
+
+* **Rules** are listed by priority with their conditions and a one-line view of the ladder. With no rules yet the page offers **Load Southeast Asia defaults** for a market. A rule can be switched on and off.
+* **The ladder builder** (Edit, or New rule) has the conditions at the top (market, customer type, segments, VIP, credit risk, priority) and the ladder below. **Drag a step from the palette into the ladder**, drag steps to reorder them, or use the arrows and the tap-to-add buttons (the same things work with a keyboard or on a phone). Each step opens to set its trigger (day, or overdue balance), its action's settings (channels, message and QR code; late fee; team and hold; how the debt is treated) and what it skips (disputes, VIPs, arrangements). The page warns when steps are out of day order and offers to sort them; the server refuses an order that makes no sense and says why.
+* **Partial payments** sit at the bottom of the rule: the threshold, what to do, and how long to pause.
+* **Late fees**, **Payment links and QR codes** (pay page address, credit bureau, merchant details per QR scheme) and **Where an account stands** (paste an account ID to see the rule that fits it, how many days past due, and each step's state: done, due now, held and why, later) are on the same page.
+
+## The Temporal ladder
+
+`dunningLadderWorkflow` (`services/order-service/src/workflows/dunning-ladder.workflow.ts`) keeps the time for one account's rule-driven ladder. It does not carry a list of steps. It asks the CRM what the ladder is today, sleeps on a durable timer until the next step's day (a held step or a balance trigger is looked at again every 24 hours), has the CRM apply what is due, and reads again. So it follows a partial-payment reset, a pause, a broken arrangement or a closed dispute without knowing about any of them.
+
+* **Signals.** `paymentReceivedSignal` (a bank or QR payment webhook, cash at a store): the ladder stops and the customer is told service is back. `partialPaymentSignal`: the workflow reads the ladder again (the rule's partial-payment policy has already been applied in the CRM). Query: `ladderStatus`.
+* **Outcomes.** `PAID`, `TERMINATED`, or `COMPLETED` when no step is left.
+* **API.** `POST /meridian-api/dunning-ladder/accounts/:id` starts one (one per account), `.../payment` and `.../partial` signal it, `GET .../accounts/:id` is its status.
+* **Activities.** `getLadder` is `GET /api/accounts/:id/collections` and `runLadder` is `POST /api/accounts/:id/collections/run` (`billing:run`), which applies what is due. The worker ships stubs, as for the other workflows, until it is wired to the CRM with a service credential. The CRM works fully without the workflow: the daily job (`POST /api/lifecycle/run`) does the same work. The older `dunningWorkflow` still runs the single lifecycle ladder.
 
 ## Which rule applies
 
