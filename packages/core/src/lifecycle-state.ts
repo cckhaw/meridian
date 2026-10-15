@@ -1,3 +1,4 @@
+import { enqueueOcs } from './ocs.js';
 import type { Queryable, Row } from './db.js';
 import { rejected } from './errors.js';
 
@@ -49,6 +50,7 @@ const BAR_INSTRUCTION: Record<BarLevel, string> = { NONE: 'RESTORE', THROTTLE: '
 /** Sets what the network may do for a service and tells the policy system (PCRF/PCF) at once. A hard bar always lets emergency calls through. */
 export async function setBarLevel(q: Queryable, s: Row, level: BarLevel, why: { kind: RestrictionKind | null; actor: string; retainIdentity?: boolean }): Promise<void> {
   await q.query('UPDATE services SET bar_level=$2 WHERE id=$1', [s.id, level]);
+  await enqueueOcs(q, 'SET_BARRING', s.id as string, { barring: { level, reason: why.kind } });
   await queueOutbox(q, {
     kind: 'NETWORK', instruction: BAR_INSTRUCTION[level], serviceId: s.id as string, accountId: s.accountId as string,
     payload: { identifier: s.identifier, iccid: s.iccid ?? null, bar: level, reason: why.kind, emergencyCalls: 'ALLOWED', ...(level === 'SOFT' ? { incoming: 'ALLOWED' } : {}), ...(why.retainIdentity ? { retainMsisdn: true, retainSim: true } : {}) },

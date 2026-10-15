@@ -107,6 +107,8 @@ export interface OfferNode extends CatalogNodeBase {
   behaviour?: Partial<import('./offer-types.js').BehaviourSwitches>;
   /** For a service kind that expires on its own: how many days the service lasts from activation (the kind's default when absent). */
   validityDays?: number;
+  /** How the charging system (OCS) knows this plan: its plan or product code there, and any extra parameters the connector sends along. Absent: the offer is not provisioned in the OCS. */
+  ocs?: { planCode: string; params?: Record<string, string | number | boolean> };
   description?: string;
   prices: PriceComponent[];
   contract?: ContractTerms;

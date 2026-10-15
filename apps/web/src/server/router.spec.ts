@@ -540,6 +540,35 @@ describe('settings and branding', () => {
     await call('POST', '/settings/store', { cookie: su, body: st.store });
   });
 
+  it('the charging system (OCS) connector is for the super user, and orders flow into its queue', async () => {
+    const admin = await staff(['admin']);
+    expect((await call('GET', '/integrations/ocs', { cookie: admin.cookie })).status).toBe(403);
+    expect((await call('POST', '/ocs/dispatch', { cookie: admin.cookie, body: {} })).status).toBe(403);
+    expect((await call('GET', '/integrations/ocs')).status).toBe(401);
+    const su = await root();
+    const ov = (await call('GET', '/integrations/ocs', { cookie: su })).json;
+    expect(ov.vendors.map((v: any) => v.id).sort()).toEqual(['generic-rest', 'simulator']);
+    expect(ov.enabled).toBe(false);
+    expect((await call('POST', '/integrations/ocs', { cookie: su, body: { vendor: 'generic-rest', enabled: true, config: { baseUrl: 'http://evil.example.com', commands: {} } } })).status).toBe(400);
+    expect((await call('POST', '/integrations/ocs/test', { cookie: su, body: { vendor: 'simulator', config: { mode: 'OK' } } })).json.ok).toBe(true);
+    expect((await call('POST', '/integrations/ocs', { cookie: su, body: { vendor: 'simulator', enabled: true } })).json.enabled).toBe(true);
+    expect((await call('GET', '/catalog-config', { cookie: su })).json.ocsEnabled).toBe(true);
+
+    expect((await call('PATCH', '/catalog/plan-sim-5g', { cookie: su, body: { ocs: { planCode: 'PLAN_5G_100', params: { dataGb: 100 } } } })).status).toBe(200);
+    expect((await call('GET', '/catalog/plan-sim-5g', { cookie: su })).json.ocs).toEqual({ planCode: 'PLAN_5G_100', params: { dataGb: 100 } });
+    expect((await call('PATCH', '/catalog/plan-sim-5g', { cookie: su, body: { ocs: { planCode: 'bad code' } } })).status).toBe(400);
+    const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'OCS router', idDocument: 'OCS-RTR-1' });
+    const o = await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: customer.id, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true, reference: 'R1' } } });
+    expect(o.status).toBe(200);
+    const jobs = (await call('GET', '/integrations/ocs/jobs', { cookie: su })).json.items;
+    expect(jobs[0]).toMatchObject({ command: 'PROVISION', status: 'PENDING', planCode: 'PLAN_5G_100' });
+    const run = await call('POST', '/ocs/dispatch', { cookie: su, body: {} });
+    expect(run.json).toMatchObject({ sent: 1, dead: 0 });
+    expect((await call('GET', '/integrations/ocs', { cookie: su })).json.stats).toMatchObject({ sent: 1, pending: 0, dead: 0 });
+    expect((await call('GET', '/integrations', { cookie: su })).json.items.find((i: any) => i.id === 'ocs').state.status).toBe('STAND_IN');
+    await call('POST', '/integrations/ocs', { cookie: su, body: { vendor: 'simulator', enabled: false } });
+  });
+
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {
     const admin = await staff(['admin']);
     expect((await call('GET', '/integrations', { cookie: admin.cookie })).status).toBe(403);

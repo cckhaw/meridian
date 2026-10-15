@@ -1,3 +1,4 @@
+import { enqueueOcs } from './ocs.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './audit.js';
 import { addDays, today } from './dates.js';
@@ -181,6 +182,9 @@ export async function completePortInTx(q: Queryable, id: string, actor: string):
   await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, account_id, instruction, payload) VALUES ('NETWORK', $1, $2, $3, $4)`,
     [s.id, s.accountId, hadTemp ? 'MSISDN_SWAP' : 'ACTIVATE_PORTED_IN', JSON.stringify({ portInId: id, from: hadTemp ? from : null, to, iccid: sim?.iccid ?? null, imsi: sim?.imsi ?? null })]);
   await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, account_id, instruction, payload) VALUES ('NOTIFY', $1, $2, 'PORT_IN_COMPLETE', $3)`, [s.id, s.accountId, JSON.stringify({ number: to })]);
+  // The charging system: a line that waited for its number starts there now; one that was running on a temporary number swaps it.
+  if (wasPending) await enqueueOcs(q, 'PROVISION', s.id as string);
+  else if (hadTemp) await enqueueOcs(q, 'CHANGE_IDENTITY', s.id as string, { identity: { from: { identifier: from, iccid: null }, to: { identifier: to, iccid: null } } });
   await audit(q, actor, 'port_in', id, 'COMPLETED', { from: hadTemp ? from : null, to });
 }
 

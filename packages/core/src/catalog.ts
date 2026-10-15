@@ -17,7 +17,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
     markets: r.markets, version: r.version, createdAt: r.createdAt, updatedAt: r.updatedAt, sortOrder: r.sortOrder ?? 0,
     ...(r.level === 'NETWORK_TYPE' ? { networkType: d.networkType } : {}),
     ...(r.level === 'OFFER'
-      ? { kind: r.kind, template: d.template ?? r.kind, behaviour: d.behaviour, validityDays: d.validityDays, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
+      ? { kind: r.kind, template: d.template ?? r.kind, behaviour: d.behaviour, validityDays: d.validityDays, ocs: d.ocs, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
           characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [], variants: d.variants ?? [], deals: d.deals ?? [], group: d.group }
       : {}),
     ...(r.level === 'LINE_ITEM'
@@ -29,7 +29,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
 const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, description: i.description || undefined, quantity: i.unlimited ? undefined : i.quantity, unit: i.unit || undefined, unlimited: !!i.unlimited, sku: i.sku || undefined });
 
 const offerData = (o: Partial<OfferNode>) => ({
-  template: o.template, behaviour: o.behaviour, validityDays: o.validityDays, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
+  template: o.template, behaviour: o.behaviour, validityDays: o.validityDays, ocs: o.ocs, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
   characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [], deals: o.deals ?? [], suspension: o.suspension, group: o.group?.isGroupOffer ? o.group : undefined,
 });
 
@@ -258,7 +258,7 @@ export interface NodePatch {
   itemType?: string; quantity?: number | null; unit?: string; unlimited?: boolean; sku?: string;
   name?: string; networkType?: string; markets?: string[];
   kind?: string; description?: string; prices?: PriceComponent[]; contract?: ContractTerms; fulfilment?: OfferNode['fulfilment'];
-  partnerCode?: string; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals']; suspension?: OfferNode['suspension']; group?: OfferNode['group'] | null;
+  partnerCode?: string; ocs?: OfferNode['ocs'] | null; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals']; suspension?: OfferNode['suspension']; group?: OfferNode['group'] | null;
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -307,6 +307,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
       contract: patch.contract ?? o.contract, fulfilment: patch.fulfilment ?? o.fulfilment, partnerCode: patch.partnerCode ?? o.partnerCode,
       characteristics: patch.characteristics ?? o.characteristics, requires: patch.requires ?? o.requires, excludes: patch.excludes ?? o.excludes, salesChannels: patch.salesChannels ?? o.salesChannels ?? [], variants: patch.variants ?? o.variants ?? [], deals: patch.deals ?? o.deals ?? [], suspension: patch.suspension ?? o.suspension,
       group: patch.group === null ? undefined : patch.group ?? o.group,
+      ocs: patch.ocs === null ? undefined : patch.ocs ?? o.ocs,
     } as OfferNode;
     const commercialChange = !same(next.prices, o.prices) || !same(next.contract, o.contract) || next.kind !== o.kind;
     if (commercialChange) {

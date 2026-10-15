@@ -191,7 +191,7 @@ const dealSchema = z.object({ termMonths: z.number().int(), subsidyMinor: z.numb
 const offerFields = {
   kind: z.string().min(1).max(40), // an offer type id (Settings → Catalog → Offer types)
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
-  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), ocs: z.object({ planCode: z.string().max(60), params: z.record(z.union([z.string().max(100), z.number(), z.boolean()])).optional() }).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
   requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]), suspension: z.object({ mode: z.enum(['PAUSE', 'MAINTENANCE_FEE']), monthlyFeeMinor: z.number().int().min(0).max(100_000_000).optional() }).optional(),
   group: z.object({ isGroupOffer: z.boolean(), maxGroupMembers: z.number().int().min(1).max(20), allowedMemberOfferIds: z.array(z.string().max(70)).max(50).default([]), sharedPoolQuotaGb: z.number().min(0).max(100_000).optional() }).nullable().optional(),
 };
@@ -210,7 +210,7 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
+  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), ocs: z.object({ planCode: z.string().max(60), params: z.record(z.union([z.string().max(100), z.number(), z.boolean()])).nullable().optional() }).nullable().optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
@@ -408,6 +408,27 @@ get('/settings/store', 'settings:manage', async ({ db }) => ({
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
 post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body)));
+// ───────────────────────── charging system (OCS): connector, queue, retries ─────────────────────────
+get('/integrations/ocs', 'settings:manage', ({ db }) => core.ocsOverview(db));
+post('/integrations/ocs', 'settings:manage', async ({ db, user, body }) => {
+  const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), config: z.unknown().optional() }).parse(body);
+  await core.setOcsSettings(db, user.username, b);
+  return core.ocsOverview(db);
+});
+post('/integrations/ocs/test', 'settings:manage', async ({ db, body }) => {
+  const b = z.object({ vendor: z.string().max(40), config: z.unknown() }).parse(body);
+  const v = core.OCS_VENDORS[b.vendor];
+  if (!v) throw new DomainError('INVALID', 'unknown vendor');
+  const c = v.create(v.validate(b.config));
+  const problem = c.problem();
+  if (problem) return { ok: false, detail: problem };
+  return c.test ? c.test() : { ok: true, detail: 'This connector has no connection test.' };
+});
+get('/integrations/ocs/jobs', 'settings:manage', async ({ db, query }) => ({ items: await core.listOcsJobs(db, { status: str(query, 'status'), serviceId: str(query, 'serviceId'), limit: num(query, 'limit') }) }));
+post('/integrations/ocs/jobs/:id/retry', 'settings:manage', ({ db, user, params }) => core.retryOcsJob(db, params.id!, user.username));
+/** Delivers due jobs to the charging system. Schedule it every minute (service account with billing:run); the Run now button calls it too. */
+post('/ocs/dispatch', 'billing:run', ({ db }) => core.dispatchOcs(db));
+
 /** Every external integration with its live status (environment variable names only, never values). Super user. */
 get('/integrations', 'settings:manage', async ({ db }) => core.integrationOverview(db));
 // ── cancellation rules (Settings → Cancellation) ──
@@ -469,7 +490,7 @@ route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, use
 
 // ───────────────────────── catalog configuration (offer types and fulfilment options) ─────────────────────────
 // Read by anyone who works on the catalog (the offer wizard, bundle rules); changed only in Settings by the super user.
-get('/catalog-config', 'catalog:read', async ({ db }) => ({ types: await core.listOfferTypes(db, { activeOnly: true }), options: await core.listFulfilmentOptions(db, { activeOnly: true }), serviceKinds: await core.listServiceKinds(db, { activeOnly: true }) }));
+get('/catalog-config', 'catalog:read', async ({ db }) => ({ types: await core.listOfferTypes(db, { activeOnly: true }), options: await core.listFulfilmentOptions(db, { activeOnly: true }), serviceKinds: await core.listServiceKinds(db, { activeOnly: true }), ocsEnabled: (await core.getOcsSettings(db)).enabled }));
 get('/settings/catalog', 'settings:manage', async ({ db }) => ({ types: await core.listOfferTypes(db, { withUsage: true }), options: await core.listFulfilmentOptions(db, { withUsage: true }), serviceKinds: await core.listServiceKinds(db, { withUsage: true }) }));
 /** The behaviour switches of an offer type. Each is optional: what is left out keeps the preset's (or the type's current) value. */
 const switchesBody = z.object({

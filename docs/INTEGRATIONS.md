@@ -12,6 +12,8 @@ Stripe and identity verification each have **one** card; the settings inside say
 
 The list lives in `packages/core/src/integrations.ts`; the page reads `GET /api/integrations`. Adding an integration is one entry there.
 
+Charging-system (OCS) provisioning has its own guide: [OCS.md](OCS.md).
+
 ## How each one connects
 
 | Pattern | Meaning |

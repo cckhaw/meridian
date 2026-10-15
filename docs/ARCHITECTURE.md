@@ -66,3 +66,5 @@ dev partitions cover shards 0-15 only; usage rating/charging, the invoice design
 Offer behaviour is a set of per-type **switches** stamped onto each offer when it is saved (`behaviourOf`, `offer-config.ts`), and operator-defined **service kinds** (`service-kinds.ts`, migration `0028`) give new services their own identifier, expiry and provisioning instructions. Details in [CATALOG.md](CATALOG.md#switches).
 
 Every external connection is catalogued in `integrations.ts` and shown on the **Integration** page (see [INTEGRATIONS.md](INTEGRATIONS.md)).
+
+Provisioning into the charging system goes through a vendor-neutral queue (`ocs.ts`, migration `0029`) and one connector file per vendor in `ocs-vendors/`; see [OCS.md](OCS.md).

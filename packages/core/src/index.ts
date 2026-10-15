@@ -93,3 +93,6 @@ export * from './stores.js';
 export * from './offer-config.js';
 export * from './service-kinds.js';
 export * from './integrations.js';
+export * from './ocs.js';
+export { OCS_COMMAND_LABEL, OCS_VENDORS, GENERIC_REST_EXAMPLE, TEMPLATE_VARS } from './ocs-vendors/index.js';
+export type { OcsConnector, OcsRequest, OcsResult, OcsCommandName } from './ocs-vendors/index.js';

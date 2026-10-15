@@ -1,3 +1,4 @@
+import { cleanOcsMapping } from './ocs.js';
 import { FULFILMENT_MECHANICS, OFFER_TEMPLATES, ORDER_STEPS, TEMPLATES, switchesOf, switchProblems, type BehaviourSwitches, type FulfilmentMechanic, type OfferTemplate, type OrderStep } from '@meridian/types';
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
@@ -195,6 +196,10 @@ export async function prepareOffer<T extends { kind?: string; template?: string;
   const sk = type.effective.service && !isBuiltinKind(type.effective.service) ? await getServiceKind(q, type.effective.service) : null;
   const days = (o as { validityDays?: number }).validityDays;
   if (sk?.expires) { if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) throw invalid('the validity is 1 to 3650 days'); } else delete (out as { validityDays?: number }).validityDays;
+  // How the charging system knows this plan. Only an offer that starts a service can have one.
+  const mapping = cleanOcsMapping((o as { ocs?: unknown }).ocs);
+  if (mapping && type.effective.service == null) throw invalid('Only an offer that starts a service can have an OCS plan code.');
+  if (mapping) (out as { ocs?: unknown }).ocs = mapping; else delete (out as { ocs?: unknown }).ocs;
   if (type.effective.needsInstallation && out.fulfilment && !out.fulfilment.requiresInstallation && ids) {
     throw invalid('fibre offers need an installation option');
   }
