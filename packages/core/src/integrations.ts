@@ -265,7 +265,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     id: 'device-credit-bureau', group: 'Credit and collections', name: 'Credit profile for device financing', with: 'A credit bureau (REST) that scores a customer from their ID number',
     summary: 'A device on a contract is paid over the contract. With the credit check on, Meridian sends the customer’s ID number (with their consent; only a hash is kept) to the bureau. A score comes back and the score bands set the upfront payment, or the bureau returns the upfront amount itself. Without a bureau, or when it fails, the fallback share applies (or the sale stops, as you choose). A built-in simulator lets you try the flow.',
     maturity: 'BUILT', direction: 'OUT',
-    needs: ['Add the bureau under Integration hub → Finance (kind: credit bureau): address, key, and the names of the ID field and the score or upfront field in its answer', 'Set the score bands and what to do when the bureau fails in Settings → Device financing, then use “Try it”'],
+    needs: ['Add the bureau under Integration → Integration hub → Finance (kind: credit bureau): address, key, and the names of the ID field and the score or upfront field in its answer', 'Set the score bands and what to do when the bureau fails in Settings → Device financing, then use “Try it”'],
     configure: { label: 'Settings → Device financing', href: '/admin/settings?section=device-financing' }, doc: 'FINANCING.md', keywords: 'device financing credit check bureau score upfront payment dup instalment consent id number',
   },
   {

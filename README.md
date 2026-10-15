@@ -50,8 +50,9 @@ Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environme
 | Early termination | Rules and formulas for the charge when a contract ends early | [LIFECYCLE.md](docs/LIFECYCLE.md) |
 | Device financing | Instalments over the contract, credit-check bands, fallback | [FINANCING.md](docs/FINANCING.md) |
 | Dunning rules | Ladders, late fees, QR links, arrangements, collections | [DUNNING.md](docs/DUNNING.md) |
-| Integration hub | OAuth clients, API keys, rate limits, webhooks, TMF 688, field service, network, finance and bureau endpoints, event topics | [INTEGRATION_API.md](docs/INTEGRATION_API.md) |
 | Cases, Donor operators, Numbers & SIMs | SLA matrix and taxonomy, port-in operators, number pools and VIP tiers | [CASES.md](docs/CASES.md), [NUMBERING.md](docs/NUMBERING.md) |
+
+Everything about outside systems is under the **Integration** menu (next to Settings): *Connections* shows each connection and whether it works, and *Integration hub* holds OAuth clients, API keys, rate limits, webhooks, TMF 688 subscriptions, field-service, network, finance and credit-bureau endpoints, and event topics ([INTEGRATION_API.md](docs/INTEGRATION_API.md)).
 
 ## Documentation
 

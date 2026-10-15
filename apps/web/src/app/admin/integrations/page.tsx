@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useApi } from '@/lib/api';
 import { dt } from '@/lib/format';
+import { useRouter } from 'next/navigation';
+import { IntegrationHubSettings } from './integration-hub';
 import { OcsPanel } from './ocs';
 import { KycPanel, PaymentsPanel, StorefrontPanel } from './storefront';
 
@@ -36,7 +38,21 @@ const DIRECTION: Record<Item['direction'], string> = { OUT: 'Meridian sends', IN
 const FILTERS = [{ value: 'all', label: 'All' }, { value: 'action', label: 'Needs action' }, { value: 'working', label: 'Working' }, { value: 'hand', label: 'By hand' }] as const;
 
 export default function IntegrationPage() {
-  return <Suspense fallback={<Spinner />}><Integrations /></Suspense>;
+  return <Suspense fallback={<Spinner />}><IntegrationShell /></Suspense>;
+}
+
+/** Everything about outside connections lives here: the status of each connection, and the hub where credentials, API access, webhooks and endpoints are set up. */
+function IntegrationShell() {
+  const sp = useSearchParams();
+  const router = useRouter();
+  const view = sp.get('view') === 'hub' ? 'hub' : 'connections';
+  const go = (v: 'connections' | 'hub') => router.replace(v === 'hub' ? '/admin/integrations?view=hub' : '/admin/integrations');
+  return (
+    <>
+      <div className="mb-4"><Segmented label="Integration" value={view} options={[{ value: 'connections', label: 'Connections' }, { value: 'hub', label: 'Integration hub' }]} onChange={go} /></div>
+      {view === 'hub' ? <><LargeTitle subtitle="API credentials, rate limits, webhooks, field service, core network, finance and event subscriptions. Secrets are encrypted and never shown again.">Integration hub</LargeTitle><IntegrationHubSettings /></> : <Integrations />}
+    </>
+  );
 }
 
 function Integrations() {

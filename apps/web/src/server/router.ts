@@ -598,7 +598,7 @@ get('/settings/dunning-rules/:id', 'settings:manage', ({ db, params }) => core.g
 patch('/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params, body }) => core.saveDunningRule(db, user.username, dunRule.parse(body) as core.DunningRuleInput, params.id!));
 route('DELETE', '/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params }) => core.deleteDunningRule(db, user.username, params.id!));
 
-// ───────────────────────── integration hub (Settings → Integrations) ─────────────────────────
+// ───────────────────────── integration hub (Integration → Integration hub) ─────────────────────────
 const hubGroup = z.enum(core.HUB_GROUPS);
 const endpointBody = z.object({ group: hubGroup, kind: z.string().max(40), name: z.string().min(1).max(80), url: z.string().max(500).nullish(), fallbackUrl: z.string().max(500).nullish(), timeoutMs: z.number().int().optional(), config: z.record(z.unknown()).optional(), enabled: z.boolean().optional(), secret: z.string().max(20000).optional() });
 const webhookBody = z.object({ kind: z.enum(['OUTBOUND', 'INBOUND', 'TMF688']), name: z.string().min(1).max(80), targetUrl: z.string().max(500).nullish(), authKind: z.enum(['NONE', 'BEARER', 'HMAC']).optional(), secret: z.string().max(2000).optional(), provider: z.string().max(60).nullish(), events: z.array(z.string().max(60)).max(40).optional(), query: z.string().max(500).nullish(), retryMax: z.number().int().optional(), retryBackoffSeconds: z.number().int().optional(), status: z.enum(['ACTIVE', 'PAUSED', 'FAILED']).optional() });

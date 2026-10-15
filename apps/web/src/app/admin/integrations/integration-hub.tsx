@@ -19,7 +19,7 @@ interface Hub {
   webhooks: any[]; topics: any[]; eventTypes: string[]; channels: string[]; scopes: Array<{ id: string; label: string }>;
 }
 
-/** Settings → Integrations: the credentials, endpoints and rules behind every outside connection, in six groups. Secrets are write-only: they are encrypted when saved and never shown again. */
+/** Integration → Integration hub: the credentials, endpoints and rules behind every outside connection, in six groups. Secrets are write-only: they are encrypted when saved and never shown again. */
 export function IntegrationHubSettings() {
   const hub = useApi<Hub>('/settings/integration-hub');
   const [tab, setTab] = useState<Tab>('gateway');
