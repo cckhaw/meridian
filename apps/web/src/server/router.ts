@@ -424,7 +424,7 @@ post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.se
 // ───────────────────────── data migration: exports, templates, jobs ─────────────────────────
 const migrationAny: Permission[] = ['migration:export', 'migration:import'];
 get('/migration/meta', migrationAny, async ({ db, user }) => ({
-  domains: core.DOMAINS, phases: core.PHASES, entities: await core.publishTemplates(db), canUnmask: user.permissions.has('settings:manage'), reasonMin: core.REASON_MIN,
+  domains: core.DOMAINS, phases: core.PHASES, entities: (await core.publishTemplates(db)).map((e) => ({ ...e, rollback: core.canRollBack(e.id) })), canUnmask: user.permissions.has('settings:manage'), reasonMin: core.REASON_MIN,
   canExport: user.permissions.has('migration:export'), canImport: user.permissions.has('migration:import'),
 }));
 get('/migration/templates/:entity', migrationAny, async ({ db, params, query }) => {
@@ -449,6 +449,30 @@ get('/migration/exports/:id/download', 'migration:export', async ({ db, user, pa
 });
 get('/migration/jobs', migrationAny, ({ db, query }) => core.listMigrationJobs(db, { kind: str(query, 'kind'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/migration/jobs/:id', migrationAny, ({ db, params }) => core.getMigrationJob(db, params.id!));
+// Importing: a file is uploaded (in pieces, or straight to the object store), turned into a job, checked, then loaded in slices.
+const uploadBody = z.object({ fileName: z.string().min(1).max(200), totalBytes: z.number().int().min(1).max(5 * 1024 ** 3) });
+post('/migration/uploads', 'migration:import', async ({ db, user, body }) => {
+  const u = await core.createUpload(db, user.username, uploadBody.parse(body));
+  return Response.json({ id: u.id, mode: u.mode, chunks: u.chunks, chunkBytes: u.chunkBytes, presigned: u.presigned ?? null }, { status: 201 });
+});
+post('/migration/uploads/:id/chunks/:n', 'migration:import', async ({ db, user, params, body }) => {
+  const b = z.object({ data: z.string().max(3_000_000) }).parse(body);
+  return core.putChunk(db, user.username, params.id!, Number(params.n), Buffer.from(b.data, 'base64'));
+}, { maxBody: 3_200_000 });
+post('/migration/uploads/:id/complete', 'migration:import', ({ db, user, params }) => core.completeUpload(db, user.username, params.id!));
+post('/migration/uploads/:id/discard', 'migration:import', async ({ db, user, params }) => { await core.discardUpload(db, user.username, params.id!); return { ok: true }; });
+post('/migration/imports', 'migration:import', async ({ db, user, body }) => {
+  const b = z.object({ uploadId: z.string().max(40), entity: z.string().max(40), onError: z.enum(['ABORT', 'SKIP']).optional(), errorThresholdPercent: z.number().min(0).max(100).optional(), batchSize: z.number().int().min(10).max(5000).optional(), autoStart: z.boolean().optional() }).parse(body);
+  return Response.json(await core.createImportJob(db, user.username, b), { status: 201 });
+});
+/** Works on a job for up to about 20 seconds and says where it is. The page calls it while it is open; a scheduler can too. */
+post('/migration/jobs/:id/run', 'migration:import', async ({ db, params }) => { const r = await core.runMigrationSlice(db, params.id!); return { ...r.job, busy: !!r.busy, waitingFor: r.waitingFor ?? null }; });
+post('/migration/jobs/:id/start', 'migration:import', ({ db, user, params }) => core.startImport(db, user.username, params.id!));
+post('/migration/jobs/:id/cancel', 'migration:import', ({ db, user, params }) => core.cancelJob(db, user.username, params.id!));
+post('/migration/jobs/:id/rollback', 'migration:import', ({ db, user, params, body }) => core.rollbackJob(db, user.username, params.id!, z.object({ reason: z.string().max(300).optional() }).parse(body ?? {}).reason));
+get('/migration/jobs/:id/report.csv', migrationAny, async ({ db, params }) => csv(await core.jobReportCsv(db, params.id!), `migration-report-${params.id}.csv`));
+/** For a scheduler: works on whatever import jobs are waiting, so loads go on with nobody watching. */
+post('/migration/run', ['billing:run'], ({ db }) => core.runDueMigrationJobs(db));
 
 // ───────────────────────── charging system (OCS): connector, queue, retries ─────────────────────────
 get('/integrations/ocs', 'settings:manage', ({ db }) => core.ocsOverview(db));

@@ -33,12 +33,13 @@ export const GL = {
   DISBURSEMENT: '1150', // commission payouts sent to the bank, until the bank confirms
   COMMISSION_PAYABLE: '2300', // commission earned and not yet paid
   COMMISSION_EXPENSE: '6200', // dealer and sales-agent commission
+  OPENING_BALANCE: '3900', // the other side of receivables brought over from a previous system: Finance maps it to the migration clearing account
 } as const;
 
 export const GL_NAMES: Record<string, string> = {
   '1100': 'Cash and bank', '1200': 'Accounts receivable', '2100': 'Indirect tax payable', '2200': 'Customer deposits', '6100': 'Bad debt expense',
   '4000': 'Service revenue', '4100': 'Goods revenue', '4900': 'Credit notes and refunds',
-  '1150': 'Commission disbursement clearing', '2300': 'Commission payable', '6200': 'Sales commission expense',
+  '1150': 'Commission disbursement clearing', '2300': 'Commission payable', '6200': 'Sales commission expense', '3900': 'Opening balance clearing (data migration)',
 };
 
 export const INVOICE_TERMS_DAYS = 14;
