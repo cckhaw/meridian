@@ -1,3 +1,4 @@
+import { resolveCasesOfService } from './cases.js';
 import { enqueueOcs } from './ocs.js';
 import { randomUUID } from 'node:crypto';
 import type { EtcQuote } from '@meridian/types';
@@ -373,8 +374,7 @@ export async function completePortOut(db: Db, id: string, actor = 'system', o: {
   if (s.status === 'TERMINATED' && s.terminatedReason === 'PORTED_OUT') return { alreadyDone: true, service: s };
   if (s.status !== 'PORTING_OUT') throw rejected(`service is ${s.status}, not PORTING_OUT`);
   const r = await terminateService(db, id, { reason: 'PORTED_OUT', ported: true, refundDeposit: true, unbilledUsageMinor: o.unbilledUsageMinor, etcAdjust: o.etcAdjust }, actor);
-  await db.query(`UPDATE cases SET status='RESOLVED', notes = notes || $2::jsonb, updated_at=now() WHERE service_id=$1 AND type='MNP_PORT_OUT' AND status IN ('OPEN','IN_PROGRESS')`,
-    [id, JSON.stringify([{ at: new Date().toISOString(), by: actor, text: `Port-out confirmed${o.reference ? ` (clearinghouse ref ${o.reference})` : ''}. Service terminated, closing invoice ${r.invoice?.number ?? 'none (nothing owed)'}.` }])]);
+  await resolveCasesOfService(db, id, 'MNP_PORT_OUT', 'RESOLVED', `Port-out confirmed${o.reference ? ` (clearinghouse ref ${o.reference})` : ''}. Service terminated, closing invoice ${r.invoice?.number ?? 'none (nothing owed)'}.`);
   return { alreadyDone: false, ...r };
 }
 
@@ -383,7 +383,7 @@ export async function cancelPortOut(db: Db, id: string, actor = 'system') {
     const s = await lockService(q, id);
     if (s.status !== 'PORTING_OUT') throw rejected(`service is ${s.status}, not PORTING_OUT`);
     await q.query(`UPDATE services SET status='ACTIVE', version=version+1, updated_at=now() WHERE id=$1`, [id]);
-    await q.query(`UPDATE cases SET status='CLOSED', updated_at=now() WHERE service_id=$1 AND type='MNP_PORT_OUT' AND status IN ('OPEN','IN_PROGRESS')`, [id]);
+    await resolveCasesOfService(q, id, 'MNP_PORT_OUT', 'CLOSED_AUTO', 'Port-out was cancelled.');
     await audit(q, actor, 'service', id, 'PORT_OUT_CANCELLED');
     return (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!;
   });

@@ -610,9 +610,10 @@ function redact360(u: SessionUser, c: core.Row) {
 const noBalance = (u: SessionUser, accounts: core.Row[]) => (u.permissions.has('billing:read') ? accounts : accounts.map((a) => ({ ...a, balanceMinor: null })));
 get('/customers/:id', 'customer:read', async ({ db, user, params }) => { assertCustomer(user, params.id!); return redact360(user, await core.customer360(db, params.id!)); });
 patch('/customers/:id', 'customer:write', async ({ db, user, params, body }) => {
-  const b = z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional(), dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional() }).parse(body);
+  const b = z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional(), dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional(), vip: z.boolean().optional() }).parse(body);
+  if (b.vip !== undefined && !user.permissions.has('settings:manage')) throw forbidden('Only an administrator can mark a customer as VIP (it changes their support SLA).');
   const d = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: b.email, phone: b.phone, dateOfBirth: b.dateOfBirth, gender: b.gender, address: b.address }, { partial: true });
-  const r = await core.updateCustomer(db, params.id!, { displayName: b.displayName, status: b.status, ...d });
+  const r = await core.updateCustomer(db, params.id!, { displayName: b.displayName, status: b.status, vip: b.vip, ...d });
   await core.audit(db, user.username, 'customer', params.id!, 'UPDATED');
   return r;
 });
@@ -1166,16 +1167,62 @@ get('/commission/payouts/:id/file', 'commission:settle', async ({ db, user, para
 post('/commission/payouts/:id/confirm', 'commission:settle', ({ db, user, params }) => core.confirmPayoutBatch(db, params.id!, user.username));
 
 // ───────────────────────── cases / inventory ─────────────────────────
-get('/cases', 'case:read', ({ db, user, query }) => core.listCases(db, { customerId: user.scope.customerId ?? str(query, 'customerId'), status: str(query, 'status'), type: str(query, 'type'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+const severity = z.enum(core.SEVERITIES);
+const caseNote = z.string().max(4000);
+get('/cases', 'case:read', ({ db, user, query }) => core.listCases(db, { customerId: user.scope.customerId ?? str(query, 'customerId'), status: str(query, 'status'), type: str(query, 'type'), severity: str(query, 'severity'),
+  assignee: str(query, 'assignee'), unassigned: query.get('unassigned') === '1', issueTypeId: str(query, 'issueTypeId'), breached: query.get('breached') === '1', q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+/** What the case screens need: the classification tree, severities, tiers, statuses with the moves each allows, channels and the SLA matrix. */
+get('/cases/meta', 'case:read', async ({ db }) => ({ taxonomy: await core.listCaseTaxonomy(db, { activeOnly: true }), severities: core.SEVERITIES, tiers: core.TIERS, statuses: core.CASE_STATUSES, transitions: core.CASE_TRANSITIONS, channels: core.INTERACTION_CHANNELS, sla: await core.listSla(db), settings: await core.getCaseSettings(db) }));
+/** Staff a case can be assigned to. */
+get('/cases/assignees', 'case:write', async ({ db, query }) => {
+  const t = (str(query, 'q') ?? '').toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+  return { items: (await db.query(`SELECT username, display_name FROM users WHERE status='ACTIVE' AND ($1 = '' OR lower(username) LIKE $2 OR lower(display_name) LIKE $2) ORDER BY username LIMIT 30`, [t, `%${t}%`])).rows };
+});
 post('/cases', 'case:create', async ({ db, user, body }) => {
-  const b = z.object({ customerId: uuid.optional(), serviceId: uuid.optional(), type: z.enum(core.CASE_TYPES), subject: z.string().min(1).max(200), priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).optional(), note: z.string().max(2000).optional() }).parse(body);
+  const b = z.object({ customerId: uuid.optional(), serviceId: uuid.optional(), type: z.enum(core.CASE_TYPES).optional(), issueTypeId: z.string().max(120).optional(), subject: z.string().min(1).max(200), severity: severity.optional(),
+    priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).optional(), note: z.string().max(2000).optional(), channel: z.enum(core.INTERACTION_CHANNELS).optional(), interactionIds: z.array(uuid).max(200).optional() }).parse(body);
   const customerId = user.scope.customerId ?? b.customerId;
   if (!customerId) throw new DomainError('INVALID', 'customerId is required');
-  if (user.scope.customerId && b.type === 'MNP_PORT_OUT') throw forbidden();
+  if (user.scope.customerId && (b.type === 'MNP_PORT_OUT' || b.severity || b.priority || b.interactionIds)) throw forbidden();   // a customer opens a case; staff decide how severe it is
   return core.createCase(db, { ...b, customerId }, user.username);
 });
 get('/cases/:id', 'case:read', async ({ db, user, params }) => { const c = await core.getCase(db, params.id!); assertCustomer(user, c.customerId); return c; });
-patch('/cases/:id', 'case:write', ({ db, user, params, body }) => core.updateCase(db, params.id!, z.object({ status: z.string().optional(), priority: z.string().optional(), note: z.string().max(2000).optional() }).parse(body), user.username));
+get('/cases/:id/timeline', 'case:read', async ({ db, user, params }) => { assertCustomer(user, (await core.getCase(db, params.id!)).customerId); return { items: await core.caseTimeline(db, params.id!) }; });
+patch('/cases/:id', 'case:write', ({ db, user, params, body }) => core.updateCase(db, params.id!, z.object({ status: z.string().optional(), priority: z.string().optional(), note: caseNote.optional(), resolution: z.string().max(2000).optional(), reason: z.string().max(500).optional() }).parse(body), user.username));
+post('/cases/:id/status', 'case:write', ({ db, user, params, body }) => { const b = z.object({ status: z.enum(core.CASE_STATUSES), note: caseNote.optional(), resolution: z.string().max(2000).optional(), reason: z.string().max(500).optional() }).parse(body); return core.transitionCase(db, params.id!, b.status, { actor: user.username, note: b.note, resolution: b.resolution, reason: b.reason }); });
+post('/cases/:id/assign', 'case:write', ({ db, user, params, body }) => { const b = z.object({ assignee: z.string().max(80).nullable(), team: z.string().max(80).nullable().optional() }).parse(body); return core.assignCase(db, params.id!, b, user.username); });
+post('/cases/:id/severity', 'case:write', ({ db, user, params, body }) => { const b = z.object({ severity, why: z.string().max(300).optional() }).parse(body); return core.setSeverity(db, params.id!, b.severity, user.username, b.why); });
+post('/cases/:id/notes', 'case:write', ({ db, user, params, body }) => core.addCaseNote(db, params.id!, z.object({ text: caseNote }).parse(body).text, user.username));
+post('/cases/:id/interactions', 'case:write', ({ db, user, params, body }) => core.attachInteractions(db, params.id!, z.object({ interactionIds: z.array(uuid).min(1).max(200) }).parse(body).interactionIds, user.username));
+
+// ── interactions: every touchpoint with a customer ──
+get('/interactions', 'case:read', ({ db, user, query }) => {
+  const customerId = user.scope.customerId ?? str(query, 'customerId');
+  return core.listInteractions(db, { customerId, caseId: str(query, 'caseId'), channel: str(query, 'channel'), unattached: query.get('unattached') === '1', limit: num(query, 'limit'), cursor: str(query, 'cursor') });
+});
+post('/interactions', 'case:create', async ({ db, user, body }) => {
+  const b = z.object({ customerId: uuid, channel: z.enum(core.INTERACTION_CHANNELS), direction: z.enum(core.DIRECTIONS), subject: z.string().min(1).max(200), summary: z.string().max(8000).optional(), serviceId: uuid.optional(), caseId: uuid.optional(),
+    agent: z.string().max(80).optional(), sessionRef: z.string().max(120).optional(), durationSec: z.number().int().min(0).max(86_400).optional(), occurredAt: z.string().max(40).optional(), metadata: z.record(z.unknown()).optional() }).parse(body);
+  assertCustomer(user, b.customerId);
+  return Response.json(await core.logInteraction(db, { ...b, agent: b.agent ?? user.username }, user.username), { status: 201 });
+});
+post('/interactions/:id/case', 'case:create', ({ db, user, params, body }) => {
+  const b = z.object({ issueTypeId: z.string().max(120).optional(), type: z.enum(core.CASE_TYPES).optional(), subject: z.string().max(200).default(''), severity: severity.optional(), note: z.string().max(2000).optional() }).parse(body);
+  return core.caseFromInteraction(db, params.id!, b, user.username);
+});
+post('/interactions/:id/detach', 'case:write', ({ db, user, params }) => core.detachInteraction(db, params.id!, user.username));
+
+// ── Settings → Cases: classification, SLA matrix, closing rules ──
+const nodeBody = z.object({ name: z.string().max(80), parentId: z.string().max(120).nullable().optional(), description: z.string().max(300).nullable().optional(), sortOrder: z.number().int().min(0).max(10_000).optional(), active: z.boolean().optional(),
+  caseType: z.enum(core.CASE_TYPES).optional(), defaultSeverity: severity.optional(), needsDispatch: z.boolean().optional(), skills: z.array(z.string().max(40)).max(12).optional(), equipment: z.array(z.string().max(40)).max(12).optional() });
+get('/settings/cases/taxonomy', 'settings:manage', async ({ db }) => ({ items: await core.listCaseTaxonomy(db) }));
+post('/settings/cases/taxonomy', 'settings:manage', async ({ db, user, body }) => Response.json(await core.createCaseNode(db, user.username, nodeBody.parse(body)), { status: 201 }));
+patch('/settings/cases/taxonomy/:id', 'settings:manage', ({ db, user, params, body }) => core.updateCaseNode(db, user.username, decodeURIComponent(params.id!), nodeBody.partial().omit({ parentId: true }).parse(body)));
+route('DELETE', '/settings/cases/taxonomy/:id', 'settings:manage', ({ db, user, params }) => core.deleteCaseNode(db, user.username, decodeURIComponent(params.id!)));
+get('/settings/cases/sla', 'settings:manage', async ({ db }) => ({ items: await core.listSla(db) }));
+post('/settings/cases/sla', 'settings:manage', async ({ db, user, body }) => ({ items: await core.setSla(db, user.username, z.object({ rows: z.array(z.object({ tier: z.enum(core.TIERS), severity, firstResponseMinutes: z.number().int(), resolutionMinutes: z.number().int(), warnPercent: z.number().int() })).min(1).max(9) }).parse(body).rows) }));
+get('/settings/cases', 'settings:manage', ({ db }) => core.getCaseSettings(db));
+post('/settings/cases', 'settings:manage', ({ db, user, body }) => core.setCaseSettings(db, user.username, z.object({ autoCloseHours: z.number().int(), reopenDays: z.number().int(), customerResponseHours: z.number().int() }).parse(body)));
 get('/inventory', 'inventory:read', ({ db, user, query }) => core.listStock(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/inventory/locations', 'inventory:read', async ({ db, user }) => ({ items: user.scope.storeId ? [user.scope.storeId] : await core.listStockLocations(db), warehouses: user.scope.storeId ? [] : (await core.listWarehouses(db)).filter((w) => w.status === 'ACTIVE').map((w) => ({ id: w.id, name: w.name })) }));
 const ownStore = (user: SessionUser, locationId: string) => { if (user.scope.storeId && locationId !== user.scope.storeId) throw forbidden('You can only work on your own store’s stock.'); };

@@ -1,3 +1,4 @@
+import { ACTIVE_SQL } from './cases.js';
 import type { OfferNode } from '@meridian/types';
 import { monthlyFee } from './catalog.js';
 import { GL, GL_NAMES } from './config.js';
@@ -80,7 +81,7 @@ async function computeDashboard(q: Queryable): Promise<Row> {
     one(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS receivable,
         COALESCE(sum(total_minor - paid_minor - credited_minor) FILTER (WHERE status='OVERDUE'),0) AS overdue FROM invoices WHERE status IN ('ISSUED','OVERDUE')`),
     one(`SELECT COALESCE(sum(credit_minor - debit_minor),0) AS revenue FROM gl_entries WHERE account_code IN ('4000','4100','4900')`),
-    one(`SELECT count(*) AS open FROM cases WHERE status IN ('OPEN','IN_PROGRESS')`),
+    one(`SELECT count(*) AS open FROM cases WHERE status IN ${ACTIVE_SQL}`),
     q.query(`SELECT s.offer_id, c.name, c.data, c.kind, count(*) AS n FROM services s JOIN catalog_nodes c ON c.id = s.offer_id WHERE s.status='ACTIVE' GROUP BY s.offer_id, c.name, c.data, c.kind`),
     q.query(`SELECT state, count(*) AS n FROM orders GROUP BY state ORDER BY n DESC`),
     q.query(`SELECT o.id, o.number, o.state, o.total_minor, o.currency, o.created_at, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.created_at DESC LIMIT 6`),
