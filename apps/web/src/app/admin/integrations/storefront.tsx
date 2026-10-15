@@ -1,85 +1,152 @@
 'use client';
 import { Alert, Badge, Button, Card, Field, Input, SectionTitle, Select, Spinner } from '@meridian/ui';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { del, post, useAction, useApi } from '@/lib/api';
 import { dt } from '@/lib/format';
 
-interface StoreSettings { kycMode: 'manual' | 'auto'; minAge: number; requireKycForServices: boolean; termsUrl: string; privacyUrl: string; termsVersion: string; applicationTtlHours: number; gateways: { enabled: string[]; default: string | null } }
+/**
+ * The three panels that used to be one "Store-front" form. Each integration owns its own settings and says where they apply: the store-front, the CRM
+ * (staff selling), or both. They all read and write the same stored settings, one panel's save never touches another's fields.
+ */
+interface StoreSettings { kycMode: 'manual' | 'auto'; minAge: number; requireKycForServices: boolean; termsUrl: string; privacyUrl: string; termsVersion: string; applicationTtlHours: number; gateways: { enabled: string[]; default: string | null; crm: string[] } }
+interface GatewayInfo { id: string; label: string; configured: boolean; paymentLink: boolean }
 
-export function StorefrontSettings() {
+function useStore() {
   const { data, error, loading, reload } = useApi('/settings/store');
-  if (loading && !data) return <Spinner />;
-  if (error || !data) return <Alert>{error ?? 'Could not load'}</Alert>;
+  return { data, error, loading, reload };
+}
+function Loading({ s, children }: { s: ReturnType<typeof useStore>; children: (d: any) => ReactNode }) {
+  if (s.loading && !s.data) return <Spinner />;
+  if (s.error || !s.data) return <Alert>{s.error ?? 'Could not load'}</Alert>;
+  return <>{children(s.data)}</>;
+}
+
+/** Where a setting applies. */
+function Where({ store, crm }: { store?: boolean; crm?: boolean }) {
+  return <span className="inline-flex shrink-0 gap-1">{store && <Badge tone="neutral">Store-front</Badge>}{crm && <Badge tone="neutral">CRM</Badge>}</span>;
+}
+function Row({ title, hint, where, children }: { title: string; hint?: ReactNode; where: ReactNode; children?: ReactNode }) {
   return (
-    <div className="space-y-5">
-      <Rules initial={data.store} gateways={data.gateways} webhookPath={data.webhookPath} onSaved={reload} />
-      <Keys clients={data.clients} onChange={reload} />
+    <div className="space-y-2 py-3">
+      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="font-medium">{title}</div>{hint && <div className="text-footnote text-label2">{hint}</div>}</div>{where}</div>
+      {children}
+    </div>
+  );
+}
+const checkbox = 'mt-0.5 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]';
+
+function useSave(initial: StoreSettings, reload: () => void) {
+  const [f, setF] = useState<StoreSettings>({ ...initial, gateways: { ...initial.gateways, crm: initial.gateways.crm ?? [] } });
+  const act = useAction(reload);
+  const set = <K extends keyof StoreSettings>(k: K, v: StoreSettings[K]) => setF((s) => ({ ...s, [k]: v }));
+  return { f, setF, set, act, save: (msg: string) => void act.run(() => post('/settings/store', f), msg) };
+}
+function SaveBar({ act, label, onSave }: { act: ReturnType<typeof useAction>; label: string; onSave: () => void }) {
+  return (
+    <div className="space-y-3 pt-3">
+      {act.error && <Alert>{act.error}</Alert>}
+      {act.ok && <Alert tone="success">{act.ok}</Alert>}
+      <Button type="button" onClick={onSave} disabled={act.busy}>{act.busy ? 'Saving…' : label}</Button>
     </div>
   );
 }
 
-function Rules({ initial, gateways, webhookPath, onSaved }: { initial: StoreSettings; gateways: Array<{ id: string; label: string; configured: boolean }>; webhookPath: string; onSaved: () => void }) {
-  const [f, setF] = useState<StoreSettings>(initial);
-  const act = useAction(onSaved);
-  const set = <K extends keyof StoreSettings>(k: K, v: StoreSettings[K]) => setF((s) => ({ ...s, [k]: v }));
-  const enabled = new Set(f.gateways.enabled);
-  const toggleGw = (id: string, on: boolean) => {
-    const list = on ? [...enabled, id] : [...enabled].filter((x) => x !== id);
-    setF({ ...f, gateways: { enabled: list, default: list.includes(f.gateways.default ?? '') ? f.gateways.default : list[0] ?? null } });
-  };
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+// ───────────────────────── store-front: keys, terms, sign-up retention ─────────────────────────
+export function StorefrontPanel() {
+  const s = useStore();
+  return <Loading s={s}>{(d) => <StorefrontForm initial={d.store} clients={d.clients} reload={s.reload} />}</Loading>;
+}
+function StorefrontForm({ initial, clients, reload }: { initial: StoreSettings; clients: any[]; reload: () => void }) {
+  const { f, set, act, save } = useSave(initial, reload);
   return (
-    <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); void act.run(() => post('/settings/store', f), 'Store-front settings saved.'); }}>
+    <div className="space-y-5">
+      <Keys clients={clients} onChange={reload} />
       <Card>
-        <SectionTitle>Identity verification (KYC)</SectionTitle>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Online sign-ups are approved by" hint="Manual: every application is reviewed by a compliance officer. Automatic: ones passing all rules are approved without review (use with an eKYC provider).">
-            <Select value={f.kycMode} onChange={(e) => set('kycMode', e.target.value as StoreSettings['kycMode'])}><option value="manual">A compliance officer (recommended)</option><option value="auto">Automatic rules only</option></Select>
-          </Field>
-          <Field label="Minimum age"><Input type="number" min={0} max={100} value={f.minAge} onChange={(e) => set('minAge', Number(e.target.value))} /></Field>
-          <label className="flex min-h-tap items-start gap-3 sm:col-span-2"><input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.requireKycForServices} onChange={(e) => set('requireKycForServices', e.target.checked)} />
-            <span><span className="block font-medium">Require verified identity before selling any service</span><span className="text-footnote text-label2">Applies to every channel, including staff creating orders in the CRM. Turn on once your existing customers are verified, or they cannot be sold new services.</span></span></label>
-        </div>
-      </Card>
-
-      <Card>
-        <SectionTitle>Terms and privacy</SectionTitle>
+        <SectionTitle>Terms and sign-ups</SectionTitle>
+        <p className="mb-3 text-footnote text-label2">Shown to online customers and recorded with their consent. Identity verification and payment have their own panels below.</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Terms and conditions link"><Input type="url" placeholder="https://…" value={f.termsUrl} onChange={(e) => set('termsUrl', e.target.value)} /></Field>
           <Field label="Privacy notice link"><Input type="url" placeholder="https://…" value={f.privacyUrl} onChange={(e) => set('privacyUrl', e.target.value)} /></Field>
           <Field label="Terms version" hint="Recorded with each customer’s acceptance. Change it when the terms change."><Input value={f.termsVersion} onChange={(e) => set('termsVersion', e.target.value)} maxLength={20} /></Field>
           <Field label="Keep unfinished sign-ups for (hours)"><Input type="number" min={1} max={720} value={f.applicationTtlHours} onChange={(e) => set('applicationTtlHours', Number(e.target.value))} /></Field>
         </div>
+        <SaveBar act={act} label="Save" onSave={() => save('Store-front settings saved.')} />
       </Card>
+    </div>
+  );
+}
 
-      <Card>
-        <SectionTitle>Payment gateways</SectionTitle>
-        <p className="mb-3 text-subhead text-label2">Online payments in the store-front. A gateway is offered only when it is switched on here <em>and</em> its keys are set on the server.</p>
-        <ul className="divide-y divide-separator">
-          {gateways.map((g) => (
-            <li key={g.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:gap-3">
-              <label className="flex min-h-tap items-center gap-3 sm:flex-1"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={enabled.has(g.id)} onChange={(e) => toggleGw(g.id, e.target.checked)} /><span className="font-medium">{g.label}</span></label>
-              <div className="flex flex-wrap items-center gap-3 pl-8 sm:pl-0">
-              <Badge tone={g.configured ? 'success' : 'warning'}>{g.configured ? 'Keys configured' : 'Keys not set'}</Badge>
-              <label className="flex min-h-[32px] items-center gap-2 text-subhead"><input type="radio" name="default-gw" disabled={!enabled.has(g.id)} checked={f.gateways.default === g.id} onChange={() => setF({ ...f, gateways: { ...f.gateways, default: g.id } })} />Default</label>
-              </div>
-            </li>
-          ))}
-        </ul>
-        <details className="mt-3 rounded-control bg-surface2 p-3 text-subhead">
-          <summary className="cursor-pointer font-medium">Set up Stripe</summary>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-label2">
-            <li>In the server environment set <code>MERIDIAN_STRIPE_SECRET_KEY</code> (sk_…), <code>MERIDIAN_STRIPE_PUBLISHABLE_KEY</code> (pk_…) and <code>MERIDIAN_STRIPE_WEBHOOK_SECRET</code> (whsec_…).</li>
-            <li>In Stripe → Developers → Webhooks add the endpoint <code className="break-all">{origin}{webhookPath}</code> and subscribe to <code>payment_intent.succeeded</code> and <code>payment_intent.payment_failed</code>.</li>
-            <li>Redeploy, switch Stripe on above and save. Orders are confirmed only by Stripe’s signed webhook.</li>
-          </ol>
-          <p className="mt-2 text-label2">Another provider can be added later: it implements the same small gateway interface and appears in this list.</p>
-        </details>
-      </Card>
-      {act.error && <Alert>{act.error}</Alert>}
-      {act.ok && <Alert tone="success">{act.ok}</Alert>}
-      <Button type="submit" disabled={act.busy}>{act.busy ? 'Saving…' : 'Save store-front settings'}</Button>
-    </form>
+// ───────────────────────── identity verification (KYC): store-front and CRM ─────────────────────────
+export function KycPanel() {
+  const s = useStore();
+  return <Loading s={s}>{(d) => <KycForm initial={d.store} reload={s.reload} />}</Loading>;
+}
+function KycForm({ initial, reload }: { initial: StoreSettings; reload: () => void }) {
+  const { f, set, act, save } = useSave(initial, reload);
+  return (
+    <Card>
+      <SectionTitle>Identity verification (KYC)</SectionTitle>
+      <p className="text-footnote text-label2">One set of rules for both ways of selling. The badge on each line says where it applies.</p>
+      <div className="divide-y divide-separator">
+        <Row title="Online sign-ups are approved by" where={<Where store />}
+          hint="Manual: a compliance officer reviews every application. Automatic: applications that pass every rule are approved without review (only with an eKYC provider behind it).">
+          <Select aria-label="Online sign-ups are approved by" value={f.kycMode} onChange={(e) => set('kycMode', e.target.value as StoreSettings['kycMode'])}><option value="manual">A compliance officer (recommended)</option><option value="auto">Automatic rules only</option></Select>
+        </Row>
+        <Row title="Staff check in person" where={<Where crm />} hint="In the CRM a member of staff sights the original ID and confirms the face matches. This is always done by a person; there is nothing to switch." />
+        <Row title="Minimum age" where={<Where store crm />} hint="Applicants under this age are refused, online and in the CRM.">
+          <div className="w-32"><Input type="number" aria-label="Minimum age" min={0} max={100} value={f.minAge} onChange={(e) => set('minAge', Number(e.target.value))} /></div>
+        </Row>
+        <Row title="Verified identity before a service is sold" where={<Where store crm />}
+          hint="Online, a customer is always verified before they can order. Here you choose whether staff in the CRM may sell a service to a customer who has not been verified yet. Turn on once your existing customers are verified, or they cannot be sold new services.">
+          <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className={checkbox} checked disabled readOnly /><span><span className="block">Store-front</span><span className="text-footnote text-label2">Always required</span></span></label>
+          <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className={checkbox} checked={f.requireKycForServices} onChange={(e) => set('requireKycForServices', e.target.checked)} /><span><span className="block">CRM</span><span className="text-footnote text-label2">Require it for every service sold by staff</span></span></label>
+        </Row>
+      </div>
+      <SaveBar act={act} label="Save identity rules" onSave={() => save('Identity verification settings saved.')} />
+    </Card>
+  );
+}
+
+// ───────────────────────── payment gateways: store-front and CRM ─────────────────────────
+export function PaymentsPanel({ webhookPath }: { webhookPath?: string }) {
+  const s = useStore();
+  return <Loading s={s}>{(d) => <PaymentsForm initial={d.store} gateways={d.gateways} webhookPath={webhookPath ?? d.webhookPath} reload={s.reload} />}</Loading>;
+}
+function PaymentsForm({ initial, gateways, webhookPath, reload }: { initial: StoreSettings; gateways: GatewayInfo[]; webhookPath: string; reload: () => void }) {
+  const { f, setF, act, save } = useSave(initial, reload);
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const store = new Set(f.gateways.enabled), crm = new Set(f.gateways.crm);
+  const shown = gateways.filter((g) => g.configured || g.id === 'stripe');
+  const toggleStore = (id: string, on: boolean) => {
+    const list = on ? [...store, id] : [...store].filter((x) => x !== id);
+    setF({ ...f, gateways: { ...f.gateways, enabled: list, default: list.includes(f.gateways.default ?? '') ? f.gateways.default : list[0] ?? null } });
+  };
+  const toggleCrm = (id: string, on: boolean) => setF({ ...f, gateways: { ...f.gateways, crm: on ? [...crm, id] : [...crm].filter((x) => x !== id) } });
+  return (
+    <Card>
+      <SectionTitle>Where each gateway is used</SectionTitle>
+      <p className="text-footnote text-label2">A gateway is offered only where it is switched on here <em>and</em> its keys are set on the server. Orders are always confirmed by the provider’s signed webhook.</p>
+      <ul className="divide-y divide-separator">
+        {shown.map((g) => (
+          <li key={g.id} className="space-y-1 py-3">
+            <div className="flex flex-wrap items-center gap-3"><span className="font-medium">{g.label}</span><Badge tone={g.configured ? 'success' : 'warning'}>{g.configured ? 'Keys configured' : 'Keys not set'}</Badge></div>
+            <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className={checkbox} checked={store.has(g.id)} onChange={(e) => toggleStore(g.id, e.target.checked)} /><span><span className="block">Store-front</span><span className="text-footnote text-label2">Customers pay by card online at checkout.</span></span></label>
+            {store.has(g.id) && <label className="ml-8 flex min-h-[32px] items-center gap-2 text-subhead"><input type="radio" name="default-gw" checked={f.gateways.default === g.id} onChange={() => setF({ ...f, gateways: { ...f.gateways, default: g.id } })} />First choice in the store-front</label>}
+            <label className={`flex min-h-tap items-start gap-3 ${g.paymentLink ? '' : 'opacity-60'}`}><input type="checkbox" className={checkbox} disabled={!g.paymentLink} checked={crm.has(g.id)} onChange={(e) => toggleCrm(g.id, e.target.checked)} /><span><span className="block">CRM</span><span className="text-footnote text-label2">{g.paymentLink ? 'Staff send the customer a card payment link from the order (the customer pays on their own phone). Card details are never entered into the CRM.' : 'Not available: this gateway has no payment link, so staff record its payments by hand.'}</span></span></label>
+          </li>
+        ))}
+      </ul>
+      <details className="mt-3 rounded-control bg-surface2 p-3 text-subhead">
+        <summary className="cursor-pointer font-medium">Set up Stripe</summary>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-label2">
+          <li>In the server environment set <code>MERIDIAN_STRIPE_SECRET_KEY</code> (sk_…), <code>MERIDIAN_STRIPE_PUBLISHABLE_KEY</code> (pk_…) and <code>MERIDIAN_STRIPE_WEBHOOK_SECRET</code> (whsec_…).</li>
+          <li>In Stripe → Developers → Webhooks add the endpoint <code className="break-all">{origin}{webhookPath}</code> and subscribe to <code>payment_intent.succeeded</code>, <code>payment_intent.payment_failed</code> and <code>checkout.session.completed</code>.</li>
+          <li>Redeploy, switch Stripe on above for the store-front, the CRM or both, and save.</li>
+        </ol>
+        <p className="mt-2 text-label2">Another provider can be added later: it implements the same small gateway interface and appears in this list.</p>
+      </details>
+      <SaveBar act={act} label="Save payment settings" onSave={() => save('Payment settings saved.')} />
+    </Card>
   );
 }
 

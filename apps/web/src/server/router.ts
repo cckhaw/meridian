@@ -135,7 +135,7 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
 });
 get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
-get('/meta', null, async ({ db, user }) => ({ ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), customers: await core.getCustomerSettings(db), billCycles: await core.getBillCycles(db) }));
+get('/meta', null, async ({ db, user }) => ({ ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), cardLink: (await core.activeGateways(db, process.env, 'CRM')).list.some((g) => !!g.createPaymentLink), customers: await core.getCustomerSettings(db), billCycles: await core.getBillCycles(db) }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', ({ db }) => core.listRoles(db));
@@ -399,11 +399,11 @@ post('/kyc/cases/:id/decision', 'kyc:review', async ({ db, user, params, body })
 // ───────────────────────── store settings and API keys (super user) ─────────────────────────
 const storeSettingsSchema = z.object({
   kycMode: z.enum(['manual', 'auto']), minAge: z.number().int(), requireKycForServices: z.boolean(), termsUrl: z.string().max(300), privacyUrl: z.string().max(300), termsVersion: z.string().max(20),
-  applicationTtlHours: z.number().int(), gateways: z.object({ enabled: z.array(z.string().max(20)).max(10), default: z.string().max(20).nullable() }),
+  applicationTtlHours: z.number().int(), gateways: z.object({ enabled: z.array(z.string().max(20)).max(10), default: z.string().max(20).nullable(), crm: z.array(z.string().max(20)).max(10).default([]) }),
 });
 get('/settings/store', 'settings:manage', async ({ db }) => ({
   store: await core.getStoreSettings(db),
-  gateways: Object.values(core.GATEWAYS).map((g) => ({ id: g.id, label: g.label, configured: g.configured() })),
+  gateways: Object.values(core.GATEWAYS).map((g) => ({ id: g.id, label: g.label, configured: g.configured(), paymentLink: !!g.createPaymentLink })),
   clients: await core.listApiClients(db),
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
@@ -837,6 +837,13 @@ post('/orders/:id/actions', null, async ({ db, user, params, body }) => {
   if (a.type === 'cancel') return core.cancelOrder(db, params.id!, a.reason, user.username, { groups: a.groups, canOverride, initiatedBy: user.scope.customerId ? 'CUSTOMER' : 'STAFF' });
   if (a.type === 'return') return core.returnGoods(db, params.id!, { reason: a.reason, deductionMinor: a.deductionMinor, condition: a.condition }, user.username, { canOverride });
   return core.advanceOrder(db, params.id!, a, user.username);
+});
+/** A card payment page for the customer to open on their own phone, for an order waiting for money. Only through a gateway switched on for the CRM. */
+post('/orders/:id/payment-link', null, async ({ db, user, params, req }) => {
+  need(user, 'order:payment');
+  assertOrder(user, await core.getOrder(db, params.id!));
+  const origin = new URL(req.url).origin;
+  return core.createPaymentLink(db, params.id!, user.username, { returnUrl: `${origin}/pay/done` });
 });
 
 // ───────────────────────── billing ─────────────────────────

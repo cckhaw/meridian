@@ -1,6 +1,14 @@
 # Integrations
 
-**Integration** (left menu, below Settings; super user only) lists every connection between Meridian and another system, grouped by function. Each entry says what it is for, how it connects, what you must provide, the environment variables involved (shown as *set* or *not set*, never by value), the API the other side calls, the outbox instructions Meridian queues, and a live status. The store-front's API keys, payment gateways, sign-up rules and terms moved here from Settings (old links still land in the right place).
+**Integration** (left menu, below Settings; super user only) lists every connection between Meridian and another system, grouped by function. Each entry says what it is for, how it connects, what you must provide, the environment variables involved (shown as *set* or *not set*, never by value), the API the other side calls, the outbox instructions Meridian queues, and a live status. The store-front's API keys and terms moved here from Settings (old links still land in the right place).
+
+## One place per integration, with where it applies
+
+Stripe and identity verification each have **one** card; the settings inside say where they apply: the store-front, the CRM (staff selling), or both.
+
+* **Payment gateways.** For each gateway, tick *Store-front* (customers pay by card at online checkout) and/or *CRM*. In the CRM, an order waiting for card payment shows **Get card payment link**: staff send the customer a Stripe-hosted page to open on their own phone. Card details are never typed into the CRM. The order is released by Stripe's signed webhook (`checkout.session.completed`), exactly as online. A gateway without a payment link (the development test gateway) cannot be switched on for the CRM.
+* **Identity verification (KYC).** Each line is marked *Store-front*, *CRM* or both. Sign-up approval mode is store-front only. The in-person check is always a person, in the CRM. Minimum age applies to both. *Verified identity before a service is sold*: online it is always required; for the CRM it is a switch.
+* **Store-front.** API keys, terms and privacy links, and how long unfinished sign-ups are kept.
 
 The list lives in `packages/core/src/integrations.ts`; the page reads `GET /api/integrations`. Adding an integration is one entry there.
 

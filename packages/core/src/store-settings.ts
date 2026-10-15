@@ -10,18 +10,22 @@ export interface StoreSettings {
   /** manual: every online sign-up is reviewed by a person. auto: applications that pass every rule are approved without review (use with an eKYC provider). */
   kycMode: 'manual' | 'auto';
   minAge: number;
-  /** When on, no channel (including staff in the CRM) can sell a service to a customer who has not been KYC-verified. */
+  /** When on, staff in the CRM cannot sell a service to a customer who has not been KYC-verified. (The store-front always requires an approved identity application.) */
   requireKycForServices: boolean;
   termsUrl: string;
   privacyUrl: string;
   /** Shown to the customer and recorded with their consent; bump it when the terms change. */
   termsVersion: string;
   applicationTtlHours: number;
-  gateways: { enabled: string[]; default: string | null };
+  /**
+   * Payment gateways: `enabled` are offered in the store-front (with `default` as the first choice); `crm` are offered to staff in the CRM, who send the
+   * customer a card payment link from the order. A gateway can be on in either, both or neither.
+   */
+  gateways: { enabled: string[]; default: string | null; crm?: string[] };
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
-  kycMode: 'manual', minAge: 18, requireKycForServices: false, termsUrl: '', privacyUrl: '', termsVersion: '1', applicationTtlHours: 72, gateways: { enabled: [], default: null },
+  kycMode: 'manual', minAge: 18, requireKycForServices: false, termsUrl: '', privacyUrl: '', termsVersion: '1', applicationTtlHours: 72, gateways: { enabled: [], default: null, crm: [] },
 };
 
 export async function getStoreSettings(q: Queryable): Promise<StoreSettings> {
@@ -35,8 +39,9 @@ export async function setStoreSettings(q: Queryable, actor: string, input: Store
   if (!Number.isInteger(input.applicationTtlHours) || input.applicationTtlHours < 1 || input.applicationTtlHours > 24 * 30) throw invalid('applications can be kept open for 1 hour to 30 days');
   for (const u of [input.termsUrl, input.privacyUrl]) if (u && !/^https?:\/\/\S+$/.test(u)) throw invalid('terms and privacy links must be http(s) URLs');
   if (!input.termsVersion.trim() || input.termsVersion.length > 20) throw invalid('terms version must be 1–20 characters');
-  for (const g of input.gateways.enabled) if (!GATEWAYS[g]) throw invalid(`unknown payment gateway ${g}`);
+  for (const g of [...input.gateways.enabled, ...(input.gateways.crm ?? [])]) if (!GATEWAYS[g]) throw invalid(`unknown payment gateway ${g}`);
   if (input.gateways.default && !input.gateways.enabled.includes(input.gateways.default)) throw invalid('the default gateway must be one of the enabled gateways');
+  input = { ...input, gateways: { ...input.gateways, crm: [...new Set(input.gateways.crm ?? [])] } };
   const before = await getStoreSettings(q);
   await q.query(
     `INSERT INTO settings (key, value, updated_by) VALUES ('store', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`,
@@ -47,9 +52,10 @@ export async function setStoreSettings(q: Queryable, actor: string, input: Store
 }
 
 /** Gateways that are switched on in Settings AND have their keys configured here. Nothing is offered that cannot take a payment. */
-export async function activeGateways(q: Queryable, env: NodeJS.ProcessEnv = process.env): Promise<{ list: PaymentGateway[]; default: PaymentGateway | null }> {
+export async function activeGateways(q: Queryable, env: NodeJS.ProcessEnv = process.env, where: 'STOREFRONT' | 'CRM' = 'STOREFRONT'): Promise<{ list: PaymentGateway[]; default: PaymentGateway | null }> {
   const s = await getStoreSettings(q);
-  const enabled = s.gateways.enabled.length ? s.gateways.enabled : Object.keys(GATEWAYS); // none chosen yet: offer whatever is configured
+  // Store-front: none chosen yet means offer whatever is configured. CRM: only what was switched on for staff (a payment link is opt-in).
+  const enabled = where === 'CRM' ? s.gateways.crm ?? [] : s.gateways.enabled.length ? s.gateways.enabled : Object.keys(GATEWAYS);
   const list = enabled.map((id) => GATEWAYS[id]!).filter((g) => g && g.configured(env));
   const def = list.find((g) => g.id === s.gateways.default) ?? list[0] ?? null;
   return { list, default: def };

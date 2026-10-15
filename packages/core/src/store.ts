@@ -338,6 +338,33 @@ export async function startPayment(db: Db, appId: string, access: AppAccess, o: 
   return { gateway: gw.id, ref: intent.ref, clientSecret: intent.clientSecret, redirectUrl: intent.redirectUrl, publicConfig: gw.publicConfig(), amountMinor: order.totalMinor, currency: order.currency };
 }
 
+export interface PaymentLink { gateway: string; url: string; ref: string; expiresAt?: string; amountMinor: number; currency: string }
+/**
+ * Staff in the CRM collect card payment by sending the customer a payment page of the provider (a link or QR the customer opens on their own phone).
+ * Only for an order waiting for money, and only through a gateway switched on for the CRM. Asking again replaces the earlier link. The order is confirmed
+ * by the provider's signed webhook exactly as for a store-front payment.
+ */
+export async function createPaymentLink(db: Db, orderId: string, actor: string, o: { returnUrl: string; gateway?: string }): Promise<PaymentLink> {
+  const order = await getOrder(db, orderId);
+  if (order.state !== 'PAYMENT_PENDING') throw rejected(`This order is ${String(order.state).toLowerCase().replace(/_/g, ' ')}; no payment is due.`);
+  if (!/^https:\/\/|^http:\/\/localhost/.test(o.returnUrl)) throw invalid('returnUrl must be an https URL.');
+  const { list } = await activeGateways(db, process.env, 'CRM');
+  const usable = list.filter((g) => g.createPaymentLink);
+  const gw = o.gateway ? usable.find((g) => g.id === o.gateway) : usable[0];
+  if (!gw?.createPaymentLink) throw rejected(usable.length || o.gateway ? `Payment method ${o.gateway} is not switched on for the CRM.` : 'Card payment links are not switched on for the CRM. A super user can switch them on under Integration → Payment gateways.');
+  const attempt = (await db.query('SELECT count(*) AS n FROM payment_intents WHERE order_id=$1', [order.id])).rows[0]!.n as number;
+  const link = await gw.createPaymentLink({
+    amountMinor: order.totalMinor, currency: order.currency, reference: order.id, description: `Order ${order.number ?? String(order.id).slice(0, 8)}`,
+    idempotencyKey: `meridian-order-${order.id}-${attempt}`, returnUrl: o.returnUrl, metadata: { order_id: order.id, source: 'crm' },
+  });
+  await db.tx(async (q) => {
+    await q.query(`UPDATE payment_intents SET status='CANCELLED', updated_at=now() WHERE order_id=$1 AND status='REQUIRES_PAYMENT'`, [order.id]);
+    await q.query(`INSERT INTO payment_intents (order_id, gateway, gateway_ref, amount_minor, currency) VALUES ($1,$2,$3,$4,$5)`, [order.id, gw.id, link.ref, order.totalMinor, order.currency]);
+    await audit(q, actor, 'order', order.id, 'PAYMENT_LINK_CREATED', { gateway: gw.id, amountMinor: order.totalMinor });
+  });
+  return { gateway: gw.id, url: link.url, ref: link.ref, expiresAt: link.expiresAt, amountMinor: order.totalMinor, currency: order.currency };
+}
+
 /** A verified gateway event. Replays are ignored; amount and currency must match what we asked for, or the event is refused and audited. */
 export async function applyGatewayEvent(db: Db, gatewayId: string, ev: GatewayEvent): Promise<{ handled: boolean; note?: string }> {
   const fresh = await db.query('INSERT INTO webhook_events (gateway, event_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [gatewayId, ev.eventId]);

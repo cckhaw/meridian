@@ -74,7 +74,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   // ───────────── Online store-front ─────────────
   {
     id: 'storefront', group: 'Online store-front', name: 'Online store-front', with: 'The self-serve web shop (apps/storefront) and any other client you build',
-    summary: 'Customers browse, sign up, verify identity and pay on the store-front. It reaches Meridian only through the store API, with an API key. Keys, payment gateways and the sign-up rules are managed on this page.',
+    summary: 'Customers browse, sign up, verify identity and pay on the store-front. It reaches Meridian only through the store API, with an API key. Its API keys, terms links and sign-up retention are managed here. Payment and identity verification have their own cards, because they apply to the CRM as well.',
     maturity: 'BUILT', direction: 'BOTH',
     env: [
       { name: 'MERIDIAN_API_URL', purpose: 'Base address of this portal, for example https://crm.example.com', on: 'storefront', required: true },
@@ -86,23 +86,23 @@ export const INTEGRATIONS: IntegrationDef[] = [
       { method: 'POST', path: '/api/store/quote', purpose: 'Price a basket', auth: 'API key' },
       { method: 'POST', path: '/api/store/applications', purpose: 'Start an application; then documents, KYC, checkout and payment under /api/store/applications/:id', auth: 'API key + application token' },
     ],
-    needs: ['Issue an API key below and set MERIDIAN_API_URL and MERIDIAN_API_KEY on the store-front deployment', 'Choose which payment gateways are on', 'Set the terms and privacy links'],
-    configure: { label: 'Store-front settings and API keys', href: '/admin/integrations?item=storefront' }, doc: 'STOREFRONT.md', keywords: 'store front storefront shop web api key self serve online',
+    needs: ['Issue an API key below and set MERIDIAN_API_URL and MERIDIAN_API_KEY on the store-front deployment', 'Set the terms and privacy links'],
+    configure: { label: 'API keys and terms', href: '/admin/integrations?item=storefront' }, doc: 'STOREFRONT.md', keywords: 'store front storefront shop web api key self serve online',
   },
 
   // ───────────── Payments ─────────────
   {
-    id: 'stripe', group: 'Payments', name: 'Stripe', with: 'Stripe (cards and wallets for the store-front)',
-    summary: 'Meridian creates a payment intent with Stripe, the customer pays in the browser, and the order is confirmed only by Stripe’s signed webhook. Card numbers never reach Meridian.',
+    id: 'stripe', group: 'Payments', name: 'Stripe', with: 'Stripe (card payments for the store-front and the CRM)',
+    summary: 'In the store-front the customer pays by card in the browser. In the CRM, staff send the customer a Stripe payment link from the order and the customer pays on their own phone. Either way the order is confirmed only by Stripe’s signed webhook, and card numbers never reach Meridian. You choose below where Stripe is used: store-front, CRM or both.',
     maturity: 'BUILT', direction: 'BOTH',
     env: [
       { name: 'MERIDIAN_STRIPE_SECRET_KEY', purpose: 'Secret key (sk_live_… or sk_test_…)', on: 'web', required: true, secret: true },
       { name: 'MERIDIAN_STRIPE_PUBLISHABLE_KEY', purpose: 'Publishable key (pk_…), shown to the store-front', on: 'web', required: true },
       { name: 'MERIDIAN_STRIPE_WEBHOOK_SECRET', purpose: 'Signing secret of the webhook endpoint (whsec_…)', on: 'web', required: true, secret: true },
     ],
-    endpoints: [{ method: 'POST', path: '/api/webhooks/gateway/stripe', purpose: 'Stripe calls this: payment_intent.succeeded and payment_intent.payment_failed', auth: 'Stripe signature' }],
-    needs: ['Set the three keys on the web deployment', 'In Stripe, add the webhook endpoint above', 'Switch Stripe on under Store-front → Payment gateways'],
-    configure: { label: 'Payment gateways', href: '/admin/integrations?item=storefront' }, doc: 'STOREFRONT.md', keywords: 'stripe card payment gateway online pay',
+    endpoints: [{ method: 'POST', path: '/api/webhooks/gateway/stripe', purpose: 'Stripe calls this: payment_intent.succeeded, payment_intent.payment_failed and checkout.session.completed', auth: 'Stripe signature' }],
+    needs: ['Set the three keys on the web deployment', 'In Stripe, add the webhook endpoint above', 'Switch Stripe on for the store-front, the CRM or both (below)'],
+    configure: { label: 'Where Stripe is used', href: '/admin/integrations?item=stripe' }, doc: 'STOREFRONT.md', keywords: 'stripe card payment gateway online pay',
   },
   {
     id: 'payment-webhook', group: 'Payments', name: 'Payment provider webhook and terminals', with: 'A payment provider, bank terminal or QR scheme that confirms payments',
@@ -251,10 +251,10 @@ export const INTEGRATIONS: IntegrationDef[] = [
   // ───────────── Identity and compliance ─────────────
   {
     id: 'ekyc', group: 'Identity and compliance', name: 'Identity verification (eKYC)', with: 'An eKYC vendor (document check, liveness, registry lookup)',
-    summary: 'Online applicants upload ID documents. Meridian applies its own rules (age, expiry, duplicates) and a compliance officer reviews, or in automatic mode clean applications are approved by the rules alone. No vendor is called today; automatic mode is meant to sit behind one.',
+    summary: 'Online applicants upload ID documents and a compliance officer reviews them (or, in automatic mode, clean applications are approved by the rules alone). In the CRM, staff sight the original ID in person. The rules below apply to the store-front, the CRM or both, as marked. No eKYC vendor is called today; automatic mode is meant to sit behind one.',
     maturity: 'MANUAL', direction: 'OUT',
     needs: ['Choose an eKYC vendor', 'Add a connector that verifies the document and selfie and feeds the result into the same checks', 'Keep automatic approval off until it exists'],
-    configure: { label: 'KYC rules and terms', href: '/admin/integrations?item=storefront' }, doc: 'STOREFRONT.md', keywords: 'ekyc kyc identity verification liveness document id vendor compliance',
+    configure: { label: 'Identity rules', href: '/admin/integrations?item=ekyc' }, doc: 'STOREFRONT.md', keywords: 'ekyc kyc identity verification liveness document id vendor compliance',
   },
   {
     id: 'secrets', group: 'Identity and compliance', name: 'Keys that protect customer data', with: 'Your secrets store',
@@ -387,9 +387,10 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
         else { status = 'NEEDS_SETUP'; detail = 'No API key has been issued.'; }
         break;
       case 'stripe': {
-        const on = store.gateways.enabled.includes('stripe'), ok = GATEWAYS.stripe?.configured(env) ?? false;
+        const sf = store.gateways.enabled.includes('stripe'), crm = (store.gateways.crm ?? []).includes('stripe'), on = sf || crm, ok = GATEWAYS.stripe?.configured(env) ?? false;
+        const where = [sf && 'store-front', crm && 'CRM'].filter(Boolean).join(' and ');
         status = ok && on ? 'CONNECTED' : 'NEEDS_SETUP';
-        detail = ok ? (on ? 'Keys set and Stripe is switched on.' : 'Keys set, but Stripe is not switched on in the store-front panel below.') : `Missing ${missing.join(', ')}.`;
+        detail = ok ? (on ? `Keys set. Stripe is on for the ${where}.` : 'Keys set, but Stripe is not switched on for the store-front or the CRM yet.') : `Missing ${missing.join(', ')}.`;
         break;
       }
       case 'payment-webhook': {
