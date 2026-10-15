@@ -21,6 +21,7 @@ const CORE_PERMISSIONS = [
   'order:read', 'order:payment', 'order:fulfil', 'order:cancel',
   'order:override', // approve a cancellation or return the policy would only allow with a supervisor's say-so
   'billing:read', 'billing:pay', 'billing:credit', 'billing:run',
+  'billing:approve', // approve a mocked bill run so it can be billed for real; with dual control, a second person from the one who asked for it
   'finance:read', 'finance:export',
   'finance:configure', // posting rules (SAP accounts, cost centres, profit centres) and the SAP connection settings
   'ledger:ingest', // send financial events to the sub-ledger
@@ -93,7 +94,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   },
   'billing-ops': {
     id: 'billing-ops', label: 'Billing Operations', scope: 'staff', home: '/billing', creditLimitMinor: null,
-    summary: 'Runs bill cycles and dunning, records payments, issues credit notes, handles invoice queries.',
+    summary: 'Prepares bill runs (mock, review, exclusions) and runs dunning, records payments, issues credit notes, handles invoice queries. Approval of a bill run is for Finance or Revenue Assurance.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'billing:read', 'billing:pay', 'billing:credit', 'billing:run', 'case:read', 'case:create', 'case:write'],
   },
   'rating-charging': {
@@ -142,8 +143,8 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   },
   finance: {
     id: 'finance', label: 'Finance', scope: 'staff', home: '/finance', creditLimitMinor: null,
-    summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables.',
-    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
+    summary: 'Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables, and approval of bill runs.',
+    permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:credit', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
   },
   fraud: {
     id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',
@@ -162,8 +163,8 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   },
   'revenue-assurance': {
     id: 'revenue-assurance', label: 'Revenue Assurance', scope: 'staff', home: '/finance',
-    summary: 'Checks that billing, payments and the ledger agree (read-only).',
-    permissions: ['dashboard:read', 'finance:read', 'billing:read', 'audit:read', 'customer:search', 'customer:read'],
+    summary: 'Checks that billing, payments and the ledger agree, and approves a bill run once its mock has been reviewed (otherwise read-only).',
+    permissions: ['dashboard:read', 'finance:read', 'billing:read', 'billing:approve', 'audit:read', 'customer:search', 'customer:read'],
   },
 };
 

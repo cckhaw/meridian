@@ -3,7 +3,7 @@ import { Alert, Badge, Button, Card, DataList, Empty, Field, Input, LargeTitle, 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { post, useAction, useDebounced, usePaged } from '@/lib/api';
+import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { d, label, money, tone } from '@/lib/format';
 
@@ -51,19 +51,28 @@ function Billing() {
 
 function Runs({ onDone }: { onDone: () => void }) {
   const [asOf, setAsOf] = useState(todayStr());
+  const gov = useApi<{ enforceGovernance: boolean }>('/billing/runs/settings');
   const bill = useAction(onDone), dun = useAction(onDone);
   const [res, setRes] = useState<any>(null);
   const [dres, setDres] = useState<any>(null);
   return (
     <div className="grid gap-4 md:grid-cols-2">
+      {gov.data?.enforceGovernance !== false ? (
+        <Card>
+          <h2 className="text-title3 font-semibold">Bill runs</h2>
+          <p className="mb-3 text-subhead text-label2">Each cycle is billed in four steps: a <strong>mock</strong> (nothing is invoiced), a <strong>review</strong> with exclusions, an <strong>approval</strong>, then the real run.</p>
+          <Link className="inline-flex min-h-tap items-center rounded-control bg-accent px-4 text-subhead font-semibold text-accent-label" href="/billing/runs">Open bill runs</Link>
+        </Card>
+      ) : (
       <Card>
         <h2 className="text-title3 font-semibold">Bill run</h2>
-        <p className="mb-3 text-subhead text-label2">Bills every account whose cycle day matches the date (daily-cycle accounts every day), in arrears. Safe to re-run: existing invoices are skipped.</p>
+        <p className="mb-3 text-subhead text-label2">Governance is switched off, so a date can be billed directly. <Link className="text-accent" href="/billing/runs">Bill runs</Link> with a mock, review and approval is the safer way.</p>
         <div className="form-row"><Field label="Run date"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
           <Button disabled={bill.busy} onClick={async () => setRes(await bill.run(() => post('/billing/run', { asOf })))}>{bill.busy ? 'Running…' : 'Run bill cycle'}</Button></div>
         {bill.error && <div className="mt-3"><Alert>{bill.error}</Alert></div>}
         {res && <div className="mt-3"><Alert tone={res.errors.length ? 'danger' : 'success'}>{res.accounts} accounts due · {res.invoices} invoices ({money(res.totalMinor)}) · {res.skipped} skipped{res.errors.length > 0 && ` · ${res.errors.length} errors: ${res.errors[0].error}`}</Alert></div>}
       </Card>
+      )}
       <Card>
         <h2 className="text-title3 font-semibold">Dunning</h2>
         <p className="mb-3 text-subhead text-label2">Marks unpaid invoices overdue, suspends services 15 days after the due date, and flags accounts at 45 days for write-off review.</p>
