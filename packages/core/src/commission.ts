@@ -29,6 +29,15 @@ export async function uplinesOf(q: Queryable, dealerId: string): Promise<Array<{
   return out;
 }
 
+/** Whether `parent` can be the parent of a dealer (an existing one, or a new one when `dealerId` is null): it exists, makes no loop, and keeps the channel within its depth. */
+export async function assertParentFits(q: Queryable, dealerId: string | null, parent: string): Promise<void> {
+  if (dealerId && parent === dealerId) throw invalid('a dealer cannot be its own parent');
+  if (!(await q.query('SELECT 1 FROM dealers WHERE id=$1', [parent])).rows.length) throw notFound(`dealer ${parent}`);
+  const chain = await uplinesOf(q, parent);
+  if (dealerId && chain.some((u) => u.dealerId === dealerId)) throw invalid('that would put the dealer under one of its own sub-dealers');
+  if (chain.length + 1 + (dealerId ? await depthBelow(q, dealerId) : 0) > MAX_DEPTH - 1) throw invalid(`the channel can be at most ${MAX_DEPTH} levels deep`);
+}
+
 /** Where a dealer sits in the channel and how it is paid. A dealer cannot sit under itself or one of its own sub-dealers, and the chain has a depth limit. */
 export async function setDealerChannel(q: Queryable, actor: string, dealerId: string, i: ChannelInput): Promise<Row> {
   const cur = (await q.query('SELECT * FROM dealers WHERE id=$1', [dealerId])).rows[0];
@@ -36,13 +45,7 @@ export async function setDealerChannel(q: Queryable, actor: string, dealerId: st
   const tier = i.tier ?? cur.tier;
   if (!(DEALER_TIERS as readonly string[]).includes(tier)) throw invalid(`the tier is one of ${DEALER_TIERS.join(', ')}`);
   const parent = i.parentDealerId === undefined ? cur.parentDealerId : i.parentDealerId || null;
-  if (parent) {
-    if (parent === dealerId) throw invalid('a dealer cannot be its own parent');
-    if (!(await q.query('SELECT 1 FROM dealers WHERE id=$1', [parent])).rows.length) throw notFound(`dealer ${parent}`);
-    const chain = await uplinesOf(q, parent);
-    if (chain.some((u) => u.dealerId === dealerId)) throw invalid('that would put the dealer under one of its own sub-dealers');
-    if (chain.length + 1 + (await depthBelow(q, dealerId)) > MAX_DEPTH - 1) throw invalid(`the channel can be at most ${MAX_DEPTH} levels deep`);
-  }
+  if (parent) await assertParentFits(q, dealerId, parent);
   const pick = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
   const r = await q.query(
     `UPDATE dealers SET tier=$2, parent_dealer_id=$3, bank_account_name=$4, bank_account_no=$5, bank_code=$6, sap_vendor_no=$7, updated_at=now() WHERE id=$1 RETURNING *`,
