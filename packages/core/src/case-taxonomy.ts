@@ -131,19 +131,23 @@ export interface CaseSettings {
   incidentAutoLink: boolean;
   /** Group cases into a master incident by themselves: when this many network cases from one postal node open within the window. Off unless switched on. */
   incidentAutoCreate: boolean; incidentThreshold: number; incidentWindowMinutes: number;
+  /** Field visits: how long after the end of a booked window supervisors are told the technician has not reported, and how long a case may sit waiting for the field-service system to confirm. */
+  dispatchGraceMinutes: number; dispatchUnconfirmedHours: number;
+  /** When a fault case that normally needs a technician breaches its SLA, ask the field-service system for the earliest slot. */
+  autoDispatch: boolean;
 }
-export const DEFAULT_CASE_SETTINGS: CaseSettings = { autoCloseHours: 72, reopenDays: 14, customerResponseHours: 72, incidentAutoLink: true, incidentAutoCreate: false, incidentThreshold: 5, incidentWindowMinutes: 60 };
+export const DEFAULT_CASE_SETTINGS: CaseSettings = { autoCloseHours: 72, reopenDays: 14, customerResponseHours: 72, incidentAutoLink: true, incidentAutoCreate: false, incidentThreshold: 5, incidentWindowMinutes: 60, dispatchGraceMinutes: 60, dispatchUnconfirmedHours: 4, autoDispatch: false };
 export async function getCaseSettings(q: Queryable): Promise<CaseSettings> {
   const v = (await q.query(`SELECT value FROM settings WHERE key='cases'`)).rows[0]?.value as Partial<CaseSettings> | undefined;
   return { ...DEFAULT_CASE_SETTINGS, ...(v ?? {}) };
 }
 export async function setCaseSettings(q: Queryable, actor: string, s: Partial<CaseSettings>): Promise<CaseSettings> {
   const v: CaseSettings = { ...(await getCaseSettings(q)), ...s };
-  for (const [k, max] of [['autoCloseHours', 24 * 90], ['reopenDays', 365], ['customerResponseHours', 24 * 90], ['incidentThreshold', 1000], ['incidentWindowMinutes', 24 * 60]] as const) {
+  for (const [k, max] of [['autoCloseHours', 24 * 90], ['reopenDays', 365], ['customerResponseHours', 24 * 90], ['incidentThreshold', 1000], ['incidentWindowMinutes', 24 * 60], ['dispatchGraceMinutes', 24 * 60], ['dispatchUnconfirmedHours', 24 * 14]] as const) {
     const n = v[k]; if (!Number.isInteger(n) || n < 1 || n > max) throw invalid(`${k} is a whole number from 1 to ${max}.`);
   }
   if (v.incidentThreshold < 2) throw invalid('A network incident needs at least 2 cases.');
-  v.incidentAutoLink = !!v.incidentAutoLink; v.incidentAutoCreate = !!v.incidentAutoCreate;
+  v.autoDispatch = !!v.autoDispatch; v.incidentAutoLink = !!v.incidentAutoLink; v.incidentAutoCreate = !!v.incidentAutoCreate;
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('cases', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(v), actor]);
   await audit(q, actor, 'settings', 'cases', 'update', { ...v });
   return v;

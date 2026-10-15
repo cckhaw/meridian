@@ -19,7 +19,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 560 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 578 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -33,7 +33,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 - [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies, bulk offer import, offer type switches and service types, markets
 - [Service lifecycle](docs/LIFECYCLE.md): voluntary suspension, credit-limit bars, the dunning ladder, termination and ETC, port-out
 - [Finance: sub-ledger, SAP journals, reconciliation](docs/FINANCE.md): events into an immutable ledger, posting rules to SAP accounts, IDoc/flat/JSON/CSV export, daily close, reconciliation
-- [Cases: classification, SLA, lifecycle, interactions, watchdog, refunds, incidents](docs/CASES.md): the three-level case taxonomy, the SLA matrix, the case state machine with guards, the interaction registry, the SLA watchdog (sweep and Temporal workflow), refund approval by amount, and master network incidents
+- [Cases: classification, SLA, lifecycle, interactions, watchdog, refunds, incidents](docs/CASES.md): the three-level case taxonomy, the SLA matrix, the case state machine with guards, the interaction registry, the SLA watchdog (sweep and Temporal workflow), refund approval by amount, master network incidents, field-service visits with a signed callback, and TM Forum views
 - [Billing: bill runs, governance, simulator](docs/BILLING.md): mock, review, exclusions and approval for every cycle, anomalies, selective and retry runs, dual control, the Temporal workflow; forecast bills, quote ending a service, preview a plan change
 - [Data migration](docs/MIGRATION.md): back up and move data: streaming exports with masking, templates for every data set
 - [Bulk import and export](docs/BULK_IMPORT.md): dealers, agents and stores as spreadsheets: templates, current data, check then load

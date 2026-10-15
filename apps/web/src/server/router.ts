@@ -74,6 +74,22 @@ post('/auth/change-password', null, async ({ db, user, body, req }) => {
   return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': clearCookie(req) } }); // all sessions ended: sign in again
 }, { allowMustChange: true });
 
+// ───────────────────────── field-service (WFM) callback ─────────────────────────
+/**
+ * The field-service system reports a visit's progress here (EN_ROUTE, ON_SITE, JOB_COMPLETED, CUSTOMER_NOT_AT_HOME, RE_SCHEDULING_REQUIRED, …). Authenticated by
+ * `X-WFM-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">` with the secret in the environment variable named in Settings → Cases. A bad or stale
+ * signature is refused and nothing is stored. Repeats are harmless (one row per event id); an unknown job answers 404 so the system retries; a failure answers 500 for the same reason.
+ */
+open('POST', '/v1/cases/webhooks/wfm-callback', async ({ db, raw, req }) => {
+  const s = await core.getWfmSettings(db);
+  const secret = process.env[s.webhookSecretEnv];
+  if (!s.enabled || !secret || secret.length < 16) throw new DomainError('NOT_FOUND', 'not found');   // disabled unless configured
+  core.verifyWfmSignature(raw, req.headers.get('x-wfm-signature'), secret);
+  const ev = core.parseWfmEvent(raw);
+  const out = await core.processWfmEvent(db, ev, JSON.parse(raw));
+  return Response.json(out, { status: out.status === 'UNKNOWN_JOB' ? 404 : out.status === 'FAILED' ? 500 : 200 });
+}, { noCsrf: true });
+
 // ───────────────────────── payment provider webhook ─────────────────────────
 /**
  * A payment provider (or your PSP integration) confirms money received. Authenticated by HMAC-SHA256 of the raw body with
@@ -1193,10 +1209,10 @@ const actorOf = (user: SessionUser) => ({ username: user.username, roles: user.r
 post('/cases/:id/sla-tick', superv, async ({ db, params, body }) => {
   const b = z.object({ now: z.string().max(40).optional() }).parse(body ?? {});
   const r = await core.fireDueCaseTimers(db, params.id!, b.now ? new Date(b.now) : new Date());
-  return { fired: r.fired, nextAt: r.timers.nextAt, closed: r.timers.closed };
+  return { fired: r.fired, nextAt: r.timers.nextAt, closed: r.timers.closed, waiting: r.timers.waiting };
 });
 /** What a scheduler runs every minute or so: everything with an SLA step due, and (when switched on) the grouping of busy nodes into incidents. */
-post('/cases/sla-sweep', superv, async ({ db, user }) => ({ ...(await core.sweepCaseSla(db)), incidents: (await core.correlateCases(db, user.username)).created }));
+post('/cases/sla-sweep', superv, async ({ db, user }) => ({ ...(await core.sweepCaseSla(db)), incidents: (await core.correlateCases(db, user.username)).created, fieldService: await core.deliverWfmCancels(db) }));
 get('/cases/sla-board', superv, ({ db }) => core.slaBoard(db));
 get('/cases/incidents/suggestions', superv, async ({ db }) => ({ items: await core.suggestIncidents(db) }));
 get('/cases/incidents', 'case:read', ({ db, query }) => core.listCases(db, { masters: true, status: str(query, 'status') ?? 'ACTIVE', limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
@@ -1223,6 +1239,39 @@ post('/cases/:id/assign', 'case:write', ({ db, user, params, body }) => { const 
 post('/cases/:id/severity', 'case:write', ({ db, user, params, body }) => { const b = z.object({ severity, why: z.string().max(300).optional() }).parse(body); return core.setSeverity(db, params.id!, b.severity, user.username, b.why); });
 post('/cases/:id/notes', 'case:write', ({ db, user, params, body }) => core.addCaseNote(db, params.id!, z.object({ text: caseNote }).parse(body).text, user.username));
 post('/cases/:id/interactions', 'case:write', ({ db, user, params, body }) => core.attachInteractions(db, params.id!, z.object({ interactionIds: z.array(uuid).min(1).max(200) }).parse(body).interactionIds, user.username));
+
+// ── field visits ──
+get('/cases/:id/slots', 'case:write', ({ db, params, query }) => core.findSlots(db, params.id!, { from: str(query, 'from'), to: str(query, 'to'), durationMinutes: num(query, 'duration') }));
+get('/cases/:id/appointments', 'case:read', async ({ db, user, params }) => { assertCustomer(user, (await core.getCase(db, params.id!)).customerId); return { items: await core.listAppointments(db, params.id!) }; });
+const slot = z.object({ id: z.string().min(1).max(200), start: z.string().max(40), end: z.string().max(40) });
+post('/cases/:id/appointments', 'case:write', async ({ db, user, params, body }) => { const b = z.object({ slot, notes: z.string().max(1000).optional() }).parse(body); return Response.json(await core.bookVisit(db, params.id!, b, user.username), { status: 201 }); });
+post('/cases/:id/appointments/hold', 'case:write', async ({ db, user, params, body }) => { const b = z.object({ slot, notes: z.string().max(1000).optional() }).parse(body); return Response.json(await core.holdSlot(db, params.id!, b, user.username), { status: 201 }); });
+post('/cases/:id/dispatch', 'case:write', ({ db, user, params, body }) => core.escalateToDispatch(db, params.id!, z.object({ auto: z.boolean().optional(), slot: slot.optional(), notes: z.string().max(1000).optional() }).parse(body ?? {}), user.username));
+get('/cases/:id/webhook-events', 'case:read', async ({ db, user, params }) => { assertCustomer(user, (await core.getCase(db, params.id!)).customerId); return { items: await core.listWebhookEvents(db, { caseId: params.id! }) }; });
+post('/appointments/:id/confirm', 'case:write', ({ db, user, params }) => core.confirmAppointment(db, params.id!, user.username));
+post('/appointments/:id/cancel', 'case:write', ({ db, user, params, body }) => core.cancelAppointment(db, params.id!, z.object({ reason: z.string().max(300).optional() }).parse(body ?? {}).reason ?? '', user.username));
+post('/appointments/:id/reschedule', 'case:write', ({ db, user, params, body }) => core.rescheduleAppointment(db, params.id!, z.object({ slot, notes: z.string().max(1000).optional() }).parse(body), user.username));
+/** Delivers the cancellations queued for the field-service system. Schedule it with the SLA sweep. */
+post('/cases/wfm-outbox', superv, ({ db }) => core.deliverWfmCancels(db));
+get('/settings/cases/field-service', 'settings:manage', ({ db }) => core.wfmOverview(db));
+post('/settings/cases/field-service', 'settings:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), config: z.record(z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
+post('/settings/cases/field-service/test', 'settings:manage', ({ db }) => core.testWfm(db));
+
+// ── TM Forum Open APIs: TMF621 trouble tickets, TMF656 service problems, TMF683 party interactions ──
+const tmfPage = (items: unknown[], total: number, offset: number) => Response.json(items, { headers: { 'x-total-count': String(total), 'x-result-count': String(items.length), 'x-offset': String(offset) } });
+const tmfPaging = (query: URLSearchParams) => ({ offset: query.get('offset') ? Number(query.get('offset')) : 0, limit: query.get('limit') ? Number(query.get('limit')) : 20 });
+const tmfBase = (req: Request) => new URL(req.url).origin;
+const T = '/tmf-api/troubleTicket/v4/troubleTicket';
+get(T, 'case:read', async ({ db, user, query, req }) => { const r = await core.tmfListCases(db, { ...tmfPaging(query), kind: 'ticket', status: str(query, 'status'), customerId: user.scope.customerId ?? str(query, 'relatedParty.id') ?? null, assignee: str(query, 'assignee') }); return tmfPage(r.items.map((c) => core.selectFields(core.toTroubleTicket(c, tmfBase(req)), str(query, 'fields'))), r.total, tmfPaging(query).offset); });
+get(`${T}/:id`, 'case:read', async ({ db, user, params, query, req }) => { const c = await core.getCase(db, params.id!); assertCustomer(user, c.customerId); if (c.isMaster) throw new DomainError('NOT_FOUND', 'not found'); return core.selectFields(core.toTroubleTicket(c, tmfBase(req)), str(query, 'fields')); });
+post(T, 'case:create', async ({ db, user, body, req }) => Response.json(core.toTroubleTicket(await core.tmfCreateTicket(db, (body ?? {}) as Record<string, unknown>, user.username, user.scope.customerId), tmfBase(req)), { status: 201 }));
+patch(`${T}/:id`, 'case:write', async ({ db, user, params, body, req }) => { const c = await core.getCase(db, params.id!); if (c.isMaster) throw new DomainError('NOT_FOUND', 'not found'); return core.toTroubleTicket(await core.tmfPatchTicket(db, params.id!, (body ?? {}) as Record<string, unknown>, user.username), tmfBase(req)); });
+const SP = '/tmf-api/serviceProblemManagement/v4/serviceProblem';
+get(SP, 'case:read', async ({ db, user, query, req }) => { if (user.scope.customerId) throw forbidden(); const r = await core.tmfListCases(db, { ...tmfPaging(query), kind: 'problem', status: str(query, 'status') }); return tmfPage(r.items.map((c) => core.selectFields(core.toServiceProblem(c, tmfBase(req)), str(query, 'fields'))), r.total, tmfPaging(query).offset); });
+get(`${SP}/:id`, 'case:read', async ({ db, user, params, query, req }) => { if (user.scope.customerId) throw forbidden(); const c = await core.getCase(db, params.id!); if (!c.isMaster) throw new DomainError('NOT_FOUND', 'not found'); return core.selectFields(core.toServiceProblem(c, tmfBase(req)), str(query, 'fields')); });
+const PI = '/tmf-api/partyInteractionManagement/v4/partyInteraction';
+get(PI, 'case:read', async ({ db, user, query, req }) => { const customerId = user.scope.customerId ?? str(query, 'relatedParty.id'); const { offset, limit } = tmfPaging(query); const page = await core.listInteractions(db, { customerId, limit: Math.min(limit, 100), cursor: str(query, 'cursor') }); return tmfPage(page.items.map((i) => core.selectFields(core.toPartyInteraction(i, tmfBase(req)), str(query, 'fields'))), page.items.length + (page.nextCursor ? 1 : 0), offset); });
+post(PI, 'case:create', async ({ db, user, body, req }) => Response.json(core.toPartyInteraction(await core.tmfCreateInteraction(db, (body ?? {}) as Record<string, unknown>, user.username, user.scope.customerId), tmfBase(req)), { status: 201 }));
 
 // ── interactions: every touchpoint with a customer ──
 get('/interactions', 'case:read', ({ db, user, query }) => {
@@ -1251,7 +1300,7 @@ route('DELETE', '/settings/cases/taxonomy/:id', 'settings:manage', ({ db, user, 
 get('/settings/cases/sla', 'settings:manage', async ({ db }) => ({ items: await core.listSla(db) }));
 post('/settings/cases/sla', 'settings:manage', async ({ db, user, body }) => ({ items: await core.setSla(db, user.username, z.object({ rows: z.array(z.object({ tier: z.enum(core.TIERS), severity, firstResponseMinutes: z.number().int(), resolutionMinutes: z.number().int(), warnPercent: z.number().int() })).min(1).max(9) }).parse(body).rows) }));
 get('/settings/cases', 'settings:manage', ({ db }) => core.getCaseSettings(db));
-post('/settings/cases', 'settings:manage', ({ db, user, body }) => core.setCaseSettings(db, user.username, z.object({ autoCloseHours: z.number().int().optional(), reopenDays: z.number().int().optional(), customerResponseHours: z.number().int().optional(), incidentAutoLink: z.boolean().optional(), incidentAutoCreate: z.boolean().optional(), incidentThreshold: z.number().int().optional(), incidentWindowMinutes: z.number().int().optional() }).parse(body)));
+post('/settings/cases', 'settings:manage', ({ db, user, body }) => core.setCaseSettings(db, user.username, z.object({ autoCloseHours: z.number().int().optional(), reopenDays: z.number().int().optional(), customerResponseHours: z.number().int().optional(), incidentAutoLink: z.boolean().optional(), incidentAutoCreate: z.boolean().optional(), incidentThreshold: z.number().int().optional(), incidentWindowMinutes: z.number().int().optional(), dispatchGraceMinutes: z.number().int().optional(), dispatchUnconfirmedHours: z.number().int().optional(), autoDispatch: z.boolean().optional() }).parse(body)));
 get('/inventory', 'inventory:read', ({ db, user, query }) => core.listStock(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/inventory/locations', 'inventory:read', async ({ db, user }) => ({ items: user.scope.storeId ? [user.scope.storeId] : await core.listStockLocations(db), warehouses: user.scope.storeId ? [] : (await core.listWarehouses(db)).filter((w) => w.status === 'ACTIVE').map((w) => ({ id: w.id, name: w.name })) }));
 const ownStore = (user: SessionUser, locationId: string) => { if (user.scope.storeId && locationId !== user.scope.storeId) throw forbidden('You can only work on your own store’s stock.'); };

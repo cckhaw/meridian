@@ -14,7 +14,8 @@
 | Network incidents (master cases) | `packages/core/src/case-incidents.ts` |
 | Refund approval by amount | `packages/core/src/case-refunds.ts` |
 | The watchdog as a durable workflow | `services/order-service/src/workflows/case-sla.workflow.ts`, `activities/case-sla.ts`, `api/case-sla.controller.ts` |
-| More tables and columns | migration `0038_case_sla_refunds_incidents.sql` (`case_refund_requests`, master and escalation columns on `cases`) |
+| Field service: connectors (`simulator`, `rest`), visits, the signed callback, TM Forum views | `packages/core/src/wfm/`, `workforce.ts`, `wfm-webhook.ts`, `tmf.ts` |
+| More tables and columns | migration `0039_workforce_dispatch.sql` (`workforce_appointments`, `webhook_event_log`, dispatch columns on `cases`); `0038_case_sla_refunds_incidents.sql` (`case_refund_requests`, master and escalation columns on `cases`) |
 | Screens | `apps/web/src/app/cases`, `apps/web/src/app/cases/board`, the Cases and Interactions sections of a customer, **Settings → Cases** |
 | API | `/api/cases*`, `/api/interactions*`, `/api/settings/cases*` |
 
@@ -89,6 +90,42 @@ A **master incident** stands for a network fault at a postal node (a case's node
 * A new fault case at a node with an open incident joins it as it is created (switchable); each customer is told that the fault is known and being worked on.
 * **Resolving the master resolves every open child** in one set-based statement: each child's audit trail shows the move from the state it was in (waiting for the customer, waiting for dispatch, …), its SLA pause is released, and each customer is told. Children already resolved or closed are left alone. Linking is set-based too, so an incident with thousands of cases is as quick as one with three.
 
+## Field service (technician visits)
+
+**Settings → Cases → Field service** connects a workforce-management (WFM) system through a connector, the same way charging systems are connected: `simulator` for trying the flow, and `rest`, a small REST/JSON contract (four `POST` calls: `/availability`, `/reservations`, `/jobs`, `/cancellations`) that Salesforce Field Service, Oracle Field Service Cloud or TOA sit behind through a thin adapter. The token comes from an environment variable named `MERIDIAN_WFM_…`, never the database; https only. A new system is one file in `packages/core/src/wfm/`.
+
+**Booking.** An issue type says which skills (`FIBER_SPLICING`) and equipment (`ONT_UNIT`) its visit needs. On a case, the agent asks for free windows (`GET /api/cases/:id/slots`; a slot already full with Meridian's own bookings is not offered), **holds** one while on the call (the system reserves the slot, the skills and the equipment, for a few minutes; a hold nobody confirms is released by the sweep), and **confirms** it, which creates the job. One visit at a time per case; moving a visit books the new window first, so a failure leaves the old booking. Booking in one step is `POST /api/cases/:id/appointments`; `POST /api/cases/:id/dispatch` escalates a case to waiting-for-dispatch and, with `auto`, books the earliest slot. Optionally, when a fault case that normally needs a technician **breaches its SLA** the earliest slot is booked by itself (Settings → Cases; off by default).
+
+**The case follows the visit.** Confirming moves the case to *waiting for dispatch*; it becomes *dispatched* when the system has a technician on the job (at once if the system confirms synchronously, otherwise on the `ASSIGNED` callback). A completed visit resolves the case; the customer not being at home puts it in *waiting for the customer* (and pauses its SLA); a request for another time returns it to *waiting for dispatch*; a cancelled job returns it to the agent. The customer is told on **WhatsApp when they have used it in the last 90 days, otherwise SMS** (outbox `NOTIFY` with the channel), at booking, assignment, on the way, on site, resolved, not-at-home, rescheduling and cancellation, once each.
+
+**The callback** is `POST /api/v1/cases/webhooks/wfm-callback`, with `X-WFM-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">` made with the secret in the environment variable named in Settings (16 characters or more). A bad or stale (over 5 minutes) signature is refused with 401 and **nothing is stored**; with no secret set, or field service switched off, the URL does not exist. The body: `{ eventId, jobRef, type, occurredAt?, technician?: { ref, name, phone }, notes?, reason?, eta?, newWindow?: { start, end } }` with `type` one of `JOB_ACCEPTED`, `ASSIGNED`, `EN_ROUTE`, `ON_SITE`, `JOB_COMPLETED`, `CUSTOMER_NOT_AT_HOME`, `RE_SCHEDULING_REQUIRED`, `JOB_CANCELLED`. Every authenticated event is written to `webhook_event_log`, once per `eventId`:
+
+| Answer | Meaning |
+|---|---|
+| 200 `APPLIED` | the visit and case were updated |
+| 200 `IGNORED` | the visit already ended, or is already further along than the event says (late or repeated under another id) |
+| 200 `DUPLICATE` | this `eventId` was handled |
+| 404 `UNKNOWN_JOB` | no visit has that job number: the system should retry, as the booking may not have been recorded yet |
+| 500 `FAILED` | the event could not be applied (recorded); delivering it again retries it |
+
+A case an agent has already resolved is left alone (the visit is still recorded as completed).
+
+**Waiting states.** A case waiting on a technician has a deadline: the booked window's end plus a grace (60 minutes by default), or, before a booking is confirmed, a few hours (4 by default). Past it, supervisors are told once (`DISPATCH_OVERDUE`). The Temporal watchdog waits through this and wakes at once on a `dispatchUpdated` signal; without Temporal the sweep does the same.
+
+**Incidents.** A case resolved by a network incident has its booked visit cancelled with it, in the database at once and at the field-service system through the outbox (`WFM_CANCEL`). The same outbox carries a cancellation that could not be delivered the first time; `POST /api/cases/sla-sweep` (or `POST /api/cases/wfm-outbox`) delivers them.
+
+## TM Forum Open APIs
+
+Standard views of the same data, for a partner, a portal or an assurance tool, under `/api/tmf-api/…` (same sign-in and permissions as the rest of the API; a customer-scoped user sees only their own):
+
+| Resource | Standard | Path |
+|---|---|---|
+| Trouble ticket (a customer's case) | TMF621 | `/troubleTicket/v4/troubleTicket` (list, get, create, patch) |
+| Service problem (a network incident) | TMF656 | `/serviceProblemManagement/v4/serviceProblem` (list, get) |
+| Party interaction (a customer touchpoint) | TMF683 | `/partyInteractionManagement/v4/partyInteraction` (list, create) |
+
+(Customer interaction history is TMF683, and a network fault grouped across customers is a TMF656 service problem; TMF653 is service *test* management and is not offered.) These are profiles, not the whole of each specification: the attributes above, `offset`/`limit` paging (offset to 10,000) with `X-Total-Count`, `fields` selection, and TMF's status words (`submitted`, `inProgress`, `pending`, `resolved`, `closed`). A ticket's status can be patched to `inProgress`, `pending`, `resolved` (with a `statusChangeReason`) or `closed`; creating one needs a customer in `relatedParty`, a `name` and a `ticketType` (Fault, Billing, Porting, Enquiry). GraphQL is not offered.
+
 ## Not built here
 
-Field dispatch (and cancelling the technician booking of children resolved with an incident), the work-force webhook and the TM Forum interfaces in part 3. Business-hours calendars, and per-queue routing rules beyond manual assignment, are not modelled; refund approval is by amount, not by reason code.
+Business-hours calendars, a technician-level schedule inside Meridian (the field-service system owns technicians and their calendars), real adapters for Salesforce Field Service, Oracle Field Service Cloud or TOA (the `rest` connector is the contract they sit behind), TM Forum event hubs and notifications, GraphQL, and per-queue routing rules beyond manual assignment, are not modelled; refund approval is by amount, not by reason code.

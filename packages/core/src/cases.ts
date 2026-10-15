@@ -1,6 +1,7 @@
 import { audit } from './audit.js';
 import { maybeLinkToIncident, resolveIncidentChildren } from './case-incidents.js';
 import { pendingRefundCount } from './case-refunds.js';
+import { cancelVisitsOfCases } from './workforce.js';
 import { getCaseSettings, issueType, PRIORITY_OF, SEVERITIES, slaFor, TIERS, type CaseType, type Severity, type Tier, CASE_TYPES } from './case-taxonomy.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
@@ -126,7 +127,7 @@ export const notifyCustomer = async (q: Queryable, c: Row, instruction: string, 
 };
 
 // ───────────────────────── moving a case through its lifecycle ─────────────────────────
-export interface TransitionOptions { actor?: string; note?: string; resolution?: string; reason?: string; /** Moves made by a timer or by the field-service system. */ system?: boolean }
+export interface TransitionOptions { actor?: string; note?: string; resolution?: string; reason?: string; /** Moves made by a timer or by the field-service system. */ system?: boolean; /** Tell the customer about the move (the default); a caller that sends its own message turns this off. */ notify?: boolean }
 
 const MESSAGES: Partial<Record<CaseStatus, (c: Row) => string>> = {
   PENDING_CUSTOMER: (c) => `We need a reply from you on case ${c.number}. Please get in touch.`,
@@ -169,6 +170,9 @@ export async function transitionCase(q: Queryable, id: string, to: CaseStatus, o
     add(`reopen_count = reopen_count + 1`); add(`resolved_at = NULL`); add(`closed_at = NULL`);
     add(`resolution_due = now() + make_interval(mins => sla_resolution_minutes)`); add(`sla_warned_at = NULL`); add(`sla_breached_at = NULL`);
   }
+  // A case waiting on a technician has a time by which the visit should have been settled; leaving the dispatch states clears it.
+  if (to === 'PENDING_DISPATCH') { if (from !== 'DISPATCHED') add(`dispatch_due_at = COALESCE(dispatch_due_at, now() + make_interval(hours => ${settings.dispatchUnconfirmedHours}))`); }
+  else if (to !== 'DISPATCHED') { add(`dispatch_due_at = NULL`); add(`dispatch_notified_at = NULL`); }
   add(`status = $3`); add(`updated_at = now()`);
   if (to === 'RESOLVED' || to === 'CLOSED_AUTO' || to === 'CLOSED_VERIFIED') { /* kept as is: the SLA outcome is read from resolved_at */ }
   const r = await q.query(`UPDATE cases SET ${set.join(', ')} WHERE id=$1 AND status=$2`, args);
@@ -179,9 +183,13 @@ export async function transitionCase(q: Queryable, id: string, to: CaseStatus, o
   await audit(q, actor, 'case', id, 'STATUS', { from, to });
   if (to === 'RESOLVED' && c.isMaster) {
     const kids = await resolveIncidentChildren(q, c, (o.resolution ?? o.note ?? '').trim(), settings.autoCloseHours);
-    if (kids.length) await caseLog(q, id, actor, 'INCIDENT_CASES_RESOLVED', { detail: { count: kids.length } });
+    if (kids.length) {
+      await caseLog(q, id, actor, 'INCIDENT_CASES_RESOLVED', { detail: { count: kids.length } });
+      await cancelVisitsOfCases(q, kids.map((k) => k.id), `Resolved with network incident ${c.number}`);   // no technician needs to go for a fault that is fixed
+    }
   }
-  if (to === 'RESOLVED') await notifyCustomer(q, c, 'CASE_RESOLVED', `Case ${c.number} has been resolved: ${(o.resolution ?? o.note ?? '').trim()}. If it is not fixed, tell us within ${settings.reopenDays} days and we will look again.`);
+  if (o.notify === false) { /* the caller tells the customer itself */ }
+  else if (to === 'RESOLVED') await notifyCustomer(q, c, 'CASE_RESOLVED', `Case ${c.number} has been resolved: ${(o.resolution ?? o.note ?? '').trim()}. If it is not fixed, tell us within ${settings.reopenDays} days and we will look again.`);
   else if (MESSAGES[to]) await notifyCustomer(q, c, `CASE_${to}`, MESSAGES[to]!(c));
   return getCase(q, id);
 }

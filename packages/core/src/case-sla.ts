@@ -2,6 +2,7 @@ import { ACTIVE_SQL, ACTIVE_STATUSES, caseLog, getCase, notifySupervisors, trans
 import { getCaseSettings, PRIORITY_OF, type CaseSettings } from './case-taxonomy.js';
 import type { Queryable, Row } from './db.js';
 import { notFound } from './errors.js';
+import { maybeAutoDispatch, releaseExpiredHolds } from './workforce.js';
 
 /**
  * The SLA watchdog. For one case it works out what is due (a first-response breach, the warning point, the breach, a second escalation, an automatic closing)
@@ -21,13 +22,15 @@ export interface CaseTimers {
   /** The earliest moment something becomes due, or null when nothing ever will. */
   nextAt: string | null;
   /** What is due, in time order. */
-  upcoming: Array<{ kind: 'FIRST_RESPONSE_BREACH' | 'SLA_WARNING' | 'SLA_BREACH' | 'SLA_ESCALATION' | 'AUTO_CLOSE' | 'CUSTOMER_WAIT_CLOSE'; at: string }>;
+  upcoming: Array<{ kind: 'FIRST_RESPONSE_BREACH' | 'SLA_WARNING' | 'SLA_BREACH' | 'SLA_ESCALATION' | 'AUTO_CLOSE' | 'CUSTOMER_WAIT_CLOSE' | 'DISPATCH_OVERDUE'; at: string }>;
+  /** What the case is mainly waiting on, for a screen or a workflow to say. */
+  waiting: 'DISPATCH' | 'CUSTOMER' | 'RESOLUTION' | null;
   closed: boolean;
 }
 
 /** When each thing becomes due for this case row. Pure. */
 export function caseTimers(c: Row, s: Pick<CaseSettings, 'customerResponseHours'>): CaseTimers {
-  if (!ACTIVE_STATUSES.includes(c.status) && c.status !== 'RESOLVED') return { nextAt: null, upcoming: [], closed: true };
+  if (!ACTIVE_STATUSES.includes(c.status) && c.status !== 'RESOLVED') return { nextAt: null, upcoming: [], closed: true, waiting: null };
   const out: CaseTimers['upcoming'] = [];
   const add = (kind: CaseTimers['upcoming'][number]['kind'], t: number | null) => { if (t !== null && Number.isFinite(t)) out.push({ kind, at: new Date(t).toISOString() }); };
   if (c.status === 'RESOLVED') { add('AUTO_CLOSE', ms(c.autoCloseAt)); }
@@ -41,8 +44,9 @@ export function caseTimers(c: Row, s: Pick<CaseSettings, 'customerResponseHours'
       if ((c.escalationLevel ?? 0) < 2) add('SLA_ESCALATION', due + 0.5 * total);
     }
   }
+  if ((c.status === 'PENDING_DISPATCH' || c.status === 'DISPATCHED') && c.dispatchDueAt && !c.dispatchNotifiedAt) add('DISPATCH_OVERDUE', ms(c.dispatchDueAt));
   out.sort((a, b) => a.at.localeCompare(b.at));
-  return { nextAt: out[0]?.at ?? null, upcoming: out, closed: false };
+  return { nextAt: out[0]?.at ?? null, upcoming: out, closed: false, waiting: c.status === 'PENDING_DISPATCH' || c.status === 'DISPATCHED' ? 'DISPATCH' : c.status === 'PENDING_CUSTOMER' ? 'CUSTOMER' : c.status === 'RESOLVED' ? null : 'RESOLUTION' };
 }
 
 const supervisorsMessage = (c: Row, what: string) => `${what}: case ${c.number} (${String(c.severity).replace(/_/g, ' ').toLowerCase()}, ${String(c.tier).toLowerCase()})${c.assignee ? `, assigned to ${c.assignee}` : ', unassigned'}.`;
@@ -72,6 +76,14 @@ export async function fireDueCaseTimers(q: Queryable, caseId: string, now: Date 
         await caseLog(q, caseId, 'system', due.kind, { detail: { level, priority: LEVEL_PRIORITY[level] } });
         await notifySupervisors(q, c, due.kind === 'SLA_BREACH' ? 'CASE_SLA_BREACH' : 'CASE_SLA_ESCALATED', supervisorsMessage(c, due.kind === 'SLA_BREACH' ? 'The SLA has been breached' : 'Still unresolved, escalated again'), { level });
         fired.push(due.kind);
+        if (due.kind === 'SLA_BREACH') await maybeAutoDispatch(q, c);
+      }
+    } else if (due.kind === 'DISPATCH_OVERDUE') {
+      if (await mark('dispatch_notified_at = now()')) {
+        const unconfirmed = c.status === 'PENDING_DISPATCH';
+        await caseLog(q, caseId, 'system', 'DISPATCH_OVERDUE', { detail: { dueAt: c.dispatchDueAt, unconfirmed } });
+        await notifySupervisors(q, c, 'CASE_DISPATCH_OVERDUE', supervisorsMessage(c, unconfirmed ? 'Waiting for a technician to be confirmed, and it is taking too long' : 'The technician has not reported the visit done'));
+        fired.push(due.kind);
       }
     } else if (due.kind === 'AUTO_CLOSE') {
       await transitionCase(q, caseId, 'CLOSED_AUTO', { system: true, note: 'Closed automatically: no reply from the customer after the case was resolved.' });
@@ -86,7 +98,7 @@ export async function fireDueCaseTimers(q: Queryable, caseId: string, now: Date 
 }
 
 /** Cases with something due right now, oldest deadline first. One indexed scan: this is what a scheduler runs every minute or so. */
-export async function sweepCaseSla(q: Queryable, now: Date = new Date(), limit = 500): Promise<{ checked: number; fired: Record<string, number>; errors: Array<{ caseId: string; error: string }> }> {
+export async function sweepCaseSla(q: Queryable, now: Date = new Date(), limit = 500): Promise<{ checked: number; fired: Record<string, number>; errors: Array<{ caseId: string; error: string }>; holdsReleased: number }> {
   const s = await getCaseSettings(q);
   const rows = (await q.query(
     `SELECT id FROM cases WHERE
@@ -95,6 +107,7 @@ export async function sweepCaseSla(q: Queryable, now: Date = new Date(), limit =
           OR (sla_warned_at IS NULL AND resolution_due - make_interval(secs => (100 - sla_warn_percent) * sla_resolution_minutes * 0.6) <= $1)
           OR (escalation_level < 2 AND resolution_due + make_interval(secs => sla_resolution_minutes * 30) <= $1)
           OR (first_response_at IS NULL AND first_response_breached_at IS NULL AND first_response_due <= $1)))
+       OR (status IN ('PENDING_DISPATCH','DISPATCHED') AND dispatch_due_at <= $1 AND dispatch_notified_at IS NULL)
        OR (status = 'RESOLVED' AND auto_close_at <= $1)
        OR (status = 'PENDING_CUSTOMER' AND sla_paused_at + make_interval(hours => $2) <= $1)
      ORDER BY resolution_due LIMIT $3`, [now.toISOString(), s.customerResponseHours, limit])).rows;
@@ -103,7 +116,8 @@ export async function sweepCaseSla(q: Queryable, now: Date = new Date(), limit =
     try { for (const f of (await fireDueCaseTimers(q, r.id, now)).fired) fired[f] = (fired[f] ?? 0) + 1; }
     catch (e) { errors.push({ caseId: r.id, error: (e as Error).message }); }
   }
-  return { checked: rows.length, fired, errors };
+  const holdsReleased = await releaseExpiredHolds(q, undefined, undefined, now).catch(() => 0);
+  return { checked: rows.length, fired, errors, holdsReleased };
 }
 
 /** Cases that have breached their SLA or are close to it, for a supervisor's board. */

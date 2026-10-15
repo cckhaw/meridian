@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { createCustomer, createUser, markVerified, getDb, placeOrder, requestPortOut, type Db, type NewUser } from '@meridian/core';
+import { createCustomer, createUser, markVerified, getDb, placeOrder, requestPortOut, wfmSignature, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -1717,5 +1717,69 @@ describe('offer type switches and service types', () => {
     expect((await call('GET', '/settings/cases/refund-tiers', { cookie: agent.cookie })).status).toBe(403);
     expect((await call('POST', '/settings/cases/refund-tiers', { cookie: su, body: { tiers: [{ label: 'Only', maxMinor: 100, roleIds: ['finance'] }] } })).status).toBe(400);
     void fin;
+  });
+  it('field service: slots, booking, the signed callback, and the TM Forum views', async () => {
+    const su = await root();
+    const agent = await staff(['call-center']);
+    const lead = await staff(['team-lead']);
+    const SECRET = 'wfm-test-secret-0123456789';
+    // not connected yet: nothing to search, and the callback does not exist
+    const k0 = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Visit Vera', idDocument: `S${Math.random().toString().slice(2, 9)}B`, address: { line1: '2 Road', postcode: 'FV1234' }, phone: '+6591230000' } })).json.customer;
+    const kase = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: k0.id, issueTypeId: 'broadband.down.los', subject: 'Red light' } })).json;
+    await call('POST', `/cases/${kase.id}/status`, { cookie: agent.cookie, body: { status: 'IN_PROGRESS' } });
+    expect((await call('GET', `/cases/${kase.id}/slots`, { cookie: agent.cookie })).status).toBe(409);
+    const body0 = JSON.stringify({ eventId: 'e0', type: 'EN_ROUTE', jobRef: 'J' });
+    const sign = (b: string, secret = SECRET, at = Date.now()) => wfmSignature(b, secret, at);
+    process.env.MERIDIAN_WFM_WEBHOOK_SECRET = SECRET;
+    expect((await call('POST', '/v1/cases/webhooks/wfm-callback', { raw: body0, headers: { 'x-wfm-signature': sign(body0) }, origin: null })).status).toBe(404);   // switched off
+    // settings are an administrator's
+    expect((await call('GET', '/settings/cases/field-service', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('POST', '/settings/cases/field-service', { cookie: su, body: { vendor: 'simulator', enabled: true, config: { mode: 'OK', capacity: 2 } } })).json).toMatchObject({ enabled: true, webhookSecretSet: true, callbackPath: '/api/v1/cases/webhooks/wfm-callback' });
+    expect((await call('POST', '/settings/cases/field-service/test', { cookie: su })).json.ok).toBe(true);
+    // book
+    const slots = (await call('GET', `/cases/${kase.id}/slots`, { cookie: agent.cookie })).json;
+    expect(slots.slots.length).toBeGreaterThan(3);
+    expect(slots.skills).toEqual(['FIBER_SPLICING']);
+    const booked = await call('POST', `/cases/${kase.id}/appointments`, { cookie: agent.cookie, body: { slot: slots.slots[0], notes: 'Gate code 4321' } });
+    expect([booked.status, booked.json.status]).toEqual([201, 'SCHEDULED']);
+    expect((await call('GET', `/cases/${kase.id}`, { cookie: agent.cookie })).json.status).toBe('DISPATCHED');
+    expect((await call('POST', `/cases/${kase.id}/appointments`, { cookie: agent.cookie, body: { slot: slots.slots[1] } })).status).toBe(409);   // one visit at a time
+    // the callback: signed, or refused
+    const cb = (b: object, o: { secret?: string; at?: number; header?: string | null } = {}) => { const raw = JSON.stringify(b); return call('POST', '/v1/cases/webhooks/wfm-callback', { raw, headers: o.header === null ? {} : { 'x-wfm-signature': o.header ?? sign(raw, o.secret, o.at) }, origin: null }); };
+    const job = booked.json.externalRef;
+    expect((await cb({ eventId: 'a1', type: 'EN_ROUTE', jobRef: job }, { secret: 'wrong-secret-wrong-secret' })).status).toBe(401);
+    expect((await cb({ eventId: 'a1', type: 'EN_ROUTE', jobRef: job }, { header: null })).status).toBe(401);
+    expect((await cb({ eventId: 'a1', type: 'EN_ROUTE', jobRef: job }, { at: Date.now() - 3_600_000 })).status).toBe(401);
+    expect(Number((await db.query(`SELECT count(*) AS n FROM webhook_event_log WHERE event_id='a1'`)).rows[0]!.n)).toBe(0);   // nothing is stored for a request that failed authentication
+    expect((await cb({ eventId: 'a1', type: 'EN_ROUTE', jobRef: job, technician: { name: 'Lee' } })).json.status).toBe('APPLIED');
+    expect((await cb({ eventId: 'a1', type: 'EN_ROUTE', jobRef: job })).json.status).toBe('DUPLICATE');
+    expect((await cb({ eventId: 'a2', type: 'EN_ROUTE', jobRef: 'NOPE' })).status).toBe(404);
+    expect((await cb({ eventId: 'a3', type: 'TELEPORTED', jobRef: job })).status).toBe(400);
+    expect((await cb({ eventId: 'a4', type: 'JOB_COMPLETED', jobRef: job, notes: 'ONT replaced' })).json).toMatchObject({ status: 'APPLIED' });
+    const done = (await call('GET', `/cases/${kase.id}`, { cookie: agent.cookie })).json;
+    expect([done.status, done.resolution]).toEqual(['RESOLVED', 'Field visit completed: ONT replaced']);
+    expect((await call('GET', `/cases/${kase.id}/webhook-events`, { cookie: agent.cookie })).json.items.map((e: any) => e.status)).toEqual(expect.arrayContaining(['APPLIED']));
+    // TM Forum: ticket, interaction, service problem
+    const T = '/tmf-api/troubleTicket/v4/troubleTicket';
+    const tk = await call('GET', `${T}/${kase.id}`, { cookie: agent.cookie });
+    expect(tk.json).toMatchObject({ id: kase.id, externalId: kase.number, status: 'resolved', severity: 'Critical', ticketType: 'Fault', '@type': 'TroubleTicket' });
+    expect(tk.json.relatedParty).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'customer', id: k0.id })]));
+    const list = await call('GET', `${T}?status=resolved&limit=5&fields=name,status`, { cookie: agent.cookie });
+    expect(list.headers.get('x-total-count')).toBeTruthy();
+    expect(Object.keys(list.json[0]).sort()).toEqual(['@type', 'href', 'id', 'name', 'status']);
+    const created = await call('POST', T, { cookie: agent.cookie, body: { name: 'Slow evenings', description: 'Drops after 8pm', ticketType: 'Fault', severity: 'Major', relatedParty: [{ role: 'customer', id: k0.id }] } });
+    expect([created.status, created.json.status, created.json.severity]).toEqual([201, 'submitted', 'Major']);
+    expect((await call('PATCH', `${T}/${created.json.id}`, { cookie: agent.cookie, body: { status: 'inProgress', note: [{ text: 'Looking at it' }] } })).json.status).toBe('inProgress');
+    expect((await call('PATCH', `${T}/${created.json.id}`, { cookie: agent.cookie, body: { status: 'resolved' } })).status).toBe(400);   // a resolution is needed
+    expect((await call('PATCH', `${T}/${created.json.id}`, { cookie: agent.cookie, body: { status: 'resolved', statusChangeReason: 'Line re-profiled' } })).json.status).toBe('resolved');
+    const pi = await call('POST', '/tmf-api/partyInteractionManagement/v4/partyInteraction', { cookie: agent.cookie, body: { channel: { name: 'whatsapp' }, direction: 'inbound', reason: 'Asked for an update', relatedParty: [{ role: 'customer', id: k0.id }] } });
+    expect([pi.status, pi.json.channel.name, pi.json.direction]).toEqual([201, 'WHATSAPP', 'inbound']);
+    expect((await call('GET', `/tmf-api/partyInteractionManagement/v4/partyInteraction?relatedParty.id=${k0.id}`, { cookie: agent.cookie })).json.length).toBeGreaterThan(0);
+    const inc = (await call('POST', '/cases/incidents', { cookie: lead.cookie, body: { postalNode: 'FV1234', issueTypeId: 'broadband.down.cut' } })).json.incident;
+    const sp = await call('GET', `/tmf-api/serviceProblemManagement/v4/serviceProblem/${inc.id}`, { cookie: agent.cookie });
+    expect(sp.json).toMatchObject({ id: inc.id, category: 'Network', '@type': 'ServiceProblem', place: [{ id: 'FV1234' }] });
+    expect((await call('GET', `${T}/${inc.id}`, { cookie: agent.cookie })).status).toBe(404);              // a network incident is not a customer ticket
+    expect((await call('GET', '/tmf-api/serviceProblemManagement/v4/serviceProblem', { cookie: agent.cookie })).json.map((x: any) => x.id)).toContain(inc.id);
+    delete process.env.MERIDIAN_WFM_WEBHOOK_SECRET;
   });
 });
