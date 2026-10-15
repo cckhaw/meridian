@@ -14,7 +14,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 |---|---|---|---|---|
 | **Administrator** (`admin`) | All records | `/admin/users` | none | Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits. |
 | **Product Configurator** (`product-configurator`) | All records | `/catalog` | none | Designs the product catalog: offers, prices, contracts, ETC rules, fulfilment. |
-| **Billing Operations** (`billing-ops`) | All records | `/billing` | unlimited | Runs bill cycles and dunning, records payments, issues credit notes, handles invoice queries. |
+| **Billing Operations** (`billing-ops`) | All records | `/billing` | unlimited | Prepares bill runs (mock, review, exclusions) and runs dunning, records payments, issues credit notes, handles invoice queries. Approval of a bill run is for Finance or Revenue Assurance. |
 | **Rating & Charging** (`rating-charging`) | All records | `/catalog` | none | Reviews tariffs and price plans (read-only). Usage rating is not part of this release. |
 | **Customer (self-serve portal)** (`self-serve`) | Own customer | `/account` | none | An end customer. Sees and acts only on their own account: shop, orders, bills, cases. Online payments are confirmed by the payment provider webhook, never by the customer. |
 | **Call Center Agent** (`call-center`) | All records | `/customers` | none | Handles customer queries on the Customer 360: profile, services, orders, bills, cases. Can suspend/resume, change SIM or number, take payments. |
@@ -23,9 +23,9 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | **Dealer** (`dealer`) | Own dealer | `/orders/new?channel=DEALER` | none | A partner who sells for the operator. Sees only their own orders and commission. |
 | **Dealer Desk** (`dealer-desk`) | All records | `/orders/new?channel=DEALER` | none | Operator staff who keep the dealers and their agents and place orders on a dealer’s behalf, naming the dealer and the agent who sold it. |
 | **Customer Service** (`customer-service`) | All records | `/cases` | 200.00 | Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation. |
-| **Finance** (`finance`) | All records | `/finance` | unlimited | Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables. |
+| **Finance** (`finance`) | All records | `/finance` | unlimited | Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables, and approval of bill runs. |
 | **Fraud Analyst** (`fraud`) | All records | `/orders` | none | Reviews orders and accounts: can suspend a service and cancel an order before it ships. |
-| **Revenue Assurance** (`revenue-assurance`) | All records | `/finance` | none | Checks that billing, payments and the ledger agree (read-only). |
+| **Revenue Assurance** (`revenue-assurance`) | All records | `/finance` | none | Checks that billing, payments and the ledger agree, and approves a bill run once its mock has been reviewed (otherwise read-only). |
 | **KYC Compliance Officer** (`compliance`) | All records | `/kyc` | none | Reviews identity verification for online sign-ups and referred cases: approves, rejects, or sends back for corrections. Sees identity evidence; cannot sell or change billing. |
 | **Operations Support** (`inventory-ops`) | All records | `/inventory` | none | Looks after stock: keeps warehouse locations, loads stock in batches or one SKU at a time, and writes stock off with a reason. Sees the stock history; cannot sell or change billing. |
 
@@ -79,6 +79,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `billing:pay` |  |  | ✓ |  |  | ✓ |  | ✓ |  |  |  |  |  |  |  |  |
 | `billing:credit` |  |  | ✓ |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |
 | `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `billing:approve` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:export` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
 | `finance:configure` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |

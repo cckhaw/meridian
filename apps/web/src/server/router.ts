@@ -948,7 +948,36 @@ post('/invoices/:id/credit', 'billing:credit', async ({ db, user, params, body }
   if (limit !== null && b.amountMinor > limit) throw forbidden(`This credit is above your limit (${formatMoney(limit, await core.getRegional(db))}). Ask Billing or Finance to issue it.`);
   return core.creditInvoice(db, params.id!, b.amountMinor, b.reason, user.username, b.caseId);
 });
-post('/billing/run', 'billing:run', ({ db, user, body }) => { const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
+// ───────────────────────── governed bill runs: mock → review → exclusions → approval → production ─────────────────────────
+get('/billing/runs/settings', 'billing:read', ({ db }) => core.getBillRunSettings(db));
+post('/billing/runs/settings', 'settings:manage', ({ db, user, body }) => core.setBillRunSettings(db, user.username, z.object({
+  enforceGovernance: z.boolean(), dualControl: z.boolean(), spikePercent: z.number(), dropPercent: z.number(), largeMinor: z.number(), maxMockAgeHours: z.number() }).parse(body)));
+get('/billing/cycles', 'billing:read', async ({ db }) => ({ items: await core.listCycleConfigs(db) }));
+patch('/billing/cycles/:day', 'settings:manage', ({ db, user, params, body }) => core.updateCycleConfig(db, user.username, Number(params.day), z.object({ label: z.string().max(60).optional(), enabled: z.boolean().optional(), dualControl: z.boolean().nullable().optional(), notes: z.string().max(500).optional() }).parse(body)));
+get('/billing/runs', 'billing:read', ({ db, query }) => core.listBillRuns(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/billing/runs', 'billing:run', async ({ db, user, body }) => Response.json(await core.createBillRun(db, user.username, z.object({
+  cycleDay: z.number().int().optional(), daily: z.boolean().optional(), accountIds: z.array(z.string().uuid()).max(core.SELECTIVE_MAX).optional(), asOf: date.optional(), note: z.string().max(500).optional() }).parse(body)), { status: 201 }));
+get('/billing/runs/:id', 'billing:read', ({ db, params }) => core.getBillRun(db, params.id!));
+get('/billing/runs/:id/items', 'billing:read', ({ db, params, query }) => core.listBillRunItems(db, params.id!, { status: str(query, 'status'), anomaly: str(query, 'anomaly'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/billing/runs/:id/accounts/:accountId', 'billing:read', ({ db, params }) => core.previewRunAccount(db, params.id!, params.accountId!));
+/** Works on a run for up to about 20 seconds and says where it is. The page calls it while it is open; a scheduler can too (POST /billing/run-due). */
+post('/billing/runs/:id/work', 'billing:run', async ({ db, params }) => { const r = await core.runBillRunSlice(db, params.id!); return { ...r.run, busy: !!r.busy }; });
+post('/billing/runs/:id/submit', 'billing:run', ({ db, user, params, body }) => core.submitForApproval(db, user.username, params.id!, z.object({ note: z.string().max(500).optional() }).parse(body ?? {}).note));
+post('/billing/runs/:id/approve', 'billing:approve', ({ db, user, params, body }) => { const b = z.object({ note: z.string().max(400).optional(), execute: z.boolean().optional() }).parse(body ?? {}); return core.approveBillRun(db, user.username, params.id!, b); });
+post('/billing/runs/:id/reject', 'billing:approve', ({ db, user, params, body }) => core.rejectBillRun(db, user.username, params.id!, z.object({ note: z.string().min(1).max(400) }).parse(body).note));
+post('/billing/runs/:id/execute', 'billing:approve', ({ db, user, params }) => core.executeBillRun(db, user.username, params.id!));
+post('/billing/runs/:id/remock', 'billing:run', ({ db, user, params }) => core.remock(db, user.username, params.id!));
+post('/billing/runs/:id/cancel', 'billing:run', ({ db, user, params, body }) => core.cancelBillRun(db, user.username, params.id!, z.object({ note: z.string().max(400).optional() }).parse(body ?? {}).note));
+post('/billing/runs/:id/retry', 'billing:run', ({ db, user, params, body }) => core.retryFailedItems(db, user.username, params.id!, z.object({ accountIds: z.array(z.string().uuid()).max(5000).optional() }).parse(body ?? {}).accountIds));
+post('/billing/runs/:id/include', 'billing:run', ({ db, user, params, body }) => core.includeAccounts(db, user.username, params.id!, z.object({ accountIds: z.array(z.string().uuid()).min(1).max(5000) }).parse(body).accountIds));
+get('/billing/exclusions', 'billing:read', async ({ db, query }) => ({ items: await core.listExclusions(db, { runId: str(query, 'runId') }) }));
+post('/billing/exclusions', 'billing:run', async ({ db, user, body }) => Response.json(await core.addExclusion(db, user.username, z.object({
+  accountId: z.string().uuid().optional(), customerId: z.string().uuid().optional(), runId: z.string().uuid().optional(), reason: z.string().min(1).max(300), untilDate: date.optional() }).parse(body)), { status: 201 }));
+post('/billing/exclusions/:id/remove', 'billing:run', async ({ db, user, params }) => { await core.removeExclusion(db, user.username, Number(params.id)); return { ok: true }; });
+/** For a scheduler: works on whatever mock or production runs are waiting, so a big run goes on with nobody watching. */
+post('/billing/run-due', 'billing:run', ({ db }) => core.runDueBillRuns(db));
+/** The plain "bill this date" call skips review and approval, so it is refused while governance is on (the default). */
+post('/billing/run', 'billing:run', async ({ db, user, body }) => { if ((await core.getBillRunSettings(db)).enforceGovernance) throw new DomainError('REJECTED', 'Bill cycles are run from Billing → Bill runs, with a mock, a review and an approval. (A super user can switch this off in the bill-run settings.)'); const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
 /** Housekeeping for the store-front: closes stale sign-ups and releases orders whose online payment never arrived. Safe to run often (hourly is plenty). */
 post('/jobs/sweep-orders', 'billing:run', async ({ db, user }) => { const r = await core.sweepOrders(db, new Date(), user.username); await core.audit(db, user.username, 'order', 'sweep', 'SWEEP_ORDERS', { ...r }); return r; });
 post('/jobs/expire-applications', 'billing:run', async ({ db, user }) => { const r = await core.expireApplications(db); await core.audit(db, user.username, 'store', 'expire', 'EXPIRE_APPLICATIONS', { ...r }); return r; });

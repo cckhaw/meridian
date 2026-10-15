@@ -16,28 +16,32 @@ import { liftCreditRestrictions, restoreAfterPayment, voluntarySuspendedDays } f
 export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; /** The revenue stream the line belongs to, for the posting rules. */ stream?: RevenueStream; description: string; amountMinor: number; taxInclusive: boolean }
 
 /** Which stream an invoice line is booked to: what it says, or what its kind implies. */
-const streamOfLine = (l: DraftLine): RevenueStream => l.stream ?? (l.kind === 'ETC' ? 'ETC' : l.kind === 'INSTALLMENT' ? 'DEVICE_INSTALMENT' : 'SUBSCRIPTION');
+export const streamOfLine = (l: DraftLine): RevenueStream => l.stream ?? (l.kind === 'ETC' ? 'ETC' : l.kind === 'INSTALLMENT' ? 'DEVICE_INSTALMENT' : 'SUBSCRIPTION');
+
+/** Tax and totals for draft lines, without writing anything: what an invoice of these lines would come to. Used by the invoice itself and by mock bill runs and simulations. */
+export async function priceDraft(q: Queryable, acct: Row, lines: DraftLine[]) {
+  const customer = (await q.query('SELECT market_code FROM customers WHERE id=$1', [acct.customerId])).rows[0]!;
+  const mk = await marketFor(q, customer.marketCode);
+  const priced = lines.map((l) => ({ ...l, ...taxSplit(l.amountMinor, mk.taxBps, l.taxInclusive) })).filter((l) => l.gross !== 0);
+  return { mk, priced, net: priced.reduce((s, l) => s + l.net, 0), tax: priced.reduce((s, l) => s + l.tax, 0) };
+}
 
 /** Persists an invoice from priced draft lines and posts Dr AR / Cr revenue / Cr tax. Returns null when the total is zero. */
 export async function issueInvoice(
   q: Queryable,
   acct: Row,
-  o: { kind: 'CYCLE' | 'FINAL' | 'ADJUSTMENT'; periodStart: DateStr; periodEnd: DateStr; issueDate: DateStr; lines: DraftLine[] },
+  o: { kind: 'CYCLE' | 'FINAL' | 'ADJUSTMENT'; periodStart: DateStr; periodEnd: DateStr; issueDate: DateStr; lines: DraftLine[]; billRunId?: string },
 ): Promise<Row | null> {
-  const customer = (await q.query('SELECT market_code FROM customers WHERE id=$1', [acct.customerId])).rows[0]!;
-  const mk = await marketFor(q, customer.marketCode);
-  const priced = o.lines.map((l) => ({ ...l, ...taxSplit(l.amountMinor, mk.taxBps, l.taxInclusive) })).filter((l) => l.gross !== 0);
-  const net = priced.reduce((s, l) => s + l.net, 0);
-  const tax = priced.reduce((s, l) => s + l.tax, 0);
+  const { mk, priced, net, tax } = await priceDraft(q, acct, o.lines);
   if (net + tax <= 0) return null;
   const year = o.issueDate.slice(0, 4);
   const seq = (await q.query(`SELECT nextval('invoice_seq') AS n`)).rows[0]!.n as number;
   const id = randomUUID();
   const number = `INV-${year}-${String(seq).padStart(6, '0')}`;
   await q.query(
-    `INSERT INTO invoices (id, shard_id, number, account_id, customer_id, kind, period_start, period_end, issue_date, due_date, currency, net_minor, tax_minor, total_minor)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-    [id, acct.shardId, number, acct.id, acct.customerId, o.kind, o.periodStart, o.periodEnd, o.issueDate, addDays(o.issueDate, INVOICE_TERMS_DAYS), acct.currency, net, tax, net + tax],
+    `INSERT INTO invoices (id, shard_id, number, account_id, customer_id, kind, period_start, period_end, issue_date, due_date, currency, net_minor, tax_minor, total_minor, bill_run_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    [id, acct.shardId, number, acct.id, acct.customerId, o.kind, o.periodStart, o.periodEnd, o.issueDate, addDays(o.issueDate, INVOICE_TERMS_DAYS), acct.currency, net, tax, net + tax, o.billRunId ?? null],
   );
   const revenue = new Map<string, number>();
   for (const l of priced) {
@@ -85,12 +89,26 @@ export async function runBillCycle(db: Db, asOf: DateStr = today(), opts: { acco
   return res;
 }
 
-async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | null | 'EXISTS'> {
+/** What a cycle bill of this account would hold, read-only: the period, the lines, and the instalment charges it would use up. `exists` when the period is already billed. */
+export interface CycleDraft { exists: boolean; periodStart: DateStr; periodEnd: DateStr; lines: DraftLine[]; chargeIds: string[] }
+
+/** Bills one account for the cycle ending the day before `asOf`, in the caller's transaction. */
+export async function billAccount(q: Queryable, a: Row, asOf: DateStr, o: { billRunId?: string } = {}): Promise<Row | null | 'EXISTS'> {
+  const d = await draftCycleBill(q, a, asOf);
+  if (d.exists) return 'EXISTS';
+  for (const id of d.chargeIds) await q.query('UPDATE service_charges SET remaining_cycles = remaining_cycles - 1 WHERE id=$1', [id]);
+  const inv = await issueInvoice(q, a, { kind: 'CYCLE', periodStart: d.periodStart, periodEnd: d.periodEnd, issueDate: asOf, lines: d.lines, billRunId: o.billRunId });
+  await liftCreditRestrictions(q, a.id as string); // a new bill starts the unbilled usage from zero
+  if (inv) await audit(q, 'billing', 'invoice', inv.id, 'ISSUED', { number: inv.number, total: inv.totalMinor });
+  return inv;
+}
+
+export async function draftCycleBill(q: Queryable, a: Row, asOf: DateStr): Promise<CycleDraft> {
   const daily = a.billCycleDay === null;
   const periodStart = daily ? addDays(asOf, -1) : addMonths(asOf, -1);
   const periodEnd = addDays(asOf, -1);
   const exists = (await q.query(`SELECT 1 FROM invoices WHERE account_id=$1 AND kind='CYCLE' AND period_start=$2 AND period_end=$3`, [a.id, periodStart, periodEnd])).rows.length;
-  if (exists) return 'EXISTS';
+  if (exists) return { exists: true, periodStart, periodEnd, lines: [], chargeIds: [] };
   const days = diffDays(periodEnd, periodStart) + 1;
   const lines: DraftLine[] = [];
 
@@ -168,15 +186,13 @@ async function billAccount(q: Queryable, a: Row, asOf: DateStr): Promise<Row | n
     if (off > 0) lines.push({ serviceId: s.id, kind: 'ADJUSTMENT', revenueAccount: GL.SERVICE_REVENUE, taxInclusive: p.f.taxInclusive, description: `Group discount ${s.groupName}: ${s.identifier} (${s.bps / 100}% off)`, amountMinor: -off });
   }
   // Instalments and one-off adjustments
+  const chargeIds: string[] = [];
   const charges = (await q.query(`SELECT * FROM service_charges WHERE account_id=$1 AND remaining_cycles > 0 ORDER BY created_at`, [a.id])).rows;
   for (const c of charges) {
     lines.push({ serviceId: c.serviceId, kind: c.kind === 'INSTALLMENT' ? 'INSTALLMENT' : 'ADJUSTMENT', stream: 'DEVICE_INSTALMENT', revenueAccount: GL.GOODS_REVENUE, taxInclusive: c.taxInclusive, description: c.description, amountMinor: c.amountMinor });
-    await q.query('UPDATE service_charges SET remaining_cycles = remaining_cycles - 1 WHERE id=$1', [c.id]);
+    chargeIds.push(c.id as string);
   }
-  const inv = await issueInvoice(q, a, { kind: 'CYCLE', periodStart, periodEnd, issueDate: asOf, lines });
-  await liftCreditRestrictions(q, a.id as string); // a new bill starts the unbilled usage from zero
-  if (inv) await audit(q, 'billing', 'invoice', inv.id, 'ISSUED', { number: inv.number, total: inv.totalMinor });
-  return inv;
+  return { exists: false, periodStart, periodEnd, lines, chargeIds };
 }
 
 // ───────────────────────── payments, credit notes, dunning ─────────────────────────

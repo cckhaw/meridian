@@ -147,7 +147,11 @@ describe('role-based access', () => {
     await db.query(`UPDATE services SET activated_at = now() - interval '100 days' WHERE customer_id=$1`, [c]);
     const day = new Date().toISOString().slice(0, 10);
     await db.query('UPDATE accounts SET bill_cycle_day=$2 WHERE id=$1', [acct, Number(day.slice(8))]);
+    expect((await call('POST', '/billing/run', { cookie: root_, body: { asOf: day, accountId: acct } })).status).toBe(422); // governance is on: no plain run
+    const gov = (await call('GET', '/billing/runs/settings', { cookie: root_ })).json;
+    await call('POST', '/billing/runs/settings', { cookie: root_, body: { ...gov, enforceGovernance: false } });
     await call('POST', '/billing/run', { cookie: root_, body: { asOf: day, accountId: acct } });
+    await call('POST', '/billing/runs/settings', { cookie: root_, body: gov });
     const inv = (await call('GET', `/invoices?customerId=${c}`, { cookie: root_ })).json.items[0];
     expect(inv.totalMinor).toBeGreaterThan(0);
 
@@ -686,6 +690,59 @@ describe('settings and branding', () => {
     for (let i = 0; i < 20 && state.status !== 'ROLLED_BACK'; i++) state = (await call('POST', `/migration/jobs/${job.json.id}/run`, { cookie: admin.cookie })).json;
     expect(state.status).toBe('ROLLED_BACK');
     expect((await call('POST', '/migration/run', { cookie: admin.cookie })).status).toBe(403); // the scheduler endpoint needs billing:run
+  });
+
+  it('governed bill runs: Billing Ops mocks and reviews, Finance approves, nobody else can, and the cycle is billed once', async () => {
+    const billing = await staff(['billing-ops']);
+    const finance = await staff(['finance']);
+    const retail = await staff(['product-configurator']); // no billing permissions at all
+    const su = await root();
+    for (const p of ['/billing/runs', '/billing/cycles', '/billing/exclusions', '/billing/runs/settings']) {
+      expect((await call('GET', p, { cookie: retail.cookie })).status, p).toBe(403);
+      expect((await call('GET', p, { cookie: billing.cookie })).status, p).toBe(200);
+    }
+    const cycles = (await call('GET', '/billing/cycles', { cookie: billing.cookie })).json.items;
+    expect(cycles).toHaveLength(28);
+    expect((await call('PATCH', '/billing/cycles/5', { cookie: billing.cookie, body: { enabled: false } })).status).toBe(403); // configuring is for the super user
+    expect((await call('PATCH', '/billing/cycles/5', { cookie: su, body: { label: 'Mid-month enterprise' } })).json.label).toBe('Mid-month enterprise');
+
+    const c = await customer(su);
+    const acct = (await call('GET', `/customers/${c}/accounts`, { cookie: su })).json.items[0].id;
+    await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: c, accountId: acct, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true } } });
+    await db.query(`UPDATE services SET activated_at = now() - interval '100 days' WHERE customer_id=$1`, [c]);
+    const d = new Date(); d.setUTCDate(21); if (d.getTime() < Date.now() - 3 * 86_400_000) d.setUTCMonth(d.getUTCMonth() + 1);
+    await db.query('UPDATE accounts SET bill_cycle_day=21 WHERE id=$1', [acct]);
+
+    expect((await call('POST', '/billing/runs', { cookie: finance.cookie, body: { cycleDay: 21 } })).status).toBe(403); // approving is not running
+    const made = await call('POST', '/billing/runs', { cookie: billing.cookie, body: { cycleDay: 21, asOf: d.toISOString().slice(0, 10) } });
+    expect(made.status).toBe(201);
+    const id = made.json.id as string;
+    let st = made.json;
+    for (let i = 0; i < 20 && st.status !== 'MOCK_COMPLETED'; i++) st = (await call('POST', `/billing/runs/${id}/work`, { cookie: billing.cookie })).json;
+    expect(st).toMatchObject({ status: 'MOCK_COMPLETED' });
+    expect(st.mockTotalMinor).toBeGreaterThan(0);
+    const items = (await call('GET', `/billing/runs/${id}/items`, { cookie: billing.cookie })).json.items;
+    expect(items.map((i: any) => i.accountId)).toContain(acct);
+    expect((await call('GET', `/billing/runs/${id}/accounts/${acct}`, { cookie: billing.cookie })).json.lines.length).toBeGreaterThan(0);
+    // Billing Ops can run it but cannot approve it; Finance can approve but not run
+    expect((await call('POST', `/billing/runs/${id}/approve`, { cookie: billing.cookie, body: {} })).status).toBe(403);
+    expect((await call('POST', `/billing/runs/${id}/work`, { cookie: finance.cookie })).status).toBe(403);
+    // an exclusion is a billing-ops action and is recorded with its reason
+    expect((await call('POST', '/billing/exclusions', { cookie: billing.cookie, body: { accountId: acct, runId: id, reason: 'x' } })).status).toBe(400);
+    const ex = await call('POST', '/billing/exclusions', { cookie: billing.cookie, body: { accountId: acct, runId: id, reason: 'Fraud investigation FI-1' } });
+    expect(ex.status).toBe(201);
+    expect((await call('GET', `/billing/runs/${id}`, { cookie: billing.cookie })).json.counts.EXCLUDED).toBe(1);
+    expect((await call('POST', `/billing/exclusions/${ex.json.id}/remove`, { cookie: billing.cookie })).status).toBe(200);
+    st = (await call('GET', `/billing/runs/${id}`, { cookie: billing.cookie })).json;
+    expect(st.status).toBe('MOCK_RUNNING'); // the account that came back is priced again
+    for (let i = 0; i < 20 && st.status !== 'MOCK_COMPLETED'; i++) st = (await call('POST', `/billing/runs/${id}/work`, { cookie: billing.cookie })).json;
+    const ok = await call('POST', `/billing/runs/${id}/approve`, { cookie: finance.cookie, body: { note: 'Reviewed the mock', execute: true } });
+    expect(ok.json).toMatchObject({ status: 'PRODUCTION_RUNNING', approvedBy: expect.any(String) });
+    for (let i = 0; i < 40 && st.status !== 'COMPLETED'; i++) st = (await call('POST', `/billing/runs/${id}/work`, { cookie: billing.cookie })).json;
+    expect(st).toMatchObject({ status: 'COMPLETED' });
+    expect(st.billedInvoices).toBeGreaterThan(0);
+    expect((await call('GET', `/invoices?customerId=${c}`, { cookie: su })).json.items[0].totalMinor).toBeGreaterThan(0);
+    expect((await call('POST', '/billing/run-due', { cookie: billing.cookie })).status).toBe(200);
   });
 
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {

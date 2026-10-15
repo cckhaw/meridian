@@ -24,6 +24,7 @@ export * from './lifecycle-service.js';
 export * from './warehouses.js';
 export * from './roles-config.js';
 export * from './billing.js';
+export * from './bill-runs.js';
 export * from './cases.js';
 export * from './catalog.js';
 export * from './config.js';
