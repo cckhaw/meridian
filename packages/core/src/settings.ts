@@ -3,14 +3,30 @@ import { currencyInfo, DEFAULT_REGIONAL, regionalProblems, type RegionalSettings
 import { audit } from './audit.js';
 import { market, MARKETS, type Market } from './config.js';
 
-import type { Queryable } from './db.js';
+import { TX_SCOPE, type Queryable } from './db.js';
 import { invalid, rejected } from './errors.js';
 import { DEFAULT_THEME, isThemeId, type ThemeId } from '@meridian/types';
 
 // ───────────────────────── regional ─────────────────────────
+/**
+ * Settings that every step of an order reads again and again (the regional format, the markets) are read once per transaction. Outside a transaction nothing is
+ * remembered, and a write through the same transaction forgets them, so a reader never sees a stale value it could not have seen anyway.
+ */
+const txMemo = new WeakMap<object, Map<string, unknown>>();
+async function memoised<T>(q: Queryable, key: string, load: () => Promise<T>): Promise<T> {
+  if (!TX_SCOPE.has(q)) return load();
+  let m = txMemo.get(q);
+  if (!m) txMemo.set(q, (m = new Map()));
+  if (!m.has(key)) m.set(key, await load());
+  return structuredClone(m.get(key) as T);
+}
+const forgetSettings = (q: Queryable) => txMemo.get(q)?.clear();
+
 export async function getRegional(q: Queryable): Promise<RegionalSettings> {
-  const r = (await q.query(`SELECT value FROM settings WHERE key='regional'`)).rows[0];
-  return { ...DEFAULT_REGIONAL, ...(r?.value ?? {}) };
+  return memoised(q, 'regional', async () => {
+    const r = (await q.query(`SELECT value FROM settings WHERE key='regional'`)).rows[0];
+    return { ...DEFAULT_REGIONAL, ...(r?.value ?? {}) };
+  });
 }
 
 // ───────────────────────── markets ─────────────────────────
@@ -36,7 +52,8 @@ const cleanMarket = (m: Market): Market => {
   return { code, name, currency: '', dialCode, taxBps: m.taxBps, taxName };
 };
 
-export async function getMarketSettings(q: Queryable): Promise<MarketSettings> {
+export const getMarketSettings = (q: Queryable): Promise<MarketSettings> => memoised(q, 'markets', () => loadMarketSettings(q));
+async function loadMarketSettings(q: Queryable): Promise<MarketSettings> {
   const [row, r] = await Promise.all([q.query(`SELECT value FROM settings WHERE key='markets'`).then((x) => x.rows[0]?.value as Partial<MarketSettings> | undefined), getRegional(q)]);
   const stored = Array.isArray(row?.markets) && row.markets.length ? row.markets : Object.values(MARKETS);
   // The home country always shows the tax and dial code from Regional, which is where they are edited.
@@ -74,6 +91,7 @@ export async function setMarketSettings(q: Queryable, actor: string, s: { multip
   }
   const value = { multiple: !!s.multiple, defaultMarket, markets: markets.map(({ currency: _c, ...m }) => m) };
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('markets', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(value), actor]);
+  forgetSettings(q);
   await audit(q, actor, 'settings', 'markets', 'update', { multiple: value.multiple, defaultMarket, markets: value.markets.map((m) => m.code), from: before.markets.map((m) => m.code) });
   return getMarketSettings(q);
 }
@@ -159,6 +177,7 @@ export async function setRegional(q: Queryable, actor: string, input: RegionalSe
      ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`,
     [JSON.stringify(next), actor],
   );
+  forgetSettings(q);
   await audit(q, actor, 'settings', 'regional', 'update', { from: before, to: next, repricedOffers: repriced });
   return { regional: next, repriced };
 }
