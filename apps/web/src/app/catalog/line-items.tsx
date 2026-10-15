@@ -18,7 +18,7 @@ export function LineItemsSection({ offer, items, editable, onChanged }: { offer:
           <h3 id="li-h" className="text-footnote font-semibold uppercase tracking-wide text-label2">What’s included</h3>
           <p className="text-footnote text-label2">The parts of this offer, shown to customers. They don’t change the price.</p>
         </div>
-        {editable && <Button variant="secondary" className="!min-h-[36px] shrink-0 whitespace-nowrap !px-3 !text-subhead" onClick={() => setEditing('new')}>＋ Add line item</Button>}
+        {editable && <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap shrink-0 whitespace-nowrap !px-3 !text-subhead" onClick={() => setEditing('new')}>＋ Add line item</Button>}
       </div>
       {act.error && <div className="mb-2"><Alert>{act.error}</Alert></div>}
       {items.length === 0 ? (

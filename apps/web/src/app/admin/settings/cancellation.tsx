@@ -63,11 +63,11 @@ export function CancellationSettings() {
                 </div>
                 {/* The actions sit on their own line under the text: beside it they squeeze the rule's wording into a sliver. */}
                 <span className="flex w-full flex-wrap items-center gap-1 sm:pl-10">
-                  <Button variant="plain" aria-label={`Move ${r.name} up`} disabled={i === 0 || act.busy} className="!min-h-[36px] !px-2" onClick={() => apply(() => post(`/settings/cancellation/rules/${r.id}/move`, { direction: 'up' }))}>↑</Button>
-                  <Button variant="plain" aria-label={`Move ${r.name} down`} disabled={i === mine.length - 1 || act.busy} className="!min-h-[36px] !px-2" onClick={() => apply(() => post(`/settings/cancellation/rules/${r.id}/move`, { direction: 'down' }))}>↓</Button>
-                  <Button variant="secondary" className="!min-h-[36px] !px-3 !text-subhead" onClick={() => apply(() => patch(`/settings/cancellation/rules/${r.id}`, { ...r, enabled: !r.enabled }))}>{r.enabled ? 'Turn off' : 'Turn on'}</Button>
-                  <Button variant="secondary" className="!min-h-[36px] !px-3 !text-subhead" onClick={() => { setEditing(r); setCreating(false); }}>Edit</Button>
-                  <Button variant="plain" className="!min-h-[36px] !px-2 text-danger" aria-label={`Delete ${r.name}`} onClick={() => { if (confirm(`Delete “${r.name}”?`)) void apply(() => del(`/settings/cancellation/rules/${r.id}`)); }}>Delete</Button>
+                  <Button variant="plain" aria-label={`Move ${r.name} up`} disabled={i === 0 || act.busy} className="!min-h-[36px] max-lg:!min-h-tap !px-2" onClick={() => apply(() => post(`/settings/cancellation/rules/${r.id}/move`, { direction: 'up' }))}>↑</Button>
+                  <Button variant="plain" aria-label={`Move ${r.name} down`} disabled={i === mine.length - 1 || act.busy} className="!min-h-[36px] max-lg:!min-h-tap !px-2" onClick={() => apply(() => post(`/settings/cancellation/rules/${r.id}/move`, { direction: 'down' }))}>↓</Button>
+                  <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={() => apply(() => patch(`/settings/cancellation/rules/${r.id}`, { ...r, enabled: !r.enabled }))}>{r.enabled ? 'Turn off' : 'Turn on'}</Button>
+                  <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={() => { setEditing(r); setCreating(false); }}>Edit</Button>
+                  <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap !px-2 text-danger" aria-label={`Delete ${r.name}`} onClick={() => { if (confirm(`Delete “${r.name}”?`)) void apply(() => del(`/settings/cancellation/rules/${r.id}`)); }}>Delete</Button>
                 </span>
               </li>
             ))}
@@ -161,13 +161,13 @@ function RuleEditor({ v, rule, creating, onClose, onSaved }: { v: View; rule: Ru
                   <Select aria-label="Condition" value={c.fact} onChange={(e) => changeFact(i, e.target.value)}>{v.facts.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}</Select>
                   <Select aria-label="Comparison" value={c.op} onChange={(e) => changeOp(i, e.target.value)}>{v.ops.filter((o) => o.types.includes(f.type)).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</Select>
                   <ValueInput fact={f} cond={c} onChange={(n) => setCond(i, n)} />
-                  <Button type="button" variant="plain" aria-label="Remove condition" className="!min-h-[36px] text-danger" onClick={() => set({ when: r.when.filter((_, k) => k !== i) })}>Remove</Button>
+                  <Button type="button" variant="plain" aria-label="Remove condition" className="!min-h-[36px] max-lg:!min-h-tap text-danger" onClick={() => set({ when: r.when.filter((_, k) => k !== i) })}>Remove</Button>
                   <p className="text-caption text-label2 sm:col-span-4">{f.help}</p>
                 </div>
               );
             })}
           </div>
-          <Button type="button" variant="secondary" className="mt-2 !min-h-[36px] !px-3 !text-subhead" onClick={addCond}>＋ Add a condition</Button>
+          <Button type="button" variant="secondary" className="mt-2 !min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={addCond}>＋ Add a condition</Button>
         </fieldset>
 
         {r.action !== 'FLAG_AT_RISK' && (

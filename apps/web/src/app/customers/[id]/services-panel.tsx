@@ -70,7 +70,7 @@ export function ServicePanel({ service, onClose, onDone }: { service: any; accou
   const portingOut = service.status === 'PORTING_OUT';
   return (
     <Card className="mt-3 border border-accent/30">
-      <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold">Manage <span className="font-mono">{service.identifier}</span></h3><Button variant="plain" className="!min-h-[36px]" onClick={onClose}>Close</Button></div>
+      <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold">Manage <span className="font-mono">{service.identifier}</span></h3><Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" onClick={onClose}>Close</Button></div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Action"><Select value={action} onChange={(e) => setAction(e.target.value)}>
           {portingOut ? <><option value="complete-port-out">Complete port-out</option><option value="cancel-port-out">Cancel port-out</option></> : avail.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}

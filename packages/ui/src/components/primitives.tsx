@@ -12,7 +12,7 @@ const variants: Record<Variant, string> = {
 };
 
 export function Button({ variant = 'primary', className, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
-  return <button {...p} className={cx('inline-flex min-h-tap min-w-tap items-center justify-center gap-2 whitespace-nowrap rounded-control px-5 text-body font-medium transition active:scale-[.98] disabled:opacity-40', focus, variants[variant], className)} />;
+  return <button {...p} className={cx('inline-flex min-h-tap min-w-tap items-center justify-center gap-2 rounded-control px-5 text-body font-medium transition active:scale-[.98] disabled:opacity-40', focus, variants[variant], className)} />;
 }
 
 export function Card({ className, ...p }: HTMLAttributes<HTMLDivElement>) {

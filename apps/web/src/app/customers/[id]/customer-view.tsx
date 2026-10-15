@@ -61,7 +61,7 @@ export function CustomerView({ id }: { id: string }) {
 
       <div className="mb-4 flex items-center justify-between gap-3 lg:hidden">
         <nav aria-label="Where you are" className="min-w-0 flex-1 truncate text-subhead text-label2">{trail.map((t, i) => <span key={i}>{i > 0 && ' › '}{t.label}</span>)}</nav>
-        <Button variant="secondary" className="!min-h-[36px] shrink-0 !px-3 !text-subhead" aria-expanded={navOpen} onClick={() => setNavOpen(!navOpen)}>{navOpen ? 'Hide hierarchy' : 'Hierarchy'}</Button>
+        <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap shrink-0 !px-3 !text-subhead" aria-expanded={navOpen} onClick={() => setNavOpen(!navOpen)}>{navOpen ? 'Hide hierarchy' : 'Hierarchy'}</Button>
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] lg:items-start">

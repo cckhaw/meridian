@@ -357,7 +357,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                     );
                   })}
                 </div>
-                <Button type="button" variant="secondary" className="mt-2 !min-h-[36px] !px-3 !text-subhead" onClick={() => setF({ ...f, variants: [...f.variants, { colour: '', storage: '', sku: '', delta: '' }] })}>＋ Add colour or storage option</Button>
+                <Button type="button" variant="secondary" className="mt-2 !min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" onClick={() => setF({ ...f, variants: [...f.variants, { colour: '', storage: '', sku: '', delta: '' }] })}>＋ Add colour or storage option</Button>
               </fieldset>
             )}
           </div>

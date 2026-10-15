@@ -66,7 +66,7 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
           {c.isMaster && <IncidentCases c={c} onChange={refresh} />}
           {!c.isMaster && c.customerId && <FieldVisit c={c} onChange={refresh} />}
           <Card>
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-title3 font-semibold">Interactions on this case</h2>{can('case:create') && <Button variant="plain" className="!min-h-[36px]" onClick={() => setLogOpen(!logOpen)}>{logOpen ? 'Close' : 'Log an interaction'}</Button>}</div>
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-title3 font-semibold">Interactions on this case</h2>{can('case:create') && <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" onClick={() => setLogOpen(!logOpen)}>{logOpen ? 'Close' : 'Log an interaction'}</Button>}</div>
             {logOpen && <form className="mb-4 grid gap-3 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => post('/interactions', { customerId: c.customerId, caseId: id, ...li }))) { setLogOpen(false); setLi({ ...li, subject: '', summary: '' }); } }}>
               <Field label="Channel"><Select value={li.channel} onChange={(e) => setLi({ ...li, channel: e.target.value })}>{(meta.data?.channels ?? []).map((ch: string) => <option key={ch} value={ch}>{label(ch)}</option>)}</Select></Field>
               <Field label="Direction"><Select value={li.direction} onChange={(e) => setLi({ ...li, direction: e.target.value })}><option value="OUTBOUND">We contacted the customer</option><option value="INBOUND">The customer contacted us</option></Select></Field>
@@ -144,10 +144,10 @@ function Refunds({ c, onChange }: { c: any; onChange: () => Promise<void> }) {
             <div className="text-caption text-label2">asked by {r.requestedBy} · {dt(r.requestedAt)}{r.decidedBy && <> · {r.status === 'EXECUTED' ? 'approved' : r.status === 'REJECTED' ? 'rejected' : 'withdrawn'} by {r.decidedBy}{r.decisionNote && `: ${r.decisionNote}`}</>}</div>
             {r.status === 'PENDING' && can('case:write') && (
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {mine.has(r.id) && <><Input aria-label="Decision note" placeholder="Note (needed to reject)" value={note} onChange={(e) => setNote(e.target.value)} className="!min-h-[36px] max-w-xs" />
-                  <Button className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'APPROVE', note }), 'Approved and credited')}>Approve</Button>
-                  <Button variant="secondary" className="!min-h-[36px]" disabled={act.busy || note.trim().length < 3} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'REJECT', note }), 'Rejected')}>Reject</Button></>}
-                <Button variant="plain" className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/cancel`), 'Withdrawn')}>Withdraw</Button>
+                {mine.has(r.id) && <><Input aria-label="Decision note" placeholder="Note (needed to reject)" value={note} onChange={(e) => setNote(e.target.value)} className="!min-h-[36px] max-lg:!min-h-tap max-w-xs" />
+                  <Button className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'APPROVE', note }), 'Approved and credited')}>Approve</Button>
+                  <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy || note.trim().length < 3} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'REJECT', note }), 'Rejected')}>Reject</Button></>}
+                <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/cancel`), 'Withdrawn')}>Withdraw</Button>
               </div>)}
           </li>))}</ul>)}
       {can('case:write') && !closed && (
@@ -171,7 +171,7 @@ function IncidentCases({ c, onChange }: { c: any; onChange: () => Promise<void> 
   return (
     <Card>
       <div className="mb-3 flex items-center justify-between"><h2 className="text-title3 font-semibold">Customer cases ({c.childCount})</h2>
-        {can('case:supervise') && open && <Button variant="secondary" className="!min-h-[36px]" disabled={act.busy} onClick={() => void act.run(() => post(`/cases/${c.id}/children`, { adoptNode: true }), 'Attached')}>Attach open cases at {c.postalNode}</Button>}</div>
+        {can('case:supervise') && open && <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/cases/${c.id}/children`, { adoptNode: true }), 'Attached')}>Attach open cases at {c.postalNode}</Button>}</div>
       {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
       {kids.items.length === 0 ? <p className="text-subhead text-label2">No cases yet.</p> : <ul className="space-y-1">{kids.items.map((k: any) => (
         <li key={k.id} className="flex flex-wrap items-center gap-2 rounded-control bg-surface2 px-3 py-2 text-subhead"><Link className="font-mono text-accent" href={`/cases/${k.id}`}>{k.number}</Link><span className="min-w-0 flex-1 truncate">{k.customerName} · {k.subject}</span><Badge>{label(k.status)}</Badge>

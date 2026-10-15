@@ -16,7 +16,7 @@ export function CasesPanel({ customerId, cases, onChange }: { customerId: string
   const issue = f.issueTypeId && meta.data ? findNode(meta.data.taxonomy, f.issueTypeId) : null;
   return (
     <>
-      <SectionTitle action={can('case:create') ? <Button variant="plain" className="!min-h-[36px]" onClick={() => setOpen(!open)}>{open ? 'Close' : 'New case'}</Button> : undefined}>Cases</SectionTitle>
+      <SectionTitle action={can('case:create') ? <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" onClick={() => setOpen(!open)}>{open ? 'Close' : 'New case'}</Button> : undefined}>Cases</SectionTitle>
       {open && (
         <Card className="mb-4"><form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await run(() => post('/cases', { customerId, issueTypeId: f.issueTypeId, subject: f.subject, ...(f.note ? { note: f.note } : {}), ...(f.severity ? { severity: f.severity } : {}), channel: 'CALL_CENTER' }))) { setOpen(false); setF({ issueTypeId: '', subject: '', note: '', severity: '' }); } }}>
           <div className="sm:col-span-2">{meta.data ? <IssueTypePicker tree={meta.data.taxonomy} value={f.issueTypeId} onChange={(v) => setF({ ...f, issueTypeId: v })} /> : <p className="text-footnote text-label2">Loading…</p>}</div>
