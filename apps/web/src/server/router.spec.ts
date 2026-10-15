@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { createUser, getDb, placeOrder, requestPortOut, type Db, type NewUser } from '@meridian/core';
+import { createCustomer, createUser, markVerified, getDb, placeOrder, requestPortOut, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -518,6 +518,26 @@ describe('settings and branding', () => {
     expect(s.json.logoGuidance).toMatchObject({ width: 480, height: 120 });
     expect((await call('GET', '/auth/me', { cookie: su })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(true);
     expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(false);
+  });
+
+  it('settings say where a gateway is used, and the CRM payment link follows them', async () => {
+    const su = await root();
+    const st = (await call('GET', '/settings/store', { cookie: su })).json;
+    expect(st.gateways.find((g: any) => g.id === 'stripe')).toMatchObject({ paymentLink: true });
+    expect(st.gateways.find((g: any) => g.id === 'test')?.paymentLink ?? false).toBe(false);
+    expect(st.store.gateways.crm ?? []).toEqual([]);
+    expect((await call('GET', '/meta', { cookie: su })).json.cardLink).toBe(false);
+    const saved = await call('POST', '/settings/store', { cookie: su, body: { ...st.store, gateways: { enabled: [], default: null, crm: ['stripe'] } } });
+    expect(saved.status).toBe(200);
+    expect((await call('GET', '/settings/store', { cookie: su })).json.store.gateways.crm).toEqual(['stripe']);
+    const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'Router payer', idDocument: 'RTR-PAY-1' });
+    await markVerified(db, customer.id);
+    const o = { json: await placeOrder(db, { customerId: customer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CREDIT_CARD', deferred: true }, lines: [{ offerId: 'plan-sim-5g' }] }) };
+    expect(o.json.state).toBe('PAYMENT_PENDING');
+    const noKeys = await call('POST', `/orders/${o.json.id}/payment-link`, { cookie: su, body: {} });
+    expect(noKeys.status).toBeGreaterThanOrEqual(400); // Stripe keys are not set in tests: nothing is offered
+    expect((await call('POST', `/orders/${o.json.id}/payment-link`, { body: {} })).status).toBe(401);
+    await call('POST', '/settings/store', { cookie: su, body: st.store });
   });
 
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {

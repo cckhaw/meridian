@@ -99,6 +99,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
               {o.nextActions.includes('confirm_payment') && can('order:payment') && meta.data?.paymentMode === 'manual' && (
                 <Field label="Payment reference" hint="Terminal approval, receipt or transfer number"><Input value={ref} onChange={(e) => setRef(e.target.value)} /></Field>
               )}
+              {o.nextActions.includes('confirm_payment') && can('order:payment') && meta.data?.cardLink && <PaymentLink orderId={o.id} />}
               {o.nextActions.includes('confirm_payment') && !can('order:payment') && <Alert tone="info">Waiting for your payment to be confirmed. This order is released automatically once it is.</Alert>}
               {o.nextActions.includes('schedule_installation') && (
                 <Field label="Installation slot"><Input type="datetime-local" value={slot} onChange={(e) => setSlot(e.target.value)} /></Field>
@@ -132,5 +133,30 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
         </aside>
       </div>
     </>
+  );
+}
+
+/** A card payment page for the customer to open on their own phone. The order releases itself when the provider confirms; nothing to type here. */
+function PaymentLink({ orderId }: { orderId: string }) {
+  const [link, setLink] = useState<{ url: string; expiresAt?: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const act = useAction(() => {});
+  return (
+    <div className="space-y-2 rounded-control bg-surface2 p-3">
+      <div className="font-medium">Customer pays by card</div>
+      <p className="text-footnote text-label2">Send the customer a secure payment page to open on their own phone. The order is released as soon as the payment is confirmed.</p>
+      {link ? (
+        <div className="space-y-2">
+          <code className="block break-all rounded bg-surface p-2 text-footnote">{link.url}</code>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={async () => { try { await navigator.clipboard.writeText(link.url); setCopied(true); } catch { /* select manually */ } }}>{copied ? 'Copied' : 'Copy link'}</Button>
+            <a href={link.url} target="_blank" rel="noreferrer" className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead text-accent">Open</a>
+          </div>
+          {link.expiresAt && <p className="text-footnote text-label2">Valid until {dt(link.expiresAt)}. Getting a new link replaces this one.</p>}
+        </div>
+      ) : null}
+      {act.error && <Alert>{act.error}</Alert>}
+      <Button variant="secondary" className="w-full" disabled={act.busy} onClick={async () => { const r = await act.run(() => post(`/orders/${orderId}/payment-link`, {})); if (r) { setLink(r); setCopied(false); } }}>{act.busy ? 'Creating…' : link ? 'Get a new link' : 'Get card payment link'}</Button>
+    </div>
   );
 }

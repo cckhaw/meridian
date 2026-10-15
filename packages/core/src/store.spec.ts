@@ -9,8 +9,8 @@ import type { Db } from './db.js';
 import { createCustomer } from './customers.js';
 import { decideKycCase, type Personal, getKycCase, getKycDocument, listKycCases, markVerified } from './kyc.js';
 import { advanceOrder, getOrder, placeOrder } from './orders.js';
-import { applicationView, applyGatewayEvent, cancelApplication, checkout, createApplication, expireApplications, quoteBasket, startPayment, storeCatalog, storeConfig, submitKyc, testGatewayOutcome, updateApplication, uploadDocument, type AppAccess } from './store.js';
-import { getStoreSettings, setStoreSettings, DEFAULT_STORE_SETTINGS } from './store-settings.js';
+import { applicationView, applyGatewayEvent, cancelApplication, checkout, createApplication, createPaymentLink, expireApplications, quoteBasket, startPayment, storeCatalog, storeConfig, submitKyc, testGatewayOutcome, updateApplication, uploadDocument, type AppAccess } from './store.js';
+import { activeGateways, getStoreSettings, setStoreSettings, DEFAULT_STORE_SETTINGS } from './store-settings.js';
 import { freshDb } from './test-helpers.js';
 
 const png = (w = 64, h = 64) => {
@@ -372,7 +372,7 @@ describe('assisted sale (customer is in the store)', () => {
 });
 
 describe('KYC required for services', () => {
-  it('blocks selling a service to an unverified customer in any channel once switched on', async () => {
+  it('blocks selling a service to an unverified customer in the CRM once switched on', async () => {
     const s = await getStoreSettings(db);
     await setStoreSettings(db, 'root', { ...s, requireKycForServices: true });
     try {
@@ -386,10 +386,11 @@ describe('KYC required for services', () => {
 
   it('validates store settings', async () => {
     const s = await getStoreSettings(db);
-    await expect(setStoreSettings(db, 'r', { ...s, gateways: { enabled: ['paypal'], default: null } })).rejects.toThrow(/unknown payment gateway/);
-    await expect(setStoreSettings(db, 'r', { ...s, gateways: { enabled: ['stripe'], default: 'test' } })).rejects.toThrow(/default/);
+    await expect(setStoreSettings(db, 'r', { ...s, gateways: { enabled: ['paypal'], default: null, crm: [] } })).rejects.toThrow(/unknown payment gateway/);
+    await expect(setStoreSettings(db, 'r', { ...s, gateways: { enabled: ['stripe'], default: 'test', crm: [] } })).rejects.toThrow(/default/);
     await expect(setStoreSettings(db, 'r', { ...s, termsUrl: 'javascript:alert(1)' })).rejects.toThrow(/URL/);
     await expect(setStoreSettings(db, 'r', { ...s, minAge: -1 })).rejects.toThrow(/age/);
+    await expect(setStoreSettings(db, 'r', { ...s, gateways: { ...s.gateways, crm: ['paypal'] } })).rejects.toThrow(/unknown payment gateway/);
   });
 });
 
@@ -433,5 +434,58 @@ describe('a device on a contract in the online shop', () => {
     expect(svc.contractTermMonths).toBe(24);
     expect(svc.deal).toMatchObject({ termMonths: 24, subsidyMinor: 40000 });
     await setStoreSettings(db, 'root', s);
+  });
+});
+
+describe('where a payment gateway is used: store-front, CRM or both', () => {
+  const keys = { MERIDIAN_STRIPE_SECRET_KEY: 'sk_test_abc123', MERIDIAN_STRIPE_PUBLISHABLE_KEY: 'pk_test_abc123', MERIDIAN_STRIPE_WEBHOOK_SECRET: 'whsec_abc123' };
+  const saved: Record<string, string | undefined> = {};
+  const pending = async () => {
+    const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'Link payer', idDocument: `LNK-${++n}` });
+    await markVerified(db, customer.id);
+    return placeOrder(db, { customerId: customer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CREDIT_CARD', deferred: true }, lines: [{ offerId: 'plan-sim-5g' }] });
+  };
+  beforeAll(() => { for (const k of Object.keys(keys)) saved[k] = process.env[k]; Object.assign(process.env, keys); });
+  afterAll(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } setGatewayFetch(null); });
+
+  it('offers each place only what was switched on for it', async () => {
+    const s = await getStoreSettings(db);
+    await setStoreSettings(db, 'root', { ...s, gateways: { enabled: ['stripe'], default: 'stripe', crm: [] } });
+    expect((await activeGateways(db, process.env, 'STOREFRONT')).list.map((g) => g.id)).toEqual(['stripe']);
+    expect((await activeGateways(db, process.env, 'CRM')).list).toEqual([]);
+    await setStoreSettings(db, 'root', { ...s, gateways: { enabled: [], default: null, crm: ['stripe'] } });
+    expect((await activeGateways(db, process.env, 'CRM')).list.map((g) => g.id)).toEqual(['stripe']);
+    await setStoreSettings(db, 'root', s);
+  });
+
+  it('staff get a Stripe payment link for an order waiting for money, and the signed webhook releases it', async () => {
+    const s = await getStoreSettings(db);
+    const order = await pending();
+    expect(order.state).toBe('PAYMENT_PENDING');
+    await expect(createPaymentLink(db, order.id, 'clerk', { returnUrl: 'https://crm.example.com/pay/done' })).rejects.toThrow(/not switched on for the CRM/);
+    await setStoreSettings(db, 'root', { ...s, gateways: { enabled: [], default: null, crm: ['stripe'] } });
+    let sent = '';
+    setGatewayFetch(async (url, init) => { sent = `${url}?${init.body}`; return { ok: true, status: 200, json: async () => ({ id: 'cs_test_link1', url: 'https://checkout.stripe.com/c/pay/cs_test_link1', expires_at: Math.floor(Date.now() / 1000) + 3600 }) }; });
+    await expect(createPaymentLink(db, order.id, 'clerk', { returnUrl: 'javascript:alert(1)' })).rejects.toThrow(/https/);
+    const link = await createPaymentLink(db, order.id, 'clerk', { returnUrl: 'https://crm.example.com/pay/done' });
+    expect(link).toMatchObject({ gateway: 'stripe', ref: 'cs_test_link1', url: expect.stringContaining('checkout.stripe.com'), amountMinor: order.totalMinor });
+    expect(sent).toContain('api.stripe.com/v1/checkout/sessions');
+    expect(sent).toContain(`unit_amount%5D=${order.totalMinor}`);
+    expect(sent).not.toMatch(/sk_test_abc123/);
+
+    const raw = JSON.stringify({ id: 'evt_link1', type: 'checkout.session.completed', data: { object: { id: 'cs_test_link1', payment_status: 'paid', amount_total: order.totalMinor, currency: order.currency.toLowerCase() } } });
+    const sig = stripeSignature(raw, keys.MERIDIAN_STRIPE_WEBHOOK_SECRET);
+    const ev = stripeGateway.verifyWebhook(raw, (h) => (h === 'stripe-signature' ? sig : null), process.env)!;
+    expect(ev).toMatchObject({ type: 'payment.succeeded', ref: 'cs_test_link1' });
+    expect((await applyGatewayEvent(db, 'stripe', ev)).handled).toBe(true);
+    expect((await getOrder(db, order.id)).state).not.toBe('PAYMENT_PENDING');
+    await expect(createPaymentLink(db, order.id, 'clerk', { returnUrl: 'https://crm.example.com/pay/done' })).rejects.toThrow(/no payment is due/);
+    await setStoreSettings(db, 'root', s);
+  });
+
+  it('an unpaid Checkout session does not release the order', () => {
+    const raw = JSON.stringify({ id: 'evt_unpaid', type: 'checkout.session.completed', data: { object: { id: 'cs_x', payment_status: 'unpaid', amount_total: 100, currency: 'sgd' } } });
+    const sig = stripeSignature(raw, keys.MERIDIAN_STRIPE_WEBHOOK_SECRET);
+    expect(stripeGateway.verifyWebhook(raw, (h) => (h === 'stripe-signature' ? sig : null), process.env)).toBeNull();
   });
 });

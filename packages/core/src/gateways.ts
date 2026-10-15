@@ -21,6 +21,8 @@ export interface PaymentGateway {
   /** Non-secret values the store-front needs to render the payment step (e.g. Stripe publishable key). */
   publicConfig(env?: NodeJS.ProcessEnv): Record<string, string>;
   createIntent(i: CreateIntentInput, env?: NodeJS.ProcessEnv): Promise<CreatedIntent>;
+  /** Optional: a provider-hosted page the customer opens to pay (used by staff in the CRM, who are not collecting the card themselves). `ref` is what the webhook reports. */
+  createPaymentLink?(i: CreateIntentInput & { returnUrl: string }, env?: NodeJS.ProcessEnv): Promise<{ ref: string; url: string; expiresAt?: string }>;
   /** Verifies the provider's signature on the raw body and returns the event, or null for event types we ignore. Throws on a bad signature. */
   verifyWebhook(raw: string, headers: (name: string) => string | null, env?: NodeJS.ProcessEnv, now?: number): GatewayEvent | null;
 }
@@ -53,6 +55,25 @@ export const stripeGateway: PaymentGateway = {
     }
     return { ref: j.id, clientSecret: j.client_secret };
   },
+  /** A Stripe Checkout page for one payment. The order is confirmed by the signed webhook, never by the customer returning. */
+  async createPaymentLink(i, env = process.env) {
+    const form = new URLSearchParams({
+      mode: 'payment', success_url: i.returnUrl, cancel_url: i.returnUrl, client_reference_id: i.reference, 'line_items[0][quantity]': '1',
+      'line_items[0][price_data][currency]': i.currency.toLowerCase(), 'line_items[0][price_data][unit_amount]': String(i.amountMinor), 'line_items[0][price_data][product_data][name]': i.description,
+      expires_at: String(Math.floor(Date.now() / 1000) + 24 * 3600),
+    });
+    for (const [k, v] of Object.entries({ ...i.metadata, reference: i.reference })) { form.set(`metadata[${k}]`, v); form.set(`payment_intent_data[metadata][${k}]`, v); }
+    const res = await httpFetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST', body: form.toString(),
+      headers: { authorization: `Bearer ${env.MERIDIAN_STRIPE_SECRET_KEY}`, 'content-type': 'application/x-www-form-urlencoded', 'idempotency-key': i.idempotencyKey },
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.id || !j.url) {
+      console.error('[stripe] create checkout session failed', res.status, j?.error?.type, j?.error?.code);
+      throw new DomainError('REJECTED', 'The payment provider could not create the payment link. Please try again.');
+    }
+    return { ref: j.id, url: j.url, expiresAt: j.expires_at ? new Date(j.expires_at * 1000).toISOString() : undefined };
+  },
   verifyWebhook(raw, header, env = process.env, now = Date.now()) {
     const secret = env.MERIDIAN_STRIPE_WEBHOOK_SECRET;
     if (!secret) throw new DomainError('NOT_FOUND', 'not found');
@@ -66,6 +87,8 @@ export const stripeGateway: PaymentGateway = {
     const ev = JSON.parse(raw);
     const obj = ev?.data?.object;
     if (ev.type === 'payment_intent.succeeded') return { eventId: ev.id, type: 'payment.succeeded', ref: obj.id, amountMinor: obj.amount_received ?? obj.amount, currency: String(obj.currency).toUpperCase() };
+    if ((ev.type === 'checkout.session.completed' || ev.type === 'checkout.session.async_payment_succeeded') && obj.payment_status === 'paid') return { eventId: ev.id, type: 'payment.succeeded', ref: obj.id, amountMinor: obj.amount_total, currency: String(obj.currency).toUpperCase() };
+    if (ev.type === 'checkout.session.async_payment_failed') return { eventId: ev.id, type: 'payment.failed', ref: obj.id, amountMinor: obj.amount_total, currency: String(obj.currency).toUpperCase(), reason: 'The payment did not go through.' };
     if (ev.type === 'payment_intent.payment_failed') return { eventId: ev.id, type: 'payment.failed', ref: obj.id, amountMinor: obj.amount, currency: String(obj.currency).toUpperCase(), reason: obj.last_payment_error?.message };
     return null;
   },

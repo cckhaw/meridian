@@ -153,7 +153,8 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
   }
   const hasService = [...offers.values()].some(createsService);
   if (hasService && customer?.displayName === 'Walk-in customer') throw rejected('services need a registered customer');
-  if (hasService && customer && (await getStoreSettings(q)).requireKycForServices && customer.kycStatus !== 'VERIFIED') {
+  // CRM channels only: the store-front never sells a service without an approved identity application, whatever this switch says.
+  if (hasService && customer && input.channel !== 'SELF_SERVE' && (await getStoreSettings(q)).requireKycForServices && customer.kycStatus !== 'VERIFIED') {
     fail('Identity verification (KYC) must be completed before a service can be sold to this customer.');
   }
 
