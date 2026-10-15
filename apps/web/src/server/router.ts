@@ -1469,6 +1469,16 @@ post('/inventory/write-off', 'inventory:writeoff', async ({ db, user, body }) =>
   return core.writeOffStock(db, user.username, b);
 });
 get('/inventory/movements', 'inventory:read', ({ db, user, query }) => core.listMovements(db, { locationId: user.scope.storeId ?? str(query, 'locationId'), sku: str(query, 'sku'), kind: str(query, 'kind'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+// ── Stock transfers between warehouses and stores ──
+const xferScope = (u: SessionUser) => ({ storeId: u.scope.storeId ?? null });
+/** Every place stock can be sent to or from: switched-on warehouses and stores (a store user needs the others too). */
+get('/inventory/transfer-places', 'inventory:read', async ({ db }) => ({ items: [...(await core.listWarehouses(db)).filter((w) => w.status === 'ACTIVE').map((w) => ({ id: w.id, name: w.name, kind: 'WAREHOUSE' })), ...(await db.query(`SELECT id, name FROM stores WHERE status='ACTIVE' ORDER BY name LIMIT 500`)).rows.map((s) => ({ id: s.id, name: s.name, kind: 'STORE' }))] }));
+get('/inventory/transfers', 'inventory:read', ({ db, user, query }) => core.listTransfers(db, { status: str(query, 'status'), location: user.scope.storeId ?? str(query, 'location'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/inventory/transfers', 'inventory:transfer', ({ db, user, body }) => core.requestTransfer(db, user.username, z.object({ from: z.string().max(40), to: z.string().max(40), lines: z.array(z.object({ sku: z.string().max(60), quantity: z.number().int() })).max(200).optional(), sims: z.object({ iccids: z.array(z.string().max(25)).max(20000).optional(), count: z.number().int().optional() }).optional(), note: z.string().max(300).optional() }).parse(body), xferScope(user)));
+get('/inventory/transfers/:id', 'inventory:read', async ({ db, user, params }) => { const t = await core.getTransfer(db, params.id!); if (user.scope.storeId && t.fromLocation !== user.scope.storeId && t.toLocation !== user.scope.storeId) throw forbidden('That transfer does not involve your store.'); return t; });
+post('/inventory/transfers/:id/dispatch', 'inventory:transfer', ({ db, user, params }) => core.dispatchTransfer(db, user.username, params.id!, xferScope(user)));
+post('/inventory/transfers/:id/receive', 'inventory:transfer', ({ db, user, params, body }) => core.receiveTransfer(db, user.username, params.id!, z.object({ received: z.record(z.number().int()).optional(), iccids: z.array(z.string().max(25)).max(20000).optional(), note: z.string().max(300).optional() }).parse(body ?? {}), xferScope(user)));
+post('/inventory/transfers/:id/cancel', 'inventory:transfer', ({ db, user, params }) => core.cancelTransfer(db, user.username, params.id!, xferScope(user)));
 get('/warehouses', 'inventory:read', async ({ db }) => ({ items: await core.listWarehouses(db) }));
 post('/warehouses', 'warehouse:manage', ({ db, user, body }) => core.createWarehouse(db, user.username, z.object({ name: z.string().min(1).max(80), address: blank(z.string().max(300)) }).parse(body)));
 patch('/warehouses/:id', 'warehouse:manage', ({ db, user, params, body }) => core.updateWarehouse(db, user.username, params.id!, z.object({ name: z.string().min(1).max(80), address: z.string().max(300), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
@@ -1517,7 +1527,8 @@ get('/numbers/search', ['numbering:select'], ({ db, query }) => new core.NumberR
 }));
 post('/numbers/reserve', ['numbering:select'], ({ db, user, body }) => new core.NumberReservationService(db).reserve(z.object({ msisdn: z.string().max(20) }).parse(body).msisdn, `checkout:${user.id}`, { actor: user.username }));
 post('/numbers/release', ['numbering:select'], async ({ db, user, body }) => ({ released: await new core.NumberReservationService(db).release(z.object({ msisdn: z.string().max(20) }).parse(body).msisdn, `checkout:${user.id}`, user.username) }));
-get('/sims/available', ['numbering:select'], ({ db, user, query }) => core.listSims(db, { state: 'AVAILABLE', kind: (str(query, 'kind') as never) ?? 'PHYSICAL', locationId: user.scope.storeId ?? str(query, 'locationId'), q: str(query, 'q'), limit: num(query, 'limit') ?? 20, cursor: str(query, 'cursor') }));
+/** SIM cards free to sell. A store seller sees their own store's cards; for a store sale chosen by an administrator (`locationId`) that store's; a remote sale (call centre, self-serve, dealer: `warehouse=1`) the warehouses'. */
+get('/sims/available', ['numbering:select'], ({ db, user, query }) => core.listSims(db, { state: 'AVAILABLE', kind: (str(query, 'kind') as never) ?? 'PHYSICAL', locationId: user.scope.storeId ?? str(query, 'locationId'), warehousesOnly: !user.scope.storeId && !str(query, 'locationId') && query.get('warehouse') === '1', q: str(query, 'q'), limit: num(query, 'limit') ?? 20, cursor: str(query, 'cursor') }));
 get('/settings/numbering', ['settings:manage'], ({ db }) => core.getNumberingSettings(db));
 post('/settings/numbering', ['settings:manage'], ({ db, user, body }) => core.setNumberingSettings(db, user.username, z.object({ requireSim: z.boolean(), reservationMinutes: z.number().int(), imsiQuarantineDays: z.number().int(), auctionSettlementHours: z.number().int(), portInExpiryDays: z.number().int().default(14) }).parse(body)));
 

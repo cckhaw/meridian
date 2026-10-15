@@ -37,6 +37,7 @@ export function SimStep({ w, requireSim }: { w: Wizard; requireSim: boolean }) {
 
 function LineSim({ w, title, subtitle, badge, slot, set, line, requireSim }: { w: Wizard; title: string; subtitle?: string; badge?: string; slot: Slot; set: (p: Partial<Slot>) => void; line: any; requireSim: boolean }) {
   const taken = takenElsewhere(w.items, slot);
+  const place = w.fixedStore ?? (w.retail ? w.store : '');   // where the sale is made
   const [simMode, setSimMode] = useState<'NEXT' | 'CARD' | 'ESIM' | 'NONE'>(slot.iccid ? 'CARD' : slot.simType === 'ESIM' ? 'ESIM' : slot.simType === 'PHYSICAL' ? 'NEXT' : requireSim ? 'NEXT' : 'NONE');
   useEffect(() => { if (requireSim && simMode === 'NEXT' && !slot.iccid && !slot.simType) set({ simType: 'PHYSICAL' }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const numMode: 'AUTO' | 'CHOOSE' | 'OWN' = slot.numberToken ? 'CHOOSE' : slot.portIn ? 'OWN' : 'AUTO';
@@ -53,10 +54,10 @@ function LineSim({ w, title, subtitle, badge, slot, set, line, requireSim }: { w
       <Segmented<'NEXT' | 'CARD' | 'ESIM' | 'NONE'> label={`SIM for ${title}`} value={simMode} onChange={(v) => { setSimMode(v); set(v === 'CARD' ? { iccid: '', simType: '' } : v === 'NEXT' ? { iccid: '', simType: 'PHYSICAL' } : v === 'ESIM' ? { iccid: '', simType: 'ESIM' } : { iccid: '', simType: '' }); }}
         options={[{ value: 'NEXT' as const, label: 'Next free card' }, { value: 'CARD' as const, label: 'A specific card' }, { value: 'ESIM' as const, label: 'eSIM' }, ...(requireSim ? [] : [{ value: 'NONE' as const, label: 'Later' }])]} />
       <div className="mt-3">
-        {simMode === 'NEXT' && <p className="text-subhead text-label2">The next free SIM card {w.fixedStore ? `at your store (${w.fixedStore})` : 'in the warehouse'} is taken when the order is placed.</p>}
+        {simMode === 'NEXT' && <p className="text-subhead text-label2">The next free SIM card {place ? `at ${w.fixedStore ? 'your store' : 'the selling store'} (${place})` : w.retail ? 'at the store (choose the store first)' : 'in the warehouse'} is taken when the order is placed.</p>}
         {simMode === 'ESIM' && <p className="text-subhead text-label2">A new eSIM profile is issued; the customer scans its activation code on the device.</p>}
         {simMode === 'NONE' && <p className="text-subhead text-label2">No SIM now. It can be added when the service is set up.</p>}
-        {simMode === 'CARD' && <CardPicker value={slot.iccid ?? ''} taken={taken.iccids} onPick={(iccid) => set({ iccid, simType: iccid ? 'PHYSICAL' : '' })} />}
+        {simMode === 'CARD' && <CardPicker place={place} retail={w.retail} value={slot.iccid ?? ''} taken={taken.iccids} onPick={(iccid) => set({ iccid, simType: iccid ? 'PHYSICAL' : '' })} />}
       </div>
 
       <h4 className="mb-2 mt-5 text-subhead font-semibold">Number</h4>
@@ -76,12 +77,14 @@ function LineSim({ w, title, subtitle, badge, slot, set, line, requireSim }: { w
 export const release = (msisdn?: string, token?: string) => { if (msisdn && token) void post('/numbers/release', { msisdn }).catch(() => {}); };
 
 /** Reminder shown under SIM pickers: physical cards are taken from the seller's own stock. */
-export function CardNote() { return <p className="mt-4 text-footnote text-label2">A physical card is taken from your own stock when the order is placed; an eSIM profile is issued new.</p>; }
+export function CardNote() { return <p className="mt-4 text-footnote text-label2">A physical card is taken from the selling store’s stock (or the warehouse for a remote sale) when the order is placed; an eSIM profile is issued new.</p>; }
 
-function CardPicker({ value, onPick, taken }: { value: string; onPick: (iccid: string) => void; taken: Set<string> }) {
+function CardPicker({ place, retail, value, onPick, taken }: { place: string; retail: boolean; value: string; onPick: (iccid: string) => void; taken: Set<string> }) {
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
-  const list = useApi<{ items: any[] }>(`/sims/available?kind=PHYSICAL&limit=${8 + taken.size}&q=${encodeURIComponent(term)}`);
+  // cards come from where the sale is made: the selling store's shelf, or the warehouses for a remote sale
+  const list = useApi<{ items: any[] }>(retail && !place ? null : `/sims/available?kind=PHYSICAL&limit=${8 + taken.size}&q=${encodeURIComponent(term)}&${retail ? `locationId=${encodeURIComponent(place)}` : 'warehouse=1'}`);
+  if (retail && !place) return <Alert tone="info">Choose the selling store first; SIM cards are taken from its stock.</Alert>;
   const free = (list.data?.items ?? []).filter((s) => !taken.has(s.iccid)).slice(0, 8);
   return (
     <div>

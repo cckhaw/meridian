@@ -132,7 +132,7 @@ export async function changeSimNorth(db: Db, ref: string, i: SimSwapInput, actor
       : (await q.query(`SELECT * FROM iccid_inventory WHERE kind='ESIM' AND state IN ('WAREHOUSE_INVENTORY','DISTRIBUTED_DEALER') ORDER BY created_at, iccid LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
     if (!sim) throw i.newIccid ? notFound('SIM in inventory', i.newIccid) : rejected('No eSIM profile is available. Replenish the eSIM pool.');
     if (sim.iccid === s.iccid) throw invalid('The service already uses this SIM.');
-    if (!['WAREHOUSE_INVENTORY', 'DISTRIBUTED_DEALER', 'RESERVED'].includes(sim.state) || (sim.serviceId && sim.serviceId !== s.id)) throw conflict(`SIM ${sim.iccid} is ${String(sim.state).toLowerCase().replace(/_/g, ' ')} and cannot be issued.`);
+    if (!['WAREHOUSE_INVENTORY', 'DISTRIBUTED_DEALER', 'RESERVED'].includes(sim.state) || sim.transferId || (sim.serviceId && sim.serviceId !== s.id)) throw conflict(`SIM ${sim.iccid} is ${String(sim.state).toLowerCase().replace(/_/g, ' ')} and cannot be issued.`);
     if (i.reason === 'ESIM_CONVERSION' && sim.kind !== 'ESIM') throw invalid('Converting to eSIM needs an eSIM profile.');
     // retire the old SIM (lost, stolen or damaged ones are scrapped), quarantine its identity, and bring the new SIM in
     const old = s.iccid ? (await q.query('SELECT * FROM iccid_inventory WHERE iccid=$1 FOR UPDATE', [s.iccid])).rows[0] : null;

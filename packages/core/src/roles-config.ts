@@ -69,6 +69,7 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'catalog:write': ['Catalog', 'Maintain the catalog', 'Create and change offers, import offers'],
   'inventory:read': ['Inventory', 'See stock', 'Stock levels and movements'],
   'inventory:write': ['Inventory', 'Receive stock', 'Receive stock one SKU at a time or in a CSV batch'],
+  'inventory:transfer': ['Inventory', 'Transfer stock', 'Move stock and SIM cards between warehouses and stores: request, dispatch, receive, send back'],
   'inventory:writeoff': ['Inventory', 'Write stock off', 'Take stock off the books with a reason (damaged, lost, expired, stolen)'],
   'numbering:read': ['Numbers and SIMs', 'See the pools', 'Phone numbers, SIM cards and subscriber identities, by state'],
   'numbering:select': ['Numbers and SIMs', 'Choose a number and a SIM', 'Pick a number (VIP included) and a SIM card while selling'],

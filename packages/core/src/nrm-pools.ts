@@ -249,13 +249,15 @@ export async function transitionSim(db: Db, iccid: string, to: IccidState, o: { 
   });
 }
 
-export interface SimFilter { locationId?: string; kind?: 'PHYSICAL' | 'ESIM'; state?: string; q?: string; limit?: number; cursor?: string }
+export interface SimFilter { locationId?: string; /** Only cards held in warehouses (a sale not made at a store). */ warehousesOnly?: boolean; kind?: 'PHYSICAL' | 'ESIM'; state?: string; q?: string; limit?: number; cursor?: string }
 export async function listSims(q: Queryable, f: SimFilter = {}): Promise<{ items: Row[]; nextCursor: string | null }> {
   const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
   const params: unknown[] = [];
   const p = (v: unknown) => `$${params.push(v)}`;
   const where: string[] = [];
   if (f.locationId) where.push(`location_id = ${p(f.locationId)}`);
+  if (f.warehousesOnly) where.push(`location_id LIKE 'WH-%'`);
+  if (f.state === 'AVAILABLE') where.push('transfer_id IS NULL');                          // a card on the road cannot be sold
   if (f.kind) where.push(`kind = ${p(f.kind)}`);
   if (f.state === 'AVAILABLE') where.push(`state IN ('WAREHOUSE_INVENTORY','DISTRIBUTED_DEALER')`);
   else if (f.state) where.push(`state = ${p(f.state)}`);
@@ -337,12 +339,15 @@ export async function allocateSimTx(q: Queryable, c: SimChoice, o: { orderId: st
     }
   } else {
     sim = (await q.query(
-      `SELECT * FROM iccid_inventory WHERE kind='PHYSICAL' AND state IN ('WAREHOUSE_INVENTORY','DISTRIBUTED_DEALER') AND (CASE WHEN $1::text IS NOT NULL THEN location_id = $1 ELSE location_id LIKE 'WH-%' END)
+      `SELECT * FROM iccid_inventory WHERE kind='PHYSICAL' AND transfer_id IS NULL AND state IN ('WAREHOUSE_INVENTORY','DISTRIBUTED_DEALER') AND (CASE WHEN $1::text IS NOT NULL THEN location_id = $1 ELSE location_id LIKE 'WH-%' END)
         ORDER BY iccid LIMIT 1 FOR UPDATE SKIP LOCKED`, [o.storeId ?? null])).rows[0];
     if (!sim) throw rejected(o.storeId ? `There are no free SIM cards at your store (${o.storeId}). Receive some first, or sell an eSIM.` : 'There are no free SIM cards in the warehouse.');
   }
   if (!['WAREHOUSE_INVENTORY', 'DISTRIBUTED_DEALER'].includes(sim.state)) throw rejected(`SIM ${sim.iccid} is ${String(sim.state).toLowerCase().replace(/_/g, ' ')} and cannot be sold.`);
-  if (o.storeId && sim.locationId !== o.storeId) throw rejected(`SIM ${sim.iccid} is at ${sim.locationId}, not at your store (${o.storeId}).`);
+  if (sim.transferId) throw rejected(`SIM ${sim.iccid} is on a stock transfer and cannot be sold.`);
+  if (o.storeId && sim.locationId !== o.storeId) throw rejected(`SIM ${sim.iccid} is at ${sim.locationId ?? 'no place'}, not at your store (${o.storeId}).`);
+  // a sale that is not made at a store (call centre, self-serve) takes cards from the warehouses, never from a store's shelf
+  if (!o.storeId && sim.locationId && !String(sim.locationId).startsWith('WH-') && (await q.query('SELECT 1 FROM stores WHERE id=$1', [sim.locationId])).rows.length) throw rejected(`SIM ${sim.iccid} is at store ${sim.locationId}. Remote sales use warehouse stock.`);
   assertIccidTransition(sim.iccid, sim.state, 'RESERVED');
   await q.query(`UPDATE iccid_inventory SET state='RESERVED', previous_state=$2, order_id=$3, updated_at=now() WHERE iccid=$1`, [sim.iccid, sim.state, o.orderId]);
   await auditIdentifier(q, { type: 'ICCID', id: sim.iccid, from: sim.state, to: 'RESERVED', actor: o.actor, reason: 'allocated to an order', detail: { order: o.orderId } });

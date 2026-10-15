@@ -33,6 +33,7 @@ const CORE_PERMISSIONS = [
   'numbering:read', // see the pools of numbers, SIMs and identities
   'numbering:select', // choose a number and a SIM while selling
   'numbering:manage', // load the pools, set tier prices, hold numbers for auction, retire SIMs
+  'inventory:transfer', // move stock between warehouses and stores: request, dispatch, receive, send back
   'inventory:writeoff', // take stock off the books with a reason: damaged, lost, expired, stolen, a count that came up short
   'warehouse:manage', // add, rename, switch off and remove warehouse locations
   'case:read', 'case:create', 'case:write',
@@ -127,7 +128,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'retail-store', label: 'Retail Store', scope: 'store', home: '/orders/new?channel=RETAIL_ASSISTED',
     summary: 'Sells over the counter at one store: assisted and quick-sale orders, SIM changes, store stock. Sees only that store’s orders and stock.',
     permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'),
-      'order:payment', 'order:fulfil', 'order:cancel', 'inventory:read', 'inventory:write', 'commission:read', 'billing:read', 'billing:pay',
+      'order:payment', 'order:fulfil', 'order:cancel', 'inventory:read', 'inventory:write', 'inventory:transfer', 'commission:read', 'billing:read', 'billing:pay',
       'store:assist', 'kyc:attest', 'numbering:select'],
   },
   dealer: {
@@ -170,7 +171,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'inventory-ops': {
     id: 'inventory-ops', label: 'Operations Support', scope: 'staff', home: '/inventory',
     summary: 'Looks after stock: keeps warehouse locations, loads stock in batches or one SKU at a time, and writes stock off with a reason. Sees the stock history; cannot sell or change billing.',
-    permissions: ['dashboard:read', 'catalog:read', 'inventory:read', 'inventory:write', 'inventory:writeoff', 'warehouse:manage', 'numbering:read', 'numbering:select', 'numbering:manage', 'order:read'],
+    permissions: ['dashboard:read', 'catalog:read', 'inventory:read', 'inventory:write', 'inventory:transfer', 'inventory:writeoff', 'warehouse:manage', 'numbering:read', 'numbering:select', 'numbering:manage', 'order:read'],
   },
   'revenue-assurance': {
     id: 'revenue-assurance', label: 'Revenue Assurance', scope: 'staff', home: '/finance',

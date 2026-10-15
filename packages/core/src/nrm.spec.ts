@@ -238,7 +238,7 @@ describe('selling a plan with a SIM and a number', () => {
     const sim = (await listSims(db, { state: 'AVAILABLE', locationId: 'STORE-SG-001' })).items[0]!.iccid as string;
     const num = (await db.query(`SELECT msisdn FROM msisdn_inventory WHERE tier='STANDARD' AND state='AVAILABLE' LIMIT 1`)).rows[0]!.msisdn as string;
     // Hold the order before it activates by leaving payment unconfirmed
-    const o = await placeOrder(db, { customerId: c.customer.id, channel: 'CALL_CENTER', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: 'plan-sim-5g', iccid: sim, msisdn: num }] }).catch((e) => e);
+    const o = await placeOrder(db, { customerId: c.customer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: 'plan-sim-5g', iccid: sim, msisdn: num }] }).catch((e) => e);   // a card from the store's shelf is sold at that store
     if (o instanceof Error) throw o;
     const row = async () => ({ sim: (await db.query('SELECT state FROM iccid_inventory WHERE iccid=$1', [sim])).rows[0]!.state, num: (await db.query('SELECT state FROM msisdn_inventory WHERE msisdn=$1', [num])).rows[0]!.state });
     expect(['RESERVED', 'ACTIVE']).toContain((await row()).sim);

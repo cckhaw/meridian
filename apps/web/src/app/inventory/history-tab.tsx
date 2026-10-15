@@ -7,7 +7,7 @@ import { dt } from '@/lib/format';
 import { REASONS } from './stock-tab';
 import { useLocations } from './locations';
 
-const KINDS: Array<[string, string]> = [['RECEIPT', 'Received'], ['IMPORT', 'CSV batch'], ['COUNT', 'Count (CSV)'], ['WRITE_OFF', 'Written off']];
+const KINDS: Array<[string, string]> = [['RECEIPT', 'Received'], ['IMPORT', 'CSV batch'], ['COUNT', 'Count (CSV)'], ['WRITE_OFF', 'Written off'], ['TRANSFER_OUT', 'Transferred out'], ['TRANSFER_IN', 'Transferred in'], ['TRANSFER_SHORT', 'Short on arrival']];
 
 /** The history of stock movements: who received or wrote off what, where and why. */
 export function HistoryTab() {

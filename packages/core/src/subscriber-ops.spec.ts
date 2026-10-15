@@ -89,7 +89,7 @@ describe('transfer of ownership', () => {
     const a = await mobile();
     let to = await newCustomer(db);
     const shardOf = async (id: string) => (await db.query('SELECT shard_id FROM customers WHERE id=$1', [id])).rows[0]!.shardId;
-    for (let k = 0; k < 40 && (await shardOf(to.customer.id)) !== (await shardOf(a.customer.id)); k++) to = await newCustomer(db);   // a transfer stays inside a shard
+    for (let k = 0; k < 400 && (await shardOf(to.customer.id)) !== (await shardOf(a.customer.id)); k++) to = await newCustomer(db);   // a transfer stays inside a shard
     await expect(transferOwnershipNorth(db, a.serviceId, { toCustomerId: to.customer.id, creditCheckAuthorised: false }, 'dealer')).rejects.toThrow(/authorise a credit check/);
     await expect(transferOwnershipNorth(db, a.serviceId, { toCustomerId: to.customer.id, creditCheckAuthorised: true }, 'dealer')).rejects.toThrow(/identity-verified/);
     await db.query(`UPDATE customers SET kyc_status='VERIFIED' WHERE id=$1`, [to.customer.id]);
