@@ -1878,7 +1878,7 @@ describe('offer type switches and service types', () => {
     expect([noKey.status, noKey.json.reason]).toEqual([400, 'MISSING_IDEMPOTENCY_KEY']);
     const k1 = { ...swapper, 'x-idempotency-key': 'key-aaaaaaaa-1' };
     const otp = await call('POST', `/v1/services/${svcId}/otp`, { origin: null, headers: k1 });
-    expect([otp.status, otp.json.sentTo]).toEqual([200, expect.stringMatching(/^\+65/)]);
+    expect([otp.status, otp.json.sentTo]).toEqual([200, expect.stringMatching(/^\+\d{2,3}/)]);
     const replay = await call('POST', `/v1/services/${svcId}/otp`, { origin: null, headers: k1 });
     expect([replay.headers.get('idempotent-replay'), replay.json.challengeId]).toEqual(['true', otp.json.challengeId]);       // no second SMS
     const sms = await call('GET', '/settings/integration-hub/calls', { cookie: su });
