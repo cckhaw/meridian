@@ -42,8 +42,11 @@ export function NewOrder() {
   const [slot, setSlot] = useState('');
   const [pay, setPay] = useState({ method: 'CASH', reference: '', received: true });
   const [consent, setConsent] = useState(false);
+  const [payInFull, setPayInFull] = useState(false);
+  const [check, setCheck] = useState<{ id: string; score: number | null; band: string | null; fallback: boolean } | null>(null);
   const [kindHint, setKindHint] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
+  useEffect(() => { setCheck(null); }, [customer?.id]);
   const dir = useRef<'fwd' | 'back'>('fwd');
   const idemKey = useRef(crypto.randomUUID()); // one key per form: a double-click or retry cannot create a second order
   const meta = useApi('/meta');
@@ -61,11 +64,11 @@ export function NewOrder() {
     if (pre) void api(`/catalog/${encodeURIComponent(pre)}`).then((o) => { if (o.level === 'OFFER' && o.status === 'ACTIVE') setItemsRaw((cur) => (cur.length ? cur : [newItem(o)])); }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const setItems = useCallback((f: (c: Item[]) => Item[]) => { setItemsRaw(f); setConsent(false); }, []);
+  const setItems = useCallback((f: (c: Item[]) => Item[]) => { setItemsRaw(f); setConsent(false); setCheck(null); }, []);
   const setChannel = (c: string) => { setChannelRaw(c); setItemsRaw([]); setIndex(0); idemKey.current = crypto.randomUUID(); };
 
   // ── the server's quote, refreshed as the basket changes ──
-  const body = useMemo(() => ({ channel, customerId: quick || portal ? undefined : customer?.id, accountId: accountId || undefined, lines: items.map((i) => lineBody(i, items)) }), [channel, quick, portal, customer?.id, accountId, items]);
+  const body = useMemo(() => ({ channel, customerId: quick || portal ? undefined : customer?.id, accountId: accountId || undefined, lines: items.map((i) => lineBody(i, items)), financing: payInFull || check ? { payInFull: payInFull || undefined, creditCheckId: payInFull ? undefined : check?.id } : undefined }), [channel, quick, portal, customer?.id, accountId, items, payInFull, check]);
   const key = useDebounced(JSON.stringify(body), 250);
   const [quote, setQuote] = useState<any>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -135,7 +138,7 @@ export function NewOrder() {
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
-    address, setAddress, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
+    address, setAddress, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
 

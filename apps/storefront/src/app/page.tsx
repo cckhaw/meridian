@@ -38,7 +38,7 @@ function ContractChoice({ offer, value, plans, names, money, onChange }: { offer
               {plans.map((id) => <option key={id} value={id}>{names.get(id) ?? id}</option>)}</select></label>
           <label className="grid gap-1"><span className="text-footnote text-label2">Contract</span>
             <select className="min-h-tap rounded-control border border-separator bg-surface px-3" value={value.term} onChange={(e) => onChange({ ...value, term: Number(e.target.value) })}>
-              {offer.deals.map((d) => <option key={d.termMonths} value={d.termMonths}>{d.termMonths} months · {money(d.priceMinor)} today</option>)}</select></label>
+              {offer.deals.map((d) => <option key={d.termMonths} value={d.termMonths}>{d.termMonths} months · {money(Math.floor(d.priceMinor / d.termMonths))}/month</option>)}</select></label>
           <p className="text-footnote text-label2">If you leave before the contract ends, you repay the part of the saving that is left.</p>
         </div>
       )}
@@ -153,7 +153,7 @@ export default function Home() {
               {o.deals?.length > 0 && (
                 <div className="mt-3 rounded-control bg-accent/10 px-3 py-2 text-footnote">
                   <p className="font-medium text-accent">Or on a contract with a SIM plan</p>
-                  <ul className="mt-0.5 text-label2">{o.deals.map((d) => <li key={d.termMonths}>{d.termMonths} months: <strong className="tabular-nums text-label">{money(d.priceMinor)}</strong> today, save {money(d.subsidyMinor)}</li>)}</ul>
+                  <ul className="mt-0.5 text-label2">{o.deals.map((d) => <li key={d.termMonths}>{d.termMonths} months: <strong className="tabular-nums text-label">{money(Math.floor(d.priceMinor / d.termMonths))}</strong> a month on your plan bill, save {money(d.subsidyMinor)}</li>)}</ul>
                 </div>
               )}
               {o.requiresText.length > 0 && <p className="mt-2 rounded-control bg-accent/10 px-3 py-2 text-footnote text-accent">Needs {o.requiresText.join(' + ')} in your order</p>}

@@ -9,7 +9,7 @@ import { PaymentStep, type PaymentStart } from './payment';
 
 interface View {
   id: string; status: string; expiresAt: string;
-  quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number } }>; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; taxName: string } | null;
+  quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; instalmentMinor?: number } }>; financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean }; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; taxName: string } | null;
   personal: Record<string, string | undefined>; personalProblems: string[]; address: Record<string, string> | null; consent: Record<string, unknown> | null;
   kyc: { status: string; method: string; reason: string | null; returned: boolean } | null; documents: string[];
   order: { id: string; number?: string | null; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; lines: Array<{ name: string; quantity: number }> } | null;
@@ -138,9 +138,10 @@ function Summary({ view }: { view: View }) {
     <Card className="!p-4">
       <h2 className="mb-2 text-subhead font-semibold">Your order</h2>
       <ul className="space-y-1 text-subhead">
-        {q.lines.map((l) => <li key={l.offerId} className="flex justify-between gap-3"><span>{l.name}{l.quantity > 1 ? ` × ${l.quantity}` : ''}{l.deal && <span className="block text-footnote text-label2">On a {l.deal.termMonths}-month contract with {l.deal.planName}</span>}</span><span className="tabular-nums text-label2">{l.monthlyMinor ? `${money(l.monthlyMinor)}/mo` : money(l.upfrontMinor)}</span></li>)}
+        {q.lines.map((l) => <li key={l.offerId} className="flex justify-between gap-3"><span>{l.name}{l.quantity > 1 ? ` × ${l.quantity}` : ''}{l.deal && <span className="block text-footnote text-label2">On a {l.deal.termMonths}-month contract with {l.deal.planName}{l.deal.instalmentMinor ? `, paid ${money(l.deal.instalmentMinor)} a month with your plan` : ''}</span>}</span><span className="tabular-nums text-label2">{l.monthlyMinor ? `${money(l.monthlyMinor)}/mo` : money(l.upfrontMinor)}</span></li>)}
       </ul>
-      <p className="mt-2 border-t border-separator pt-2 text-subhead font-medium">Due today <span className="float-right tabular-nums">{money(q.upfrontMinor)}</span></p>
+      <p className="mt-2 border-t border-separator pt-2 text-subhead font-medium">Due today{q.financing?.estimate ? ' (estimate)' : ''} <span className="float-right tabular-nums">{money(q.upfrontMinor)}</span></p>
+      {q.financing?.estimate && <p className="text-footnote text-label2">A quick credit check on your ID decides how much of the device is paid today. The rest is split evenly over {q.financing.months} months.</p>}
       {q.monthlyMinor > 0 && <p className="text-footnote text-label2">then {money(q.monthlyMinor)} every month · prices include {q.taxName}</p>}
     </Card>
   );
@@ -280,11 +281,13 @@ function Review({ view, onBack, onSubmitted }: { view: View; onBack: () => void;
   const [accepted, setAccepted] = useState(false);
   const [privacy, setPrivacy] = useState(false);
   const [marketing, setMarketing] = useState(false);
+  const [credit, setCredit] = useState(false);
+  const needsCredit = !!view.quote?.financing?.creditCheck;
   const { busy, error, run } = useSave(onSubmitted);
   const link = (url: string | null, text: string) => (url ? <a href={url} target="_blank" rel="noreferrer" className="underline">{text}</a> : <>{text}</>);
   return (
     <Card>
-      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api('/application', { method: 'PATCH', json: { consent: { acceptedTerms: accepted, privacyAccepted: privacy, marketingOptIn: marketing } } }); await api('/application/kyc', { method: 'POST', json: {} }); }); }}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api('/application', { method: 'PATCH', json: { consent: { acceptedTerms: accepted, privacyAccepted: privacy, marketingOptIn: marketing, ...(needsCredit ? { creditCheck: credit } : {}) } } }); await api('/application/kyc', { method: 'POST', json: {} }); }); }}>
         <h2 className="text-title3 font-semibold">Check and confirm</h2>
         <dl className="grid gap-x-4 gap-y-1 text-subhead sm:grid-cols-[auto_1fr]">
           <dt className="text-label2">Name</dt><dd>{view.personal.fullName}</dd>
@@ -295,9 +298,10 @@ function Review({ view, onBack, onSubmitted }: { view: View; onBack: () => void;
         </dl>
         <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /><span className="text-subhead">I accept the {link(terms.termsUrl, 'terms and conditions')} (version {terms.version}).</span></label>
         <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={privacy} onChange={(e) => setPrivacy(e.target.checked)} /><span className="text-subhead">I have read the {link(terms.privacyUrl, 'privacy notice')} and agree to my ID being checked to verify my identity.</span></label>
+        {needsCredit && <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={credit} onChange={(e) => setCredit(e.target.checked)} /><span className="text-subhead">I agree to a credit check on my ID number, to decide how my device is paid for over the contract.</span></label>}
         <label className="flex items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} /><span className="text-subhead text-label2">Send me offers (optional).</span></label>
         {error && <Alert>{error}</Alert>}
-        <div className="flex gap-2"><Button type="button" variant="secondary" onClick={onBack}>Back</Button><Button type="submit" className="flex-1" disabled={busy || !accepted || !privacy}>{busy ? 'Submitting…' : 'Submit for verification'}</Button></div>
+        <div className="flex gap-2"><Button type="button" variant="secondary" onClick={onBack}>Back</Button><Button type="submit" className="flex-1" disabled={busy || !accepted || !privacy || (needsCredit && !credit)}>{busy ? 'Submitting…' : 'Submit for verification'}</Button></div>
       </form>
     </Card>
   );

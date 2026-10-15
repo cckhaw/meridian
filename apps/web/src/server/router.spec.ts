@@ -1959,4 +1959,33 @@ describe('offer type switches and service types', () => {
     expect(tried.json.quote).toMatchObject({ chargeMinor: 5000, rule: { name: 'Flat fee' } });
     expect((await call('DELETE', `/settings/etc/rules/${made.json.id}`, { cookie: su })).json.ok).toBe(true);
   });
+  it('device financing: administrator settings, a device is financed over the contract, and the credit check sets the upfront share', async () => {
+    const su = await root();
+    const bo = await staff(['billing-ops']);
+    expect((await call('GET', '/settings/financing', { cookie: bo.cookie })).status).toBe(403);
+    const view = (await call('GET', '/settings/financing', { cookie: su })).json;
+    expect(view.settings.financeOverContract).toBe(true);
+    expect(view.bureauConfigured).toBe(false);
+    expect((await call('POST', '/settings/financing', { cookie: su, body: { bands: [{ label: 'A', minScore: 0, maxScore: 600, upfrontBps: 0 }, { label: 'B', minScore: 500, maxScore: 900, upfrontBps: 0 }] } })).status).toBe(400);
+    expect((await call('POST', '/settings/financing/test', { cookie: su, body: { idNumber: 'ID-12345' } })).json).toMatchObject({ ok: false, error: expect.stringMatching(/No credit bureau/) });
+    const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'Financed Buyer', idDocument: 'FIN-ROUTER-3' });
+    await markVerified(db, customer.id);
+    const lines = [{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright', attachTo: 0, dealTermMonths: 24 }];
+    const q = await call('POST', '/orders/quote', { cookie: su, body: { channel: 'RETAIL_ASSISTED', customerId: customer.id, lines, payment: { method: 'CASH' } } });
+    expect(q.json.financing).toMatchObject({ applied: true, months: 24, upfrontMinor: 0 });
+    const full = await call('POST', '/orders/quote', { cookie: su, body: { channel: 'RETAIL_ASSISTED', customerId: customer.id, lines, payment: { method: 'CASH' }, financing: { payInFull: true } } });
+    expect(full.json.financing?.payInFull).toBe(true);
+    expect(full.json.dueNowMinor).toBeGreaterThan(q.json.dueNowMinor);
+    // a credit check needs the customer's consent and their own ID number
+    const body = { channel: 'RETAIL_ASSISTED', customerId: customer.id, lines, idNumber: 'FIN-ROUTER-3', consent: { given: true } };
+    expect((await call('POST', '/orders/credit-check', { cookie: su, body: { ...body, consent: { given: false } } })).status).toBe(422);
+    expect((await call('POST', '/orders/credit-check', { cookie: su, body: { ...body, idNumber: 'SOMEONE-ELSE' } })).status).toBe(422);
+    const chk = await call('POST', '/orders/credit-check', { cookie: su, body });
+    expect(chk.status).toBe(200);
+    expect(chk.json).toMatchObject({ fallback: true, ratioBps: 2500, decision: 'UPFRONT' }); // no bureau: the fallback share
+    const withCheck = await call('POST', '/orders/quote', { cookie: su, body: { channel: 'RETAIL_ASSISTED', customerId: customer.id, lines, payment: { method: 'CASH' }, financing: { creditCheckId: chk.json.id } } });
+    expect(withCheck.json.financing).toMatchObject({ ratioBps: 2500, checkId: chk.json.id });
+    expect(withCheck.json.dueNowMinor).toBeGreaterThan(q.json.dueNowMinor);
+    expect(JSON.stringify(chk.json)).not.toContain('FIN-ROUTER-3');
+  });
 });

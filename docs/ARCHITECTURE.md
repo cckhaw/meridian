@@ -57,6 +57,8 @@ Dunning rules, the rule engine, late fees, payment arrangements and collection p
 
 The northbound API gateway and the integration hub (`integration-hub.ts`, `oauth.ts`, `gateway.ts`, migration `0041`) are described in [INTEGRATION_API.md](INTEGRATION_API.md).
 
+Device financing (the even split over the contract, the credit check and its bureau connection) lives in `packages/core` (`device-financing.ts`, `financing-check.ts`, and the split in `order-pricing.ts`) on migration `0046`; see [FINANCING.md](FINANCING.md).
+
 Number Resource Management lives in `packages/core` (`nrm.ts`, `nrm-pools.ts`, `number-reservation.ts`, `vip-pattern-matcher.ts`, `order-numbering.ts`) on migrations `0020` and `0021`. Locks are database row locks with an optional Redis adapter; events go through the lifecycle outbox; IMSI recycling also runs as a Temporal workflow in `services/order-service`. Details in [NUMBERING.md](NUMBERING.md).
 
 ## Payments

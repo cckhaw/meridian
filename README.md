@@ -19,7 +19,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 640 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 649 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -32,6 +32,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 - [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
 - [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies, bulk offer import, offer type switches and service types, markets
 - [Dunning and collections](docs/DUNNING.md): configurable rule-based ladders per market and customer type, late fees, QR payment links (PromptPay, PayNow, DuitNow, QRIS, QR Ph), exclusions, partial payments, payment arrangements, collection agency placements, Southeast Asia starter rules
+- [Device financing](docs/FINANCING.md): a device on a contract paid evenly over the contract with the plan bill, credit check through an integration (score bands or the bureau's upfront amount), consent, fallback
 - [Service lifecycle](docs/LIFECYCLE.md): voluntary suspension, credit-limit bars, the dunning ladder, termination and ETC, port-out
 - [Finance: sub-ledger, SAP journals, reconciliation](docs/FINANCE.md): events into an immutable ledger, posting rules to SAP accounts, IDoc/flat/JSON/CSV export, daily close, reconciliation
 - [Cases: classification, SLA, lifecycle, interactions, watchdog, refunds, incidents](docs/CASES.md): the three-level case taxonomy, the SLA matrix, the case state machine with guards, the interaction registry, the SLA watchdog (sweep and Temporal workflow), refund approval by amount, master network incidents, field-service visits with a signed callback, and TM Forum views
