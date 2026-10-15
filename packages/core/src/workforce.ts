@@ -164,7 +164,7 @@ export async function confirmAppointment(q: Queryable, appointmentId: string, ac
   // The case waits for dispatch, and becomes dispatched when the field-service system has a technician on the job.
   const c = await getCase(q, a.caseId);
   if (c.status === 'IN_PROGRESS' || c.status === 'REOPENED' || c.status === 'NEW' || c.status.startsWith('PENDING_')) {
-    if (c.status === 'NEW' || c.status === 'REOPENED') await transitionCase(q, a.caseId, 'IN_PROGRESS', { actor });
+    if (c.status === 'NEW' || c.status === 'REOPENED' || c.status === 'PENDING_CUSTOMER' || c.status === 'PENDING_THIRD_PARTY') await transitionCase(q, a.caseId, 'IN_PROGRESS', { actor });
     if ((await getCase(q, a.caseId)).status !== 'PENDING_DISPATCH') await transitionCase(q, a.caseId, 'PENDING_DISPATCH', { actor, note: `Visit booked for ${when(a)}.` });
   }
   const fresh = await getAppointment(q, appointmentId);
@@ -263,4 +263,42 @@ export async function cancelVisitsOfCases(q: Queryable, caseIds: string[], reaso
     await q.query(`INSERT INTO case_audit_log (case_id, actor, action, detail) SELECT case_id, 'system', 'APPOINTMENT_CANCELLED', jsonb_build_object('reason', $2::text, 'appointmentId', id) FROM workforce_appointments WHERE id = ANY($1::uuid[])`, [rows.map((r) => r.id), reason]);
   }
   return rows.length;
+}
+
+/** Escalates a case to a field visit: it waits for dispatch, and with `auto` the earliest slot is booked at once. */
+export async function escalateToDispatch(q: Queryable, caseId: string, o: { auto?: boolean; slot?: { id: string; start: string; end: string }; notes?: string }, actor: string, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch): Promise<{ case: Row; appointment: Row | null }> {
+  const c = await getCase(q, caseId);
+  if (c.isMaster) throw invalid('Escalate the customers’ own cases to a visit, not the network incident.');
+  if (!ACTIVE_STATUSES.includes(c.status)) throw rejected('This case is not open.');
+  if (c.status === 'NEW' || c.status === 'REOPENED') await transitionCase(q, caseId, 'IN_PROGRESS', { actor });
+  const cur = (await getCase(q, caseId)).status as CaseStatus;
+  if (cur !== 'PENDING_DISPATCH' && cur !== 'DISPATCHED') {
+    if (cur !== 'IN_PROGRESS') await transitionCase(q, caseId, 'IN_PROGRESS', { actor });
+    await transitionCase(q, caseId, 'PENDING_DISPATCH', { actor, note: o.notes ?? 'Escalated to a field visit.' });
+  }
+  let appointment: Row | null = null;
+  if (o.slot) appointment = await bookVisit(q, caseId, { slot: o.slot, notes: o.notes }, actor, env, fetchImpl);
+  else if (o.auto) {
+    const { slots } = await findSlots(q, caseId, {}, env, fetchImpl);
+    if (!slots[0]) throw rejected('No technician is available in the next 14 days. The case is waiting for dispatch.');
+    appointment = await bookVisit(q, caseId, { slot: slots[0], notes: o.notes }, actor, env, fetchImpl);
+  }
+  return { case: await getCase(q, caseId), appointment };
+}
+
+/** Delivers the cancellations queued for the field-service system, oldest first. A failure leaves the message for the next run. */
+export async function deliverWfmCancels(q: Queryable, o: { limit?: number; env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch } = {}): Promise<{ attempted: number; delivered: number; failed: number; notReady?: string }> {
+  const conn = await activeWfm(q, o.env, o.fetchImpl).catch(() => null);
+  if (!conn) return { attempted: 0, delivered: 0, failed: 0, notReady: 'Field service is switched off.' };
+  const problem = conn.problem();
+  if (problem) return { attempted: 0, delivered: 0, failed: 0, notReady: problem };
+  const rows = (await q.query(`SELECT id, payload FROM lifecycle_outbox WHERE instruction='WFM_CANCEL' AND delivered_at IS NULL ORDER BY id LIMIT $1`, [Math.min(o.limit ?? 100, 500)])).rows;
+  let delivered = 0, failed = 0;
+  for (const r of rows) {
+    const p = r.payload as { jobRef?: string | null; reservationRef?: string | null; reason?: string; vendor?: string };
+    if (p.vendor && p.vendor !== conn.vendor) { await q.query('UPDATE lifecycle_outbox SET delivered_at = now() WHERE id=$1', [r.id]); continue; }   // belongs to a system that is no longer connected
+    const res = await conn.cancel({ jobRef: p.jobRef, reservationRef: p.reservationRef, reason: p.reason ?? 'Cancelled' }).catch(() => ({ ok: false as const, retryable: true }));
+    if (res.ok || !('retryable' in res && res.retryable)) { await q.query('UPDATE lifecycle_outbox SET delivered_at = now() WHERE id=$1', [r.id]); if (res.ok) delivered++; else failed++; } else failed++;
+  }
+  return { attempted: rows.length, delivered, failed };
 }

@@ -114,3 +114,4 @@ export * from './case-refunds.js';
 export * from './workforce.js';
 export * from './wfm-webhook.js';
 export { WFM_VENDORS, wfmVendor, type WfmVendor, type WfmSlot, type WfmConnector } from './wfm/index.js';
+export * from './tmf.js';

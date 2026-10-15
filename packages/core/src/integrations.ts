@@ -1,6 +1,8 @@
 import type { Queryable } from './db.js';
 import { GATEWAYS } from './gateways.js';
 import { getOcsSettings, ocsStats } from './ocs.js';
+import { getWfmSettings } from './workforce.js';
+import { WFM_VENDORS } from './wfm/index.js';
 import { OCS_VENDORS } from './ocs-vendors/index.js';
 import { getSapSettings } from './sap-exporter.js';
 import { getStoreSettings } from './store-settings.js';
@@ -128,6 +130,15 @@ export const INTEGRATIONS: IntegrationDef[] = [
     endpoints: [{ method: 'POST', path: '/api/ocs/dispatch', purpose: 'Delivers due jobs to the OCS. Schedule it every minute', auth: 'Service account with billing:run' }],
     needs: ['Choose the connector for your OCS below (Generic REST needs no code; another vendor gets its own connector file)', 'Give each plan its OCS plan code in the catalog', 'Schedule POST /api/ocs/dispatch every minute', 'Services that started before the OCS was switched on are not sent'],
     doc: 'OCS.md', keywords: 'ocs charging rating real time online voice sms data subscriber provisioning huawei ericsson amdocs oracle optiva vendor connector plan',
+  },
+  {
+    id: 'wfm', group: 'Logistics and delivery', name: 'Field service (workforce management)', with: 'Your field-service system: Salesforce Field Service, Oracle Field Service Cloud, TOA, or a partner’s dispatch tool',
+    summary: 'When a fault needs a technician, an agent asks the system which windows are free for the skills the issue needs, holds one while on the call, and turns it into a job. The system reports the visit (assigned, on the way, on site, done, customer not at home, needs another time) by calling Meridian’s signed callback URL, and Meridian moves the case and tells the customer by SMS or WhatsApp.',
+    maturity: 'BUILT', direction: 'BOTH',
+    env: [{ name: 'MERIDIAN_WFM_WEBHOOK_SECRET', purpose: 'The secret the field-service system signs its callbacks with (at least 16 characters; the name is set in Settings → Cases)', on: 'web', secret: true }, { name: 'MERIDIAN_WFM_TOKEN', purpose: 'Token for the REST connector (the name is yours to choose; it must start with MERIDIAN_WFM_)', on: 'web', secret: true }],
+    endpoints: [{ method: 'POST', path: '/api/v1/cases/webhooks/wfm-callback', purpose: 'The field-service system reports a visit. Signed with X-WFM-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "t.body">', auth: 'HMAC signature' }, { method: 'POST', path: '/api/cases/sla-sweep', purpose: 'Also delivers queued cancellations to the system. Schedule it every minute', auth: 'Service account with case:supervise' }],
+    needs: ['Choose the connector below (the REST contract needs no code; the simulator is for trying it out)', 'Set MERIDIAN_WFM_WEBHOOK_SECRET and give the same secret to the field-service system', 'Have the system call the callback URL as the technician’s app reports', 'Give each issue type that needs a technician its skills and equipment (Settings → Cases)'],
+    doc: 'CASES.md', keywords: 'wfm field service workforce technician truck roll dispatch appointment slot visit salesforce toa oracle engineer callback webhook',
   },
   {
     id: 'network-provisioning', group: 'Network and SIM provisioning', name: 'Network provisioning (HLR/HSS, policy control)', with: 'The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service kind',
@@ -382,7 +393,7 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
   const keys = (await q.query(`SELECT count(*)::int AS n FROM api_clients WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const donors = (await q.query(`SELECT count(*)::int AS n FROM donor_operators WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const embedded = !(env.DATABASE_URL ?? '').trim();
-  const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q);
+  const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q), wfmSet = await getWfmSettings(q);
 
   const items = INTEGRATIONS.map((def) => {
     const vars = (def.env ?? []).map((v) => ({ ...v, set: isSet(env, v) }));
@@ -428,6 +439,14 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
         else if (st.dead > 0) { status = 'NEEDS_SETUP'; detail = `${st.dead} job${st.dead === 1 ? '' : 's'} could not be delivered to ${v?.label}. Retry them below.`; }
         else if (!v?.real) { status = 'STAND_IN'; detail = `${v?.label}: nothing is sent to a real system.`; }
         else { status = 'CONNECTED'; detail = `${v.label}. ${st.sent} delivered, ${st.pending} waiting.${st.unmappedOffers ? ` ${st.unmappedOffers} plan${st.unmappedOffers === 1 ? ' has' : 's have'} no OCS plan code.` : ''}`; }
+        break;
+      }
+      case 'wfm': {
+        const w = wfmSet, v = w.vendor ? WFM_VENDORS[w.vendor] : null;
+        if (!w.vendor || !w.enabled) { status = 'NEEDS_SETUP'; detail = w.vendor ? `${v?.label ?? w.vendor} is chosen but switched off.` : 'No field-service system chosen yet.'; }
+        else if (!(env[w.webhookSecretEnv] ?? '').trim()) { status = 'NEEDS_SETUP'; detail = `${w.webhookSecretEnv} is not set, so callbacks cannot be accepted.`; }
+        else if (!v?.real) { status = 'STAND_IN'; detail = `${v?.label}: no real technician is booked.`; }
+        else { status = 'CONNECTED'; detail = `${v.label}. Callbacks are accepted.`; }
         break;
       }
       case 'database': status = embedded ? 'STAND_IN' : 'CONNECTED'; detail = embedded ? 'Running on the embedded demo database.' : 'Connected to the configured database.'; break;

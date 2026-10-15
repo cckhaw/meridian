@@ -2,7 +2,7 @@ import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CaseSlaActivities, CaseSlaTick } from '../activities/case-sla.js';
-import { caseChangedSignal, caseSlaWorkflow } from './case-sla.workflow.js';
+import { caseChangedSignal, caseSlaStatus, caseSlaWorkflow, dispatchUpdatedSignal } from './case-sla.workflow.js';
 
 let env: TestWorkflowEnvironment;
 beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
@@ -65,5 +65,34 @@ describe('caseSlaWorkflow', () => {
     expect([...m.fired]).toEqual(['SLA_WARNING', 'SLA_BREACH', 'SLA_ESCALATION']);
     // the warning came at 3.2 hours (the new deadline), not at 80
     expect(m.ticks.find((t) => t.includes('SLA_WARNING'))!.startsWith('3.2')).toBe(true);
+  }, 60_000);
+});
+
+describe('caseSlaWorkflow: waiting for the field-service system', () => {
+  /** A case waiting on a technician: nothing is due for a week, until the field-service system calls back and the case is resolved. */
+  function visit() {
+    let start: number | null = null, resolved = false; const ticks: string[] = [];
+    const acts: CaseSlaActivities = {
+      async caseSlaTick(_id, nowIso): Promise<CaseSlaTick> {
+        const now = Date.parse(nowIso); start ??= now; ticks.push(`${((now - start) / HOUR).toFixed(1)}:${resolved ? 'resolved' : 'waiting'}`);
+        if (resolved) return { fired: ['AUTO_CLOSE'], nextAt: null, closed: true, waiting: null };
+        return { fired: [], nextAt: new Date(start + 168 * HOUR).toISOString(), closed: false, waiting: 'DISPATCH' };
+      },
+      async casePublish() { /* not under test */ },
+    };
+    return { acts, ticks, resolve: () => { resolved = true; } };
+  }
+  it('sits on a durable timer while waiting, wakes the moment the callback signal arrives, and says what it is waiting on', async () => {
+    const m = visit();
+    let waitingSeen: unknown;
+    const { result } = await run(m.acts, async (h) => {
+      await env.sleep(2 * HOUR);
+      waitingSeen = (await h.query(caseSlaStatus)).waiting;
+      m.resolve();
+      await h.signal(dispatchUpdatedSignal, { event: 'JOB_COMPLETED' });
+    });
+    expect(result).toBe('CLOSED');
+    expect(waitingSeen).toBe('DISPATCH');
+    expect(m.ticks).toEqual(['0.0:waiting', '2.0:resolved']);   // one tick to start, one on the callback: no polling in between, and not a week later
   }, 60_000);
 });

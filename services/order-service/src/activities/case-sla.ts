@@ -1,5 +1,9 @@
 /** What a tick of the SLA watchdog reports: what it fired, when the next thing is due, and whether the case has reached its end. */
-export interface CaseSlaTick { fired: string[]; nextAt: string | null; closed: boolean }
+export interface CaseSlaTick {
+  fired: string[]; nextAt: string | null; closed: boolean;
+  /** What the case is mainly waiting on: a technician visit (the field-service system will call back), the customer, or the resolution itself. */
+  waiting?: 'DISPATCH' | 'CUSTOMER' | 'RESOLUTION' | null;
+}
 
 /**
  * What the case SLA workflow needs from the CRM. The CRM decides what is due (warning, breach, escalation, automatic closing) and does it once; the workflow

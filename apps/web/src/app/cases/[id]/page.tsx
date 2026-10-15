@@ -64,6 +64,7 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
           </Card>
           {c.type === 'BILLING_REFUND' && c.customerId && <Refunds c={c} onChange={refresh} />}
           {c.isMaster && <IncidentCases c={c} onChange={refresh} />}
+          {!c.isMaster && c.customerId && <FieldVisit c={c} onChange={refresh} />}
           <Card>
             <div className="mb-3 flex items-center justify-between"><h2 className="text-title3 font-semibold">Interactions on this case</h2>{can('case:create') && <Button variant="plain" className="!min-h-[36px]" onClick={() => setLogOpen(!logOpen)}>{logOpen ? 'Close' : 'Log an interaction'}</Button>}</div>
             {logOpen && <form className="mb-4 grid gap-3 sm:grid-cols-2" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => post('/interactions', { customerId: c.customerId, caseId: id, ...li }))) { setLogOpen(false); setLi({ ...li, subject: '', summary: '' }); } }}>
@@ -176,6 +177,60 @@ function IncidentCases({ c, onChange }: { c: any; onChange: () => Promise<void> 
         <li key={k.id} className="flex flex-wrap items-center gap-2 rounded-control bg-surface2 px-3 py-2 text-subhead"><Link className="font-mono text-accent" href={`/cases/${k.id}`}>{k.number}</Link><span className="min-w-0 flex-1 truncate">{k.customerName} · {k.subject}</span><Badge>{label(k.status)}</Badge>
           {can('case:supervise') && open && <button type="button" className="text-footnote text-danger" onClick={() => void act.run(() => post(`/cases/${k.id}/unlink`), 'Removed from the incident')}>Remove</button>}</li>))}</ul>}
       {kids.hasMore && <Button variant="plain" className="mt-2" onClick={kids.loadMore} disabled={kids.loadingMore}>Show more</Button>}
+    </Card>
+  );
+}
+
+const VISIT: Record<string, [string, 'success' | 'warning' | 'danger' | 'neutral']> = {
+  RESERVED: ['Slot held', 'warning'], REQUESTED: ['Waiting for a technician', 'warning'], SCHEDULED: ['Booked', 'success'], ASSIGNED: ['Technician assigned', 'success'], EN_ROUTE: ['On the way', 'success'], ON_SITE: ['On site', 'success'],
+  COMPLETED: ['Completed', 'success'], NO_ACCESS: ['Customer not at home', 'danger'], RESCHEDULE_REQUIRED: ['Needs another time', 'warning'], CANCELLED: ['Cancelled', 'neutral'], EXPIRED: ['Hold expired', 'neutral'],
+};
+const ACTIVE_VISIT = ['RESERVED', 'REQUESTED', 'SCHEDULED', 'ASSIGNED', 'EN_ROUTE', 'ON_SITE'];
+const slotLabel = (s: { start: string; end: string }) => `${new Date(s.start).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })} ${s.start.slice(11, 16)}–${s.end.slice(11, 16)} UTC`;
+
+/** Technician visits: find a window, book it, follow the visit as the field-service system reports it. */
+function FieldVisit({ c, onChange }: { c: any; onChange: () => Promise<void> }) {
+  const { can } = useAuth();
+  const visits = useApi(`/cases/${c.id}/appointments`);
+  const open = ['NEW', 'IN_PROGRESS', 'PENDING_CUSTOMER', 'PENDING_THIRD_PARTY', 'PENDING_DISPATCH', 'DISPATCHED', 'REOPENED'].includes(c.status);
+  const items: any[] = visits.data?.items ?? [];
+  const live = items.find((v) => ACTIVE_VISIT.includes(v.status));
+  const [finding, setFinding] = useState<'book' | 'reschedule' | null>(null);
+  const slots = useApi(finding ? `/cases/${c.id}/slots` : null);
+  const [notes, setNotes] = useState('');
+  const [reason, setReason] = useState('');
+  const act = useAction(async () => { setFinding(null); await Promise.all([visits.reload(), onChange()]); });
+  if (!can('case:write') && items.length === 0) return null;
+  const pick = (slot: any) => act.run(() => post(live && finding === 'reschedule' ? `/appointments/${live.id}/reschedule` : `/cases/${c.id}/appointments`, { slot, notes: notes || undefined }), 'Visit booked');
+  return (
+    <Card>
+      <h2 className="mb-3 text-title3 font-semibold">Field visit</h2>
+      {items.length === 0 && <p className="mb-3 text-subhead text-label2">No technician visit yet.</p>}
+      <ul className="mb-3 space-y-2">{items.map((v) => (
+        <li key={v.id} className="rounded-control bg-surface2 p-3 text-subhead">
+          <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{slotLabel({ start: v.slotStart, end: v.slotEnd })}</span><Badge tone={VISIT[v.status]?.[1] ?? 'neutral'}>{VISIT[v.status]?.[0] ?? label(v.status)}</Badge>{v.externalRef && <span className="font-mono text-caption text-label2">{v.externalRef}</span>}</div>
+          {(v.technicianName || v.technicianPhone) && <div className="text-footnote text-label2">Technician: {v.technicianName}{v.technicianPhone && ` · ${v.technicianPhone}`}</div>}
+          {v.skills?.length > 0 && <div className="text-caption text-label2">Needs {v.skills.join(', ')}{v.equipment?.length ? ` · ${v.equipment.join(', ')} reserved` : ''}</div>}
+          {v.outcomeNote && <div className="text-footnote text-label2">{v.outcomeNote}</div>}
+        </li>))}</ul>
+      {can('case:write') && open && (
+        <div className="space-y-3">
+          {!live && !finding && <div className="flex flex-wrap items-center gap-2"><Button variant="secondary" onClick={() => setFinding('book')}>Find a time for a visit</Button><Button variant="plain" disabled={act.busy} onClick={() => void act.run(() => post(`/cases/${c.id}/dispatch`, { auto: true }), 'Booked the earliest slot')}>Book the earliest slot</Button></div>}
+          {live && !finding && ['RESERVED', 'REQUESTED', 'SCHEDULED', 'ASSIGNED'].includes(live.status) && <div className="flex flex-wrap items-end gap-2">
+            <Button variant="secondary" onClick={() => setFinding('reschedule')}>Move the visit</Button>
+            <Input aria-label="Reason for cancelling" placeholder="Reason" value={reason} onChange={(e) => setReason(e.target.value)} className="!min-h-[40px] max-w-[220px]" />
+            <Button variant="plain" disabled={act.busy} onClick={() => void act.run(() => post(`/appointments/${live.id}/cancel`, { reason }), 'Visit cancelled')}>Cancel the visit</Button></div>}
+          {finding && (
+            <div className="space-y-3">
+              <Field label="Note for the technician"><Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1000} placeholder="Gate code, pets, who to ask for…" /></Field>
+              {slots.error && <Alert>{slots.error}</Alert>}
+              {!slots.data && !slots.error && <Spinner />}
+              {slots.data && slots.data.slots.length === 0 && <p className="text-subhead text-label2">No technician with {slots.data.skills.join(', ') || 'the right skills'} is free in the next two weeks.</p>}
+              {slots.data && <div className="flex flex-wrap gap-2">{slots.data.slots.slice(0, 24).map((sl: any) => <button key={sl.id} type="button" disabled={act.busy} onClick={() => void pick(sl)} className="rounded-control border border-separator bg-surface px-3 py-2 text-footnote hover:border-accent">{slotLabel(sl)}{sl.capacityLeft !== null && <span className="ml-1 text-label2">({sl.capacityLeft} left)</span>}</button>)}</div>}
+              <Button variant="plain" onClick={() => setFinding(null)}>Close</Button>
+            </div>)}
+          {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+        </div>)}
     </Card>
   );
 }
