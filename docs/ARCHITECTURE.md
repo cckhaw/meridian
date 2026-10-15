@@ -57,6 +57,12 @@ Dunning rules, the rule engine, late fees, payment arrangements and collection p
 
 The northbound API gateway and the integration hub (`integration-hub.ts`, `oauth.ts`, `gateway.ts`, migration `0041`) are described in [INTEGRATION_API.md](INTEGRATION_API.md).
 
+Northbound subscriber operations (OTP, SIM swap, number change, ownership transfer, status, plan change with scheduled changes applied by the daily job, value-added services) live in `subscriber-ops.ts` on migration `0042`. Business events (`events.ts`, `northbound-orders.ts`, migration `0043`) are raised from the order and billing code in the same transaction as the change, written to the outbox, and fanned out to webhooks, TM Forum 688 listeners and mapped topics with signed, retried deliveries.
+
+Stock transfers between warehouses and stores (`stock-transfers.ts`, migration `0044`; requested, in transit, received, cancelled or returned; permission `inventory:transfer`) move serial-numbered SIMs as well as quantities, and a SIM on a transfer cannot be sold. Remote sales draw SIMs from warehouses and store sales from the selling store's own stock (`nrm-pools.ts`).
+
+Early-termination rules (`etc-formula.ts`, `etc-rules.ts`, `lifecycle.ts`, migration `0045`) hold per-scenario rules whose charge is a formula run by a small recursive-descent evaluator (no `eval`); with no rule on, the offer's own terms apply as before. See [LIFECYCLE.md](LIFECYCLE.md).
+
 Device financing (the even split over the contract, the credit check and its bureau connection) lives in `packages/core` (`device-financing.ts`, `financing-check.ts`, and the split in `order-pricing.ts`) on migration `0046`; see [FINANCING.md](FINANCING.md).
 
 Number Resource Management lives in `packages/core` (`nrm.ts`, `nrm-pools.ts`, `number-reservation.ts`, `vip-pattern-matcher.ts`, `order-numbering.ts`) on migrations `0020` and `0021`. Locks are database row locks with an optional Redis adapter; events go through the lifecycle outbox; IMSI recycling also runs as a Temporal workflow in `services/order-service`. Details in [NUMBERING.md](NUMBERING.md).

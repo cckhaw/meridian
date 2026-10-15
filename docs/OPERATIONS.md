@@ -35,6 +35,10 @@ Meridian refuses to serve traffic in production unless it is configured safely: 
 
 Dunning needs no variables of its own: its pay page address, QR merchant details and credit-bureau name are set in Settings ([DUNNING.md](DUNNING.md#qr-payment-links)).
 
+**Settings that need no variables.** Early-termination rules ([LIFECYCLE.md](LIFECYCLE.md)), device financing and its credit bureau ([FINANCING.md](FINANCING.md)), the integration hub and the northbound API ([INTEGRATION_API.md](INTEGRATION_API.md)), and stock transfers (below) are configured in the CRM only.
+
+**The data key signs and encrypts more than KYC data.** `MERIDIAN_DATA_KEY` (or `MERIDIAN_ID_PEPPER` when unset) also encrypts the secrets entered in the integration hub (credit bureau, field service, network, SAP keys, webhook and OAuth secrets), signs the northbound access tokens (HS256) and the invoice download links. Changing it makes stored secrets unreadable and invalidates issued tokens and links, so back it up with the database. Hub secrets are write-only: no call ever returns them.
+
 See `.env.example`.
 
 ## 2. Day-one runbook
