@@ -112,7 +112,7 @@ A phone does not need a "plan with a device" offer of its own for every plan. On
 
 When the device is added to an order together with a plan that has no device of its own (a SIM-only plan, for example), staff choose **On a contract** and the plan and length:
 
-- the device costs its price less the subsidy, upfront or by instalments no longer than the contract;
+- the device costs its price less the subsidy, **spread evenly across the whole contract and billed with the plan** by default (the customer may pay in full instead, and a credit check can ask for an upfront part first: [FINANCING.md](FINANCING.md)); an instalment choice made on the line is kept;
 - the plan switches on when the device is delivered, with that contract, and the device instalments are billed on the plan;
 - leaving early charges the subsidy that has not been earned yet, whatever later happens to the catalog (the terms are saved with the service);
 - returning the device in the cooling-off period keeps the plan but ends the contract and the instalments without a charge;

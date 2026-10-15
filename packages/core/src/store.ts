@@ -8,6 +8,7 @@ import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { gatewayById, type GatewayEvent } from './gateways.js';
 import { addDocument, attestInPerson, personalProblems, submitRemote, syncCase, markVerified, type Attestation, type Personal } from './kyc.js';
 import { advanceOrder, cancelOrder, getOrder, placeOrderTx, type OrderInput } from './orders.js';
+import { runCreditCheck } from './device-financing.js';
 import { createsService, priceBasket } from './order-pricing.js';
 import { behaviourOf } from '@meridian/types';
 import { getBranding, getRegional, marketFor, marketMode } from './settings.js';
@@ -16,10 +17,11 @@ import { taxSplit } from './tax.js';
 
 export type StoreChannel = 'SELF_SERVE' | 'RETAIL_ASSISTED';
 export interface Address { line1: string; line2?: string; city: string; state?: string; postcode: string; country: string }
-export interface Consent { termsVersion: string; acceptedTerms: boolean; privacyAccepted: boolean; marketingOptIn: boolean; authorisedAssistant?: boolean }
+export interface Consent { termsVersion: string; acceptedTerms: boolean; privacyAccepted: boolean; marketingOptIn: boolean; authorisedAssistant?: boolean;
+  /** The customer agrees to a credit check on their ID number (device financing). */ creditCheck?: boolean }
 /** `attachTo` (with `dealTermMonths`) buys a device on a contract with another product in the basket: the offer id of that plan. */
-export interface CartLine { offerId: string; quantity?: number; attachTo?: string; dealTermMonths?: number }
-const storedLine = (l: CartLine): CartLine => ({ offerId: l.offerId, quantity: l.quantity ?? 1, ...(l.attachTo ? { attachTo: l.attachTo, dealTermMonths: l.dealTermMonths } : {}) });
+export interface CartLine { offerId: string; quantity?: number; attachTo?: string; dealTermMonths?: number; /** Pay the device in full now instead of over the contract. */ payInFull?: boolean }
+const storedLine = (l: CartLine): CartLine => ({ offerId: l.offerId, quantity: l.quantity ?? 1, ...(l.attachTo ? { attachTo: l.attachTo, dealTermMonths: l.dealTermMonths, ...(l.payInFull ? { payInFull: true } : {}) } : {}) });
 /** The basket as order lines: a device on a contract points at its plan by position. */
 const orderLines = (lines: CartLine[]) => lines.map((l) => {
   const plan = l.attachTo ? lines.findIndex((x) => x.offerId === l.attachTo) : -1;
@@ -27,6 +29,7 @@ const orderLines = (lines: CartLine[]) => lines.map((l) => {
   return { offerId: l.offerId, quantity: l.quantity, ...(l.attachTo ? { attachTo: plan, dealTermMonths: l.dealTermMonths } : {}) };
 });
 
+const payInFullOf = (lines: CartLine[]) => lines.some((l) => l.attachTo && l.payInFull);
 const MAX_LINE_QTY = 5;
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
@@ -103,12 +106,14 @@ const collectOnly = (o: OfferNode) => !!o.fulfilment?.requiresCollection && !o.f
 
 export interface Quote {
   currency: string; taxName: string;
-  lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; retailMinor: number } }>;
+  lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; retailMinor: number; instalmentMinor?: number } }>;
   upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; violations: string[];
+  /** A device paid over its contract. `estimate`: the upfront share is settled by a credit check at checkout, so the figures may change. */
+  financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean };
 }
 
 /** Prices a basket for a channel (and, when known, a customer who may already own prerequisites). Does not throw for unmet prerequisites: it reports them. */
-export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel: StoreChannel; customerId?: string | null }): Promise<Quote> {
+export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel: StoreChannel; customerId?: string | null; creditCheckId?: string }): Promise<Quote> {
   if (!o.lines.length) throw invalid('The basket is empty.');
   if (o.lines.length > 10) throw invalid('Too many items in the basket.');
   const marketCode = await storeMarket(q, o.customerId);
@@ -135,18 +140,22 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
     offers.push(off);
   }
   // A device bought on a contract with a plan is priced by the same code the order uses, so the shopper is quoted exactly what is charged.
+  let financing: Quote['financing'];
   if (o.lines.some((l) => l.attachTo)) {
-    const priced = await priceBasket(q, { customerId: o.customerId ?? undefined, channel: o.channel, marketCode, lines: orderLines(o.lines), payment: { method: 'CREDIT_CARD' } }, { soft: true });
+    const priced = await priceBasket(q, { customerId: o.customerId ?? undefined, channel: o.channel, marketCode, lines: orderLines(o.lines), payment: { method: 'CREDIT_CARD' }, financing: { payInFull: payInFullOf(o.lines), creditCheckId: o.creditCheckId } }, { soft: true });
     priced.lines.forEach((pl, i) => {
       if (!pl.deal) return;
-      lines[i]!.upfrontMinor = pl.gross;
-      lines[i]!.deal = { planName: priced.lines[pl.attachPosition!]!.offer.name, termMonths: pl.deal.termMonths, retailMinor: pl.listGross + pl.deal.subsidyMinor };
+      lines[i]!.upfrontMinor = pl.paidNow;
+      lines[i]!.monthlyMinor += pl.instalmentMinor; // the device instalment is billed with the plan
+      lines[i]!.deal = { planName: priced.lines[pl.attachPosition!]!.offer.name, termMonths: pl.deal.termMonths, retailMinor: pl.listGross + pl.deal.subsidyMinor, instalmentMinor: pl.instalmentMinor || undefined };
     });
+    const f = priced.financing;
+    if (f?.applied) financing = { months: f.months, upfrontMinor: f.upfrontMinor, instalmentMinor: f.instalmentMinor, estimate: f.requiresCreditCheck, creditCheck: f.requiresCreditCheck };
   }
   const violations = await checkDependencies(q, o.customerId ?? null, offers.map((x) => x.id));
   return {
     currency: mk.currency, taxName: mk.taxName, lines, upfrontMinor: lines.reduce((s, l) => s + l.upfrontMinor, 0), monthlyMinor: lines.reduce((s, l) => s + l.monthlyMinor, 0),
-    requiresShipping: shipping, violations,
+    requiresShipping: shipping, violations, financing,
   };
 }
 
@@ -272,6 +281,7 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     if (access.channel === 'RETAIL_ASSISTED' && !consent.authorisedAssistant) throw rejected('The customer must authorise the assistant to complete this order on their behalf.');
     const quote = await quoteBasket(q, { lines: a.lines, channel: access.channel, customerId: a.customerId });
     if (quote.violations.length) throw rejected(quote.violations.join(' '));
+    if (quote.financing?.creditCheck && !consent.creditCheck) throw rejected('The customer must agree to a credit check to pay for the device over the contract.');
     if (quote.requiresShipping && access.channel === 'SELF_SERVE' && !a.address) throw rejected('A delivery address is required for this order.');
 
     // customer: existing (assisted) or created now from the verified identity
@@ -302,8 +312,17 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
       attribution: staff ? { storeId: staff.storeId ?? undefined, salespersonId: staff.username } : undefined,
       deliveryAddress: addressLine(a.address as Address | null), actor: staff?.username ?? `store:${a.clientId?.slice(0, 8) ?? 'self'}`,
     };
+    // Device financing: with a credit check required, the KYC-verified ID number is checked now and the answer sets the upfront share.
+    let checked = false;
+    if (quote.financing?.creditCheck) {
+      const total = (await priceBasket(q, { customerId, channel: access.channel, lines: input.lines, payment: input.payment, financing: { payInFull: payInFullOf(a.lines) } }, { soft: true })).financing?.financedMinor ?? 0;
+      const months = quote.financing.months;
+      const check = await runCreditCheck(q, { customerId, idNumber: p.idNumber.trim(), fullName: p.fullName, dateOfBirth: p.dateOfBirth, financedMinor: total, months, currency: quote.currency, consent: { given: true, by: staff?.username ?? 'applicant', how: 'store consent' }, actor: staff?.username ?? 'store', skipCustomerMatch: true });
+      input.financing = { creditCheckId: check.id };
+      checked = true;
+    } else if (payInFullOf(a.lines as CartLine[])) input.financing = { payInFull: true };
     const order = await placeOrderTx(q, input);
-    if (order.totalMinor !== quote.upfrontMinor) throw new Error(`price changed during checkout (${order.totalMinor} vs ${quote.upfrontMinor})`);
+    if (!checked && order.totalMinor !== quote.upfrontMinor) throw new Error(`price changed during checkout (${order.totalMinor} vs ${quote.upfrontMinor})`);
     await q.query(`UPDATE applications SET status='ORDERED', customer_id=$2, order_id=$3, updated_at=now() WHERE id=$1`, [id, customerId, order.id]);
     await audit(q, staff?.username ?? 'store', 'application', id, 'CHECKOUT', { orderId: order.id, totalMinor: order.totalMinor });
     return { order, appId: id };

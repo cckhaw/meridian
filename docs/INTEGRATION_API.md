@@ -74,6 +74,8 @@ All of these are under `/api/v1`, need the scope shown and `X-Idempotency-Key`, 
 | `GET /v1/accounts/{id}/invoices` | `billing:read` | **CustomerBill** (TMF 670) pages, the account's balance (due and overdue), the estimated next bill, and for each invoice a **pre-signed PDF link** valid for 15 minutes without a login (`/api/v1/invoices/{id}/pdf?exp=…&sig=…`). Real-time charging-system bucket balances and unbilled usage need the charging system and show as not connected. |
 | `POST /v1/payments` | `payment:create` | A **Payment** (TMF 676) the channel has already captured: `{amountMinor, method, reference, and exactly one of orderId / invoiceId / accountId, topUp?}`. Against an order it confirms the order (the amount must equal the total); against an invoice it pays it; against an account it pays the oldest invoices first. An excess is refused unless `topUp: true`, which keeps it as credit. Paying what was overdue lifts the dunning bars and ends the ladder in the same step. A repeat with the same reference changes nothing. |
 
+**Device financing.** A device on a contract in `lines` (`attachTo`, `dealTermMonths`) is financed over the contract unless `payInFull: true`. Add `creditCheck: {idNumber, consent: true}` to run the credit check in the same call (the ID number must be the customer's own; it is sent to the bureau and only a hash is kept), or `creditCheckId` to use one already run. When the settings require a check and none is given the call is refused with `422`. See [FINANCING.md](FINANCING.md).
+
 The generic payment webhook (`POST /api/webhooks/payment`) can now be verified with an **inbound verification key named `payment`** in the hub, as well as with `MERIDIAN_PAYMENT_WEBHOOK_SECRET`.
 
 ## Events

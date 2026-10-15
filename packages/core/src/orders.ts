@@ -14,6 +14,7 @@ import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { MAIN_WAREHOUSE, consumeReservations, releaseReservations, reserve, restockConsumed } from './inventory.js';
 import { postJournal, type RevenueStream } from './ledger.js';
 import { today } from './dates.js';
+import { attachCheckToOrder } from './device-financing.js';
 import { createsService, deliveryMethods, groupOf, priceBasket, RETAIL_CHANNELS, skusFor, type GroupKind, type LineInput } from './order-pricing.js';
 import { assertStoreUsable } from './stores.js';
 import { decodeCursor, pageSize, sqlBuilder, tsPage, type Page } from './paging.js';
@@ -49,6 +50,8 @@ export interface OrderInput {
   delivery?: { method: 'SHIP' | 'COLLECT'; pickupStoreId?: string };
   /** Preferred installation visit, booked as soon as the order is paid. */
   installationSlot?: string;
+  /** Device financing: the credit check to use, or pay a device on a contract in full. */
+  financing?: { creditCheckId?: string; payInFull?: boolean };
   actor?: string;
 }
 
@@ -202,6 +205,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
        p.input.memberOf ?? null, p.input.joinGroupId ?? null, p.input.portIn ? JSON.stringify(p.input.portIn) : null],
     );
   }
+  if (priced.financing?.checkId) await attachCheckToOrder(q, priced.financing.checkId, orderId, customerId);
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
   o.state = 'DRAFT';
   await setState(q, o, 'SUBMITTED', actor);

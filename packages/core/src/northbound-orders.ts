@@ -1,3 +1,4 @@
+import { creditCheckForBasket } from './financing-check.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { currencyInfo, type OrderChannel, type PaymentMethod } from '@meridian/types';
 import { audit } from './audit.js';
@@ -53,6 +54,9 @@ export interface NorthOrderInput {
   delivery?: { method: 'SHIP' | 'COLLECT'; address?: string; pickupStoreId?: string };
   installationSlot?: string;
   storeId?: string; dealerId?: string; dealerAgentId?: string;
+  /** Device financing. `creditCheck` runs the credit check inline (the customer's ID number, with their consent); `creditCheckId` uses one already run; `payInFull` pays a device on a contract outright. */
+  creditCheck?: { idNumber: string; consent: boolean };
+  creditCheckId?: string; payInFull?: boolean;
 }
 
 export async function createOrderNorth(db: Db, i: NorthOrderInput, actor: string, scopes: string[]) {
@@ -70,8 +74,12 @@ export async function createOrderNorth(db: Db, i: NorthOrderInput, actor: string
     const made = await db.tx((q) => createCustomer(q, i.customer as NewCustomer));
     customerId = made.customer.id as string;
   }
+  let creditCheckId = i.creditCheckId;
+  if (i.creditCheck && !i.payInFull && !creditCheckId) {
+    creditCheckId = (await creditCheckForBasket(db, { customerId: customerId!, idNumber: i.creditCheck.idNumber, consent: { given: !!i.creditCheck.consent, by: actor, how: `northbound ${i.channel}` }, channel, lines: i.lines, actor })).id;
+  }
   const order = await placeOrder(db, {
-    customerId, accountId: i.accountId, channel, lines: i.lines,
+    customerId, accountId: i.accountId, channel, lines: i.lines, financing: { creditCheckId, payInFull: i.payInFull },
     payment: { method: i.payment.method, installmentMonths: i.payment.installmentMonths, reference: i.payment.reference, confirmed: captured },
     attribution: channel === 'SELF_SERVE' ? {} : { storeId: i.storeId, dealerId: i.dealerId, dealerAgentId: i.dealerAgentId, salespersonId: actor },
     deliveryAddress: i.delivery?.address, delivery: i.delivery?.method ? { method: i.delivery.method, pickupStoreId: i.delivery.pickupStoreId } : undefined, installationSlot: i.installationSlot, actor,

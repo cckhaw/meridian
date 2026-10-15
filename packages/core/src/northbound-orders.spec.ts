@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { updateNode } from './catalog.js';
+import { setFinancing } from './device-financing.js';
 import { runBillCycle } from './billing.js';
 import { dayOf, today } from './dates.js';
 import type { Db } from './db.js';
@@ -15,6 +17,26 @@ beforeAll(async () => { db = await freshDb(); });
 afterAll(async () => { await db.close(); });
 void [importImsis, importSims, raiseEvent, fanOutEvents, listDeliveries, saveHubWebhook];
 const ALL = ['order:create', 'payment:create'];
+
+describe('device financing through the order API', () => {
+  const lines = [{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright', attachTo: 0, dealTermMonths: 24 }] as never;
+  it('finances a device on a contract, runs the credit check inline with consent, and lets the channel ask to pay in full', async () => {
+    await updateNode(db, 'good-phone-outright', { deals: [{ termMonths: 24, subsidyMinor: 40000 }] }, 'admin');
+    await setFinancing(db, 'admin', { creditCheckRequired: true });
+    const c = await newCustomer(db, { idDocument: 'NORTH-FIN-8' });
+    const base = { channel: 'CALL_CENTER' as const, customerId: c.customer.id, lines, payment: { method: 'QR' as const } };
+    await expect(createOrderNorth(db, base, 'ivr', ['order:create'])).rejects.toThrow(/credit check is needed/);
+    await expect(createOrderNorth(db, { ...base, creditCheck: { idNumber: 'NORTH-FIN-8', consent: false } }, 'ivr', ['order:create'])).rejects.toThrow(/agree to a credit check/);
+    const financed = await createOrderNorth(db, { ...base, creditCheck: { idNumber: 'NORTH-FIN-8', consent: true } }, 'ivr', ['order:create']);
+    const used = (await db.query('SELECT order_id, ratio_bps, id_hash FROM credit_checks WHERE customer_id=$1', [c.customer.id])).rows;
+    expect(used).toHaveLength(1);
+    expect(used[0]!.orderId).toBe(financed.id);
+    expect(used[0]!.idHash).not.toContain('NORTH-FIN-8');
+    const full = await createOrderNorth(db, { ...base, payInFull: true }, 'ivr', ['order:create']);
+    expect(full.id).not.toBe(financed.id);
+    await setFinancing(db, 'admin', { creditCheckRequired: false });
+  });
+});
 
 describe('orders', () => {
   it('creates an order for an existing or a new customer, waits for payment unless it was captured, and tracks it as a TMF 622 ProductOrder', async () => {

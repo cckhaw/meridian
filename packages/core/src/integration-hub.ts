@@ -28,6 +28,7 @@ export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: s
   ],
   finance: [
     { kind: 'SAP_FICO', label: 'SAP FI-CO', hint: 'SFTP or RFC/REST host and the journal file destination' },
+    { kind: 'CREDIT_BUREAU', label: 'Credit bureau', hint: 'Credit scoring for device financing: the address, a token, and how to read the answer. Settings in JSON: mode (REST or SIMULATOR), idField, scorePath, upfrontPath, upfrontUnit (MINOR or MAJOR), referencePath' },
     { kind: 'PAYMENT_GATEWAY', label: 'Payment provider', hint: 'DuitNow, PromptPay, QRIS, SGQR, card processors: credentials and the callback address' },
   ],
   events: [{ kind: 'EVENT_BUS', label: 'Event bus', hint: 'Kafka brokers or another event stream' }],

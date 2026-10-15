@@ -1,3 +1,4 @@
+import { getFinancing, usableCheck } from './device-financing.js';
 import { behaviourOf, type DeviceDeal, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
 import { listBundleRules, matches, ruleSatisfied, type BundleRule } from './bundles.js';
 import { checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
@@ -38,6 +39,8 @@ export interface LineInput {
 export interface PricingInput {
   customerId?: string; accountId?: string; channel: OrderChannel; marketCode?: string; lines: LineInput[];
   payment: { method: PaymentMethod; installmentMonths?: number; reference?: string; confirmed?: boolean; deferred?: boolean };
+  /** Device financing: the credit check to use, or `payInFull` to pay a device on a contract outright instead of over the contract. */
+  financing?: { creditCheckId?: string; payInFull?: boolean };
 }
 
 /** Offers that produce a billable service when the order activates. */
@@ -84,6 +87,12 @@ export interface Priced {
   lines: PricedLine[]; dueNow: number; net: number; monthlyPlanMinor: number; monthlyInstalmentMinor: number; discountMinor: number;
   bundles: Array<{ ruleId: string; name: string; discountMinor: number; lineOffer: string }>;
   problems: string[]; hasService: boolean;
+  /** Set when a device on a contract is financed: how it is split and whether the customer still needs a credit check. */
+  financing?: FinancingInfo;
+}
+export interface FinancingInfo {
+  applied: boolean; months: number; financedMinor: number; upfrontMinor: number; ratioBps: number; instalmentMinor: number;
+  requiresCreditCheck: boolean; checkId?: string; score?: number | null; band?: string | null; source?: string; fallback?: boolean; payInFull?: boolean;
 }
 
 function resolveVariant(o: OfferNode, id?: string): DeviceVariant | undefined {
@@ -228,6 +237,30 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
     }
   }
 
+  // Device financing: a device on a contract is paid for over the whole contract unless the customer pays in full. The credit check decides the upfront share.
+  let financing: FinancingInfo | undefined;
+  const fset = await getFinancing(q);
+  const dealLines = lines.filter((l) => l.deal && !l.input.payment && l.gross > 0);
+  if (dealLines.length && fset.financeOverContract && !legacy) {
+    if (input.financing?.payInFull) financing = { applied: false, months: 0, financedMinor: 0, upfrontMinor: 0, ratioBps: 10000, instalmentMinor: 0, requiresCreditCheck: false, payInFull: true };
+    else {
+      const total = dealLines.reduce((t, l) => t + l.gross, 0);
+      let ratio = 0, check: Awaited<ReturnType<typeof usableCheck>> | undefined, needs = false;
+      if (input.financing?.creditCheckId) check = await usableCheck(q, input.financing.creditCheckId, input.customerId);
+      if (check) ratio = check.ratioBps;
+      else if (fset.creditCheckRequired) {
+        needs = true; ratio = fset.fallbackUpfrontBps; // shown as an estimate until the check is done
+        fail('A credit check is needed before this device can be financed.');
+      }
+      let upfront = 0, instalment = 0;
+      for (const l of dealLines) {
+        const down = ratio >= 10000 ? l.gross : Math.min(l.gross - 1, Math.max(0, Math.round((l.gross * ratio) / 10000)));
+        if (ratio >= 10000) { l.payMode = 'UPFRONT'; l.months = null; l.downMinor = 0; upfront += l.gross; }
+        else { l.payMode = 'INSTALLMENT'; l.months = l.deal!.termMonths; l.downMinor = down; upfront += down; instalment += Math.floor((l.gross - down) / l.deal!.termMonths); }
+      }
+      financing = { applied: ratio < 10000, months: dealLines[0]!.deal!.termMonths, financedMinor: total, upfrontMinor: upfront, ratioBps: ratio, instalmentMinor: instalment, requiresCreditCheck: needs, checkId: check?.id, score: check?.score, band: check?.band, source: check?.source, fallback: check?.fallback };
+    }
+  }
   let dueNow = 0, net = 0, plan = 0, inst = 0, disc = 0;
   for (const l of lines) {
     if (l.payMode === 'INSTALLMENT') {
@@ -242,7 +275,7 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
     dueNow += l.paidNow; net += l.net; plan += l.monthlyFeeMinor; inst += l.instalmentMinor; disc += l.discountMinor;
   }
   if (dueNow > 0 && legacy) throw rejected('part of this order is due now: choose how it is paid (card, cash or QR) instead of instalments only');
-  return { customer, marketCode, currency: mk.currency, taxName: mk.taxName, taxBps: mk.taxBps, lines, dueNow, net, monthlyPlanMinor: plan, monthlyInstalmentMinor: inst, discountMinor: disc, bundles, problems, hasService };
+  return { customer, marketCode, currency: mk.currency, taxName: mk.taxName, taxBps: mk.taxBps, lines, dueNow, net, monthlyPlanMinor: plan, monthlyInstalmentMinor: inst, discountMinor: disc, bundles, problems, hasService, financing };
 }
 
 /** What the customer is told about changing their mind, per part of the order, written from the cancellation rules in force. */
@@ -292,6 +325,8 @@ export interface OrderQuote {
   /** How the goods can reach the customer (ship, collect in store, or both) when the order has goods and is not sold over a counter. */
   deliveryMethods: DeliveryMethod[];
   installationSlaDays: number | null;
+  /** A device on a contract paid over the contract: the split, and whether a credit check is still needed. */
+  financing?: FinancingInfo;
 }
 
 /** Everything the order wizard's review step shows, from the same pricing the order will be charged with. Saves nothing. */
@@ -300,7 +335,7 @@ export async function quoteOrder(q: Queryable, input: PricingInput): Promise<Ord
   const kinds = [...new Set(p.lines.map((l) => l.group))];
   const terms = await cancellationTerms(q, kinds, p.currency);
   return {
-    currency: p.currency, taxName: p.taxName, taxBps: p.taxBps, bundles: p.bundles, problems: p.problems,
+    currency: p.currency, taxName: p.taxName, taxBps: p.taxBps, bundles: p.bundles, problems: p.problems, financing: p.financing,
     lines: p.lines.map((l) => ({
       offerId: l.offer.id, name: l.offer.name, kind: l.offer.kind, quantity: l.qty, group: l.group,
       variant: l.variant ? { id: l.variant.id, colour: l.variant.colour, storage: l.variant.storage } : undefined,

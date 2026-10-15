@@ -331,13 +331,13 @@ const clientRoute = (method: string, path: string, h: (c: PublicCtx & { client: 
 const north = (method: string, path: string, scope: string | null, h: (c: PublicCtx & { principal: core.GatewayPrincipal }) => unknown, o: { idempotent?: boolean } = {}) =>
   route(method, path, null, h as unknown as Handler, { north: { scope, idempotent: o.idempotent }, noCsrf: true });
 const selfAccess = (c: { client: core.ApiClient; req: Request }): core.AppAccess => ({ channel: 'SELF_SERVE', clientId: c.client.id, token: c.req.headers.get('x-application-token') ?? undefined });
-const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional(), attachTo: z.string().max(80).optional(), dealTermMonths: z.number().int().optional() })).min(1).max(10) });
+const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional(), attachTo: z.string().max(80).optional(), dealTermMonths: z.number().int().optional(), payInFull: z.boolean().optional() })).min(1).max(10) });
 const personalSchema = z.object({
   fullName: z.string().max(100), dateOfBirth: z.string().max(10), nationality: z.string().max(60).optional(), idType: z.enum(core.ID_TYPES), idNumber: z.string().max(30),
   idExpiry: blank(z.string().max(10)), email: z.string().max(120), phone: z.string().max(25),
 }).partial();
 const addressSchema = z.object({ line1: z.string().max(120), line2: z.string().max(120).optional(), city: z.string().max(80), state: z.string().max(80).optional(), postcode: z.string().max(20), country: z.string().length(2) });
-const consentSchema = z.object({ acceptedTerms: z.boolean(), privacyAccepted: z.boolean(), marketingOptIn: z.boolean(), authorisedAssistant: z.boolean().optional() }).partial();
+const consentSchema = z.object({ acceptedTerms: z.boolean(), privacyAccepted: z.boolean(), marketingOptIn: z.boolean(), authorisedAssistant: z.boolean().optional(), creditCheck: z.boolean().optional() }).partial();
 const appPatch = z.object({ lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
 const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(3_700_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') });
 const DOC_BODY = 3_800_000;
@@ -1029,13 +1029,37 @@ const orderBody = z.object({
   storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
   deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(),
   delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), pickupStoreId: z.string().max(50).optional() }).optional(),
+  financing: z.object({ creditCheckId: uuid.optional(), payInFull: z.boolean().optional() }).optional(),
+});
+// Device financing: the credit check for the devices in a basket. The customer's ID number is sent to the bureau only with their consent and is not kept.
+post('/orders/credit-check', null, async ({ db, user, body }) => {
+  const raw = z.object({ channel: z.enum(core.CHANNELS) }).parse(body);
+  need(user, `order:create:${raw.channel}` as Permission);
+  const b = z.object({ customerId: uuid.optional(), channel: z.enum(core.CHANNELS), lines: z.array(lineBody).min(1).max(50), idNumber: z.string().min(3).max(40), consent: z.object({ given: z.boolean(), how: z.string().max(60).default('in person') }) }).parse(body);
+  const customerId = user.scope.customerId ?? b.customerId;
+  if (!customerId) throw new DomainError('INVALID', 'choose the customer first');
+  return core.creditCheckForBasket(db, { customerId, idNumber: b.idNumber, consent: { given: b.consent.given, by: user.username, how: b.consent.how }, channel: b.channel, marketCode: user.marketCode, lines: b.lines, actor: user.username });
+});
+get('/settings/financing', 'settings:manage', async ({ db }) => ({ settings: await core.getFinancing(db), bureauConfigured: await core.bureauConfigured(db), defaults: core.DEFAULT_FINANCING }));
+post('/settings/financing', 'settings:manage', async ({ db, user, body }) => {
+  const b = z.object({
+    financeOverContract: z.boolean(), creditCheckRequired: z.boolean(), providerReturns: z.enum(['SCORE', 'UPFRONT_AMOUNT']), onProviderFailure: z.enum(['FALLBACK_SHARE', 'BLOCK']),
+    fallbackUpfrontBps: z.number().int(), validityDays: z.number().int(), minUpfrontMinor: z.number().int(),
+    bands: z.array(z.object({ label: z.string().max(30), minScore: z.number().int(), maxScore: z.number().int(), upfrontBps: z.number().int() })).max(12),
+  }).partial().parse(body);
+  return { settings: await core.setFinancing(db, user.username, b as Partial<core.FinancingSettings>), bureauConfigured: await core.bureauConfigured(db) };
+});
+// Tries the bureau connection the way a real check would, with a made-up amount, and shows the answer. Nothing is kept against a customer.
+post('/settings/financing/test', 'settings:manage', ({ db, body }) => {
+  const b = z.object({ idNumber: z.string().min(3).max(40), financedMinor: z.number().int().min(100).default(100000) }).parse(body);
+  return core.testBureau(db, b.idNumber, b.financedMinor);
 });
 // The wizard's review step: the full priced summary, nothing saved. Same channel permission as placing the order.
 post('/orders/quote', null, async ({ db, user, body }) => {
   const raw = z.object({ channel: z.enum(core.CHANNELS) }).parse(body);
   need(user, `order:create:${raw.channel}` as Permission);
   const b = orderBody.partial({ payment: true }).parse(body);
-  return core.quoteOrder(db, { customerId: user.scope.customerId ?? b.customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines, payment: { method: b.payment?.method ?? 'CREDIT_CARD', installmentMonths: b.payment?.installmentMonths } });
+  return core.quoteOrder(db, { customerId: user.scope.customerId ?? b.customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines, financing: b.financing, payment: { method: b.payment?.method ?? 'CREDIT_CARD', installmentMonths: b.payment?.installmentMonths } });
 });
 get('/orders/addons', 'order:read', ({ db, user, query }) => core.eligibleAddons(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), offerIds: (str(query, 'offers') ?? '').split(',').filter(Boolean).slice(0, 20), channel: z.enum(core.CHANNELS).parse(str(query, 'channel')),
@@ -1079,7 +1103,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, actor: user.username,
+      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, financing: b.financing, actor: user.username,
     });
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);
     return order;

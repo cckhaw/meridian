@@ -9,6 +9,7 @@ import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
+import { FinancingPanel } from './financing-panel';
 import { MONTHS, SWATCH, financeable, flatLines, isExclusive, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
@@ -31,6 +32,8 @@ export interface Wizard {
   consent: boolean; setConsent: (b: boolean) => void;
   jumpTo: (id: string, opts?: { kind?: string }) => void; kindHint: string | null; clearKindHint: () => void;
   can: (...p: string[]) => boolean;
+  /** Device financing: pay a device on a contract in full, and the credit check that sets the upfront share. */
+  financing: { payInFull: boolean; setPayInFull: (b: boolean) => void; check: { id: string; score: number | null; band: string | null; fallback: boolean } | null; setCheck: (c: { id: string; score: number | null; band: string | null; fallback: boolean } | null) => void };
 }
 
 const priceLine = (o: any) => {
@@ -403,6 +406,7 @@ export function ReviewStep({ w }: { w: Wizard }) {
     <div className="space-y-5">
       {w.quoteError && <Alert>{w.quoteError}</Alert>}
       {q.problems.map((p: string) => <Alert key={p}>{p}</Alert>)}
+      <FinancingPanel w={w} />
       <Card>
         <p className="text-footnote font-semibold uppercase tracking-wide text-label2">Customer</p>
         <p className="text-title3 font-semibold">{w.quick ? 'Walk-in sale' : w.customer?.displayName}</p>

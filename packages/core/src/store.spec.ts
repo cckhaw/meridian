@@ -409,8 +409,16 @@ describe('a device on a contract in the online shop', () => {
     const plain = await quoteBasket(db, { channel: 'SELF_SERVE', lines: [{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright' }] });
     const q = await quoteBasket(db, { channel: 'SELF_SERVE', lines });
     const phone = q.lines[1]!;
-    expect(phone.upfrontMinor).toBe(plain.lines[1]!.upfrontMinor - 40000);
-    expect(phone.deal).toMatchObject({ planName: '5G SIM-only 100GB', termMonths: 24 });
+    const price = plain.lines[1]!.upfrontMinor - 40000;
+    // Financed by default: the price after the subsidy is spread evenly over the contract and billed with the plan.
+    expect(phone.upfrontMinor).toBe(0);
+    expect(phone.deal).toMatchObject({ planName: '5G SIM-only 100GB', termMonths: 24, instalmentMinor: Math.floor(price / 24) });
+    expect(phone.monthlyMinor).toBe(Math.floor(price / 24));
+    expect(q.financing).toMatchObject({ months: 24, upfrontMinor: 0, estimate: false });
+    // ...unless the customer pays in full.
+    const full = await quoteBasket(db, { channel: 'SELF_SERVE', lines: [lines[0]!, { ...lines[1]!, payInFull: true }] });
+    expect(full.lines[1]!.upfrontMinor).toBe(price);
+    expect(full.financing).toBeUndefined();
     await expect(quoteBasket(db, { channel: 'SELF_SERVE', lines: [{ offerId: 'good-phone-outright', attachTo: 'plan-sim-5g', dealTermMonths: 24 }] })).rejects.toThrow(/not in the basket/);
     await expect(quoteBasket(db, { channel: 'SELF_SERVE', lines: [{ ...lines[0]! }, { offerId: 'good-phone-outright', attachTo: 'plan-sim-5g', dealTermMonths: 36 }] })).rejects.toThrow(/not offered on a 36-month contract/);
   });
