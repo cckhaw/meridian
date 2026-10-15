@@ -34,20 +34,37 @@ Search is on the server and covers the whole catalog by words in the name or cod
 
 ## What an offer type is
 
-An **offer type** says what kind of thing an offer is. It decides what the flow asks for and what happens when the offer is sold: whether a service is created, whether something ships, whether a contract is offered. The type list is in **Settings → Catalog → Offer types**: add your own, rename them, or switch off the ones you do not use. Every type is based on a **behaviour** that the platform knows how to sell, fulfil and bill, chosen when the type is created and fixed afterwards:
+An **offer type** says what kind of thing an offer is. It decides what the flow asks for and what happens when the offer is sold: whether a service is created, whether something ships, whether a contract is offered. The type list is in **Settings → Catalog → Offer types**: add your own, rename them, or switch off the ones you do not use.
 
-| Behaves like | What it does |
+### Switches
+
+A type is a set of **switches**. A new type starts from one of the eight built-in presets (the "Start from" list) and you change whatever differs:
+
+| Switch | Meaning |
 |---|---|
-| SIM-only plan | A mobile plan with a SIM and no device; creates a mobile service |
-| Plan with a device | A phone on a mobile plan, usually on contract; the service starts when the phone is delivered |
-| Wearable | A connected watch or band; creates a service only if it has a monthly fee |
-| Fibre broadband | Needs an installation; the service starts when it is installed |
-| IoT connectivity | One IoT service per device, often bought in bulk |
-| Add-on | An extra on a plan; creates a subscription |
-| Partner subscription | A partner's service billed with the plan; needs the partner's code |
-| Outright goods | A device or appliance sold outright: no service, no contract, can be a quick sale |
+| Service it creates | A service kind (Mobile, Fibre, IoT, Subscription, or one you defined) or none |
+| Only if it has a monthly fee | A watch with no plan is just goods |
+| Includes a physical item | Ships or is collected; can have colours and storage |
+| Sold outright | Goods with no service and no contract; can be a quick sale |
+| Contract | None, or a term can be offered |
+| Needs a partner | Asks for the partner's code |
+| Needs installation | The service starts when installed |
+| Where it is picked | Step 1 plans, step 2 devices, step 3 add-ons (one or more) |
+| One per order | At most one offer of this type per order (for example a mobile plan) |
+
+The form shows a live summary and refuses combinations that make no sense (a type that neither creates a service nor includes goods, an outright sale with a service, installation without a service, and so on). The order engine reads the switches stored on each offer, so changing a type never rewrites history: the built-in presets are read-only, and a custom type can be edited freely until an offer uses it, after which only *Where it is picked* and *One per order* can change (they are restamped onto its offers).
+
+The presets: SIM-only plan, plan with a device, wearable, fibre broadband, IoT connectivity, add-on, partner subscription, outright goods.
 
 A switched-off type cannot be chosen for new offers; existing offers keep working. A type can be removed only if it is custom and no offer uses it.
+
+### Service kinds
+
+**Settings → Catalog → Service kinds** defines new kinds of service beyond the built-in Mobile, Fibre, IoT and Subscription: a roaming pass, a voucher, a top-up. A kind has its own identifier prefix (`RP-…`), can **end by itself** after a default number of days, and names the network systems and the start and end instruction sent through the outbox. Choose it as the *service it creates* in an offer type. An offer can override the validity (**Valid for (days)**).
+
+When an order completes, the service is created as a subscription with the kind and its expiry, and a start instruction (identifier, offer, valid-until, systems) is queued. When the service ends, the kind's end instruction is queued. The daily job terminates services past their expiry (reason `EXPIRED`) without a final invoice. A kind in use by an offer type or service cannot be deleted. Only the super user manages kinds (`settings:manage`). Billing is the ordinary subscription billing: a monthly fee bills monthly, a one-time price is paid once.
+
+Limits: a kind changes identity, expiry and provisioning, not billing rules or the order steps themselves.
 
 ## Fulfilment options
 

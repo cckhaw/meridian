@@ -5,7 +5,7 @@ import { conflict, invalid, notFound, rejected } from './errors.js';
 import { quoteEtc } from './etc.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { validateLineItem, validateOffer, validateParent } from './hierarchy.js';
-import { expandKinds, prepareOffer } from './offer-config.js';
+import { expandKinds, kindsForStep, kindsWhere, prepareOffer } from './offer-config.js';
 import { getRegional, marketMode } from './settings.js';
 
 export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
@@ -17,7 +17,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
     markets: r.markets, version: r.version, createdAt: r.createdAt, updatedAt: r.updatedAt, sortOrder: r.sortOrder ?? 0,
     ...(r.level === 'NETWORK_TYPE' ? { networkType: d.networkType } : {}),
     ...(r.level === 'OFFER'
-      ? { kind: r.kind, template: d.template ?? r.kind, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
+      ? { kind: r.kind, template: d.template ?? r.kind, behaviour: d.behaviour, validityDays: d.validityDays, description: d.description, prices: d.prices ?? [], contract: d.contract, fulfilment: d.fulfilment, partnerCode: d.partnerCode,
           characteristics: d.characteristics ?? {}, requires: d.requires ?? [], excludes: d.excludes ?? [], salesChannels: d.salesChannels ?? [], variants: d.variants ?? [], deals: d.deals ?? [], group: d.group }
       : {}),
     ...(r.level === 'LINE_ITEM'
@@ -29,7 +29,7 @@ const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
 const lineItemData = (i: Partial<LineItemNode>) => ({ itemType: i.itemType, description: i.description || undefined, quantity: i.unlimited ? undefined : i.quantity, unit: i.unit || undefined, unlimited: !!i.unlimited, sku: i.sku || undefined });
 
 const offerData = (o: Partial<OfferNode>) => ({
-  template: o.template, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
+  template: o.template, behaviour: o.behaviour, validityDays: o.validityDays, description: o.description, prices: o.prices, contract: o.contract, fulfilment: o.fulfilment, partnerCode: o.partnerCode,
   characteristics: o.characteristics ?? {}, requires: o.requires ?? [], excludes: o.excludes ?? [], salesChannels: o.salesChannels ?? [], variants: o.variants ?? [], deals: o.deals ?? [], suspension: o.suspension, group: o.group?.isGroupOffer ? o.group : undefined,
 });
 
@@ -507,7 +507,7 @@ export async function searchNodes(q: Queryable, f: { q: string; level?: string; 
 }
 
 /** The same search for sellable offers, as full nodes (price, contract, rules) — what a sales screen needs to list and add them. */
-export async function pageOffers(q: Queryable, f: { q?: string; status?: string; market?: string; channel?: string; kind?: string; notKind?: string; limit?: number; cursor?: string }): Promise<Page<CatalogNode>> {
+export async function pageOffers(q: Queryable, f: { q?: string; status?: string; market?: string; channel?: string; kind?: string; notKind?: string; step?: string; outright?: boolean; limit?: number; cursor?: string }): Promise<Page<CatalogNode>> {
   const limit = pageSize(f.limit, 24, 100);
   const { params, p } = sqlBuilder();
   const where = [`level = 'OFFER'`];
@@ -515,6 +515,9 @@ export async function pageOffers(q: Queryable, f: { q?: string; status?: string;
   // Comma-separated, and each may be a type id or a behaviour template ("every SIM + device type").
   if (f.kind) where.push(`kind = ANY(${p(await expandKinds(q, f.kind.split(',').filter(Boolean)))})`);
   if (f.notKind) where.push(`kind <> ALL(${p(await expandKinds(q, f.notKind.split(',').filter(Boolean)))})`);
+  // Offers of the types that can be picked in a step of the order wizard (1 PLAN, 2 DEVICE, 3 ADDON), as the types' switches say.
+  if (f.outright) where.push(`kind = ANY(${p(await kindsWhere(q, (b) => !!b.outright))})`);
+  if (f.step) where.push(`kind = ANY(${p(await kindsForStep(q, f.step))})`);
   if (f.market && (await marketMode(q)).multiple) where.push(`(cardinality(markets) = 0 OR ${p(f.market)} = ANY(markets))`);
   if (f.channel) where.push(`(jsonb_array_length(COALESCE(data->'salesChannels','[]'::jsonb)) = 0 OR data->'salesChannels' ? ${p(f.channel)})`);
   const words = (f.q ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 5);

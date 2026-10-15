@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { duplicateProblem, emptyPortIn, isMobilePlan, lineBody, newItem, newMember, takenElsewhere, type Item } from './wizard-types';
+import { duplicateProblem, emptyPortIn, isExclusive, lineBody, newItem, newMember, takenElsewhere, type Item } from './wizard-types';
 
 const plan = (id: string, kind = 'SIM_ONLY') => ({ id, name: id, kind, prices: [], group: undefined });
 const item = (o: Partial<Item> = {}): Item => ({ ...newItem(plan('p')), ...o });
@@ -31,11 +31,11 @@ describe('order wizard helpers', () => {
   });
 
   it('counts only mobile plans toward the one-plan rule', () => {
-    expect(isMobilePlan(plan('a'))).toBe(true);
-    expect(isMobilePlan(plan('a', 'SIM_DEVICE'))).toBe(true);
-    expect(isMobilePlan(plan('a', 'VAS'))).toBe(false);
-    expect(isMobilePlan(plan('a', 'NON_TELCO_SUBSCRIPTION'))).toBe(false);
-    expect(isMobilePlan(plan('a', 'PHYSICAL_GOOD'))).toBe(false);
-    expect(isMobilePlan(plan('a', 'FIBER'))).toBe(false);
+    expect(isExclusive(plan('a'))).toBe(true);
+    expect(isExclusive(plan('a', 'SIM_DEVICE'))).toBe(true);
+    expect(isExclusive(plan('a', 'VAS'))).toBe(false);
+    expect(isExclusive(plan('a', 'NON_TELCO_SUBSCRIPTION'))).toBe(false);
+    expect(isExclusive(plan('a', 'PHYSICAL_GOOD'))).toBe(false);
+    expect(isExclusive(plan('a', 'FIBER'))).toBe(false);
   });
 });

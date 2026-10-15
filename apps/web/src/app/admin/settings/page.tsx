@@ -5,7 +5,7 @@ import { Suspense, useState } from 'react';
 import { useApi } from '@/lib/api';
 import { AppearanceSettings } from './appearance';
 import { CancellationSettings } from './cancellation';
-import { FulfilmentSettings, OfferTypeSettings } from './catalog-config';
+import { FulfilmentSettings, OfferTypeSettings, ServiceKindSettings } from './catalog-config';
 import { BillCycleSettings, CustomerSettings } from './customers';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
@@ -102,6 +102,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;
+    case 'service-kinds': return <ServiceKindSettings />;
     case 'cancellation': return <CancellationSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;

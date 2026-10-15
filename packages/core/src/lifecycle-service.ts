@@ -5,7 +5,7 @@ import type { Db, Queryable, Row } from './db.js';
 import { addDays, diffDays, toDate, today, type DateStr } from './dates.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { getLifecycleSettings, type DunningAction, type LifecycleSettings } from './lifecycle-config.js';
-import { autoResumeDue, completePortOut, etcQuoteForService, resumeService, suspendService, suspendVoluntary, terminateService, type LifecycleChannel, type TerminationOptions, type VoluntaryRequest } from './lifecycle.js';
+import { autoResumeDue, completePortOut, expireServices, etcQuoteForService, resumeService, suspendService, suspendVoluntary, terminateService, type LifecycleChannel, type TerminationOptions, type VoluntaryRequest } from './lifecycle.js';
 import { liftCreditRestrictions, logLifecycle, queueOutbox, restrictionOf, setBarLevel } from './lifecycle-state.js';
 import { postJournal } from './ledger.js';
 import { getNumberingSettings, recycleExpired } from './nrm.js';
@@ -282,6 +282,7 @@ export class LifecycleService {
   /** What the daily job does: resume suspensions that have ended, then dunning. (The bill run is separate.) */
   async runDailyJobs(asOf: DateStr = today()) {
     const resumed = await autoResumeDue(this.db, asOf);
+    const expiredServices = await expireServices(this.db, new Date()); // passes that have run their length
     const dunning = await runDunning(this.db, asOf);
     const released = await releaseQuarantinedNumbers(this.db, asOf);
     const nrm = await recycleExpired(this.db, asOf); // IMSIs and numbers whose cooling-off ended go back to their pools
@@ -289,7 +290,7 @@ export class LifecycleService {
     const portInsExpired = await expireStalePortIns(this.db, (await getNumberingSettings(this.db)).portInExpiryDays); // donors that never answered
     const close = await runDailyClose(this.db, { asOf: addDays(asOf, -1) }); // only when Finance switched the automatic SAP close on
     const commission = await runCommissionDaily(this.db, { asOf }); // approves earnings, takes back commission for early churn, closes the month on the 1st when switched on
-    return { asOf, commission, resumed, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds, portInsExpired, ledgerClose: close.ran ? { batch: close.batch?.batchNo ?? null } : null };
+    return { asOf, commission, resumed, expiredServices: expiredServices.expired, dunning, releasedNumbers: released, recycled: nrm, expiredHolds: holds, portInsExpired, ledgerClose: close.ran ? { batch: close.batch?.batchNo ?? null } : null };
   }
 
   async history(serviceId: string, limit = 100) {

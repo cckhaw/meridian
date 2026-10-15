@@ -40,8 +40,6 @@ export interface Item {
 export interface Cust { id: string; displayName: string; segment?: string; kycStatus?: string; email?: string | null; phone?: string | null }
 
 export const SERVICE_KINDS = ['SIM_ONLY', 'SIM_DEVICE', 'WEARABLE'];
-export const PRODUCT_KINDS = 'SIM_ONLY,SIM_DEVICE,WEARABLE,FIBER,IOT_CONNECTIVITY';
-export const DEVICE_KINDS = 'PHYSICAL_GOOD,WEARABLE';
 export const MONTHS = [3, 6, 12, 24, 36];
 
 const oneTime = (o: any) => (o.prices ?? []).filter((p: any) => p.type === 'ONE_TIME').reduce((s: number, p: any) => s + p.amount.amountMinor, 0);
@@ -82,8 +80,8 @@ export const SWATCH: Record<string, string> = {
   gold: '#e3c8a0', 'rose gold': '#e8b4b8', pink: '#f4a7b9', red: '#e03a3e', orange: '#f5841f', yellow: '#fdd835', green: '#4caf50', blue: '#3a7bd5', 'sierra blue': '#9bb5ce', purple: '#8e6bbf', titanium: '#9a9a96',
 };
 
-/** A mobile plan (a SIM plan, with or without a device): an order has one of these. Group plans carry their other lines as members. */
-export const isMobilePlan = (o: OfferNode | any) => { const b = behaviourOf(o); return b.role === 'PLAN' && b.service === 'MOBILE' && o.kind !== 'WEARABLE'; };
+/** An offer of which only one fits an order (the type's “only one per order” switch, on for mobile plans): other lines join it as members or are added as add-ons. */
+export const isExclusive = (o: OfferNode | any) => !!behaviourOf(o).exclusive;
 
 /** A line that gets its own SIM and number: a plan's own line, or one member line of a group plan. */
 export interface Slot { iccid?: string; simType?: '' | 'PHYSICAL' | 'ESIM'; portIn?: PortInForm | null; msisdn: string; numberToken?: string; numberTier?: string; numberFeeMinor?: number; numberExpires?: string }

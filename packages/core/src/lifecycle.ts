@@ -6,6 +6,7 @@ import { quoteEtc } from './etc.js';
 import { issueInvoice, invoiceBalance, settle, type DraftLine } from './billing.js';
 import { postJournal } from './ledger.js';
 import { clawBackService } from './commission-processor.js';
+import { endInstruction } from './service-kinds.js';
 import { monthlyFee } from './catalog.js';
 import { getRegional, marketFor } from './settings.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
@@ -298,7 +299,8 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
                      ON CONFLICT (identifier) DO UPDATE SET service_id=EXCLUDED.service_id, reason=EXCLUDED.reason, since=EXCLUDED.since, release_on=EXCLUDED.release_on`,
         [s.identifier, id, o.ported ? 'PORTED_OUT' : (o.reason ?? 'TERMINATED'), dayOfEnd, hold]);
     }
-    await queueOutbox(q, { kind: 'NETWORK', instruction: 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: ['HLR', 'HSS', 'PCRF'], ported: !!o.ported } });
+    const own = await endInstruction(q, s.serviceKind); // a service kind the operator defined names its own systems and instruction
+    await queueOutbox(q, { kind: 'NETWORK', instruction: own?.instruction ?? 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: own?.systems ?? ['HLR', 'HSS', 'PCRF'], ported: !!o.ported, ...(own ? { serviceKind: s.serviceKind, reason: o.reason ?? 'terminated' } : {}) } });
 
     // The deposit
     let applied = 0, refunded = 0;
@@ -399,3 +401,13 @@ export async function listServices(q: Queryable, f: { customerId?: string; accou
 }
 
 export { invoiceBalance };
+
+/** Ends the services that have reached their end date (a pass that was valid for a number of days). Each is terminated as for any customer-requested end: no early-termination charge applies to a service that ran its course. */
+export async function expireServices(db: Db, asOf: Date = new Date()): Promise<{ expired: number }> {
+  const due = (await db.query(`SELECT id FROM services WHERE expires_at IS NOT NULL AND expires_at <= $1 AND status = 'ACTIVE' ORDER BY expires_at LIMIT 5000`, [asOf.toISOString()])).rows;
+  let expired = 0;
+  for (const s of due) {
+    try { await terminateService(db, s.id, { reason: 'EXPIRED', date: asOf }, 'expiry-job'); expired++; } catch { /* a service already ended by someone else in the meantime */ }
+  }
+  return { expired };
+}

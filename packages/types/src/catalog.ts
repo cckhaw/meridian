@@ -103,6 +103,10 @@ export interface OfferNode extends CatalogNodeBase {
   kind: OfferKind;
   /** The behaviour template of `kind`, stored with the offer so it never needs a lookup. Absent on older offers: then `kind` is the template. */
   template?: string;
+  /** The behaviour switches of `kind` (what it creates, whether it has goods, a contract, where it is picked…), stored with the offer. Absent on older offers: then the template's own. */
+  behaviour?: Partial<import('./offer-types.js').BehaviourSwitches>;
+  /** For a service kind that expires on its own: how many days the service lasts from activation (the kind's default when absent). */
+  validityDays?: number;
   description?: string;
   prices: PriceComponent[];
   contract?: ContractTerms;

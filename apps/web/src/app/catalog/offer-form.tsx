@@ -1,5 +1,5 @@
 'use client';
-import { behaviourOf, TEMPLATES, type OfferTemplate } from '@meridian/types';
+import { behaviourOf, ORDER_STEP_LABEL, TEMPLATES, type OfferTemplate } from '@meridian/types';
 import { Alert, Badge, Button, Card, Field, Input, Select, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -17,7 +17,7 @@ const major = toInput;
 
 interface FormState {
   parentId: string; id: string; name: string; kind: string; description: string; market: string; recurring: string; upfront: string; taxInclusive: boolean;
-  term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string;
+  term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string; validity: string;
   requires: string[]; excludes: string[]; channels: string[]; status: string; activeFrom: string;
   variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
   /** Contracts this device can be bought on with a plan. */
@@ -28,7 +28,7 @@ interface FormState {
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: '', description: '', market, recurring: '', upfront: '', taxInclusive: true,
-  term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '',
+  term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '', validity: '',
   requires: [], excludes: [], channels: [], status: 'DRAFT', activeFrom: '', variants: [], deals: [],
   isGroup: false, maxMembers: '3', memberOffers: [], poolGb: '',
 });
@@ -44,7 +44,7 @@ function fromOffer(o: any, market: string): FormState {
     term: String(o.contract?.termMonths ?? 0), etcMethod: o.contract?.etc?.method ?? 'SUBSIDY_AMORTISED', etcPercent: String(o.contract?.etc?.percentOfRemaining ?? 50), waive: String(o.contract?.etc?.waiveInLastMonths ?? 1),
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
     options: optionsOf(o.fulfilment), skus: (o.fulfilment?.inventorySkus ?? []).join(', '), trackSim: (o.fulfilment?.inventorySkus ?? []).length > 0,
-    partner: o.partnerCode ?? '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
+    partner: o.partnerCode ?? '', validity: o.validityDays ? String(o.validityDays) : '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
     isGroup: !!o.group?.isGroupOffer, maxMembers: String(o.group?.maxGroupMembers ?? 3), memberOffers: o.group?.allowedMemberOfferIds ?? [], poolGb: o.group?.sharedPoolQuotaGb != null ? String(o.group.sharedPoolQuotaGb) : '',
     deals: (o.deals ?? []).map((d: any) => ({ term: String(d.termMonths), subsidy: major(d.subsidyMinor), waive: String(d.waiveInLastMonths ?? 1) })),
     variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
@@ -90,7 +90,7 @@ export function OfferForm({ offerId, parentId, fromId }: { offerId?: string; par
   return <Inner key={sourceId ?? 'new'} offerId={offerId} parentId={parentId ?? null} fromId={fromId ?? null} source={d?.node} names={names} where={where} markets={meta.data?.markets ?? {}} config={config.data} sold={(d?.usage?.services ?? 0) + (d?.usage?.orders ?? 0)} />;
 }
 
-function Inner({ offerId, parentId, fromId, source, names: initialNames, where: initialWhere, markets, config, sold }: { offerId?: string; parentId: string | null; fromId: string | null; source: any; names: Record<string, string>; where: string; markets: Record<string, any>; config: { types: any[]; options: any[] }; sold: number }) {
+function Inner({ offerId, parentId, fromId, source, names: initialNames, where: initialWhere, markets, config, sold }: { offerId?: string; parentId: string | null; fromId: string | null; source: any; names: Record<string, string>; where: string; markets: Record<string, any>; config: { types: any[]; options: any[]; serviceKinds?: any[] }; sold: number }) {
   const { me } = useAuth();
   const router = useRouter();
   const regional = useRegional();
@@ -117,7 +117,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   // ── what the chosen type and options mean ──
   const types: any[] = config.types.some((t) => t.id === f.kind) || !f.kind ? config.types : [...config.types, { id: f.kind, name: label(f.kind), description: null, template: source?.template ?? f.kind }];
   const type = types.find((t) => t.id === f.kind);
-  const b = type ? TEMPLATES[type.template as OfferTemplate] ?? behaviourOf({ kind: f.kind }) : null;
+  const b = type ? behaviourOf({ kind: f.kind, template: type.template, behaviour: type.effective }) : null; // the type's own switches, else its preset's
+  const serviceKind = (config.serviceKinds ?? []).find((k: any) => k.id === b?.service);
   const options: any[] = config.options;
   const option = (id: string) => options.find((o) => o.id === id);
   const chosenOptions = f.options.map(option).filter(Boolean);
@@ -135,7 +136,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
 
   // Choosing a type suggests the usual fulfilment for it, until the person changes the options themselves.
   const pickType = (t: any) => {
-    const tpl = TEMPLATES[t.template as OfferTemplate];
+    const tpl = behaviourOf({ kind: t.id, template: t.template, behaviour: t.effective });
     const suggested = touchedOptions.current ? f.options : tpl.defaults.map((m) => options.find((o) => o.mechanic === m && o.status === 'ACTIVE')?.id).filter(Boolean) as string[];
     setF({ ...f, kind: t.id, options: suggested, term: tpl.contract === 'none' ? '0' : f.term, partner: tpl.needsPartner ? f.partner : '' });
   };
@@ -164,7 +165,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const fulfilment = { options: f.options, inventorySkus: tracksStock ? csv(f.skus) : [] };
   const deals = b?.outright ? f.deals.filter((d) => d.subsidy).map((d) => ({ termMonths: Number(d.term), subsidyMinor: toMinor(d.subsidy), waiveInLastMonths: Number(d.waive || 1) })) : [];
   const group = canGroup && f.isGroup ? { isGroupOffer: true, maxGroupMembers: Number(f.maxMembers), allowedMemberOfferIds: f.memberOffers, sharedPoolQuotaGb: f.poolGb.trim() ? Number(f.poolGb) : undefined } : editing ? null : undefined; // null clears it on an offer that had one
-  const common = { deals, group, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
+  const common = { deals, group, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, validityDays: serviceKind?.expires && f.validity ? Number(f.validity) : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
     variants: hasDevice && tracksStock ? f.variants.filter((v) => v.colour.trim() && v.sku.trim()).map((v) => ({ id: slug(`${v.colour}-${v.storage}`) || slug(v.sku), colour: v.colour.trim(), storage: v.storage.trim() || undefined, sku: v.sku.trim(), priceDeltaMinor: v.delta ? toMinor(v.delta) : undefined })) : [] };
 
   // What stops the person moving on from this step, in words.
@@ -242,7 +243,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
                   );
                 })}
               </div>
-              {b && <p className="mt-2 px-1 text-footnote text-label2">{b.summary} <strong className="font-medium text-label">In the order wizard it is chosen in {b.role === 'ADDON' ? 'step 3, Add-ons' : b.role === 'GOODS' ? 'step 2, Device' : b.goods ? 'step 1, Plan or product (a device that comes with a plan or service; it can also be picked in step 2, Device)' : 'step 1, Plan or product'}.</strong></p>}
+              {b && <p className="mt-2 px-1 text-footnote text-label2">{type?.description || b.summary} <strong className="font-medium text-label">In the order wizard it is chosen in {b.steps.map((x) => ORDER_STEP_LABEL[x].toLowerCase()).join(' and ')}.</strong></p>}
             </fieldset>
             <Card className="grid gap-4 sm:grid-cols-2">
               <Field label="Display name"><Input required value={f.name} onChange={set('name')} maxLength={100} /></Field>
@@ -363,6 +364,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
             <Card className="grid gap-4 sm:grid-cols-2">
               {multi && <Field label="Market" hint={`Prices are in ${currency}`}><Select value={f.market} onChange={set('market')}>{Object.values(markets).map((m: any) => <option key={m.code} value={m.code}>{m.name}</option>)}</Select></Field>}
               {b.needsPartner && <Field label="Partner code" hint="e.g. netflix"><Input required value={f.partner} onChange={set('partner')} /></Field>}
+              {serviceKind?.expires && <Field label="Valid for (days)" hint={`From the day it starts, then it ends by itself. Leave blank for the ${serviceKind.name.toLowerCase()} default of ${serviceKind.validityDays} days.`}><Input type="number" min="1" max="3650" value={f.validity} onChange={set('validity')} placeholder={String(serviceKind.validityDays)} /></Field>}
             </Card>
             <Card>
               <fieldset>

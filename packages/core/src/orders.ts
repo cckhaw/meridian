@@ -4,6 +4,7 @@ import { ruleSatisfied, listBundleRules } from './bundles.js';
 import { decide, deadlineDays, getCancellationSettings, listRules, type CancellationDecision, type Facts } from './cancellation.js';
 import { GL, paymentMode } from './config.js';
 import { recordOrderCommission } from './commission.js';
+import { announceStart, getServiceKind, isBuiltinKind, type ServiceKind } from './service-kinds.js';
 import { clawBack } from './commission-processor.js';
 import { effectiveMarket, getRegional, marketFor } from './settings.js';
 import type { Db, Queryable, Row } from './db.js';
@@ -471,19 +472,26 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
   }
   const all = await orderLines(q, o.id);
   for (const l of lines) {
-    const type = serviceType(l.offer);
+    // A service kind the operator defined is stored as a subscription tagged with its kind, and may end by itself.
+    const kindId = serviceType(l.offer);
+    const custom: ServiceKind | null = isBuiltinKind(kindId) ? null : await getServiceKind(q, kindId);
+    if (!isBuiltinKind(kindId) && !custom) throw invalid(`the service kind ${kindId} no longer exists`);
+    const type = custom ? 'SUBSCRIPTION' : kindId;
+    const validity = custom?.expires ? (l.offer.validityDays ?? custom.validityDays) : null;
     // A device bought on a contract with this plan sets the plan's contract (and is paid for on its bill) once the device has arrived.
     const device = all.find((x) => x.attachPosition === l.position && x.status === 'ACTIVE' && x.deal);
     const term = device ? (device.deal.termMonths as number) : l.offer.contract?.termMonths || null;
-    const cols = `(id, shard_id, account_id, customer_id, type, identifier, offer_id, status, contract_start, contract_term_months, activated_at, order_id`;
+    const cols = `(id, shard_id, account_id, customer_id, type, identifier, offer_id, status, contract_start, contract_term_months, activated_at, order_id, service_kind, expires_at`;
+    const endsAt = validity ? `now() + make_interval(days => ${Number(validity)})` : 'NULL';
     if (l.quantity > 1) {
       if (type !== 'IOT' && type !== 'MOBILE' && type !== 'SUBSCRIPTION') throw invalid(`cannot bulk-activate ${type}`);
-      const prefix = type === 'MOBILE' ? mk.dialCode : type === 'IOT' ? 'IOT' : 'SUB';
+      const prefix = type === 'MOBILE' ? mk.dialCode : type === 'IOT' ? 'IOT' : custom ? custom.identifierPrefix : 'SUB';
       const seq = type === 'MOBILE' ? 'msisdn_seq' : 'circuit_seq';
       await q.query(
-        `INSERT INTO services ${cols}) SELECT gen_random_uuid(), $1, $2, $3, $4, $5 || lpad(nextval('${seq}')::text, 10, '0'), $6, 'ACTIVE', now(), $7, now(), $8 FROM generate_series(1, $9::int)`,
-        [o.shardId, accountId, o.customerId, type, prefix, l.offerId, term, o.id, l.quantity],
+        `INSERT INTO services ${cols}) SELECT gen_random_uuid(), $1, $2, $3, $4, $5 || lpad(nextval('${seq}')::text, 10, '0'), $6, 'ACTIVE', now(), $7, now(), $8, $10, ${endsAt} FROM generate_series(1, $9::int)`,
+        [o.shardId, accountId, o.customerId, type, prefix, l.offerId, term, o.id, l.quantity, custom?.id ?? null],
       );
+      if (custom) for (const s of (await q.query('SELECT id, account_id, identifier, offer_id, expires_at FROM services WHERE order_id=$1 AND offer_id=$2 AND service_kind=$3', [o.id, l.offerId, custom.id])).rows) await announceStart(q, custom, { id: s.id, accountId: s.accountId, identifier: s.identifier, offerId: s.offerId, expiresAt: s.expiresAt });
       if (l.payMode === 'INSTALLMENT') { // every unit carries its own share of the financed amount
         const financed = l.netMinor + l.taxMinor - l.downPaymentMinor, n = l.installmentMonths as number, unit = Math.floor(financed / l.quantity), each = Math.floor(unit / n);
         const rem = financed - each * n * l.quantity;
@@ -503,13 +511,15 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
       identifier = l.msisdn;
     } else if (type === 'MOBILE') identifier = mk.dialCode + (await q.query(`SELECT nextval('msisdn_seq') AS n`)).rows[0]!.n;
     else if (type === 'FIBER') identifier = 'FBR-' + (await q.query(`SELECT nextval('circuit_seq') AS n`)).rows[0]!.n;
+    else if (custom) identifier = custom.identifierPrefix + (await q.query(`SELECT nextval('circuit_seq') AS n`)).rows[0]!.n;
     else identifier = 'SUB-' + (await q.query(`SELECT nextval('circuit_seq') AS n`)).rows[0]!.n;
     const id = randomUUID();
     if (l.msisdn && (await q.query(`SELECT 1 FROM identifier_registry WHERE type=$1 AND identifier=$2`, [type, identifier])).rows.length) throw conflict(`number ${identifier} is already in service`);
     await q.query(
-      `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,${awaitingPort ? "'PENDING',NULL" : "'ACTIVE',now()"},$8,${awaitingPort ? 'NULL' : 'now()'},$9)`,
-      [id, o.shardId, accountId, o.customerId, type, identifier, l.offerId, term, o.id],
+      `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,${awaitingPort ? "'PENDING',NULL" : "'ACTIVE',now()"},$8,${awaitingPort ? 'NULL' : 'now()'},$9,$10,${endsAt})`,
+      [id, o.shardId, accountId, o.customerId, type, identifier, l.offerId, term, o.id, custom?.id ?? null],
     );
+    if (custom) await announceStart(q, custom, { id, accountId: accountId!, identifier, offerId: l.offerId, expiresAt: validity ? new Date(Date.now() + validity * 86_400_000) : null });
     await q.query('UPDATE order_lines SET service_id=$3 WHERE id=$1 AND shard_id=$2', [l.id, o.shardId, id]);
     if ((l.iccid || l.msisdn) && !awaitingPort) { // the SIM and number come out of the pools and point at the new service
       const r = await activateResourcesTx(q, { iccid: l.iccid, serviceId: id, actor: 'order' });

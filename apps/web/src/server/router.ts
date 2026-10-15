@@ -191,7 +191,7 @@ const dealSchema = z.object({ termMonths: z.number().int(), subsidyMinor: z.numb
 const offerFields = {
   kind: z.string().min(1).max(40), // an offer type id (Settings → Catalog → Offer types)
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
-  partnerCode: z.string().max(50).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
   requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]), suspension: z.object({ mode: z.enum(['PAUSE', 'MAINTENANCE_FEE']), monthlyFeeMinor: z.number().int().min(0).max(100_000_000).optional() }).optional(),
   group: z.object({ isGroupOffer: z.boolean(), maxGroupMembers: z.number().int().min(1).max(20), allowedMemberOfferIds: z.array(z.string().max(70)).max(50).default([]), sharedPoolQuotaGb: z.number().min(0).max(100_000).optional() }).nullable().optional(),
 };
@@ -210,12 +210,12 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
+  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
 const liveOnly = (user: { permissions: Set<string> }) => !user.permissions.has('catalog:write');
-get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { status: liveOnly(user) ? 'ACTIVE' : str(query, 'status'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), q: str(query, 'q'), market: str(query, 'market'), channel: str(query, 'channel'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { status: liveOnly(user) ? 'ACTIVE' : str(query, 'status'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), step: str(query, 'step'), outright: query.get('outright') === '1', q: str(query, 'q'), market: str(query, 'market'), channel: str(query, 'channel'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 // The catalog browser loads one level at a time: children of a node, word search, one node's detail. Nothing returns the whole tree.
 get('/catalog/browse', 'catalog:read', ({ db, user, query }) => core.browseChildren(db, { parentId: str(query, 'parent') || null, activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/search', 'catalog:read', ({ db, user, query }) => core.searchNodes(db, { q: str(query, 'q') ?? '', level: str(query, 'level'), activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
@@ -467,10 +467,19 @@ route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, use
 
 // ───────────────────────── catalog configuration (offer types and fulfilment options) ─────────────────────────
 // Read by anyone who works on the catalog (the offer wizard, bundle rules); changed only in Settings by the super user.
-get('/catalog-config', 'catalog:read', async ({ db }) => ({ types: await core.listOfferTypes(db, { activeOnly: true }), options: await core.listFulfilmentOptions(db, { activeOnly: true }) }));
-get('/settings/catalog', 'settings:manage', async ({ db }) => ({ types: await core.listOfferTypes(db, { withUsage: true }), options: await core.listFulfilmentOptions(db, { withUsage: true }) }));
-post('/settings/offer-types', 'settings:manage', ({ db, user, body }) => core.createOfferType(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), template: z.string().max(40) }).parse(body)));
-patch('/settings/offer-types/:id', 'settings:manage', ({ db, user, params, body }) => core.updateOfferType(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
+get('/catalog-config', 'catalog:read', async ({ db }) => ({ types: await core.listOfferTypes(db, { activeOnly: true }), options: await core.listFulfilmentOptions(db, { activeOnly: true }), serviceKinds: await core.listServiceKinds(db, { activeOnly: true }) }));
+get('/settings/catalog', 'settings:manage', async ({ db }) => ({ types: await core.listOfferTypes(db, { withUsage: true }), options: await core.listFulfilmentOptions(db, { withUsage: true }), serviceKinds: await core.listServiceKinds(db, { withUsage: true }) }));
+/** The behaviour switches of an offer type. Each is optional: what is left out keeps the preset's (or the type's current) value. */
+const switchesBody = z.object({
+  service: z.string().max(32).nullable(), serviceNeedsFee: z.boolean(), goods: z.boolean(), outright: z.boolean(), contract: z.enum(['none', 'optional']), needsPartner: z.boolean(), needsInstallation: z.boolean(),
+  steps: z.array(z.enum(['PLAN', 'DEVICE', 'ADDON'])).max(3), exclusive: z.boolean(),
+}).partial();
+const kindBody = z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), identifierPrefix: z.string().max(10).optional(), expires: z.boolean().optional(), validityDays: z.number().int().nullable().optional(), provisionSystems: z.array(z.string().max(32)).max(8).optional(), provisionInstruction: z.string().max(32).optional(), deprovisionInstruction: z.string().max(32).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() });
+post('/settings/service-kinds', 'settings:manage', ({ db, user, body }) => core.createServiceKind(db, user.username, kindBody.parse(body)));
+patch('/settings/service-kinds/:id', 'settings:manage', ({ db, user, params, body }) => core.updateServiceKind(db, user.username, params.id!, kindBody.partial().parse(body) as core.ServiceKindInput));
+route('DELETE', '/settings/service-kinds/:id', 'settings:manage', async ({ db, user, params }) => { await core.deleteServiceKind(db, user.username, params.id!); return { ok: true }; });
+post('/settings/offer-types', 'settings:manage', ({ db, user, body }) => core.createOfferType(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), template: z.string().max(40), behaviour: switchesBody.optional() }).parse(body)));
+patch('/settings/offer-types/:id', 'settings:manage', ({ db, user, params, body }) => core.updateOfferType(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), status: z.enum(['ACTIVE', 'INACTIVE']), behaviour: switchesBody }).partial().parse(body)));
 route('DELETE', '/settings/offer-types/:id', 'settings:manage', async ({ db, user, params }) => { await core.deleteOfferType(db, user.username, params.id!); return { ok: true }; });
 post('/settings/fulfilment-options', 'settings:manage', ({ db, user, body }) => core.createFulfilmentOption(db, user.username, z.object({ name: z.string().min(1).max(40), description: blank(z.string().max(200)), mechanic: z.string().max(20), tracksStock: z.boolean().optional() }).parse(body)));
 patch('/settings/fulfilment-options/:id', 'settings:manage', ({ db, user, params, body }) => core.updateFulfilmentOption(db, user.username, params.id!, z.object({ name: z.string().min(1).max(40), description: z.string().max(200), tracksStock: z.boolean(), status: z.enum(['ACTIVE', 'INACTIVE']) }).partial().parse(body)));
