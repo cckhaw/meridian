@@ -1,7 +1,7 @@
 'use client';
 import { Alert, Empty, LargeTitle, SearchField, Spinner } from '@meridian/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useApi } from '@/lib/api';
 import { AppearanceSettings } from './appearance';
 import { CancellationSettings } from './cancellation';
@@ -12,7 +12,6 @@ import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
 import { RegionalSettingsForm } from './regional';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
-import { StorefrontSettings } from './storefront';
 
 /**
  * Settings: a menu of sections on the left (grouped, searchable) and the chosen section on the right. On a phone the menu is the first screen and
@@ -27,6 +26,8 @@ function Settings() {
   const path = usePathname();
   const sp = useSearchParams();
   const current = sectionById(sp.get('section'));
+  // The store-front moved to the Integration page; old links still land in the right place.
+  useEffect(() => { if (sp.get('section') === 'storefront') router.replace('/admin/integrations?item=storefront'); }, [sp, router]);
   const [q, setQ] = useState('');
   const { data, error, loading, reload } = useApi('/settings');
   const open = (id: string | null) => router.push(id ? `${path}?section=${id}` : path, { scroll: false });
@@ -106,7 +107,6 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'cancellation': return <CancellationSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;
-    case 'storefront': return <StorefrontSettings />;
     default: return <Empty>This section is not available yet.</Empty>;
   }
 }

@@ -408,6 +408,8 @@ get('/settings/store', 'settings:manage', async ({ db }) => ({
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
 post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body)));
+/** Every external integration with its live status (environment variable names only, never values). Super user. */
+get('/integrations', 'settings:manage', async ({ db }) => core.integrationOverview(db));
 // ── cancellation rules (Settings → Cancellation) ──
 const conditionSchema = z.object({
   fact: z.string().max(40), op: z.enum(['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'not_in', 'contains']),

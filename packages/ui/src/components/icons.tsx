@@ -39,6 +39,8 @@ const G: Record<string, ReactNode> = {
   users: <><path d="M12 3 19 6v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z" /><circle cx="12" cy="10" r="2.2" /><path d="M8.5 16c.6-1.6 1.9-2.4 3.5-2.4s2.9.8 3.5 2.4" /></>,
   // preferences
   settings: <><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></>,
+  // a plug: connections to other systems
+  integrations: <><path d="M9 3v5M15 3v5" /><path d="M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0V8z" /><path d="M12 17v4" /></>,
   // history: who did what, when
   audit: <><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" /><path d="M3 4.5v4h4M12 7.5V12l3 2" /></>,
   account: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="10" r="3" /><path d="M6.5 18c1-2.3 3-3.5 5.5-3.5s4.5 1.2 5.5 3.5" /></>,
@@ -55,7 +57,7 @@ const G: Record<string, ReactNode> = {
 };
 
 /** Legacy names the server may still send, mapped to the icon that pictures the module. */
-const ALIAS: Record<string, string> = { house: 'overview', person: 'customers', bag: 'sell', store: 'dealers', pin: 'stores', box: 'orders', doc: 'billing', bubble: 'cases', shield: 'kyc', swap: 'mnp', grid: 'catalog', cube: 'inventory', ledger: 'finance', coins: 'commission', people: 'users', gear: 'settings', list: 'audit' };
+const ALIAS: Record<string, string> = { house: 'overview', person: 'customers', bag: 'sell', store: 'dealers', pin: 'stores', box: 'orders', doc: 'billing', bubble: 'cases', shield: 'kyc', swap: 'mnp', grid: 'catalog', cube: 'inventory', ledger: 'finance', coins: 'commission', people: 'users', gear: 'settings', plug: 'integrations', list: 'audit' };
 
 export type IconName = keyof typeof G;
 export function Icon({ name, size = 22, ...p }: { name: string; size?: number } & Omit<SVGProps<SVGSVGElement>, 'name'>) {

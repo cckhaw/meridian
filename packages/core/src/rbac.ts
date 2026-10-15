@@ -196,6 +196,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'commission', label: 'Commission', href: '/dealer/commission', icon: 'coins', anyOf: ['commission:read'] },
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
   { id: 'settings', label: 'Settings', href: '/admin/settings', icon: 'gear', anyOf: ['settings:manage'] },
+  { id: 'integrations', label: 'Integration', href: '/admin/integrations', icon: 'plug', anyOf: ['settings:manage'] },
   { id: 'audit', label: 'Audit log', href: '/admin/audit', icon: 'list', anyOf: ['audit:read'] },
 ];
 

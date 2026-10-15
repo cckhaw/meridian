@@ -520,6 +520,21 @@ describe('settings and branding', () => {
     expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'settings')).toBe(false);
   });
 
+  it('the Integration page is for the super user: every integration with its status, no secrets', async () => {
+    const admin = await staff(['admin']);
+    expect((await call('GET', '/integrations', { cookie: admin.cookie })).status).toBe(403);
+    expect((await call('GET', '/integrations')).status).toBe(401);
+    const su = await root();
+    const r = await call('GET', '/integrations', { cookie: su });
+    expect(r.status).toBe(200);
+    const ids = r.json.items.map((i: any) => i.id);
+    expect(ids).toEqual(expect.arrayContaining(['storefront', 'stripe', 'sap', 'mnp-port-in', 'network-provisioning', 'courier', 'notifications']));
+    expect(r.json.groups).toEqual(expect.arrayContaining(['Payments', 'Number portability (MNP)', 'Logistics and delivery']));
+    expect(JSON.stringify(r.json)).not.toMatch(/local-dev-only|sk_(live|test)_[A-Za-z0-9]{8,}/);
+    expect((await call('GET', '/auth/me', { cookie: su })).json.user.modules.some((m: any) => m.id === 'integrations')).toBe(true);
+    expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'integrations')).toBe(false);
+  });
+
   it('branding is public (login screen), and the logo is served safely', async () => {
     const su = await root();
     expect((await call('POST', '/settings/branding', { cookie: su, body: { name: 'Acme Mobile', theme: 'violet' } })).status).toBe(200);
