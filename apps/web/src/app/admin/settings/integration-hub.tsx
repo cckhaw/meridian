@@ -319,6 +319,7 @@ function Events({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
           </div>
         </Card>
       </section>
+      <Deliveries />
       <section aria-label="TM Forum subscriptions">
         <SectionTitle>TM Forum notification subscriptions (TMF 688)</SectionTitle>
         <Card>
@@ -356,6 +357,30 @@ function OperationRules() {
           {FEES.map(([k, l]) => <Field key={k} label={l}><Input type="number" min={0} value={v[k]} onChange={(e) => setF({ ...v, [k]: Number(e.target.value) })} /></Field>)}
         </div>
         <div className="mt-3"><Button disabled={act.busy || !f} onClick={async () => { if (await act.run(() => post('/settings/integration-hub/operations', f), 'Saved')) setF(null); }}>Save</Button></div>
+      </Card>
+    </section>
+  );
+}
+
+function Deliveries() {
+  const list = useApi<any[]>('/settings/integration-hub/deliveries?limit=20');
+  const act = useAction(list.reload);
+  return (
+    <section aria-label="Deliveries">
+      <SectionTitle action={<Button variant="secondary" disabled={act.busy} onClick={() => void act.run(() => post('/settings/integration-hub/events/dispatch'), 'Dispatched')}>Dispatch now</Button>}>Recent deliveries</SectionTitle>
+      <Card>
+        <p className="mb-3 text-subhead text-label2">Events go out after each northbound change and in the daily job. A failed delivery is tried again after the wait set on its webhook, doubling each time, until its retries are used up; it can then be sent again from here. Topic deliveries wait as <b>Ready</b> until an event-bus producer is connected.</p>
+        {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+        {!list.data ? <Spinner /> : list.data.length === 0 ? <p className="text-subhead text-label2">Nothing has been sent yet.</p> : (
+          <ul className="divide-y divide-separator text-footnote">{list.data.map((d) => (
+            <li key={d.id} className="flex flex-wrap items-center gap-2 py-1.5">
+              <span className="text-label2">{dt(d.createdAt)}</span>
+              <Badge tone={d.status === 'DELIVERED' ? 'success' : d.status === 'FAILED' ? 'danger' : d.status === 'READY' ? 'neutral' : 'warning'}>{label(d.status)}</Badge>
+              <code>{d.eventType}</code><span className="text-label2">{d.topic ? `→ ${d.topic}` : `→ ${d.tmfType}`}</span>
+              {d.attempts > 0 && <span className="text-label2">{d.attempts} tries</span>}
+              {d.lastError && <span className="text-danger">{d.lastError}</span>}
+              {(d.status === 'FAILED' || d.status === 'CANCELLED') && <button type="button" className="ml-auto text-accent" onClick={() => void act.run(() => post(`/settings/integration-hub/deliveries/${d.id}/retry`), 'Queued again')}>Send again</button>}
+            </li>))}</ul>)}
       </Card>
     </section>
   );

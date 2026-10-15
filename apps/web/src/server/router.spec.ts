@@ -1892,4 +1892,34 @@ describe('offer type switches and service types', () => {
     // the operator's rules for these operations are administrator settings
     expect((await call('POST', '/settings/integration-hub/operations', { cookie: su, body: { simSwapFeeMinor: 700, planChangeFeeMinor: 0 } })).json.simSwapFeeMinor).toBe(700);
   });
+  it('northbound ordering, billing and payments: an order is captured, tracked and cancelled, an invoice link downloads without a login, and events reach a webhook', async () => {
+    const su = await root();
+    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Order Omar', idDocument: 'S1357924B' } })).json.customer;
+    const c = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Super-app', channel: 'PARTNER_PORTAL', scopes: ['order:create', 'order:read', 'order:cancel', 'billing:read', 'payment:create'] } });
+    const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: c.json.client.clientId, client_secret: c.json.clientSecret } });
+    const h = { authorization: `Bearer ${t.json.access_token}` };
+    await call('POST', '/settings/integration-hub/webhooks', { cookie: su, body: { kind: 'OUTBOUND', name: 'Partner', targetUrl: 'https://partner.example.com/hook', authKind: 'NONE', events: ['ORDER_CREATED', 'ORDER_CANCELLED'] } });
+    const body = { channel: 'STOREFRONT', customerId: cust.id, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'QR' } };
+    expect((await call('POST', '/v1/orders', { origin: null, headers: h, body })).json.reason).toBe('MISSING_IDEMPOTENCY_KEY');
+    const placed = await call('POST', '/v1/orders', { origin: null, headers: { ...h, 'x-idempotency-key': 'order-key-00000001' }, body });
+    expect([placed.status, placed.json['@type'], placed.json.state]).toEqual([201, 'ProductOrder', 'pending']);
+    const replay = await call('POST', '/v1/orders', { origin: null, headers: { ...h, 'x-idempotency-key': 'order-key-00000001' }, body });
+    expect([replay.headers.get('idempotent-replay'), replay.json.id]).toEqual(['true', placed.json.id]);       // one order, not two
+    expect((await call('GET', `/v1/orders/${placed.json.id}`, { origin: null, headers: h })).json.externalId).toBe(placed.json.externalId);
+    const x = await call('POST', `/v1/orders/${placed.json.id}/cancel`, { origin: null, headers: { ...h, 'x-idempotency-key': 'cancel-key-0000001' }, body: { reason: 'Changed my mind' } });
+    expect([x.status, x.json.state]).toEqual([200, 'cancelled']);
+    // the events went to the webhook's queue
+    const disp = await call('POST', '/settings/integration-hub/events/dispatch', { cookie: su });
+    expect(disp.status).toBe(200);
+    const deliveries = (await call('GET', '/settings/integration-hub/deliveries', { cookie: su })).json;
+    expect(deliveries.map((d: any) => d.eventType)).toEqual(expect.arrayContaining(['ORDER_CREATED', 'ORDER_CANCELLED']));
+    // payments and invoices
+    const pay = await call('POST', '/v1/payments', { origin: null, headers: { ...h, 'x-idempotency-key': 'pay-key-000000001' }, body: { accountId: '00000000-0000-4000-8000-000000000000', amountMinor: 100, method: 'QR', reference: 'PSP-1' } });
+    expect([pay.status, pay.json.code]).toEqual([404, 'NOT_FOUND']);
+    const acct = (await call('GET', `/customers/${cust.id}/accounts`, { cookie: su })).json.items[0];
+    const inv = await call('GET', `/v1/accounts/${acct.id}/invoices`, { origin: null, headers: h });
+    expect([inv.status, inv.json.account.id]).toEqual([200, acct.id]);
+    const link = await call('GET', '/v1/invoices/00000000-0000-4000-8000-000000000001/pdf?exp=1&sig=bad', { origin: null });
+    expect(link.status).toBe(401);                                                  // a forged or expired link is refused
+  });
 });

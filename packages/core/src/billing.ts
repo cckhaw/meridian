@@ -1,3 +1,4 @@
+import { raiseEvent } from './events.js';
 import { randomUUID } from 'node:crypto';
 import type { OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
@@ -62,6 +63,7 @@ export async function issueInvoice(
       { account: GL.TAX_PAYABLE, credit: tax, description: `Invoice ${number} ${mk.taxName}` },
     ],
   });
+  await raiseEvent(q, 'INVOICE_ISSUED', { accountId: acct.id, resourceId: id, payload: { invoiceId: id, number, customerId: acct.customerId, accountId: acct.id, totalMinor: net + tax, currency: acct.currency, dueDate: addDays(o.issueDate, INVOICE_TERMS_DAYS) } }, { onlyIfWanted: true });
   return (await q.query('SELECT * FROM invoices WHERE id=$1', [id])).rows[0]!;
 }
 
@@ -263,7 +265,7 @@ export async function payInvoice(db: Db, invoiceId: string, o: { amountMinor?: n
       await audit(q, actor, 'invoice', invoiceId, 'PAYMENT', { amount, method: o.method });
     }
     await settle(q, inv.id);
-    if (!dup) await afterPayment(q, inv.accountId as string, amount, overdueBefore, o.date ?? today(), actor);
+    if (!dup) { await afterPayment(q, inv.accountId as string, amount, overdueBefore, o.date ?? today(), actor); await raiseEvent(q, 'PAYMENT_RECEIVED', { accountId: inv.accountId, resourceId: invoiceId, payload: { invoiceId, invoiceNumber: inv.number, customerId: inv.customerId, accountId: inv.accountId, amountMinor: amount, currency: inv.currency, method: o.method, reference: o.reference ?? null } }, { onlyIfWanted: true }); }
     return getInvoice(q, invoiceId);
   });
 }

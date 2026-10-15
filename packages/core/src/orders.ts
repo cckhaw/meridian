@@ -26,6 +26,7 @@ import { taxSplit } from './tax.js';
 import { syncOrderGroups } from './group-orders.js';
 import { createPortInTx } from './port-in.js';
 import { conflict } from './errors.js';
+import { raiseEvent } from './events.js';
 
 export type { GroupKind, LineInput, LinePayment } from './order-pricing.js';
 
@@ -66,6 +67,7 @@ async function setState(q: Queryable, o: Row, to: OrderState, actor: string, rea
     [o.id, o.shardId, to, reason ?? null],
   );
   await q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$4,$5,$6)', [o.shardId, o.id, o.state, to, actor, reason ?? null]);
+  if (to === 'CANCELLED' || to === 'COMPLETED') await raiseEvent(q, to === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_COMPLETED', { accountId: o.accountId, resourceId: o.id, payload: { orderId: o.id, orderNumber: o.number, customerId: o.customerId, state: to, reason: reason ?? null } }, { onlyIfWanted: true });
   o.state = to;
 }
 /** A line in the timeline for something that happened to part of the order without changing its overall state. */
@@ -203,6 +205,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
   o.state = 'DRAFT';
   await setState(q, o, 'SUBMITTED', actor);
+  await raiseEvent(q, 'ORDER_CREATED', { accountId: o.accountId, resourceId: o.id, payload: { orderId: o.id, orderNumber: o.number, customerId: o.customerId, channel: o.channel, totalMinor: Number(o.totalMinor) } }, { onlyIfWanted: true });
   await drive(q, o, { actor, paymentReference: input.payment.reference, paymentConfirmed: !!input.payment.confirmed, deferPayment: !!input.payment.deferred });
   return getOrder(q, orderId);
 }

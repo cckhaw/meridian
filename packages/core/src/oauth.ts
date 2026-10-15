@@ -23,7 +23,9 @@ export const SCOPE_LABEL: Record<NorthboundScope, string> = {
 
 const ISSUER = 'meridian';
 const AUDIENCE = 'meridian-api';
-const jwtKey = (): Buffer => Buffer.from(hkdfSync('sha256', process.env.MERIDIAN_DATA_KEY ?? process.env.MERIDIAN_ID_PEPPER ?? 'dev-only-pepper', 'meridian-oauth-jwt', 'hs256', 32));
+/** A signing key derived from the deployment's data key, one per purpose. */
+export const derivedKey = (label: string): Buffer => Buffer.from(hkdfSync('sha256', process.env.MERIDIAN_DATA_KEY ?? process.env.MERIDIAN_ID_PEPPER ?? 'dev-only-pepper', label, 'hs256', 32));
+const jwtKey = (): Buffer => derivedKey('meridian-oauth-jwt');
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
 
 export interface OAuthClientView { id: string; clientId: string; name: string; channel: string; scopes: string[]; tokenTtlSeconds: number; status: string; rotatedAt: string | null; previousSecretValidUntil: string | null; createdBy: string; createdAt: string; lastUsedAt: string | null }

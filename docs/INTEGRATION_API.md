@@ -14,6 +14,8 @@ Meridian exposes TM Forum Open API style endpoints to digital channels (self-car
 | Gateway: authentication, scope check, signature check | `packages/core/src/gateway.ts` |
 | Request pipeline (rate limit, idempotency, TM Forum errors, call log) | `northCall` in `apps/web/src/server/router.ts` |
 | Subscriber operations (SIM swap, number change, transfer, status, plan change, value-added services) | `packages/core/src/subscriber-ops.ts`; migration `0042` |
+| Orders, invoices, payments (TMF 622/670/676) | `packages/core/src/northbound-orders.ts` |
+| Event dispatcher (fan-out, signing, retries, TM Forum envelopes) | `packages/core/src/events.ts`; table `event_deliveries` (migration `0043`) |
 | Settings UI | `apps/web/src/app/admin/settings/integration-hub.tsx` |
 
 ## Calling the API
@@ -62,6 +64,35 @@ All of these are under `/api/v1`, need the scope shown and `X-Idempotency-Key`, 
 
 **Settings → Integration hub → API gateway → Rules for subscriber operations** sets whether a SIM swap needs the password, how long it lasts, and the fees (SIM replacement, number change, ownership transfer, plan change).
 
+## Ordering, billing and payments
+
+| Call | Scope | What it does |
+|---|---|---|
+| `POST /v1/orders` | `order:create` | A **ProductOrder** (TMF 622). `channel` is `SELF_CARE`, `STOREFRONT`, `CALL_CENTER`, `IVR`, `KIOSK` (needs `storeId`), `DEALER` or `PARTNER` (need `dealerId` and `dealerAgentId`). Identify the customer with `customerId`, or register one in the call with `customer` (a duplicate identity document is refused). Items are the same lines the CRM and store-front use: SIM only, device on a contract, goods, add-ons, group-plan members, `portIn` for number porting, `simType` for a physical SIM or an eSIM. `delivery` is `SHIP` (with an address) or `COLLECT` (with `pickupStoreId`). The same engine runs cart validation, stock reservation, credit check, payment and field or logistics scheduling. |
+| `GET /v1/orders`, `GET /v1/orders/{id}` | `order:read` | Tracking. The id can be the order number (`20261014-00042`). TM Forum states: `acknowledged`, `pending` (waiting for payment), `inProgress`, `completed`, `cancelled`, `failed`; the exact internal state and the next actions are in `@meridian`. |
+| `POST /v1/orders/{id}/cancel` | `order:cancel` | `{reason}`. Cancels while nothing irreversible has happened and refunds what was paid in the same step; after the point of no return (goods shipped, a technician dispatched, a service switched on) it is refused with `422`, and a return or termination is the way out. |
+| `GET /v1/accounts/{id}/invoices` | `billing:read` | **CustomerBill** (TMF 670) pages, the account's balance (due and overdue), the estimated next bill, and for each invoice a **pre-signed PDF link** valid for 15 minutes without a login (`/api/v1/invoices/{id}/pdf?exp=…&sig=…`). Real-time charging-system bucket balances and unbilled usage need the charging system and show as not connected. |
+| `POST /v1/payments` | `payment:create` | A **Payment** (TMF 676) the channel has already captured: `{amountMinor, method, reference, and exactly one of orderId / invoiceId / accountId, topUp?}`. Against an order it confirms the order (the amount must equal the total); against an invoice it pays it; against an account it pays the oldest invoices first. An excess is refused unless `topUp: true`, which keeps it as credit. Paying what was overdue lifts the dunning bars and ends the ladder in the same step. A repeat with the same reference changes nothing. |
+
+The generic payment webhook (`POST /api/webhooks/payment`) can now be verified with an **inbound verification key named `payment`** in the hub, as well as with `MERIDIAN_PAYMENT_WEBHOOK_SECRET`.
+
+## Events
+
+Every operation above (and orders, payments and invoices however they are made) raises a business event in the outbox in the same transaction. The dispatcher turns each into one delivery per matching **outbound webhook**, per **TM Forum 688 listener** and per **mapped topic**, in TM Forum event shape (`eventId`, `eventTime`, `eventType`, `domain`, `event.{resource}`):
+
+| Event | Announced as |
+|---|---|
+| `ORDER_CREATED` / `ORDER_CANCELLED` / `ORDER_COMPLETED` | `ProductOrderCreateEvent` / `ProductOrderStateChangeEvent` |
+| `SIM_SWAPPED`, `MSISDN_CHANGED`, `OWNERSHIP_TRANSFERRED` | `ServiceAttributeValueChangeEvent` |
+| `SERVICE_SUSPENDED`, `SERVICE_RESUMED`, `SERVICE_BARRED`, `SERVICE_TERMINATED` | `ServiceStateChangeEvent` |
+| `PLAN_CHANGED`, `VAS_CHANGED` | `ProductAttributeValueChangeEvent` |
+| `PAYMENT_RECEIVED` | `PaymentCreateEvent` |
+| `INVOICE_ISSUED` | `CustomerBillCreateEvent` |
+
+Webhooks are POSTed as JSON with `X-Meridian-Event-Id`, `X-Meridian-Event-Type` and, depending on the webhook, `Authorization: Bearer …` or `X-Meridian-Signature: t=…,v1=…` (HMAC-SHA256 of `"<t>.<body>"`). Any `2xx` is success. Anything else, or a timeout (10 s), is retried after the webhook's wait, doubling each time (at most a day), until its retries are used up; the delivery is then marked failed and can be sent again from **Events → Recent deliveries**. Redirects are not followed. A listener registered through TMF 688 gets only the event types in its `query`.
+
+High-volume events (`INVOICE_ISSUED`, `PAYMENT_RECEIVED`, the order events) are only written when somebody is subscribed to them. Dispatch runs after every successful northbound change, in the daily job, and on **Dispatch now**. In production a TMF 688 callback cannot point at a private network address (checked on the host name as written, not after name resolution).
+
 ## TM Forum 688 (event management)
 
 `POST /api/tmf-api/eventManagement/v4/hub` with `{ "callback": "https://…", "query": "eventType=…" }` (scope `event:subscribe`) registers a listener and returns `{id, callback, query}`; `DELETE …/hub/{id}` removes it (a client removes only its own; at most 20 each). The registered listeners appear under **Events** in the hub, where an administrator can pause or remove them.
@@ -74,5 +105,6 @@ All of these are under `/api/v1`, need the scope shown and `X-Idempotency-Key`, 
 
 * The stack is the one Meridian already runs on: route handlers in `apps/web`, PostgreSQL migrations, the outbox. There is no Prisma schema, NestJS gateway or GraphQL endpoint.
 * The rate limiter counts in PostgreSQL (so all instances agree). A Redis-backed limiter can replace it behind the same call.
-* Kafka publishing is configured here (topic mappings) and flows through the outbox; a Kafka producer is not shipped.
+* Topic deliveries are written to `event_deliveries` with status `READY` for a relay or producer (`setTopicPublisher` in `events.ts` takes one); a Kafka producer itself is not shipped.
+* Order-capture channels are not bound to a credential's channel: any credential with `order:create` may use any channel name, so issue credentials per channel. Customer-level access control (a credential seeing only its own customers) is not built.
 * The configured connections are stored and validated here. The existing adapters still read their own settings (for example the charging-system connector and the field-service connector) until each is moved onto the hub.
