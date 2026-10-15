@@ -1857,4 +1857,39 @@ describe('offer type switches and service types', () => {
     const ep = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'finance', kind: 'SAP_FICO', name: 'SAP', url: 'https://sap.example.com/api', secret: 'super-secret-value' } });
     expect([ep.status, ep.json.hasSecret, JSON.stringify(ep.json).includes('super-secret')]).toEqual([201, true, false]);
   });
+  it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
+    const su = await root();
+    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;
+    const order = await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: cust.id, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true, reference: 'R-NORTH' } } });
+    expect(order.status).toBe(200);
+    const svcId = (await call('GET', `/services?customerId=${cust.id}`, { cookie: su })).json.items[0].id;
+    const mk = async (name: string, scopes: string[]) => {
+      const c = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name, channel: 'CALL_CENTER', scopes } });
+      const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: c.json.client.clientId, client_secret: c.json.clientSecret } });
+      return { authorization: `Bearer ${t.json.access_token}` };
+    };
+    const reader = await mk('Reader', ['subscriber:read']);
+    const swapper = await mk('IVR', ['subscriber:read', 'sim:swap', 'subscriber:status']);
+    const got = await call('GET', `/v1/services/${svcId}`, { origin: null, headers: reader });
+    expect([got.status, got.json['@type'], got.json.state]).toEqual([200, 'Service', 'active']);
+    // a state-changing call needs the scope and an idempotency key
+    expect((await call('POST', `/v1/services/${svcId}/otp`, { origin: null, headers: { ...reader, 'x-idempotency-key': 'key-aaaaaaaa-1' } })).status).toBe(403);
+    const noKey = await call('POST', `/v1/services/${svcId}/otp`, { origin: null, headers: swapper });
+    expect([noKey.status, noKey.json.reason]).toEqual([400, 'MISSING_IDEMPOTENCY_KEY']);
+    const k1 = { ...swapper, 'x-idempotency-key': 'key-aaaaaaaa-1' };
+    const otp = await call('POST', `/v1/services/${svcId}/otp`, { origin: null, headers: k1 });
+    expect([otp.status, otp.json.sentTo]).toEqual([200, expect.stringMatching(/^\+\d{2,3}/)]);
+    const replay = await call('POST', `/v1/services/${svcId}/otp`, { origin: null, headers: k1 });
+    expect([replay.headers.get('idempotent-replay'), replay.json.challengeId]).toEqual(['true', otp.json.challengeId]);       // no second SMS
+    const sms = await call('GET', '/settings/integration-hub/calls', { cookie: su });
+    expect(sms.json.some((c: any) => c.idempotencyKey === 'key-aaaaaaaa-1')).toBe(true);
+    // without a stocked SIM the swap is refused with a TM Forum error
+    const swap = await call('POST', `/v1/services/${svcId}/change-sim`, { origin: null, headers: { ...swapper, 'x-idempotency-key': 'key-bbbbbbbb-2' }, body: { newIccid: '8960000000000000099', reason: 'LOST', otpToken: `${otp.json.challengeId}.123456` } });
+    expect([swap.status, swap.json['@type']]).toEqual([422, 'Error']);
+    // status through the API
+    const bar = await call('POST', `/v1/services/${svcId}/status`, { origin: null, headers: { ...swapper, 'x-idempotency-key': 'key-cccccccc-3' }, body: { action: 'SOFT_BAR', reason: 'ADMIN' } });
+    expect([bar.status, bar.json.result.action]).toEqual([200, 'SOFT_BAR']);
+    // the operator's rules for these operations are administrator settings
+    expect((await call('POST', '/settings/integration-hub/operations', { cookie: su, body: { simSwapFeeMinor: 700, planChangeFeeMinor: 0 } })).json.simSwapFeeMinor).toBe(700);
+  });
 });

@@ -13,6 +13,7 @@ Meridian exposes TM Forum Open API style endpoints to digital channels (self-car
 | API keys (store-front keys extended with northbound scopes, a channel, expiry and a signing secret) | `packages/core/src/apikeys.ts` |
 | Gateway: authentication, scope check, signature check | `packages/core/src/gateway.ts` |
 | Request pipeline (rate limit, idempotency, TM Forum errors, call log) | `northCall` in `apps/web/src/server/router.ts` |
+| Subscriber operations (SIM swap, number change, transfer, status, plan change, value-added services) | `packages/core/src/subscriber-ops.ts`; migration `0042` |
 | Settings UI | `apps/web/src/app/admin/settings/integration-hub.tsx` |
 
 ## Calling the API
@@ -44,11 +45,32 @@ Each call is checked in this order: credential, scope (`403` if the credential l
 
 Secrets typed into the hub are **encrypted** (AES-256-GCM, `MERIDIAN_DATA_KEY`) and never returned: a screen only shows that one is set. Credentials Meridian issues (OAuth client secrets, API keys) are kept as hashes and shown once. Every change is in the audit log, and every northbound call is in the integration call log.
 
+## Subscriber and subscription operations
+
+All of these are under `/api/v1`, need the scope shown and `X-Idempotency-Key`, and take a service by its id **or its number** (`{serviceId}` accepts `+6591234567`). Every answer is the service as a TMF 638 `Service` (`id`, `state`, `serviceCharacteristic`, `relatedParty`) plus a `result` describing what was done. Each operation audits who did it, tells the network and charging system through the outbox, and records an event (`SIM_SWAPPED`, `MSISDN_CHANGED`, `OWNERSHIP_TRANSFERRED`, `SERVICE_SUSPENDED`/`RESUMED`/`BARRED`/`TERMINATED`, `PLAN_CHANGED`, `VAS_CHANGED`) for the event bus.
+
+| Call | Scope | What it does |
+|---|---|---|
+| `GET /v1/services/{id}` | `subscriber:read` | The service, its bar level and restriction, and the value-added services on it. |
+| `POST /v1/services/{id}/otp` | `sim:swap` | Sends a six-digit one-time password by SMS to the number. Answer: `{challengeId, expiresAt, sentTo}`. At most 3 in 10 minutes. |
+| `POST /v1/services/{id}/change-sim` | `sim:swap` | `{newIccid | esim: true, reason: LOST/STOLEN/DAMAGED/UPGRADE/ESIM_CONVERSION/OTHER, otpToken: "<challengeId>.<code>"}`. The new SIM must be in stock (or an eSIM profile is taken from the eSIM pool and its activation code returned). The old SIM is scrapped (lost, stolen, damaged) or decommissioned, its IMSI is quarantined, HLR/HSS/UDM/OCS updates are queued, the customer is told by SMS, and the fee (if any) is billed. The password works once and only five wrong tries are allowed. |
+| `POST /v1/services/{id}/change-msisdn` | `msisdn:change` | `{targetMsisdn?, acceptCharge}`. The number is reserved from the pool (or the next free standard number is used), the old number rests in quarantine (the lifecycle setting), the VIP-tier fee plus the number-change fee must be accepted with `acceptCharge: true`, and the fee is billed. |
+| `POST /v1/services/{id}/transfer-ownership` | `ownership:transfer` | `{currentAccountId?, toCustomerId, toAccountId?, creditCheckAuthorised: true}`. The new owner must be active, identity-verified (KYC), not a high credit risk and have nothing overdue; the departing owner must owe nothing. The departing owner gets a closing invoice for what is unbilled (no early-termination charge, the contract continues), instalments and the contract follow the service. |
+| `POST /v1/services/{id}/status` | `subscriber:status` | `{action: SUSPEND/RESUME/SOFT_BAR/HARD_BAR/TERMINATE, reason?, months?, until?}`. A SUSPEND without a reason is the customer's voluntary suspension, capped by Settings → Lifecycle; `FRAUD` or `ADMIN` is an operator restriction. A bar put on here is lifted here; a bar billing put on lifts when the balance is paid. TERMINATE issues the closing invoice and charges the early-termination charge as usual. |
+| `POST /v1/subscriptions/{id}/change-plan` | `subscription:change` | `{targetOfferId, effective: IMMEDIATE/NEXT_BILL_CYCLE, addOns?, acceptContractTerms?}`. A subscription is identified by its service. The new plan must be on sale and of the same kind of service; a cheaper plan on a running contract needs `acceptContractTerms`. IMMEDIATE moves now, pro-rates this period (billed on the next bill as an adjustment), updates the charging system and the contract, and adds the add-ons; NEXT_BILL_CYCLE schedules it for the account's next bill date and it takes effect the day after, in the daily job. `DELETE` on the same path cancels a scheduled change. |
+| `POST /v1/services/{id}/vas` | `vas:manage` | `{action: ADD/REMOVE, offerId}` for roaming passes, boosters, insurance and partner subscriptions. A value-added service is its own subscription tied to the service; provisioning goes to the PCRF and OCS through the outbox, and partner offers also raise a `VAS_CHANGED` event with the partner code for the partner webhook. |
+
+**Settings → Integration hub → API gateway → Rules for subscriber operations** sets whether a SIM swap needs the password, how long it lasts, and the fees (SIM replacement, number change, ownership transfer, plan change).
+
 ## TM Forum 688 (event management)
 
 `POST /api/tmf-api/eventManagement/v4/hub` with `{ "callback": "https://…", "query": "eventType=…" }` (scope `event:subscribe`) registers a listener and returns `{id, callback, query}`; `DELETE …/hub/{id}` removes it (a client removes only its own; at most 20 each). The registered listeners appear under **Events** in the hub, where an administrator can pause or remove them.
 
 ## Not built
+
+* Transfer of ownership to a **new** identity (registering the new owner in the same call) is not built: create the customer and complete KYC first (store-front applications or the customer API), then transfer.
+* The SIM swap one-time password is held as a hash, but the SMS text (with the code) waits in the notification outbox until it is sent, so protect that table like any credential store.
+* Network adapters (HLR/HSS, UDM, PCRF, SM-DP+) receive the instructions through the outbox; the protocol adapters themselves are connected per deployment.
 
 * The stack is the one Meridian already runs on: route handlers in `apps/web`, PostgreSQL migrations, the outbox. There is no Prisma schema, NestJS gateway or GraphQL endpoint.
 * The rate limiter counts in PostgreSQL (so all instances agree). A Redis-backed limiter can replace it behind the same call.

@@ -124,6 +124,8 @@ function Gateway({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) 
         </Card>
       </section>
 
+      <OperationRules />
+
       <section aria-label="Recent calls">
         <SectionTitle>Recent API calls</SectionTitle>
         <Card>
@@ -331,5 +333,30 @@ function Events({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
         </Card>
       </section>
     </div>
+  );
+}
+
+// ───────────────────────── rules for the subscriber operations ─────────────────────────
+function OperationRules() {
+  const cfg = useApi<any>('/settings/integration-hub/operations');
+  const act = useAction(cfg.reload);
+  const [f, setF] = useState<any | null>(null);
+  const v = f ?? cfg.data;
+  if (!v) return null;
+  const FEES: Array<[string, string]> = [['simSwapFeeMinor', 'SIM replacement fee'], ['numberChangeFeeMinor', 'Number change fee'], ['ownershipTransferFeeMinor', 'Ownership transfer fee'], ['planChangeFeeMinor', 'Plan change fee']];
+  return (
+    <section aria-label="Operation rules">
+      <SectionTitle>Rules for subscriber operations</SectionTitle>
+      <Card>
+        <p className="mb-3 text-subhead text-label2">What the northbound SIM swap, number change, ownership transfer and plan change APIs enforce and charge. Fees are in the smallest currency unit and billed at once; 0 means free.</p>
+        {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Check checked={v.simSwapOtpRequired} onChange={(on) => setF({ ...v, simSwapOtpRequired: on })}>A SIM swap needs a one-time password sent to the number</Check>
+          <Field label="Password lifetime (minutes)"><Input type="number" min={1} max={60} value={v.otpTtlMinutes} onChange={(e) => setF({ ...v, otpTtlMinutes: Number(e.target.value) })} /></Field>
+          {FEES.map(([k, l]) => <Field key={k} label={l}><Input type="number" min={0} value={v[k]} onChange={(e) => setF({ ...v, [k]: Number(e.target.value) })} /></Field>)}
+        </div>
+        <div className="mt-3"><Button disabled={act.busy || !f} onClick={async () => { if (await act.run(() => post('/settings/integration-hub/operations', f), 'Saved')) setF(null); }}>Save</Button></div>
+      </Card>
+    </section>
   );
 }
