@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useApi } from '@/lib/api';
 import { dt } from '@/lib/format';
+import { OcsPanel } from './ocs';
 import { KycPanel, PaymentsPanel, StorefrontPanel } from './storefront';
 
 type Status = 'CONNECTED' | 'NEEDS_SETUP' | 'LISTENING' | 'WAITING' | 'MANUAL' | 'STAND_IN' | 'REMOTE';
@@ -179,9 +180,10 @@ function Row({ item: i, open, onToggle, origin }: { item: Item; open: boolean; o
           {i.id === 'storefront' && <StorefrontPanel />}
           {i.id === 'stripe' && <PaymentsPanel />}
           {i.id === 'ekyc' && <KycPanel />}
+          {i.id === 'ocs' && <OcsPanel />}
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-footnote">
-            {i.configure && !['storefront', 'stripe', 'ekyc'].includes(i.id) && <Link href={i.configure.href} className="inline-flex min-h-[32px] items-center text-accent">{i.configure.label} ›</Link>}
+            {i.configure && !['storefront', 'stripe', 'ekyc', 'ocs'].includes(i.id) && <Link href={i.configure.href} className="inline-flex min-h-[32px] items-center text-accent">{i.configure.label} ›</Link>}
             {i.doc && <span className="text-label2">Guide: docs/{i.doc}</span>}
           </div>
         </div>

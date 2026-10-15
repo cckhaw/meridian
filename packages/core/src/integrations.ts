@@ -1,5 +1,7 @@
 import type { Queryable } from './db.js';
 import { GATEWAYS } from './gateways.js';
+import { getOcsSettings, ocsStats } from './ocs.js';
+import { OCS_VENDORS } from './ocs-vendors/index.js';
 import { getSapSettings } from './sap-exporter.js';
 import { getStoreSettings } from './store-settings.js';
 
@@ -119,12 +121,21 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Network and SIM provisioning ─────────────
   {
+    id: 'ocs', group: 'Network and SIM provisioning', name: 'Charging system (OCS)', with: 'Your real-time rating and charging system (voice, SMS and data)',
+    summary: 'When a plan that has an OCS plan code starts, changes plan, is barred or restored, gets a new SIM or number, or ends, Meridian queues a vendor-neutral command and a connector for your OCS vendor delivers it: create the subscriber, subscribe the plan, and so on. Each vendor has its own connector, so Meridian does not depend on any one OCS. Jobs for a subscriber are delivered in order and retried when the OCS is down; one that cannot be delivered is kept for you to retry.',
+    maturity: 'BUILT', direction: 'OUT',
+    env: [{ name: 'MERIDIAN_OCS_TOKEN', purpose: 'Token for the generic REST connector (the name is yours to choose; it must start with MERIDIAN_OCS_)', on: 'web', secret: true }],
+    endpoints: [{ method: 'POST', path: '/api/ocs/dispatch', purpose: 'Delivers due jobs to the OCS. Schedule it every minute', auth: 'Service account with billing:run' }],
+    needs: ['Choose the connector for your OCS below (Generic REST needs no code; another vendor gets its own connector file)', 'Give each plan its OCS plan code in the catalog', 'Schedule POST /api/ocs/dispatch every minute', 'Services that started before the OCS was switched on are not sent'],
+    doc: 'OCS.md', keywords: 'ocs charging rating real time online voice sms data subscriber provisioning huawei ericsson amdocs oracle optiva vendor connector plan',
+  },
+  {
     id: 'network-provisioning', group: 'Network and SIM provisioning', name: 'Network provisioning (HLR/HSS, policy control)', with: 'The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service kind',
-    summary: 'When a service starts, changes, is barred, restored or ends, Meridian queues an instruction in the same transaction as the change. A connector you deploy delivers it to the network and acknowledges it.',
+    summary: 'When a service is barred, restored, changes plan or number, or ends, Meridian queues an instruction in the same transaction as the change; for service types that are set to tell the network when they start (your own types by default, built-in ones when you switch it on) it also queues the start. A connector you deploy delivers it to the network and acknowledges it. (Charging-system provisioning has its own card above.)',
     maturity: 'OUTBOX', direction: 'OUT',
-    outbox: NET(['PROVISION', 'DEPROVISION', 'PLAN_CHANGE', 'THROTTLE_DATA', 'BAR_OUTGOING', 'BAR_ALL', 'RESTORE']), endpoints: POLL,
-    needs: ['Build or buy an adapter that reads the outbox and talks to your HLR/HSS and PCRF', 'Authenticate it as a service account with billing:run', 'Systems and instruction names for your own service kinds are set in Settings → Service kinds'],
-    configure: { label: 'Service kinds (systems and instructions)', href: '/admin/settings?section=service-kinds' }, doc: 'LIFECYCLE.md', keywords: 'hlr hss pcrf pcf provisioning network activate bar restore sim core',
+    outbox: NET(['PROVISION', 'DEPROVISION', 'PLAN_CHANGE', 'MSISDN_SWAP', 'ACTIVATE_PORTED_IN', 'THROTTLE_DATA', 'BAR_OUTGOING', 'BAR_ALL', 'RESTORE']), endpoints: POLL,
+    needs: ['Build or buy an adapter that reads the outbox and talks to your HLR/HSS and PCRF', 'Authenticate it as a service account with billing:run', 'For each service type (Mobile, Fibre, IoT, Subscription and your own) you set the systems and the start and end instructions in Settings → Service types'],
+    configure: { label: 'Service types (systems and instructions)', href: '/admin/settings?section=service-types' }, doc: 'LIFECYCLE.md', keywords: 'hlr hss pcrf pcf provisioning network activate bar restore sim core',
   },
   {
     id: 'esim', group: 'Network and SIM provisioning', name: 'eSIM profile server (SM-DP+)', with: 'Your SM-DP+ (GSMA eSIM profile server)',
@@ -329,6 +340,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     endpoints: [
       { method: 'POST', path: '/api/billing/run', purpose: 'Bill cycle run', auth: 'Service account with billing:run' },
       { method: 'POST', path: '/api/lifecycle/run', purpose: 'Daily lifecycle job', auth: 'Service account with billing:run' },
+      { method: 'POST', path: '/api/ocs/dispatch', purpose: 'Deliver due jobs to the charging system (every minute)', auth: 'Service account with billing:run' },
       { method: 'POST', path: '/api/commission/run', purpose: 'Commission approvals, claw-backs, monthly close', auth: 'commission:settle' },
       { method: 'POST', path: '/api/jobs/expire-applications', purpose: 'Expire unfinished store-front sign-ups (hourly)', auth: 'Service account with billing:run' },
       { method: 'POST', path: '/api/numbering/recycle', purpose: 'Release rested numbers and IMSIs', auth: 'numbering:manage' },
@@ -370,6 +382,7 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
   const keys = (await q.query(`SELECT count(*)::int AS n FROM api_clients WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const donors = (await q.query(`SELECT count(*)::int AS n FROM donor_operators WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const embedded = !(env.DATABASE_URL ?? '').trim();
+  const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q);
 
   const items = INTEGRATIONS.map((def) => {
     const vars = (def.env ?? []).map((v) => ({ ...v, set: isSet(env, v) }));
@@ -406,6 +419,15 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
         else if (rest && sap.endpoint && tokenSet) { status = 'CONNECTED'; detail = `Delivering ${sap.format} to ${new URL(sap.endpoint).host}.`; }
         else if (rest) { status = 'NEEDS_SETUP'; detail = !sap.endpoint ? 'REST is chosen but no endpoint is set.' : 'REST is chosen but MERIDIAN_SAP_TOKEN is not set.'; }
         else { status = 'NEEDS_SETUP'; detail = `${sap.transport} delivery needs a connector that is not part of this deployment. Files can still be downloaded.`; }
+        break;
+      }
+      case 'ocs': {
+        const o = ocsSet, st = ocsStats4;
+        const v = o.vendor ? OCS_VENDORS[o.vendor] : null;
+        if (!o.vendor || !o.enabled) { status = 'NEEDS_SETUP'; detail = o.vendor ? `${v?.label ?? o.vendor} is chosen but switched off.` : 'No connector chosen yet.'; }
+        else if (st.dead > 0) { status = 'NEEDS_SETUP'; detail = `${st.dead} job${st.dead === 1 ? '' : 's'} could not be delivered to ${v?.label}. Retry them below.`; }
+        else if (!v?.real) { status = 'STAND_IN'; detail = `${v?.label}: nothing is sent to a real system.`; }
+        else { status = 'CONNECTED'; detail = `${v.label}. ${st.sent} delivered, ${st.pending} waiting.${st.unmappedOffers ? ` ${st.unmappedOffers} plan${st.unmappedOffers === 1 ? ' has' : 's have'} no OCS plan code.` : ''}`; }
         break;
       }
       case 'database': status = embedded ? 'STAND_IN' : 'CONNECTED'; detail = embedded ? 'Running on the embedded demo database.' : 'Connected to the configured database.'; break;

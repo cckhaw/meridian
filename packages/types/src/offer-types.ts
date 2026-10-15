@@ -14,7 +14,7 @@ export const FULFILMENT_MECHANICS: Array<{ id: FulfilmentMechanic; label: string
   { id: 'SIM', label: 'SIM activation', summary: 'A SIM is issued and switched on. Turn on stock tracking if you count SIM cards in inventory.' },
 ];
 
-/** The kinds of service the platform ships with. Operators can define more (Settings → Catalog → Service kinds); an offer's `service` is one of these or such an id. */
+/** The kinds of service the platform ships with. Operators can define more (Settings → Catalog → Service types); an offer's `service` is one of these or such an id. */
 export const BUILTIN_SERVICE_KINDS = ['MOBILE', 'FIBER', 'IOT', 'SUBSCRIPTION'] as const;
 export type ServiceKindId = string;
 export const ORDER_STEPS = ['PLAN', 'DEVICE', 'ADDON'] as const;
@@ -73,7 +73,7 @@ export const roleOfSteps = (steps: OrderStep[]): TemplateInfo['role'] => (steps.
 export function switchProblems(b: BehaviourSwitches): string[] {
   const out: string[] = [];
   if (!Array.isArray(b.steps) || b.steps.length === 0 || b.steps.some((x) => !(ORDER_STEPS as readonly string[]).includes(x))) out.push('Choose at least one step of the order where this is picked.');
-  if (b.service !== null && !/^[A-Z][A-Z0-9_]{1,31}$/.test(b.service)) out.push('The service it creates is not a valid service kind.');
+  if (b.service !== null && !/^[A-Z][A-Z0-9_]{1,31}$/.test(b.service)) out.push('The service it creates is not a valid service type.');
   if (!b.service && !b.goods) out.push('It must create a service or include a physical item, otherwise there is nothing to sell.');
   if (b.serviceNeedsFee && !b.service) out.push('“Service only with a monthly fee” needs a service.');
   if (b.outright && (b.service || !b.goods)) out.push('Outright goods are a physical item with no service.');

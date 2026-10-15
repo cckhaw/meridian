@@ -1,3 +1,4 @@
+import { enqueueOcs } from './ocs.js';
 import { randomUUID } from 'node:crypto';
 import type { EtcQuote } from '@meridian/types';
 import { audit } from './audit.js';
@@ -135,6 +136,7 @@ export async function changeSim(db: Db, id: string, iccid: string, actor = 'syst
     if (used) throw conflict('this SIM is already assigned to another service');
     await q.query('UPDATE services SET iccid=$2, version=version+1, updated_at=now() WHERE id=$1', [id, iccid]);
     await audit(q, actor, 'service', id, 'SIM_CHANGE', { from: s.iccid, to: iccid });
+    await enqueueOcs(q, 'CHANGE_IDENTITY', id, { identity: { from: { identifier: null, iccid: (s.iccid as string | null) ?? null }, to: { identifier: null, iccid } } });
     return (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!;
   });
 }
@@ -154,6 +156,7 @@ export async function changeMsisdn(db: Db, id: string, newMsisdn?: string, actor
       throw e;
     }
     await q.query('UPDATE services SET identifier=$2, version=version+1, updated_at=now() WHERE id=$1', [id, next]);
+    await enqueueOcs(q, 'CHANGE_IDENTITY', id, { identity: { from: { identifier: s.identifier as string, iccid: null }, to: { identifier: next, iccid: null } } });
     await audit(q, actor, 'service', id, 'MSISDN_CHANGE', { from: s.identifier, to: next });
     return (await q.query('SELECT * FROM services WHERE id=$1', [id])).rows[0]!;
   });
@@ -299,8 +302,9 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
                      ON CONFLICT (identifier) DO UPDATE SET service_id=EXCLUDED.service_id, reason=EXCLUDED.reason, since=EXCLUDED.since, release_on=EXCLUDED.release_on`,
         [s.identifier, id, o.ported ? 'PORTED_OUT' : (o.reason ?? 'TERMINATED'), dayOfEnd, hold]);
     }
-    const own = await endInstruction(q, s.serviceKind); // a service kind the operator defined names its own systems and instruction
-    await queueOutbox(q, { kind: 'NETWORK', instruction: own?.instruction ?? 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: own?.systems ?? ['HLR', 'HSS', 'PCRF'], ported: !!o.ported, ...(own ? { serviceKind: s.serviceKind, reason: o.reason ?? 'terminated' } : {}) } });
+    await enqueueOcs(q, 'TERMINATE', id, { termination: { reason: o.reason ?? 'TERMINATED', ported: !!o.ported } });
+    const own = await endInstruction(q, s.serviceKind ?? s.type); // the service type names its own systems and instruction
+    await queueOutbox(q, { kind: 'NETWORK', instruction: own?.instruction ?? 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: own?.systems ?? ['HLR', 'HSS', 'PCRF'], ported: !!o.ported, ...(own && s.serviceKind ? { serviceKind: s.serviceKind, reason: o.reason ?? 'terminated' } : {}) } });
 
     // The deposit
     let applied = 0, refunded = 0;

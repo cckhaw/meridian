@@ -1,3 +1,4 @@
+import { enqueueOcs } from './ocs.js';
 import { behaviourOf, type OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { getOffer, monthlyFee } from './catalog.js';
@@ -171,6 +172,7 @@ export async function upgradeToGroupOffer(db: Db, actor: string, serviceId: stri
     const term = offer.contract?.termMonths || null;
     await q.query(`UPDATE services SET offer_id=$2, contract_term_months = COALESCE(contract_term_months, $3), contract_start = CASE WHEN contract_term_months IS NULL AND $3::int IS NOT NULL THEN COALESCE(contract_start, now()) ELSE contract_start END WHERE id=$1`, [serviceId, offer.id, term]);
     await audit(q, actor, 'service', serviceId, 'PLAN_CHANGED', { from: prior, to: offer.id, group: true });
+    await enqueueOcs(q, 'CHANGE_PLAN', serviceId, { previousOfferId: prior });
     const pool = offer.group!.sharedPoolQuotaGb;
     const g = await createGroup(q, actor, {
       accountId: s.accountId as string, name: `${cust?.displayName ?? 'Family'} – ${offer.name}`.slice(0, 80), principalServiceId: serviceId, offerId: offer.id,

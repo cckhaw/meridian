@@ -42,7 +42,7 @@ A type is a set of **switches**. A new type starts from one of the eight built-i
 
 | Switch | Meaning |
 |---|---|
-| Service it creates | A service kind (Mobile, Fibre, IoT, Subscription, or one you defined) or none |
+| Service it creates | A service type (Mobile, Fibre, IoT, Subscription, or one you defined) or none |
 | Only if it has a monthly fee | A watch with no plan is just goods |
 | Includes a physical item | Ships or is collected; can have colours and storage |
 | Sold outright | Goods with no service and no contract; can be a quick sale |
@@ -58,13 +58,23 @@ The presets: SIM-only plan, plan with a device, wearable, fibre broadband, IoT c
 
 A switched-off type cannot be chosen for new offers; existing offers keep working. A type can be removed only if it is custom and no offer uses it.
 
-### Service kinds
+### Service types
 
-**Settings → Catalog → Service kinds** defines new kinds of service beyond the built-in Mobile, Fibre, IoT and Subscription: a roaming pass, a voucher, a top-up. A kind has its own identifier prefix (`RP-…`), can **end by itself** after a default number of days, and names the network systems and the start and end instruction sent through the outbox. Choose it as the *service it creates* in an offer type. An offer can override the validity (**Valid for (days)**).
+**Settings → Catalog → Service types** lists what an order can start: the four that come with the platform (Mobile, Fibre, IoT, Subscription) and any you define: a roaming pass, a voucher, a top-up. Choose one as the *service it creates* in an offer type.
 
-When an order completes, the service is created as a subscription with the kind and its expiry, and a start instruction (identifier, offer, valid-until, systems) is queued. When the service ends, the kind's end instruction is queued. The daily job terminates services past their expiry (reason `EXPIRED`) without a final invoice. A kind in use by an offer type or service cannot be deleted. Only the super user manages kinds (`settings:manage`). Billing is the ordinary subscription billing: a monthly fee bills monthly, a one-time price is paid once.
+**Built-in types** can be adapted by the super user (`settings:manage`): rename and describe them, and change how the outside world hears about them. Their identifiers (the number comes from the number pool; `FBR-`, `IOT`, `SUB-` for the rest), their life cycle (they never end by themselves) and their existence are fixed: they cannot be switched off or removed.
 
-Limits: a kind changes identity, expiry and provisioning, not billing rules or the order steps themselves.
+For **every** type, built-in or yours, you set:
+
+* **Tell the network when a service starts** and the **start instruction** (default `PROVISION`). For your own types this is on; for the built-in ones it starts off, which is how they have always behaved (only end, bar and plan-change instructions were sent). Turn it on to send a start instruction for built-in types too.
+* **Systems to tell** and the **end instruction** (default `DEPROVISION`). A built-in type that names no systems keeps the default, HLR, HSS and PCRF, so nothing changes until you adapt it. The systems and instruction are in the message sent to your integration.
+* **Provision into the charging system (OCS):** off means services of this type are never sent to the OCS, and an offer of this type cannot be given an OCS plan code ([OCS.md](OCS.md)).
+
+Types you define also have an **identifier prefix** (`RP-…`), can **end by themselves** after a default number of days (an offer can override it with **Valid for (days)**), and can be switched off or removed when nothing uses them.
+
+When an order completes, a service of one of your types is created as a subscription with the type and its expiry. The daily job ends services past their expiry (reason `EXPIRED`) without a final invoice. Billing is ordinary subscription billing: a monthly fee bills monthly, a one-time price is paid once.
+
+Limits: a type changes identity, expiry and provisioning, not billing rules or the order steps themselves. Old links to `?section=service-kinds` still work (the screen was renamed).
 
 ## Fulfilment options
 

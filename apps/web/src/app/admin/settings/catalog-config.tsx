@@ -63,7 +63,7 @@ function TypeForm({ item, kinds, onClose, onDone }: { item: any; kinds: any[]; o
           <legend className="px-1 text-subhead font-semibold">What happens when it is sold</legend>
           {fixed && <p className="text-footnote text-label2">A built-in type keeps its behaviour. To change it, add a new type starting from this one.</p>}
           {inUse && !fixed && <p className="text-footnote text-label2">{item.offers} offer{item.offers === 1 ? ' uses' : 's use'} this type, so only where it is picked and “one per order” can change. Add a new type for different behaviour.</p>}
-          <Field label="Service it creates" hint="The order starts a service of this kind. Kinds you define yourself are under Service kinds.">
+          <Field label="Service it creates" hint="The order starts a service of this type. Types you define yourself are under Service types.">
             <Select disabled={lockedCore} value={sw.service ?? ''} onChange={(e) => set({ service: e.target.value || null, ...(e.target.value ? {} : { serviceNeedsFee: false, needsInstallation: false }) })}>
               <option value="">None: nothing is created, it is a one-off sale</option>
               {kindOptions.map((k) => <option key={k.id} value={k.id}>{k.name}{k.isBuiltin ? '' : ' (yours)'}</option>)}
@@ -105,7 +105,7 @@ function Switch({ checked, onChange, label, hint, disabled }: { checked: boolean
   );
 }
 
-/** Settings → Catalog → Service kinds: kinds of service an order can start, beyond the built-in mobile, fibre, IoT and subscription. */
+/** Settings → Catalog → Service types: the kinds of service an order starts (mobile, fibre, IoT, subscription, and your own), and how the network and the charging system hear about them. */
 export function ServiceKindSettings() {
   const { data, error, reload } = useApi<any>('/settings/catalog');
   const [editing, setEditing] = useState<any>(null);
@@ -114,18 +114,19 @@ export function ServiceKindSettings() {
   return (
     <Card>
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <p className="text-subhead text-label2">A service kind is something an order can start for a customer. Define one for a pass, a voucher or a top-up: it gets its own identifier, can end by itself after a number of days, and tells the systems you name when it starts and ends. Then choose it as the <strong>service it creates</strong> in an offer type (Offer types). It is billed like any subscription: an offer with a monthly fee is billed monthly, one with only a one-time price is paid once.</p>
-        <Button className="shrink-0 self-start whitespace-nowrap" onClick={() => setEditing({})}>New service kind</Button>
+        <p className="text-subhead text-label2">A service type is what an order starts for a customer. Mobile, Fibre, IoT and Subscription come with the platform; define your own for a pass, a voucher or a top-up. For each type you set what the network is told when its services start and end, and whether its services are provisioned into the charging system. Then choose a type as the <strong>service it creates</strong> in an offer type (Offer types). Billing follows the offer’s prices, as for any subscription.</p>
+        <Button className="shrink-0 self-start whitespace-nowrap" onClick={() => setEditing({})}>New service type</Button>
       </div>
-      <DataList label="Service kinds" rows={data.serviceKinds} rowKey={(k: any) => k.id}
+      <DataList label="Service types" rows={data.serviceKinds} rowKey={(k: any) => k.id}
         columns={[
-          { key: 'kind', label: 'Service kind', primary: true, render: (k: any) => <><span className="font-medium">{k.name}</span>{k.description && <span className="block text-footnote text-label2">{k.description}</span>}<span className="block font-mono text-caption text-label2">{k.id}{k.isBuiltin ? ' · built in' : ''}</span></> },
-          { key: 'ends', label: 'Ends', render: (k: any) => (k.isBuiltin ? '—' : k.expires ? `After ${k.validityDays} days` : 'When cancelled') },
-          { key: 'sys', label: 'Tells', render: (k: any) => <span className="text-footnote text-label2">{k.isBuiltin ? 'Built-in handling' : k.provisionSystems.length ? k.provisionSystems.join(', ') : 'No systems named'}</span> },
+          { key: 'kind', label: 'Service type', primary: true, render: (k: any) => <><span className="font-medium">{k.name}</span>{k.description && <span className="block text-footnote text-label2">{k.description}</span>}<span className="block font-mono text-caption text-label2">{k.id}{k.isBuiltin ? ' · built in' : ''}</span></> },
+          { key: 'ends', label: 'Ends', render: (k: any) => (k.isBuiltin ? 'When cancelled' : k.expires ? `After ${k.validityDays} days` : 'When cancelled') },
+          { key: 'sys', label: 'Tells the network', render: (k: any) => <span className="text-footnote text-label2">{(k.announceStart ? `Start ${k.provisionInstruction}, ` : '') + `end ${k.deprovisionInstruction}`}<span className="block">{k.provisionSystems.length ? k.provisionSystems.join(', ') : k.isBuiltin ? 'HLR, HSS, PCRF (default)' : 'No systems named'}</span></span> },
+          { key: 'ocs', label: 'Charging system', render: (k: any) => <Badge tone={k.ocsEnabled ? 'success' : 'neutral'}>{k.ocsEnabled ? 'Provisioned' : 'Not sent'}</Badge> },
           { key: 'use', label: 'In use', right: true, render: (k: any) => (k.isBuiltin ? '—' : `${k.offerTypes} type${k.offerTypes === 1 ? '' : 's'}, ${k.services} service${k.services === 1 ? '' : 's'}`) },
           { key: 'status', label: 'Status', render: (k: any) => <Badge tone={k.status === 'ACTIVE' ? 'success' : 'neutral'}>{k.status === 'ACTIVE' ? 'Active' : 'Switched off'}</Badge> },
         ]}
-        actions={(k: any) => (k.isBuiltin ? undefined : <Button variant="secondary" onClick={() => setEditing(k)}>Edit</Button>)} />
+        actions={(k: any) => <Button variant="secondary" onClick={() => setEditing(k)}>Edit</Button>} />
       {editing && <KindForm item={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void reload(); }} />}
     </Card>
   );
@@ -133,30 +134,38 @@ export function ServiceKindSettings() {
 
 function KindForm({ item, onClose, onDone }: { item: any; onClose: () => void; onDone: () => void }) {
   const isNew = !item.id;
-  const [f, setF] = useState({ name: item.name ?? '', description: item.description ?? '', prefix: item.identifierPrefix ?? 'SVC', expires: !!item.expires, days: item.validityDays ? String(item.validityDays) : '7', systems: (item.provisionSystems ?? []).join(', '), start: item.provisionInstruction ?? 'PROVISION', end: item.deprovisionInstruction ?? 'DEPROVISION', active: (item.status ?? 'ACTIVE') === 'ACTIVE' });
+  const builtin = !!item.isBuiltin;
+  const [f, setF] = useState({ name: item.name ?? '', description: item.description ?? '', prefix: item.identifierPrefix ?? 'SVC', expires: !!item.expires, days: item.validityDays ? String(item.validityDays) : '7', systems: (item.provisionSystems ?? []).join(', '), start: item.provisionInstruction ?? 'PROVISION', end: item.deprovisionInstruction ?? 'DEPROVISION', announce: item.announceStart ?? true, ocs: item.ocsEnabled ?? true, active: (item.status ?? 'ACTIVE') === 'ACTIVE' });
   const { run, busy, error } = useAction();
   return (
-    <Modal title={isNew ? 'New service kind' : `Edit ${item.name}`} onClose={onClose}>
+    <Modal title={isNew ? 'New service type' : `Edit ${item.name}`} onClose={onClose}>
       <form className="space-y-4" onSubmit={async (e) => {
         e.preventDefault();
-        const body = { name: f.name, description: f.description, identifierPrefix: f.prefix, expires: f.expires, validityDays: f.expires ? Number(f.days) : null, provisionSystems: f.systems.split(',').map((x: string) => x.trim()).filter(Boolean), provisionInstruction: f.start, deprovisionInstruction: f.end, ...(isNew ? {} : { status: f.active ? 'ACTIVE' : 'INACTIVE' }) };
+        const common = { name: f.name, description: f.description, provisionSystems: f.systems.split(',').map((x: string) => x.trim()).filter(Boolean), provisionInstruction: f.start, deprovisionInstruction: f.end, announceStart: f.announce, ocsEnabled: f.ocs };
+        const body = builtin ? common : { ...common, identifierPrefix: f.prefix, expires: f.expires, validityDays: f.expires ? Number(f.days) : null, ...(isNew ? {} : { status: f.active ? 'ACTIVE' : 'INACTIVE' }) };
         if (await run(() => (isNew ? post('/settings/service-kinds', body) : patch(`/settings/service-kinds/${item.id}`, body)))) onDone();
       }}>
+        {builtin && <Alert tone="info">{item.name} comes with the platform. You can rename it and change how the network and charging system are told about it. Its identifiers ({item.id === 'MOBILE' ? 'the number comes from your number pool' : `start with ${item.identifierPrefix}`}) and its life cycle are fixed, and it cannot be switched off or removed.</Alert>}
         <Field label="Name"><Input required maxLength={40} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <Field label="Description"><Input maxLength={200} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
-        <Field label="Identifier starts with" hint="Each service gets an identifier made of this and a running number, for example RP-10432."><Input className="font-mono" maxLength={10} value={f.prefix} onChange={(e) => setF({ ...f, prefix: e.target.value.toUpperCase() })} /></Field>
-        <Switch checked={f.expires} onChange={(v) => setF({ ...f, expires: v })} label="Ends by itself" hint="The daily job ends the service when its time is up. An offer can set its own length; this is the default." />
-        {f.expires && <Field label="Default length (days)"><Input type="number" min={1} max={3650} required value={f.days} onChange={(e) => setF({ ...f, days: e.target.value })} /></Field>}
-        <Field label="Systems to tell" hint="Names of the systems that act on the instructions, separated by commas, for example PCRF, VOUCHER_PLATFORM. They are in the message sent to your integration."><Input className="font-mono" value={f.systems} onChange={(e) => setF({ ...f, systems: e.target.value })} /></Field>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Instruction when it starts"><Input className="font-mono" maxLength={32} value={f.start} onChange={(e) => setF({ ...f, start: e.target.value.toUpperCase() })} /></Field>
-          <Field label="Instruction when it ends"><Input className="font-mono" maxLength={32} value={f.end} onChange={(e) => setF({ ...f, end: e.target.value.toUpperCase() })} /></Field>
-        </div>
-        {!isNew && <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />Active: can be chosen for offer types</label>}
+        {!builtin && <Field label="Identifier starts with" hint="Each service gets an identifier made of this and a running number, for example RP-10432."><Input className="font-mono" maxLength={10} value={f.prefix} onChange={(e) => setF({ ...f, prefix: e.target.value.toUpperCase() })} /></Field>}
+        {!builtin && <Switch checked={f.expires} onChange={(v) => setF({ ...f, expires: v })} label="Ends by itself" hint="The daily job ends the service when its time is up. An offer can set its own length; this is the default." />}
+        {!builtin && f.expires && <Field label="Default length (days)"><Input type="number" min={1} max={3650} required value={f.days} onChange={(e) => setF({ ...f, days: e.target.value })} /></Field>}
+        <fieldset className="space-y-3 rounded-control border border-separator p-3">
+          <legend className="px-1 text-subhead font-medium">Network provisioning</legend>
+          <Switch checked={f.announce} onChange={(v) => setF({ ...f, announce: v })} label="Tell the network when a service starts" hint={builtin ? 'Off until you turn it on: today only the end, bar and plan-change instructions are sent for this type.' : 'Queues the start instruction for your integration.'} />
+          <Field label="Systems to tell" hint={`Names of the systems that act on the instructions, separated by commas, for example PCRF, VOUCHER_PLATFORM. They are in the message sent to your integration.${builtin ? ' Left empty, the end instruction goes to HLR, HSS and PCRF.' : ''}`}><Input className="font-mono" value={f.systems} onChange={(e) => setF({ ...f, systems: e.target.value })} /></Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Instruction when it starts"><Input className="font-mono" maxLength={32} value={f.start} onChange={(e) => setF({ ...f, start: e.target.value.toUpperCase() })} /></Field>
+            <Field label="Instruction when it ends"><Input className="font-mono" maxLength={32} value={f.end} onChange={(e) => setF({ ...f, end: e.target.value.toUpperCase() })} /></Field>
+          </div>
+        </fieldset>
+        <Switch checked={f.ocs} onChange={(v) => setF({ ...f, ocs: v })} label="Provision into the charging system (OCS)" hint="Plans of this type that have an OCS plan code are created in the OCS, changed, barred and closed there. Off: they are never sent." />
+        {!isNew && !builtin && <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />Active: can be chosen for offer types</label>}
         {error && <Alert>{error}</Alert>}
         <div className="flex flex-wrap gap-3">
-          <Button type="submit" disabled={busy}>{isNew ? 'Create service kind' : 'Save'}</Button><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          {!isNew && <Button type="button" variant="destructive" className="sm:ml-auto" disabled={busy} onClick={async () => { if (window.confirm(`Remove ${item.name}? This only works if nothing uses it.`) && (await run(() => del(`/settings/service-kinds/${item.id}`)))) onDone(); }}>Remove</Button>}
+          <Button type="submit" disabled={busy}>{isNew ? 'Create service type' : 'Save'}</Button><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          {!isNew && !builtin && <Button type="button" variant="destructive" className="sm:ml-auto" disabled={busy} onClick={async () => { if (window.confirm(`Remove ${item.name}? This only works if nothing uses it.`) && (await run(() => del(`/settings/service-kinds/${item.id}`)))) onDone(); }}>Remove</Button>}
         </div>
       </form>
     </Modal>

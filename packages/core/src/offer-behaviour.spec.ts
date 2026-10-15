@@ -75,24 +75,25 @@ describe('behaviour switches', () => {
     expect(behaviourOf((await updateNode(db, 'gadget-1', { name: 'Gadget one' })) as never).steps).toEqual(['PLAN', 'DEVICE']); // restamped on the offer
     await expect(updateOfferType(db, 'admin', 'SIM_ONLY', { behaviour: { goods: true } })).rejects.toThrow(/built-in/);
     await expect(createOfferType(db, 'admin', { name: 'Nothing', template: 'VAS', behaviour: { service: null } })).rejects.toThrow(/service or include/);
-    await expect(createOfferType(db, 'admin', { name: 'Ghost kind', template: 'VAS', behaviour: { service: 'GHOST_KIND' } })).rejects.toThrow(/unknown service kind/);
+    await expect(createOfferType(db, 'admin', { name: 'Ghost kind', template: 'VAS', behaviour: { service: 'GHOST_KIND' } })).rejects.toThrow(/unknown service type/);
     expect((await listOfferTypes(db)).find((x) => x.id === 'SIM_ONLY')!.behaviour).toBeNull(); // presets stay presets
     expect((await getOfferType(db, t.id))!.behaviour).not.toBeNull();
   });
 });
 
-describe('service kinds the operator defines', () => {
+describe('service types the operator defines', () => {
   it('validates and protects them', async () => {
     expect((await listServiceKinds(db)).filter((k) => k.isBuiltin).map((k) => k.id)).toEqual(['MOBILE', 'FIBER', 'IOT', 'SUBSCRIPTION']);
     await expect(createServiceKind(db, 'admin', { name: '', })).rejects.toThrow(/needs a name/);
     await expect(createServiceKind(db, 'admin', { name: 'Bad', expires: true })).rejects.toThrow(/default length/);
     await expect(createServiceKind(db, 'admin', { name: 'Bad', provisionSystems: ['lower case!'] })).rejects.toThrow(/up to 8 systems/);
     await expect(createServiceKind(db, 'admin', { name: 'Bad', identifierPrefix: 'way too long prefix' })).rejects.toThrow(/prefix/);
-    await expect(updateServiceKind(db, 'admin', 'MOBILE', { name: 'Phone' })).rejects.toThrow(/built-in/);
+    await expect(updateServiceKind(db, 'admin', 'MOBILE', { identifierPrefix: 'XX' })).rejects.toThrow(/issued by the platform/);
+    await expect(updateServiceKind(db, 'admin', 'MOBILE', { status: 'INACTIVE' })).rejects.toThrow(/cannot be switched off/);
     await expect(deleteServiceKind(db, 'admin', 'MOBILE')).rejects.toThrow(/built-in/);
     const k = await createServiceKind(db, 'admin', { name: 'Voucher', identifierPrefix: 'VCH-' });
     expect(k).toMatchObject({ id: 'VOUCHER', expires: false, validityDays: null, provisionInstruction: 'PROVISION' });
-    await expect(createServiceKind(db, 'admin', { name: 'voucher' })).rejects.toThrow(/already a service kind/);
+    await expect(createServiceKind(db, 'admin', { name: 'voucher' })).rejects.toThrow(/already a service type/);
     await deleteServiceKind(db, 'admin', 'VOUCHER');
   });
 

@@ -17,7 +17,7 @@ const major = toInput;
 
 interface FormState {
   parentId: string; id: string; name: string; kind: string; description: string; market: string; recurring: string; upfront: string; taxInclusive: boolean;
-  term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string; validity: string;
+  term: string; etcMethod: string; etcPercent: string; waive: string; subsidy: string; retail: string; options: string[]; skus: string; trackSim: boolean; partner: string; ocsCode: string; ocsParams: string; validity: string;
   requires: string[]; excludes: string[]; channels: string[]; status: string; activeFrom: string;
   variants: Array<{ colour: string; storage: string; sku: string; delta: string }>;
   /** Contracts this device can be bought on with a plan. */
@@ -28,7 +28,7 @@ interface FormState {
 
 const blank = (market: string): FormState => ({
   parentId: '', id: '', name: '', kind: '', description: '', market, recurring: '', upfront: '', taxInclusive: true,
-  term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '', validity: '',
+  term: '0', etcMethod: 'SUBSIDY_AMORTISED', etcPercent: '50', waive: '1', subsidy: '', retail: '', options: [], skus: '', trackSim: false, partner: '', ocsCode: '', ocsParams: '', validity: '',
   requires: [], excludes: [], channels: [], status: 'DRAFT', activeFrom: '', variants: [], deals: [],
   isGroup: false, maxMembers: '3', memberOffers: [], poolGb: '',
 });
@@ -44,7 +44,7 @@ function fromOffer(o: any, market: string): FormState {
     term: String(o.contract?.termMonths ?? 0), etcMethod: o.contract?.etc?.method ?? 'SUBSIDY_AMORTISED', etcPercent: String(o.contract?.etc?.percentOfRemaining ?? 50), waive: String(o.contract?.etc?.waiveInLastMonths ?? 1),
     subsidy: major(o.contract?.subsidy?.subsidyAmount.amountMinor), retail: major(o.contract?.subsidy?.deviceRetailPrice.amountMinor),
     options: optionsOf(o.fulfilment), skus: (o.fulfilment?.inventorySkus ?? []).join(', '), trackSim: (o.fulfilment?.inventorySkus ?? []).length > 0,
-    partner: o.partnerCode ?? '', validity: o.validityDays ? String(o.validityDays) : '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
+    partner: o.partnerCode ?? '', ocsCode: o.ocs?.planCode ?? '', ocsParams: Object.entries(o.ocs?.params ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'), validity: o.validityDays ? String(o.validityDays) : '', requires: o.requires ?? [], excludes: o.excludes ?? [], channels: o.salesChannels ?? [],
     isGroup: !!o.group?.isGroupOffer, maxMembers: String(o.group?.maxGroupMembers ?? 3), memberOffers: o.group?.allowedMemberOfferIds ?? [], poolGb: o.group?.sharedPoolQuotaGb != null ? String(o.group.sharedPoolQuotaGb) : '',
     deals: (o.deals ?? []).map((d: any) => ({ term: String(d.termMonths), subsidy: major(d.subsidyMinor), waive: String(d.waiveInLastMonths ?? 1) })),
     variants: (o.variants ?? []).map((v: any) => ({ colour: v.colour, storage: v.storage ?? '', sku: v.sku, delta: v.priceDeltaMinor ? major(v.priceDeltaMinor) : '' })),
@@ -90,7 +90,10 @@ export function OfferForm({ offerId, parentId, fromId }: { offerId?: string; par
   return <Inner key={sourceId ?? 'new'} offerId={offerId} parentId={parentId ?? null} fromId={fromId ?? null} source={d?.node} names={names} where={where} markets={meta.data?.markets ?? {}} config={config.data} sold={(d?.usage?.services ?? 0) + (d?.usage?.orders ?? 0)} />;
 }
 
-function Inner({ offerId, parentId, fromId, source, names: initialNames, where: initialWhere, markets, config, sold }: { offerId?: string; parentId: string | null; fromId: string | null; source: any; names: Record<string, string>; where: string; markets: Record<string, any>; config: { types: any[]; options: any[]; serviceKinds?: any[] }; sold: number }) {
+/** “name=value” lines to parameters: numbers and yes/no keep their type. */
+const parseParams = (text: string) => Object.fromEntries(text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf('='); const k = (i < 0 ? l : l.slice(0, i)).trim(); const v = i < 0 ? '' : l.slice(i + 1).trim(); return [k, v === 'true' ? true : v === 'false' ? false : v !== '' && !Number.isNaN(Number(v)) ? Number(v) : v]; }));
+
+function Inner({ offerId, parentId, fromId, source, names: initialNames, where: initialWhere, markets, config, sold }: { offerId?: string; parentId: string | null; fromId: string | null; source: any; names: Record<string, string>; where: string; markets: Record<string, any>; config: { types: any[]; options: any[]; serviceKinds?: any[]; ocsEnabled?: boolean }; sold: number }) {
   const { me } = useAuth();
   const router = useRouter();
   const regional = useRegional();
@@ -165,7 +168,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
   const fulfilment = { options: f.options, inventorySkus: tracksStock ? csv(f.skus) : [] };
   const deals = b?.outright ? f.deals.filter((d) => d.subsidy).map((d) => ({ termMonths: Number(d.term), subsidyMinor: toMinor(d.subsidy), waiveInLastMonths: Number(d.waive || 1) })) : [];
   const group = canGroup && f.isGroup ? { isGroupOffer: true, maxGroupMembers: Number(f.maxMembers), allowedMemberOfferIds: f.memberOffers, sharedPoolQuotaGb: f.poolGb.trim() ? Number(f.poolGb) : undefined } : editing ? null : undefined; // null clears it on an offer that had one
-  const common = { deals, group, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, validityDays: serviceKind?.expires && f.validity ? Number(f.validity) : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
+  const ocs = b?.service && f.ocsCode.trim() ? { planCode: f.ocsCode.trim(), params: parseParams(f.ocsParams) } : editing ? null : undefined; // null clears it on an offer that had one
+  const common = { deals, group, ocs, name: f.name.trim(), description: f.description || undefined, fulfilment, partnerCode: b?.needsPartner ? f.partner || undefined : undefined, validityDays: serviceKind?.expires && f.validity ? Number(f.validity) : undefined, requires: f.requires, excludes: f.excludes, salesChannels: f.channels,
     variants: hasDevice && tracksStock ? f.variants.filter((v) => v.colour.trim() && v.sku.trim()).map((v) => ({ id: slug(`${v.colour}-${v.storage}`) || slug(v.sku), colour: v.colour.trim(), storage: v.storage.trim() || undefined, sku: v.sku.trim(), priceDeltaMinor: v.delta ? toMinor(v.delta) : undefined })) : [] };
 
   // What stops the person moving on from this step, in words.
@@ -366,6 +370,13 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
               {b.needsPartner && <Field label="Partner code" hint="e.g. netflix"><Input required value={f.partner} onChange={set('partner')} /></Field>}
               {serviceKind?.expires && <Field label="Valid for (days)" hint={`From the day it starts, then it ends by itself. Leave blank for the ${serviceKind.name.toLowerCase()} default of ${serviceKind.validityDays} days.`}><Input type="number" min="1" max="3650" value={f.validity} onChange={set('validity')} placeholder={String(serviceKind.validityDays)} /></Field>}
             </Card>
+            {config.ocsEnabled && b.service && serviceKind?.ocsEnabled !== false && (
+              <Card className="grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2"><div className="font-medium">Charging system (OCS)</div><p className="text-footnote text-label2">How your charging system knows this plan. Without a plan code, customers who buy it are not created in the OCS.</p></div>
+                <Field label="OCS plan code" hint="The plan or product code in the OCS, for example PLAN_5G_100."><Input value={f.ocsCode} onChange={set('ocsCode')} maxLength={60} placeholder="PLAN_5G_100" /></Field>
+                <Field label="Extra parameters" hint="One per line, as name=value, sent with the plan. Optional."><textarea className="min-h-[88px] w-full rounded-control border border-separator bg-surface px-3 py-2 text-body" value={f.ocsParams} onChange={set('ocsParams')} placeholder={'dataGb=100\nvoiceMinutes=unlimited'} /></Field>
+              </Card>
+            )}
             <Card>
               <fieldset>
                 <legend className="mb-1 text-subhead font-medium">Sold through</legend>

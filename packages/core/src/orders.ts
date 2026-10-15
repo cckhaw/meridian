@@ -1,3 +1,4 @@
+import { enqueueOcs } from './ocs.js';
 import { randomUUID } from 'node:crypto';
 import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type PaymentMethod } from '@meridian/types';
 import { ruleSatisfied, listBundleRules } from './bundles.js';
@@ -472,11 +473,12 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
   }
   const all = await orderLines(q, o.id);
   for (const l of lines) {
-    // A service kind the operator defined is stored as a subscription tagged with its kind, and may end by itself.
+    // A service type the operator defined is stored as a subscription tagged with its kind, and may end by itself.
     const kindId = serviceType(l.offer);
     const custom: ServiceKind | null = isBuiltinKind(kindId) ? null : await getServiceKind(q, kindId);
-    if (!isBuiltinKind(kindId) && !custom) throw invalid(`the service kind ${kindId} no longer exists`);
+    if (!isBuiltinKind(kindId) && !custom) throw invalid(`the service type ${kindId} no longer exists`);
     const type = custom ? 'SUBSCRIPTION' : kindId;
+    const telling = custom ?? (await getServiceKind(q, type)); // the service type says whether the network is told when its services start (built-in types: off until the super user turns it on)
     const validity = custom?.expires ? (l.offer.validityDays ?? custom.validityDays) : null;
     // A device bought on a contract with this plan sets the plan's contract (and is paid for on its bill) once the device has arrived.
     const device = all.find((x) => x.attachPosition === l.position && x.status === 'ACTIVE' && x.deal);
@@ -491,7 +493,8 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
         `INSERT INTO services ${cols}) SELECT gen_random_uuid(), $1, $2, $3, $4, $5 || lpad(nextval('${seq}')::text, 10, '0'), $6, 'ACTIVE', now(), $7, now(), $8, $10, ${endsAt} FROM generate_series(1, $9::int)`,
         [o.shardId, accountId, o.customerId, type, prefix, l.offerId, term, o.id, l.quantity, custom?.id ?? null],
       );
-      if (custom) for (const s of (await q.query('SELECT id, account_id, identifier, offer_id, expires_at FROM services WHERE order_id=$1 AND offer_id=$2 AND service_kind=$3', [o.id, l.offerId, custom.id])).rows) await announceStart(q, custom, { id: s.id, accountId: s.accountId, identifier: s.identifier, offerId: s.offerId, expiresAt: s.expiresAt });
+      if (telling?.announceStart) for (const s of (await q.query('SELECT id, account_id, identifier, offer_id, expires_at FROM services WHERE order_id=$1 AND offer_id=$2 AND service_kind IS NOT DISTINCT FROM $3', [o.id, l.offerId, custom?.id ?? null])).rows) await announceStart(q, telling, { id: s.id, accountId: s.accountId, identifier: s.identifier, offerId: s.offerId, expiresAt: s.expiresAt });
+      for (const s of (await q.query('SELECT id FROM services WHERE order_id=$1 AND offer_id=$2 ORDER BY id', [o.id, l.offerId])).rows) await enqueueOcs(q, 'PROVISION', s.id as string);
       if (l.payMode === 'INSTALLMENT') { // every unit carries its own share of the financed amount
         const financed = l.netMinor + l.taxMinor - l.downPaymentMinor, n = l.installmentMonths as number, unit = Math.floor(financed / l.quantity), each = Math.floor(unit / n);
         const rem = financed - each * n * l.quantity;
@@ -519,7 +522,7 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
       `INSERT INTO services ${cols}) VALUES ($1,$2,$3,$4,$5,$6,$7,${awaitingPort ? "'PENDING',NULL" : "'ACTIVE',now()"},$8,${awaitingPort ? 'NULL' : 'now()'},$9,$10,${endsAt})`,
       [id, o.shardId, accountId, o.customerId, type, identifier, l.offerId, term, o.id, custom?.id ?? null],
     );
-    if (custom) await announceStart(q, custom, { id, accountId: accountId!, identifier, offerId: l.offerId, expiresAt: validity ? new Date(Date.now() + validity * 86_400_000) : null });
+    if (telling?.announceStart && !awaitingPort) await announceStart(q, telling, { id, accountId: accountId!, identifier, offerId: l.offerId, expiresAt: validity ? new Date(Date.now() + validity * 86_400_000) : null });
     await q.query('UPDATE order_lines SET service_id=$3 WHERE id=$1 AND shard_id=$2', [l.id, o.shardId, id]);
     if ((l.iccid || l.msisdn) && !awaitingPort) { // the SIM and number come out of the pools and point at the new service
       const r = await activateResourcesTx(q, { iccid: l.iccid, serviceId: id, actor: 'order' });
@@ -528,6 +531,7 @@ async function activateLines(q: Queryable, o: Row, serviceLines: Array<Row & { o
       if (l.msisdn) await consumeMsisdnTx(q, l.msisdn, id, 'order');
     }
     if (l.portIn) await createPortInTx(q, { customerId: o.customerId, orderId: o.id, orderLineId: l.id, serviceId: id, input: l.portIn, temporaryMsisdn: awaitingPort ? null : l.msisdn, actor: 'order' });
+    if (!awaitingPort) await enqueueOcs(q, 'PROVISION', id); // into the charging system, with the SIM and number it was given above
     if (device) {
       await q.query('UPDATE services SET deal=$2 WHERE id=$1', [id, JSON.stringify({ deviceLineId: device.id, deviceOfferId: device.offerId, device: device.description, termMonths: device.deal.termMonths,
         subsidyMinor: device.deal.subsidyMinor, waiveInLastMonths: device.deal.waiveInLastMonths ?? 1, currency: device.deal.currency })]);
