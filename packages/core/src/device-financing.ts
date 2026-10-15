@@ -8,7 +8,7 @@ import { hubEndpointWithSecret } from './integration-hub.js';
 /**
  * Device financing. A device sold on a contract is paid for by the price after the subsidy, spread evenly over the whole contract and billed with the monthly plan
  * fee. A customer with a weak credit profile pays part of that price upfront first, and the rest is spread evenly. The profile comes from a credit bureau
- * connection (Integration → Integration → Integration hub → Finance → credit bureau), which either returns a score that the bands below turn into the upfront share, or returns the
+ * connection (Integration → Identity, credit and collections → credit bureau), which either returns a score that the bands below turn into the upfront share, or returns the
  * upfront amount itself. The customer's ID number is sent only with their consent and only a hash of it is kept.
  */
 export interface FinancingBand { label: string; minScore: number; maxScore: number; upfrontBps: number }
@@ -166,7 +166,7 @@ export async function testBureau(q: Queryable, idNumber: string, financedMinor: 
   const s = await getFinancing(q);
   try {
     const a = await askBureau(q, { idNumber: idNumber.trim(), financedMinor, currency: 'XXX', months: 24, reference: crypto.randomUUID() });
-    if (!a) return { ok: false, error: 'No credit bureau is set up (Integration → Integration hub → Finance → Credit bureau).' };
+    if (!a) return { ok: false, error: 'No credit bureau is set up (Integration → Identity, credit and collections → Credit bureau).' };
     let ratio: number; let band: string | null = null;
     if (s.providerReturns === 'UPFRONT_AMOUNT' && a.upfrontMinor !== null) ratio = Math.min(10000, Math.round((a.upfrontMinor * 10000) / financedMinor));
     else if (a.score !== null) { const b = bandFor(s, a.score); band = b?.label ?? null; ratio = b ? b.upfrontBps : s.fallbackUpfrontBps; } else return { ok: false, error: 'The bureau answered, but not with what the settings expect (a score, or an upfront amount).' };

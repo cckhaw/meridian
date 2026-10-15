@@ -52,7 +52,7 @@ Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environme
 | Dunning rules | Ladders, late fees, QR links, arrangements, collections | [DUNNING.md](docs/DUNNING.md) |
 | Cases, Donor operators, Numbers & SIMs | SLA matrix and taxonomy, port-in operators, number pools and VIP tiers | [CASES.md](docs/CASES.md), [NUMBERING.md](docs/NUMBERING.md) |
 
-Everything about outside systems is under the **Integration** menu (next to Settings): *Connections* shows each connection and whether it works, and *Integration hub* holds OAuth clients, API keys, rate limits, webhooks, TMF 688 subscriptions, field-service, network, finance and credit-bureau endpoints, and event topics ([INTEGRATION_API.md](docs/INTEGRATION_API.md)).
+Everything about outside systems is under the **Integration** menu (next to Settings): a menu of sections grouped by what you are doing: the **systems Meridian connects to** (network, payments, identity and credit, field service, messaging; each with its status and connection details together), the **channels and partners that connect to Meridian** (store-front, API access, inbound callbacks), the **events Meridian shares** (webhooks, event streams, the delivery queue) and the **platform** ([INTEGRATIONS.md](docs/INTEGRATIONS.md), [INTEGRATION_API.md](docs/INTEGRATION_API.md)).
 
 ## Documentation
 

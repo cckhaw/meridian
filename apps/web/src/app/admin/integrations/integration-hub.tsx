@@ -5,39 +5,14 @@ import { del, patch, post, useAction, useApi } from '@/lib/api';
 import { dt, label } from '@/lib/format';
 
 type Tab = 'gateway' | 'webhooks' | 'wfm' | 'network' | 'finance' | 'events';
-const TABS: Array<{ value: Tab; label: string; blurb: string }> = [
-  { value: 'gateway', label: 'API gateway', blurb: 'Who may call Meridian’s northbound APIs, with what rights, and how often.' },
-  { value: 'webhooks', label: 'Webhooks', blurb: 'Where Meridian tells partners what happened, and the keys that prove incoming callbacks are genuine.' },
-  { value: 'wfm', label: 'Field service', blurb: 'The dispatch system that books and tracks technician visits.' },
-  { value: 'network', label: 'Core network', blurb: 'HLR/HSS, UDM, PCRF, the charging system and the eSIM server.' },
-  { value: 'finance', label: 'Finance', blurb: 'The SAP ledger and the payment providers.' },
-  { value: 'events', label: 'Events', blurb: 'Which business events go to which topics, and who has subscribed to notifications.' },
-];
 
-interface Hub {
+export interface Hub {
   groups: Tab[]; endpointKinds: Record<string, Array<{ kind: string; label: string; hint: string }>>; endpoints: any[]; oauthClients: any[]; apiKeys: any[]; rateLimits: Array<{ channel: string; perMinute: number; enabled: boolean; isDefault: boolean }>;
   webhooks: any[]; topics: any[]; eventTypes: string[]; channels: string[]; scopes: Array<{ id: string; label: string }>;
 }
 
-/** Integration → Integration hub: the credentials, endpoints and rules behind every outside connection, in six groups. Secrets are write-only: they are encrypted when saved and never shown again. */
-export function IntegrationHubSettings() {
-  const hub = useApi<Hub>('/settings/integration-hub');
-  const [tab, setTab] = useState<Tab>('gateway');
-  if (hub.error) return <Alert>{hub.error}</Alert>;
-  if (!hub.data) return <Spinner />;
-  const h = hub.data; const reload = hub.reload;
-  const cur = TABS.find((t) => t.value === tab)!;
-  return (
-    <div className="space-y-5">
-      <Segmented label="Group" value={tab} options={TABS.map((t) => ({ value: t.value, label: t.label }))} onChange={setTab} />
-      <p className="text-subhead text-label2">{cur.blurb} Secrets you enter here are encrypted and are never shown again; to change one, enter a new value.</p>
-      {tab === 'gateway' && <Gateway h={h} reload={reload} />}
-      {tab === 'webhooks' && <Webhooks h={h} reload={reload} />}
-      {(tab === 'wfm' || tab === 'network' || tab === 'finance') && <Endpoints key={tab} group={tab} h={h} reload={reload} />}
-      {tab === 'events' && <Events h={h} reload={reload} />}
-    </div>
-  );
-}
+/** The hub's data (credentials, endpoints, webhooks, topics) shared by the Integration sections. */
+export function useHub() { return useApi<Hub>('/settings/integration-hub'); }
 
 // ───────────────────────── shared bits ─────────────────────────
 function ShownOnce({ title, items, onClose }: { title: string; items: Array<[string, string]>; onClose: () => void }) {
@@ -56,7 +31,7 @@ const Check = ({ checked, onChange, children }: { checked: boolean; onChange: (v
 );
 
 // ───────────────────────── 1. API gateway ─────────────────────────
-function Gateway({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
+export function Gateway({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
   const act = useAction(reload);
   const [oc, setOc] = useState<any | null>(null);
   const [key, setKey] = useState<any | null>(null);
@@ -184,7 +159,7 @@ function RateRow({ r, act }: { r: Hub['rateLimits'][number]; act: ReturnType<typ
 }
 
 // ───────────────────────── 2. webhooks ─────────────────────────
-function Webhooks({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
+export function Webhooks({ h, reload, only }: { h: Hub; reload: () => void | Promise<void>; only: 'OUTBOUND' | 'INBOUND' }) {
   const act = useAction(reload);
   const [f, setF] = useState<any | null>(null);
   const out = h.webhooks.filter((w) => w.kind === 'OUTBOUND'), inn = h.webhooks.filter((w) => w.kind === 'INBOUND');
@@ -204,14 +179,14 @@ function Webhooks({ h, reload }: { h: Hub; reload: () => void | Promise<void> })
   return (
     <div className="space-y-6">
       {act.error && !f && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
-      <section aria-label="Outbound webhooks">
+      {only === 'OUTBOUND' && <section aria-label="Outbound webhooks">
         <SectionTitle action={<Button variant="secondary" onClick={() => setF(blank('OUTBOUND'))}>＋ New outbound webhook</Button>}>Outbound webhooks</SectionTitle>
         <Card><p className="mb-3 text-subhead text-label2">Meridian posts events to these addresses, signed or with a bearer token, and retries a failed delivery with a growing wait.</p><List items={out} empty="None registered." /></Card>
-      </section>
-      <section aria-label="Inbound webhook keys">
+      </section>}
+      {only === 'INBOUND' && <section aria-label="Inbound webhook keys">
         <SectionTitle action={<Button variant="secondary" onClick={() => setF(blank('INBOUND'))}>＋ New verification key</Button>}>Inbound webhook verification keys</SectionTitle>
         <Card><p className="mb-3 text-subhead text-label2">The HMAC keys that prove a callback from a payment gateway, courier or dealer channel is genuine.</p><List items={inn} empty="None registered." /></Card>
-      </section>
+      </section>}
       {f && (
         <Modal title={`${f.id ? 'Edit' : 'New'} ${f.kind === 'OUTBOUND' ? 'outbound webhook' : 'verification key'}`} onClose={() => setF(null)} wide>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -247,23 +222,25 @@ const CONFIG_HINT: Record<string, string> = {
   SAP_FICO: '{"transport":"SFTP","directory":"/inbound/gl","companyCode":"1000","format":"IDOC"}',
   PAYMENT_GATEWAY: '{"provider":"DuitNow","callbackUrl":"https://…/api/webhooks/gateway/duitnow","merchantId":"…"}',
 };
-function Endpoints({ group, h, reload }: { group: Tab; h: Hub; reload: () => void | Promise<void> }) {
+/** The connections (address, credentials, settings) for the given kinds of system, wherever the hub keeps them. */
+export function EndpointManager({ kinds: wanted, h, reload }: { kinds: string[]; h: Hub; reload: () => void | Promise<void> }) {
   const act = useAction(reload);
-  const kinds = h.endpointKinds[group] ?? [];
-  const items = h.endpoints.filter((e) => e.group === group);
+  const groupOf = (k: string) => Object.entries(h.endpointKinds).find(([, list]) => list.some((x) => x.kind === k))?.[0] as Tab;
+  const kinds = Object.values(h.endpointKinds).flat().filter((k) => wanted.includes(k.kind));
+  const items = h.endpoints.filter((e) => wanted.includes(e.kind));
   const [f, setF] = useState<any | null>(null);
   const open = (e?: any) => setF(e ? { id: e.id, kind: e.kind, name: e.name, url: e.url ?? '', fallbackUrl: e.fallbackUrl ?? '', timeoutMs: String(e.timeoutMs), config: JSON.stringify(e.config ?? {}, null, 2), secret: '', clearSecret: false, enabled: e.enabled, hasSecret: e.hasSecret }
     : { kind: kinds[0]?.kind ?? '', name: '', url: '', fallbackUrl: '', timeoutMs: '10000', config: '{}', secret: '', clearSecret: false, enabled: true, hasSecret: false });
   const save = async () => {
     let config: unknown; try { config = JSON.parse(f.config || '{}'); } catch { act.clear(); alert('The settings must be valid JSON.'); return; }
-    const body = { group, kind: f.kind, name: f.name, url: f.url || null, fallbackUrl: f.fallbackUrl || null, timeoutMs: Number(f.timeoutMs), config, enabled: f.enabled, secret: f.clearSecret ? '' : f.secret || undefined };
+    const body = { group: groupOf(f.kind), kind: f.kind, name: f.name, url: f.url || null, fallbackUrl: f.fallbackUrl || null, timeoutMs: Number(f.timeoutMs), config, enabled: f.enabled, secret: f.clearSecret ? '' : f.secret || undefined };
     if (await act.run(() => (f.id ? patch(`/settings/integration-hub/endpoints/${f.id}`, body) : post('/settings/integration-hub/endpoints', body)), 'Saved')) setF(null);
   };
   const info = (k: string) => kinds.find((x) => x.kind === k);
   return (
     <section aria-label="Endpoints">
-      <SectionTitle action={<Button variant="secondary" onClick={() => open()}>＋ New connection</Button>}>Connections</SectionTitle>
-      <Card>
+      <div className="mb-2 mt-1 flex flex-wrap items-center justify-between gap-2"><h3 className="text-footnote font-semibold uppercase tracking-wide text-label2">Connection details</h3><Button variant="secondary" onClick={() => open()}>＋ Add connection</Button></div>
+      <div className="rounded-control bg-surface2 p-3">
         {act.error && !f && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
         <ul className="mb-3 space-y-1 text-footnote text-label2">{kinds.map((k) => <li key={k.kind}><b className="text-label">{k.label}</b>: {k.hint}</li>)}</ul>
         {items.length === 0 ? <p className="text-subhead text-label2">Nothing configured yet.</p> : (
@@ -274,7 +251,7 @@ function Endpoints({ group, h, reload }: { group: Tab; h: Hub; reload: () => voi
               <Button variant="secondary" onClick={() => open(e)}>Edit</Button>
               <button type="button" className="text-footnote text-danger" onClick={() => confirm(`Remove ${e.name}?`) && void act.run(() => del(`/settings/integration-hub/endpoints/${e.id}`), 'Removed')}>Remove</button>
             </li>))}</ul>)}
-      </Card>
+      </div>
       {f && (
         <Modal title={f.id ? 'Edit connection' : 'New connection'} onClose={() => setF(null)} wide>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -296,7 +273,7 @@ function Endpoints({ group, h, reload }: { group: Tab; h: Hub; reload: () => voi
 }
 
 // ───────────────────────── 6. events ─────────────────────────
-function Events({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
+export function Events({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
   const act = useAction(reload);
   const [ev, setEv] = useState(h.eventTypes[0] ?? '');
   const [topic, setTopic] = useState('');
@@ -319,7 +296,6 @@ function Events({ h, reload }: { h: Hub; reload: () => void | Promise<void> }) {
           </div>
         </Card>
       </section>
-      <Deliveries />
       <section aria-label="TM Forum subscriptions">
         <SectionTitle>TM Forum notification subscriptions (TMF 688)</SectionTitle>
         <Card>
@@ -362,7 +338,7 @@ function OperationRules() {
   );
 }
 
-function Deliveries() {
+export function Deliveries() {
   const list = useApi<any[]>('/settings/integration-hub/deliveries?limit=20');
   const act = useAction(list.reload);
   return (
