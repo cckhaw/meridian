@@ -53,7 +53,7 @@ export async function setBarLevel(q: Queryable, s: Row, level: BarLevel, why: { 
   await enqueueOcs(q, 'SET_BARRING', s.id as string, { barring: { level, reason: why.kind } });
   await queueOutbox(q, {
     kind: 'NETWORK', instruction: BAR_INSTRUCTION[level], serviceId: s.id as string, accountId: s.accountId as string,
-    payload: { identifier: s.identifier, iccid: s.iccid ?? null, bar: level, reason: why.kind, emergencyCalls: 'ALLOWED', ...(level === 'SOFT' ? { incoming: 'ALLOWED' } : {}), ...(why.retainIdentity ? { retainMsisdn: true, retainSim: true } : {}) },
+    payload: { identifier: s.identifier, iccid: s.iccid ?? null, bar: level, reason: why.kind, emergencyCalls: 'ALLOWED', ...(level === 'NONE' ? { priority: 'URGENT' } : {}), ...(level === 'SOFT' ? { incoming: 'ALLOWED', zeroRated: ['SELF_SERVE_APP', 'PAYMENT_PORTAL'] } : {}), ...(why.retainIdentity ? { retainMsisdn: true, retainSim: true } : {}) },
   });
 }
 

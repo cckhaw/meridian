@@ -1782,4 +1782,30 @@ describe('offer type switches and service types', () => {
     expect((await call('GET', '/tmf-api/serviceProblemManagement/v4/serviceProblem', { cookie: agent.cookie })).json.map((x: any) => x.id)).toContain(inc.id);
     delete process.env.MERIDIAN_WFM_WEBHOOK_SECRET;
   });
+  it('dunning: rules, late fees and QR settings are administrator settings; arrangements and agency files are collections work', async () => {
+    const su = await root();
+    const bo = await staff(['billing-ops']);
+    const agent = await staff(['call-center']);
+    expect((await call('GET', '/settings/dunning-rules', { cookie: bo.cookie })).status).toBe(403);
+    const seeded = await call('POST', '/settings/dunning-rules/seed', { cookie: su, body: { market: 'TH' } });
+    expect(seeded.status).toBe(200);
+    expect(seeded.json.rules.map((r: any) => r.code)).toEqual(expect.arrayContaining(['consumer-standard-th', 'enterprise-th']));
+    expect(seeded.json.qrSchemes.map((x: any) => x.id)).toContain('PROMPTPAY');
+    const rule = seeded.json.rules.find((r: any) => r.code === 'consumer-standard-th');
+    // a ladder that makes no sense is refused with the reasons
+    const bad = await call('PATCH', `/settings/dunning-rules/${rule.id}`, { cookie: su, body: { ...rule, steps: [...rule.steps].reverse() } });
+    expect(bad.status).toBe(400);
+    const ok = await call('PATCH', `/settings/dunning-rules/${rule.id}`, { cookie: su, body: { ...rule, name: 'Thai consumers' } });
+    expect([ok.status, ok.json.name, ok.json.version]).toEqual([200, 'Thai consumers', rule.version + 1]);
+    expect((await call('POST', '/settings/dunning-rules/payments', { cookie: su, body: { baseUrl: 'http://example.com' } })).status).toBe(400);   // https only
+    expect((await call('POST', '/settings/dunning-rules/payments', { cookie: su, body: { baseUrl: 'https://pay.example.com/', merchants: { PROMPTPAY: { name: 'Meridian', city: 'Bangkok', proxy: '0812345678' } } } })).json.baseUrl).toBe('https://pay.example.com');
+    // collections work
+    expect((await call('GET', '/collections/placements', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('GET', '/collections/placements', { cookie: bo.cookie })).status).toBe(200);
+    expect((await call('POST', '/collections/export', { cookie: bo.cookie, body: {} })).status).toBe(200);
+    // only an administrator flags a customer as a high credit risk
+    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Risky Rob', idDocument: 'S7654321B' } })).json.customer;
+    expect((await call('PATCH', `/customers/${cust.id}`, { cookie: bo.cookie, body: { creditRisk: 'HIGH' } })).status).toBe(403);
+    expect((await call('PATCH', `/customers/${cust.id}`, { cookie: su, body: { creditRisk: 'HIGH' } })).json.creditRisk).toBe('HIGH');
+  });
 });

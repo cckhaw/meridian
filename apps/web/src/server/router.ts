@@ -564,6 +564,42 @@ post('/settings/cancellation/simulate', 'settings:manage', async ({ db, body }) 
   const b = z.object({ action: z.enum(core.RULE_ACTIONS as [string, ...string[]]), group: z.enum(['GOODS', 'INSTALL', 'ACTIVATION']), facts: z.record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).default({}), paidMinor: z.number().int().min(0).default(0), canOverride: z.boolean().default(false) }).parse(body);
   return core.simulate(db, { ...b, action: b.action as core.RuleAction, group: b.group, facts: b.facts as core.Facts, currency: (await core.getRegional(db)).currency });
 });
+
+// ── Settings → Dunning rules: who is chased, when, and how; late fees; QR payment details; collections ──
+const dunStep = z.object({
+  id: uuid.optional(), position: z.number().int().optional(), name: z.string().min(1).max(80), enabled: z.boolean().default(true),
+  trigger: z.discriminatedUnion('kind', [z.object({ kind: z.literal('DAYS_PAST_DUE'), days: z.number().int() }), z.object({ kind: z.literal('BALANCE'), balanceMinor: z.number().int(), minDays: z.number().int().default(0) })]),
+  action: z.enum(core.DUNNING_STEP_ACTIONS as unknown as [string, ...string[]]),
+  params: z.record(z.unknown()).default({}), exclusions: z.object({ dispute: z.boolean().optional(), vip: z.boolean().optional(), arrangement: z.boolean().optional() }).default({}),
+});
+const dunRule = z.object({
+  code: z.string().max(60).optional(), name: z.string().min(1).max(80), description: z.string().max(400).default(''), active: z.boolean().default(true), priority: z.number().int().min(0).max(10000).default(100),
+  market: z.string().max(8).nullable().default(null), customerKind: z.enum(['ANY', 'INDIVIDUAL', 'BUSINESS']).default('ANY'), segments: z.array(z.string().max(60)).max(50).default([]),
+  vip: z.enum(['ANY', 'YES', 'NO']).default('ANY'), creditRisk: z.enum(['ANY', 'HIGH', 'NORMAL']).default('ANY'),
+  partial: z.object({ thresholdPercent: z.number().min(1).max(100), action: z.enum(['RESET_TO_SOFT_BAR', 'PAUSE']), pauseDays: z.number().int().min(1).max(60) }).nullable().default(null),
+  steps: z.array(dunStep).max(40),
+});
+const dunningView = async (db: core.Db) => ({ rules: await core.listDunningRules(db), lateFees: await core.listLateFees(db), payments: await core.getDunningPayments(db), templates: core.DUNNING_TEMPLATES, actions: core.DUNNING_STEP_ACTIONS, channels: core.DUNNING_CHANNELS, qrSchemes: core.QR_SCHEMES.map((k) => ({ id: k, label: core.QR_SCHEME_LABEL[k] })), seaMarkets: core.SEA_MARKETS });
+get('/settings/dunning-rules', 'settings:manage', ({ db }) => dunningView(db));
+post('/settings/dunning-rules', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveDunningRule(db, user.username, dunRule.parse(body) as core.DunningRuleInput), { status: 201 }));
+post('/settings/dunning-rules/seed', 'settings:manage', async ({ db, user, body }) => { await core.seedDunningRules(db, { market: z.object({ market: z.string().max(4).optional() }).parse(body ?? {}).market, actor: user.username }); return dunningView(db); });
+post('/settings/dunning-rules/late-fees', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveLateFee(db, user.username, z.object({ code: z.string().max(60).optional(), name: z.string().min(1).max(80), mode: z.enum(['FLAT', 'PERCENT']), flatMinor: z.number().int().min(0).optional(), percentBps: z.number().int().min(0).max(10000).optional(), minMinor: z.number().int().min(0).optional(), maxMinor: z.number().int().min(0).nullable().optional(), taxable: z.boolean().optional(), active: z.boolean().optional() }).parse(body)), { status: 201 }));
+patch('/settings/dunning-rules/late-fees/:id', 'settings:manage', async ({ db, user, params, body }) => core.saveLateFee(db, user.username, { ...z.object({ name: z.string().min(1).max(80), mode: z.enum(['FLAT', 'PERCENT']), flatMinor: z.number().int().min(0).optional(), percentBps: z.number().int().min(0).max(10000).optional(), minMinor: z.number().int().min(0).optional(), maxMinor: z.number().int().min(0).nullable().optional(), taxable: z.boolean().optional(), active: z.boolean().optional() }).parse(body), id: params.id! }));
+route('DELETE', '/settings/dunning-rules/late-fees/:id', 'settings:manage', async ({ db, user, params }) => core.deleteLateFee(db, user.username, params.id!));
+get('/settings/dunning-rules/payments', 'settings:manage', ({ db }) => core.getDunningPayments(db));
+post('/settings/dunning-rules/payments', 'settings:manage', ({ db, user, body }) => core.setDunningPayments(db, user.username, z.object({ baseUrl: z.string().max(200).optional(), bureau: z.string().max(80).optional(), merchants: z.record(z.object({ name: z.string().max(25), city: z.string().max(15), proxy: z.string().max(40).optional(), uen: z.string().max(20).optional(), accounts: z.record(z.string().max(99)).optional() })).optional() }).parse(body) as Partial<core.DunningPaymentSettings>));
+post('/settings/dunning-rules/preview', 'settings:manage', async ({ db, body }) => { const b = z.object({ accountId: uuid, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(body); return core.explainLadder(db, b.accountId, b.date ?? core.today(), await core.listDunningRules(db, { activeOnly: true })); });
+get('/settings/dunning-rules/:id', 'settings:manage', ({ db, params }) => core.getDunningRule(db, params.id!));
+patch('/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params, body }) => core.saveDunningRule(db, user.username, dunRule.parse(body) as core.DunningRuleInput, params.id!));
+route('DELETE', '/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params }) => core.deleteDunningRule(db, user.username, params.id!));
+
+// ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
+get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
+post('/accounts/:id/arrangements', 'collections:manage', async ({ db, user, params, body }) => Response.json(await core.createArrangement(db, params.id!, z.object({ installments: z.array(z.object({ dueDate: z.string(), amountMinor: z.number().int() })).min(1).max(36), reason: z.string().max(300).optional(), graceDays: z.number().int().min(0).max(14).optional() }).parse(body), user.username), { status: 201 }));
+post('/arrangements/:id/cancel', 'collections:manage', async ({ db, user, params, body }) => core.cancelArrangement(db, params.id!, user.username, z.object({ reason: z.string().max(300).optional() }).parse(body ?? {}).reason));
+get('/collections/placements', 'collections:manage', ({ db, query }) => core.listPlacements(db, { status: str(query, 'status'), pending: query.get('pending') === '1', limit: num(query, 'limit') }));
+post('/collections/placements/:id/recall', 'collections:manage', ({ db, user, params, body }) => core.recallPlacement(db, params.id!, user.username, z.object({ reason: z.string().min(1).max(300) }).parse(body).reason));
+post('/collections/export', 'collections:manage', async ({ db, user, body }) => { const r = await core.exportAgencyFile(db, user.username, z.object({ limit: z.number().int().min(1).max(5000).optional() }).parse(body ?? {})); return csv(r.csv, `meridian-collections-${r.batchId}.csv`, { 'x-batch-id': r.batchId, 'x-count': String(r.count) }); });
 post('/settings/api-clients', 'settings:manage', async ({ db, user, body }) => {
   const r = await core.createApiClient(db, user.username, z.object({ name: z.string().min(1).max(60) }).parse(body));
   return Response.json({ client: r.client, key: r.key }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
@@ -626,10 +662,11 @@ function redact360(u: SessionUser, c: core.Row) {
 const noBalance = (u: SessionUser, accounts: core.Row[]) => (u.permissions.has('billing:read') ? accounts : accounts.map((a) => ({ ...a, balanceMinor: null })));
 get('/customers/:id', 'customer:read', async ({ db, user, params }) => { assertCustomer(user, params.id!); return redact360(user, await core.customer360(db, params.id!)); });
 patch('/customers/:id', 'customer:write', async ({ db, user, params, body }) => {
-  const b = z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional(), dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional(), vip: z.boolean().optional() }).parse(body);
+  const b = z.object({ displayName: z.string().optional(), email: z.string().email().optional(), phone: z.string().optional(), status: z.enum(['ACTIVE', 'BLOCKED']).optional(), dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional(), vip: z.boolean().optional(), creditRisk: z.enum(['NORMAL', 'HIGH']).optional() }).parse(body);
+  if (b.creditRisk !== undefined && !user.permissions.has('settings:manage')) throw forbidden('Only an administrator can flag a customer as high credit risk (it changes how quickly they are chased).');
   if (b.vip !== undefined && !user.permissions.has('settings:manage')) throw forbidden('Only an administrator can mark a customer as VIP (it changes their support SLA).');
   const d = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: b.email, phone: b.phone, dateOfBirth: b.dateOfBirth, gender: b.gender, address: b.address }, { partial: true });
-  const r = await core.updateCustomer(db, params.id!, { displayName: b.displayName, status: b.status, vip: b.vip, ...d });
+  const r = await core.updateCustomer(db, params.id!, { displayName: b.displayName, status: b.status, vip: b.vip, creditRisk: b.creditRisk, ...d });
   await core.audit(db, user.username, 'customer', params.id!, 'UPDATED');
   return r;
 });
@@ -800,7 +837,7 @@ post('/accounts/:id/dunning', ['billing:run'], ({ db, user, params, body }) => {
   const b = z.object({ asOf: date.optional(), only: z.enum(core.DUNNING_ACTIONS).optional() }).parse(body ?? {});
   return core.evaluateDunningLadder(db, params.id!, b.asOf, { only: b.only, actor: user.username });
 });
-get('/accounts/:id/dunning', ['billing:read'], async ({ db, user, params }) => {
+get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => {
   const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId);
   const runs = (await db.query(`SELECT * FROM dunning_runs WHERE account_id=$1 ORDER BY id DESC LIMIT 10`, [params.id])).rows;
   const steps = runs.length ? (await db.query(`SELECT run_id, step, day_offset, applied_on, outcome FROM dunning_steps WHERE run_id = ANY($1::bigint[]) ORDER BY id`, [runs.map((r) => r.id)])).rows : [];

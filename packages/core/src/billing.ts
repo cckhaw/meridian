@@ -11,9 +11,11 @@ import { postJournal, type RevenueStream } from './ledger.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { customerIdsMatching, likePrefix, parseQuery } from './search.js';
 import { taxSplit } from './tax.js';
+import { arrangementStatus, recordRecovery } from './collections.js';
+import { onPartialPayment } from './dunning-engine.js';
 import { liftCreditRestrictions, restoreAfterPayment, voluntarySuspendedDays } from './lifecycle-state.js';
 
-export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; /** The revenue stream the line belongs to, for the posting rules. */ stream?: RevenueStream; description: string; amountMinor: number; taxInclusive: boolean }
+export interface DraftLine { serviceId?: string | null; kind: 'RECURRING' | 'INSTALLMENT' | 'ETC' | 'ADJUSTMENT'; revenueAccount: string; /** The revenue stream the line belongs to, for the posting rules. */ stream?: RevenueStream; description: string; amountMinor: number; taxInclusive: boolean; /** No indirect tax on this line (a late payment charge in a market that does not tax it). */ taxExempt?: boolean }
 
 /** Which stream an invoice line is booked to: what it says, or what its kind implies. */
 export const streamOfLine = (l: DraftLine): RevenueStream => l.stream ?? (l.kind === 'ETC' ? 'ETC' : l.kind === 'INSTALLMENT' ? 'DEVICE_INSTALMENT' : 'SUBSCRIPTION');
@@ -22,7 +24,7 @@ export const streamOfLine = (l: DraftLine): RevenueStream => l.stream ?? (l.kind
 export async function priceDraft(q: Queryable, acct: Row, lines: DraftLine[]) {
   const customer = (await q.query('SELECT market_code FROM customers WHERE id=$1', [acct.customerId])).rows[0]!;
   const mk = await marketFor(q, customer.marketCode);
-  const priced = lines.map((l) => ({ ...l, ...taxSplit(l.amountMinor, mk.taxBps, l.taxInclusive) })).filter((l) => l.gross !== 0);
+  const priced = lines.map((l) => ({ ...l, ...taxSplit(l.amountMinor, l.taxExempt ? 0 : mk.taxBps, l.taxInclusive) })).filter((l) => l.gross !== 0);
   return { mk, priced, net: priced.reduce((s, l) => s + l.net, 0), tax: priced.reduce((s, l) => s + l.tax, 0) };
 }
 
@@ -245,6 +247,7 @@ export async function payInvoice(db: Db, invoiceId: string, o: { amountMinor?: n
     if (amount > bal) throw rejected(`payment ${amount} exceeds the outstanding balance ${bal}`);
     if (paymentMode() === 'manual' && !o.reference?.trim()) throw invalid('a payment reference (terminal approval, receipt or bank transfer number) is required');
     if (paymentMode() === 'simulated' && (o.reference ?? '').toUpperCase().startsWith('DECLINE')) throw rejected('payment declined by the gateway');
+    const overdueBefore = Number((await q.query(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS n FROM invoices WHERE account_id=$1 AND status='OVERDUE'`, [inv.accountId])).rows[0]!.n);
     const key = o.idempotencyKey ?? `inv-${invoiceId}-${randomUUID()}`;
     const dup = (await q.query('SELECT id FROM payments WHERE shard_id=$1 AND idempotency_key=$2', [inv.shardId, key])).rows[0];
     if (!dup) {
@@ -260,8 +263,17 @@ export async function payInvoice(db: Db, invoiceId: string, o: { amountMinor?: n
       await audit(q, actor, 'invoice', invoiceId, 'PAYMENT', { amount, method: o.method });
     }
     await settle(q, inv.id);
+    if (!dup) await afterPayment(q, inv.accountId as string, amount, overdueBefore, o.date ?? today(), actor);
     return getInvoice(q, invoiceId);
   });
+}
+
+/** What a payment sets going elsewhere: a partial payment may reset or pause the dunning ladder, a payment against debt placed with an agency counts as recovered, and an arrangement is brought up to date. */
+async function afterPayment(q: Queryable, accountId: string, paidMinor: number, overdueBeforeMinor: number, asOf: DateStr, actor: string) {
+  const stillOverdue = (await q.query(`SELECT 1 FROM invoices WHERE account_id=$1 AND status='OVERDUE' LIMIT 1`, [accountId])).rows.length > 0;
+  if (stillOverdue && overdueBeforeMinor > 0) await onPartialPayment(q, accountId, { paidMinor, overdueBeforeMinor, asOf, actor });
+  await recordRecovery(q, accountId);
+  await arrangementStatus(q, accountId, asOf);
 }
 
 /** Re-derives status from balance, and lifts a dunning suspension once the account has nothing overdue. */
