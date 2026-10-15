@@ -11,7 +11,6 @@ import { CaseSettings } from './cases';
 import { DunningSettings } from './dunning';
 import { EtcSettings } from './etc';
 import { FinancingSettings } from './financing';
-import { IntegrationHubSettings } from './integration-hub';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
@@ -34,6 +33,7 @@ function Settings() {
   // The store-front moved to the Integration page; old links still land in the right place.
   useEffect(() => {
     if (sp.get('section') === 'storefront') router.replace('/admin/integrations?item=storefront');
+    if (sp.get('section') === 'integrations') router.replace('/admin/integrations?view=hub'); // the hub moved to the Integration menu
     if (sp.get('section') === 'service-kinds') router.replace(`${path}?section=service-types`); // renamed
   }, [sp, router, path]);
   const [q, setQ] = useState('');
@@ -117,7 +117,6 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'dunning-rules': return <DunningSettings />;
     case 'early-termination': return <EtcSettings />;
     case 'device-financing': return <FinancingSettings />;
-    case 'integrations': return <IntegrationHubSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;
     default: return <Empty>This section is not available yet.</Empty>;
