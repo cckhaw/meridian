@@ -127,14 +127,14 @@ export async function listChildren(q: Queryable, customerId: string, o: { deep?:
   return { items: page.items.map(({ cursorOrd: _o, ...rest }) => strip(rest)), nextCursor: page.nextCursor };
 }
 
-export async function updateCustomer(q: Queryable, id: string, patch: { displayName?: string; email?: string; phone?: string; status?: string; dateOfBirth?: string; gender?: string; address?: CustomerDetails['address'] }) {
+export async function updateCustomer(q: Queryable, id: string, patch: { displayName?: string; email?: string; phone?: string; status?: string; dateOfBirth?: string; gender?: string; address?: CustomerDetails['address']; vip?: boolean }) {
   const cur = await getCustomer(q, id);
   // The address is replaced as a whole when any part of it is sent, merged with what was there so a single changed field does not wipe the rest.
   const address = patch.address ? { ...((cur.address as object | null) ?? {}), ...patch.address } : undefined;
   await q.query(
     `UPDATE customers SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), phone = COALESCE($4, phone),
-       status = COALESCE($5, status), date_of_birth = COALESCE($6::date, date_of_birth), gender = COALESCE($7, gender), address = COALESCE($8::jsonb, address), version = version + 1, updated_at = now() WHERE id = $1`,
-    [id, patch.displayName ?? null, patch.email ?? null, patch.phone ?? null, patch.status ?? null, patch.dateOfBirth ?? null, patch.gender ?? null, address ? JSON.stringify(address) : null],
+       status = COALESCE($5, status), date_of_birth = COALESCE($6::date, date_of_birth), gender = COALESCE($7, gender), address = COALESCE($8::jsonb, address), vip = COALESCE($9, vip), version = version + 1, updated_at = now() WHERE id = $1`,
+    [id, patch.displayName ?? null, patch.email ?? null, patch.phone ?? null, patch.status ?? null, patch.dateOfBirth ?? null, patch.gender ?? null, address ? JSON.stringify(address) : null, patch.vip ?? null],
   );
   return getCustomer(q, id);
 }

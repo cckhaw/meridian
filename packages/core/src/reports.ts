@@ -1,3 +1,4 @@
+import { ACTIVE_SQL, slaView } from './cases.js';
 import type { OfferNode } from '@meridian/types';
 import { monthlyFee } from './catalog.js';
 import { GL, GL_NAMES } from './config.js';
@@ -38,7 +39,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
     q.query(`SELECT o.id, o.number, o.state, o.channel, o.total_minor, o.currency, o.created_at,
         (SELECT string_agg(ol.description, ', ') FROM order_lines ol WHERE ol.order_id = o.id) AS summary FROM orders o WHERE o.customer_id=$1 ORDER BY o.created_at DESC LIMIT 10`, [id]),
     q.query(`SELECT i.id, i.number, i.status, i.issue_date, i.due_date, i.total_minor, i.currency, i.total_minor - i.paid_minor - i.credited_minor AS balance_minor FROM invoices i WHERE i.customer_id=$1 ORDER BY i.issue_date DESC, i.number DESC LIMIT 10`, [id]),
-    q.query(`SELECT id, number, type, status, priority, subject, created_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
+    q.query(`SELECT id, number, type, status, priority, severity, tier, assignee, subject, category_path, created_at, resolution_due, first_response_due, first_response_at, sla_resolution_minutes, sla_warn_percent, sla_paused_at, resolved_at FROM cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 10`, [id]),
     listChildren(q, id, { limit: 10 }),
     q.query(`SELECT count(*) AS n FROM service_groups WHERE customer_id=$1 AND status='ACTIVE'`, [id]),
     customerLineage(q, id),
@@ -49,7 +50,7 @@ export async function customer360(q: Queryable, id: string): Promise<Row> {
   const b = balance.rows[0]!;
   const childCount = (await q.query('SELECT count(*) AS n FROM customers WHERE parent_customer_id=$1', [id])).rows[0]!.n;
   return {
-    customer, accounts: accounts.items, accountCount: acctCount.rows[0]!.n, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows,
+    customer, accounts: accounts.items, accountCount: acctCount.rows[0]!.n, serviceSummary: svcSummary.rows, recentOrders: orders.rows, recentInvoices: invoices.rows, cases: cases.rows.map((k) => ({ ...k, sla: slaView(k) })),
     children: children.items, childCount, groupCount: groupCount.rows[0]!.n, ancestors: lineage.ancestors,
     outstandingMinor: b.outstanding, overdueMinor: b.overdue,
     recommendations: await recommend(q, id, b.overdue),
@@ -80,7 +81,7 @@ async function computeDashboard(q: Queryable): Promise<Row> {
     one(`SELECT COALESCE(sum(total_minor - paid_minor - credited_minor),0) AS receivable,
         COALESCE(sum(total_minor - paid_minor - credited_minor) FILTER (WHERE status='OVERDUE'),0) AS overdue FROM invoices WHERE status IN ('ISSUED','OVERDUE')`),
     one(`SELECT COALESCE(sum(credit_minor - debit_minor),0) AS revenue FROM gl_entries WHERE account_code IN ('4000','4100','4900')`),
-    one(`SELECT count(*) AS open FROM cases WHERE status IN ('OPEN','IN_PROGRESS')`),
+    one(`SELECT count(*) AS open FROM cases WHERE status IN ${ACTIVE_SQL}`),
     q.query(`SELECT s.offer_id, c.name, c.data, c.kind, count(*) AS n FROM services s JOIN catalog_nodes c ON c.id = s.offer_id WHERE s.status='ACTIVE' GROUP BY s.offer_id, c.name, c.data, c.kind`),
     q.query(`SELECT state, count(*) AS n FROM orders GROUP BY state ORDER BY n DESC`),
     q.query(`SELECT o.id, o.number, o.state, o.total_minor, o.currency, o.created_at, c.display_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.created_at DESC LIMIT 6`),

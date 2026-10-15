@@ -3,12 +3,13 @@ import { Alert, Badge, Button, Card, Empty, Field, Input, LargeTitle, SectionTit
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useState } from 'react';
-import { post, useAction, useApi } from '@/lib/api';
+import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useSegments } from '@/lib/segments';
 import { d, dt, label, money, tone } from '@/lib/format';
 import { AccountPane } from './account-pane';
 import { CasesPanel } from './cases-panel';
+import { InteractionsPanel } from './interactions-panel';
 import { HierarchyNav } from './hierarchy-nav';
 import { ServicesTable } from './services-panel';
 import { SegmentChange } from './segment-change';
@@ -100,6 +101,7 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
         {can(...CHANNEL_PERMS) && <Link href={`/orders/new?customerId=${id}`}><Button>New order</Button></Link>}
         {can('billing:read') && <Link href={`/billing?customerId=${id}`}><Button variant="secondary">Invoices</Button></Link>}
         {can('customer:write') && <SegmentChange customer={c.customer} onDone={reload} />}
+        {can('settings:manage') && <Button variant={c.customer.vip ? 'primary' : 'secondary'} onClick={() => void patch(`/customers/${id}`, { vip: !c.customer.vip }).then(() => reload())}>{c.customer.vip ? 'VIP: faster SLA' : 'Mark as VIP'}</Button>}
       </div>
       <SegmentHistory customerId={id} segment={c.customer.segment} />
 
@@ -154,6 +156,7 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
       )}</>}
 
       {can('case:read') && <CasesPanel customerId={id} cases={c.cases} onChange={() => void reload()} />}
+      {can('case:read') && <InteractionsPanel customerId={id} onChange={() => void reload()} />}
     </>
   );
 }

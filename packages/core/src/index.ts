@@ -106,3 +106,5 @@ export { BLOCK_TYPES, defaultTemplate, PAGE_SIZES_MM, sampleInvoice, STREAMS as 
 export type { Block, InvoiceDoc, TemplateSchema } from './billing-docs/schema.js';
 export { DEFAULT_PRINT_PROFILE, SCREEN_PROFILE, type PrintProfile } from './billing-docs/pdf.js';
 export type { ConversionReport } from './billing-docs/legacy.js';
+export * from './case-taxonomy.js';
+export * from './interactions.js';
