@@ -80,6 +80,8 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | `billing:credit` |  |  | ✓ |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |
 | `billing:run` |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `billing:simulate` |  |  | ✓ |  |  | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |  |  |
+| `billing:template` |  |  | ✓ |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
+| `billing:print` |  |  | ✓ |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |
 | `billing:approve` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:read` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |  |
 | `finance:export` |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |

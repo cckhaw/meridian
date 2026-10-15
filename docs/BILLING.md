@@ -11,7 +11,9 @@
 | Tables: `bill_cycle_configs` (the 28 cycles), `bill_runs`, `bill_run_items`, `bill_run_exclusions`, `invoices.bill_run_id` | migration `0034_bill_runs.sql` |
 | The same four stages as a durable Temporal workflow with deadlines and signals | `services/order-service/src/workflows/bill-run-governance.workflow.ts` |
 | The billing simulator: forecasts, termination quotes, plan-change previews, saved simulations | `packages/core/src/billing-simulation.ts`, tables `simulation_runs`, `simulation_ledger` (migration `0035`) |
-| Screens and API | `apps/web/src/app/billing/runs`, `apps/web/src/app/billing/simulate`, `/api/billing/runs*`, `/api/billing/cycles`, `/api/billing/exclusions`, `/api/billing/simulate/*`, `/api/billing/simulations*` |
+| Bill templates (designer model, layout engine, PDF drawer, legacy converter) | `packages/core/src/billing-docs/` (`schema.ts`, `layout.ts`, `pdf.ts`, `codes.ts`, `legacy.ts`), `billing-templates.ts`, tables `bill_templates`, `bill_template_versions` (migration `0036`) |
+| Print-house packages | `packages/core/src/print-house.ts`, table `print_jobs` |
+| Screens and API | `apps/web/src/app/billing/runs`, `apps/web/src/app/billing/simulate`, `/api/billing/runs*`, `/api/billing/cycles`, `/api/billing/exclusions`, `/api/billing/simulate/*`, `/api/billing/simulations*`, `apps/web/src/app/billing/templates`, `/api/billing/templates*`, `/api/invoices/:id/pdf`, `/api/billing/print/*` |
 
 ## The four stages
 
@@ -54,6 +56,22 @@ A run is a list of items, one per account, created in one statement when the run
 * **Plan change.** For a service changing plan on a date: the statement that covers the date (the next bill date after it, in arrears) shows the old plan pro-rated up to the date and the new plan from it, compared with leaving things as they are, and the statement after it. It warns about a downgrade, a contract that would restart, and the early-termination exposure on the current contract. It is a preview: changing a plan in the live system is not built by this release.
 
 Simulation answers are stored one row per bill in `simulation_ledger`, partitioned by the account's bill cycle day (28 partitions, daily-cycle accounts in `00`), so a cycle's simulations live and can be dropped together.
+
+## Bill templates, PDFs and the print house
+
+**Billing → Bill templates and printing** (`billing:template` to design, `billing:print` to produce print output; Finance and Billing Operations have both; any role with `billing:read` may download an issued bill's PDF from the invoice page).
+
+**The model.** A template is a page set-up (A4, A5 or Letter, margins, RGB or CMYK), a theme, and three lists of blocks: a header and footer drawn on every page, and a body that flows across pages. Blocks are heading, text, logo or image, colour band (optionally running to the page edge), columns, details (label/value), bill summary, itemised charges (a table filtered by revenue stream: plans, usage, partner services, device instalments, early termination, goods, one-time; repeated header row when it crosses a page), QR pay code, Code 128 barcode, terms, line, space and page break. Text may hold fields such as `{{customer.name}}` or `{{invoice.total}}`; the designer lists every field, and a template using an unknown one is refused.
+
+**Designer.** One layout engine places every block in millimetres; the PDF drawer consumes its result. The designer's preview is that PDF drawn with sample data (or a real invoice's id), redrawn as you type, so what you see is what is printed. A template is a draft until it is **published** as the next numbered version; bills and print jobs always use a published version (the default template unless one is named), so editing a draft never changes a bill already sent, and each print job records the version it used. With nothing published the built-in layout is used. Every change and publication is audited.
+
+**Legacy conversion.** Paste or upload an HTML/CSS bill, a JSON design (elements with x/y positions) or an XML layout. The converter normalises placeholders (`{{x}}`, `${x}`, `[[x]]`, `%x%`, `<%= x %>`), maps common legacy names to the system's fields (`invoice_no`, `totaldue`, `cust_name`…), turns tables with a repeat row into itemised-charge blocks, flex rows into columns, absolutely placed elements into placed blocks, and lists what was carried over, what was approximated, what was dropped (scripts, unsupported images, fancy CSS) and which fields are unknown (they are shown as «name» so nothing disappears silently). The result opens in the designer as a draft with the report beside it.
+
+**PDF output.** `pdf-lib` with Inter embedded as a subset font; text is measured with the font's real metrics, so wrapping and right-alignment are exact. Print profile: bleed and slug, `TrimBox`/`BleedBox`, crop marks, CMYK colours (neutrals as K-only black), vector QR codes (with the 4-module quiet zone), Code 128 barcodes (10-module quiet zone), and optical-mark channels on the left edge (start, end, insert and an odd-parity mark) that an inserter reads. Output is deterministic: the same bill and template give the same bytes. Characters Inter cannot print are replaced by “?” and reported rather than dropped.
+
+**Print-house package** (`GET /api/billing/print/package`, a ZIP built while it downloads, one batch in memory at a time). For a completed bill run, a date range or a list of invoices: `pdf/batch-0001.pdf…` (N bills per PDF, in invoice order, each page carrying a sheet barcode of job, sequence and page), `control/<job>.csv` (one line per bill: sequence, number, name, address, postcode, pages, batch file, first page in the file, insert flag, mail class), `control/<job>.dat` (the same as pipe-separated `H`/`D`/`T` records with counts and page totals), `exceptions.csv` (bills with no postal address, left out of the batches) and `manifest.json` (the `PrintJobManifest`: template and version, profile, totals, every batch with its SHA-256, exceptions, warnings). The archive uses ZIP64 records, so it can exceed 4 GB.
+
+**Not built.** Sorting bills by postcode for presort discounts (the package follows invoice order; a postcode sort needs an index on a customer address field and is a separate decision); CMYK conversion of embedded images (the logo stays RGB, with a warning); a drag-and-drop canvas (the designer is a block list with a live PDF page, which is exact but not free-form); non-Latin scripts (Inter Latin only: other characters are reported); ICC output intents and PDF/X conformance, which a print house may require, and which need a licensed profile.
 
 ## Not built, and design notes
 
