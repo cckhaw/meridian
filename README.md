@@ -19,7 +19,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 604 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 612 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
