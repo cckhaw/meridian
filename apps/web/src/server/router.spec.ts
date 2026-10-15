@@ -610,6 +610,49 @@ describe('settings and branding', () => {
     expect((await post('/stores/import', su, 'store_id,name\n,Bulk Store\n', true)).status).toBe(400); // the name is taken
   });
 
+  it('data migration: administrators export with masking, the super user may unmask with a reason, downloads work once', async () => {
+    const admin = await staff(['admin']);
+    const retail = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    const su = await root();
+    for (const p of ['/migration/meta', '/migration/jobs']) {
+      expect((await call('GET', p, { cookie: retail.cookie })).status, p).toBe(403);
+      expect((await call('GET', p)).status, p).toBe(401);
+      expect((await call('GET', p, { cookie: admin.cookie })).status, p).toBe(200);
+    }
+    expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.modules.some((m: any) => m.id === 'migration')).toBe(true);
+    expect((await call('GET', '/auth/me', { cookie: retail.cookie })).json.user.modules.some((m: any) => m.id === 'migration')).toBe(false);
+    const meta = (await call('GET', '/migration/meta', { cookie: admin.cookie })).json;
+    expect(meta.canUnmask).toBe(false);
+    expect((await call('GET', '/migration/meta', { cookie: su })).json.canUnmask).toBe(true);
+    expect(meta.entities.length).toBeGreaterThan(20);
+
+    const t = await call('GET', '/migration/templates/customers', { cookie: admin.cookie });
+    expect(t.status).toBe(200);
+    expect(t.headers.get('content-disposition')).toContain('meridian-customers-template.csv');
+    expect(t.text).toContain('id,segment,display_name,id_document,');
+    expect(JSON.parse((await call('GET', '/migration/templates/customers?format=json', { cookie: admin.cookie })).text).template.entity).toBe('customers');
+    expect((await call('GET', '/migration/templates/nope', { cookie: admin.cookie })).status).toBe(404);
+
+    expect((await call('POST', '/migration/exports', { cookie: retail.cookie, body: { entities: ['stores'], format: 'CSV' } })).status).toBe(403);
+    expect((await call('POST', '/migration/exports', { cookie: admin.cookie, body: { entities: ['stores'], format: 'CSV', unmasked: true, reason: 'I would like everything please' } })).status).toBe(422);
+    expect((await call('POST', '/migration/exports', { cookie: su, body: { entities: ['stores'], format: 'CSV', unmasked: true, reason: 'too short' } })).status).toBe(400);
+    const made = await call('POST', '/migration/exports', { cookie: admin.cookie, body: { domains: ['operations'], format: 'CSV' } });
+    expect(made.status).toBe(201);
+    expect(made.json.masked).toBe(true);
+    expect((await call('GET', made.json.downloadUrl.replace('/api', ''), { cookie: su })).status).toBe(404); // someone else's export is not theirs to download
+    const res = await dispatch(new Request(`http://localhost${made.json.downloadUrl}`, { headers: { cookie: admin.cookie, host: 'localhost' } }), made.json.downloadUrl.replace('/api/', '').split('/'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/zip');
+    expect(res.headers.get('content-disposition')).toMatch(/meridian-export-.*\.zip/);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(bytes.subarray(0, 4).toString('hex')).toBe('504b0304'); // a ZIP
+    expect(bytes.includes(Buffer.from('manifest.json'))).toBe(true);
+    expect((await call('GET', made.json.downloadUrl.replace('/api', ''), { cookie: admin.cookie })).status).toBe(422); // once only
+    const jobs = (await call('GET', '/migration/jobs?kind=EXPORT', { cookie: admin.cookie })).json.items;
+    expect(jobs.find((j: any) => j.id === made.json.id)).toMatchObject({ status: 'COMPLETED', percent: 100, masked: true });
+    expect((await call('GET', `/migration/jobs/${made.json.id}`, { cookie: admin.cookie })).json.id).toBe(made.json.id);
+  });
+
   it('the Integration page is for the super user: every integration with its status, no secrets', async () => {
     const admin = await staff(['admin']);
     expect((await call('GET', '/integrations', { cookie: admin.cookie })).status).toBe(403);
