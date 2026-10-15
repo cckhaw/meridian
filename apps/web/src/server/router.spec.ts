@@ -937,14 +937,14 @@ describe('the customer form follows the settings', () => {
     expect(ok.json.customer.gender ?? null).toBeNull(); // hidden in Settings, so not kept
     expect((await call('GET', '/meta', { cookie: admin })).json.customers.fields.postcode).toBe('required');
 
-    expect((await call('POST', '/settings/bill-cycles', { cookie: admin, body: { days: [1, 15, 25], daily: false, defaultCycle: 15 } })).status).toBe(200);
+    expect((await call('POST', '/settings/bill-cycles', { cookie: admin, body: { days: [1, 15, 25], defaultCycle: 15 } })).status).toBe(200);
     const off = await newC({ dateOfBirth: '1991-02-03', address: { postcode: '1' }, account: { billCycleDay: 7 } });
     expect(off.status).toBe(400);
     expect(off.json.error.message).toMatch(/Bill cycle day 7 is not offered/);
     const dflt = await newC({ dateOfBirth: '1991-02-03', address: { postcode: '1' } });
     expect(dflt.json.account.billCycleDay).toBe(15); // the operator's default
-    expect((await call('GET', '/meta', { cookie: staffUser.cookie })).json.billCycles).toEqual({ days: [1, 15, 25], daily: false, defaultCycle: 15 });
-    await call('POST', '/settings/bill-cycles', { cookie: admin, body: { days: Array.from({ length: 28 }, (_, i) => i + 1), daily: true, defaultCycle: 1 } });
+    expect((await call('GET', '/meta', { cookie: staffUser.cookie })).json.billCycles).toEqual({ days: [1, 15, 25], daily: false, defaultCycle: 15, defaultMode: 'FIXED', defaultDay: 15 });
+    await call('POST', '/settings/bill-cycles', { cookie: admin, body: { days: Array.from({ length: 28 }, (_, i) => i + 1), defaultCycle: 1 } });
     await call('POST', '/settings/customers', { cookie: admin, body: { allowCreateWithoutOrder: false, fields: { postcode: 'optional', gender: 'optional', dateOfBirth: 'optional' } } });
   });
 });

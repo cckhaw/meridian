@@ -67,34 +67,51 @@ export function checkCustomerDetails(fields: CustomerFieldSettings, d: CustomerD
 }
 
 // ───────────────────────── bill cycles ─────────────────────────
-/** The bill cycles an account can be given: monthly on a day 1–28, and/or daily. Operators switch off the days they do not use. */
-export interface BillCycleSettings { days: number[]; daily: boolean; defaultCycle: number | 'daily' }
-export const DEFAULT_BILL_CYCLES: BillCycleSettings = { days: Array.from({ length: 28 }, (_, i) => i + 1), daily: true, defaultCycle: 1 };
+/**
+ * The bill cycles an account can be given: monthly on a day 1–28, the days the operator switches on. A new account gets the default by one of three rules:
+ * FIXED (one chosen day), NEXT (the next switched-on cycle day after the day the billing account is created) or PREVIOUS (the latest switched-on day before it).
+ * `daily` is kept in the stored shape for old data but is never offered: it is always false.
+ */
+export type BillCycleDefaultMode = 'FIXED' | 'NEXT' | 'PREVIOUS';
+export interface BillCycleSettings { days: number[]; daily: boolean; defaultCycle: number | 'daily'; defaultMode: BillCycleDefaultMode }
+export const DEFAULT_BILL_CYCLES: BillCycleSettings = { days: Array.from({ length: 28 }, (_, i) => i + 1), daily: false, defaultCycle: 1, defaultMode: 'FIXED' };
 
 export async function getBillCycles(q: Queryable): Promise<BillCycleSettings> {
   const r = (await q.query(`SELECT value FROM settings WHERE key='billCycles'`)).rows[0];
   const v = r?.value as Partial<BillCycleSettings> | undefined;
   if (!v) return DEFAULT_BILL_CYCLES;
-  return { days: Array.isArray(v.days) ? v.days : DEFAULT_BILL_CYCLES.days, daily: v.daily ?? true, defaultCycle: v.defaultCycle ?? 1 };
+  const days = Array.isArray(v.days) && v.days.length ? v.days : DEFAULT_BILL_CYCLES.days;
+  const defaultCycle = typeof v.defaultCycle === 'number' && days.includes(v.defaultCycle) ? v.defaultCycle : days[0]!;   // a stored "daily" default becomes the first day
+  return { days, daily: false, defaultCycle, defaultMode: v.defaultMode === 'NEXT' || v.defaultMode === 'PREVIOUS' ? v.defaultMode : 'FIXED' };
 }
 
-export async function setBillCycles(q: Queryable, actor: string, s: BillCycleSettings): Promise<BillCycleSettings> {
+export async function setBillCycles(q: Queryable, actor: string, s: Omit<BillCycleSettings, 'defaultMode' | 'daily'> & { defaultMode?: BillCycleDefaultMode; daily?: boolean }): Promise<BillCycleSettings> {
   const days = [...new Set(s.days)].sort((a, b) => a - b);
   if (days.some((d) => !Number.isInteger(d) || d < 1 || d > 28)) throw invalid('A bill cycle day is a whole number from 1 to 28.');
-  if (!days.length && !s.daily) throw invalid('Keep at least one bill cycle available.');
+  if (!days.length) throw invalid('Keep at least one bill cycle available.');
+  const defaultMode = s.defaultMode ?? 'FIXED';
+  if (!['FIXED', 'NEXT', 'PREVIOUS'].includes(defaultMode)) throw invalid('The default for a new account is a fixed day, the next bill cycle date or the previous one.');
   const defaultCycle = s.defaultCycle;
-  if (defaultCycle === 'daily' ? !s.daily : !days.includes(defaultCycle as number)) throw invalid('The default bill cycle must be one of the cycles that are switched on.');
-  const value: BillCycleSettings = { days, daily: !!s.daily, defaultCycle };
+  if (defaultMode === 'FIXED' && !days.includes(defaultCycle as number)) throw invalid('The default bill cycle must be one of the cycles that are switched on.');
+  const value: BillCycleSettings = { days, daily: false, defaultCycle: days.includes(defaultCycle as number) ? defaultCycle : days[0]!, defaultMode };
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('billCycles', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(value), actor]);
   await audit(q, actor, 'settings', 'billCycles', 'update', { ...value });
   return value;
+}
+
+/** The cycle day a new billing account gets when nobody chooses one, from the day of the month it is created. NEXT and PREVIOUS look at the days switched on and wrap round the month. */
+export function defaultCycleDay(s: BillCycleSettings, createdOn: string | Date = new Date()): number {
+  if (s.defaultMode === 'FIXED') return s.defaultCycle as number;
+  const dom = typeof createdOn === 'string' ? Number(createdOn.slice(8, 10)) : createdOn.getUTCDate();
+  const days = [...s.days].sort((a, b) => a - b);
+  return s.defaultMode === 'NEXT' ? days.find((d) => d > dom) ?? days[0]! : [...days].reverse().find((d) => d < dom) ?? days[days.length - 1]!;
 }
 
 /** The cycle a new account gets (null = daily), and a check that an explicit choice is one the operator offers. */
 export const cycleToDay = (c: number | 'daily'): number | null => (c === 'daily' ? null : c);
 export async function resolveBillCycle(q: Queryable, requested: number | null | undefined): Promise<number | null> {
   const s = await getBillCycles(q);
-  if (requested === undefined) return cycleToDay(s.defaultCycle);
+  if (requested === undefined) return defaultCycleDay(s);
   if (requested === null ? !s.daily : !s.days.includes(requested)) throw invalid(requested === null ? 'A daily bill cycle is not offered. Choose one of the bill cycles in Settings.' : `Bill cycle day ${requested} is not offered. Choose one of the bill cycles in Settings.`);
   return requested;
 }
