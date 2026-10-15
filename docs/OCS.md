@@ -60,6 +60,7 @@ and add it to `OCS_VENDORS` in `index.ts`. Nothing else changes: orders, lifecyc
 ## Limits
 
 * Only the **generic REST** connector and a **simulator** are provided. No named vendor's connector is included: those need that vendor's interface specification and a test system.
+* Whether services of a type go to the OCS at all is a switch per service type (Settings → Service types).
 * An add-on offer creates its own subscription in Meridian and is not linked to the line it extends, so it is sent as its own subscriber, not as an extra product on the line's number.
 * Services are **not** back-filled when the OCS is switched on, and the CSV offer import does not carry the plan code yet.
 * Balances, top-ups and usage are not part of this: Meridian provisions, the OCS charges.

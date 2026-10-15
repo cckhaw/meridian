@@ -63,7 +63,7 @@ receipt reference, and a payment provider confirms online payments through the s
 No MFA/SSO; one currency per deployment (markets differ in tax and dial code, not currency); currencies assumed 2-decimal; cross-shard ownership transfer is rejected (needs the shard migration job);
 dev partitions cover shards 0-15 only; usage rating/charging, the invoice designer, delivery of notifications and network instructions (queued in `lifecycle_outbox`) and the order-workflow designer UI are not built.
 
-Offer behaviour is a set of per-type **switches** stamped onto each offer when it is saved (`behaviourOf`, `offer-config.ts`), and operator-defined **service kinds** (`service-kinds.ts`, migration `0028`) give new services their own identifier, expiry and provisioning instructions. Details in [CATALOG.md](CATALOG.md#switches).
+Offer behaviour is a set of per-type **switches** stamped onto each offer when it is saved (`behaviourOf`, `offer-config.ts`), and service types (built-in and operator-defined) (`service-kinds.ts`, migration `0028`) give new services their own identifier, expiry and provisioning instructions. Details in [CATALOG.md](CATALOG.md#switches).
 
 Every external connection is catalogued in `integrations.ts` and shown on the **Integration** page (see [INTEGRATIONS.md](INTEGRATIONS.md)).
 

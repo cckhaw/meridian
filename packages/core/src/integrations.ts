@@ -131,11 +131,11 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'network-provisioning', group: 'Network and SIM provisioning', name: 'Network provisioning (HLR/HSS, policy control)', with: 'The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service kind',
-    summary: 'When a service is barred, restored, changes plan or number, or ends, Meridian queues an instruction in the same transaction as the change; for services of a kind you define it also queues the start. A connector you deploy delivers it to the network and acknowledges it. (Charging-system provisioning has its own card above.)',
+    summary: 'When a service is barred, restored, changes plan or number, or ends, Meridian queues an instruction in the same transaction as the change; for service types that are set to tell the network when they start (your own types by default, built-in ones when you switch it on) it also queues the start. A connector you deploy delivers it to the network and acknowledges it. (Charging-system provisioning has its own card above.)',
     maturity: 'OUTBOX', direction: 'OUT',
     outbox: NET(['PROVISION', 'DEPROVISION', 'PLAN_CHANGE', 'MSISDN_SWAP', 'ACTIVATE_PORTED_IN', 'THROTTLE_DATA', 'BAR_OUTGOING', 'BAR_ALL', 'RESTORE']), endpoints: POLL,
-    needs: ['Build or buy an adapter that reads the outbox and talks to your HLR/HSS and PCRF', 'Authenticate it as a service account with billing:run', 'Systems and instruction names for your own service kinds are set in Settings → Service kinds'],
-    configure: { label: 'Service kinds (systems and instructions)', href: '/admin/settings?section=service-kinds' }, doc: 'LIFECYCLE.md', keywords: 'hlr hss pcrf pcf provisioning network activate bar restore sim core',
+    needs: ['Build or buy an adapter that reads the outbox and talks to your HLR/HSS and PCRF', 'Authenticate it as a service account with billing:run', 'For each service type (Mobile, Fibre, IoT, Subscription and your own) you set the systems and the start and end instructions in Settings → Service types'],
+    configure: { label: 'Service types (systems and instructions)', href: '/admin/settings?section=service-types' }, doc: 'LIFECYCLE.md', keywords: 'hlr hss pcrf pcf provisioning network activate bar restore sim core',
   },
   {
     id: 'esim', group: 'Network and SIM provisioning', name: 'eSIM profile server (SM-DP+)', with: 'Your SM-DP+ (GSMA eSIM profile server)',

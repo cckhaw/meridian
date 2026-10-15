@@ -303,8 +303,8 @@ export async function terminateService(db: Db, id: string, o: TerminationOptions
         [s.identifier, id, o.ported ? 'PORTED_OUT' : (o.reason ?? 'TERMINATED'), dayOfEnd, hold]);
     }
     await enqueueOcs(q, 'TERMINATE', id, { termination: { reason: o.reason ?? 'TERMINATED', ported: !!o.ported } });
-    const own = await endInstruction(q, s.serviceKind); // a service kind the operator defined names its own systems and instruction
-    await queueOutbox(q, { kind: 'NETWORK', instruction: own?.instruction ?? 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: own?.systems ?? ['HLR', 'HSS', 'PCRF'], ported: !!o.ported, ...(own ? { serviceKind: s.serviceKind, reason: o.reason ?? 'terminated' } : {}) } });
+    const own = await endInstruction(q, s.serviceKind ?? s.type); // the service type names its own systems and instruction
+    await queueOutbox(q, { kind: 'NETWORK', instruction: own?.instruction ?? 'DEPROVISION', serviceId: id, accountId: s.accountId, payload: { identifier: s.identifier, iccid: s.iccid ?? null, systems: own?.systems ?? ['HLR', 'HSS', 'PCRF'], ported: !!o.ported, ...(own && s.serviceKind ? { serviceKind: s.serviceKind, reason: o.reason ?? 'terminated' } : {}) } });
 
     // The deposit
     let applied = 0, refunded = 0;

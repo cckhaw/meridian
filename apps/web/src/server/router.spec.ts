@@ -1367,8 +1367,8 @@ describe('commission plans, ledger and payouts', () => {
   });
 });
 
-describe('offer type switches and service kinds', () => {
-  it('the super user defines a service kind and a type that creates it; the catalog and the wizard lists follow the switches', async () => {
+describe('offer type switches and service types', () => {
+  it('the super user defines a service type and a type that creates it; the catalog and the wizard lists follow the switches', async () => {
     const admin = await root();
     const cfg = await staff(['product-configurator']);
     // reading is for the catalog team, changing is for the super user
@@ -1377,7 +1377,10 @@ describe('offer type switches and service kinds', () => {
     const kind = await call('POST', '/settings/service-kinds', { cookie: admin, body: { name: 'Event pass', identifierPrefix: 'EP-', expires: true, validityDays: 2, provisionSystems: ['GATE_SYSTEM'] } });
     expect([kind.status, kind.json.id]).toEqual([200, 'EVENT_PASS']);
     expect((await call('POST', '/settings/service-kinds', { cookie: admin, body: { name: 'Event pass' } })).status).toBe(409);
-    expect((await call('PATCH', '/settings/service-kinds/MOBILE', { cookie: admin, body: { name: 'Phone' } })).status).toBe(422);
+    expect((await call('PATCH', '/settings/service-kinds/MOBILE', { cookie: admin, body: { identifierPrefix: 'XX' } })).status).toBe(422); // issued by the platform
+    const renamed = await call('PATCH', '/settings/service-kinds/MOBILE', { cookie: admin, body: { name: 'Mobile line', announceStart: true, provisionSystems: ['HLR', 'AAA'] } });
+    expect(renamed.json).toMatchObject({ name: 'Mobile line', announceStart: true, provisionSystems: ['HLR', 'AAA'], isBuiltin: true });
+    await call('PATCH', '/settings/service-kinds/MOBILE', { cookie: admin, body: { name: 'Mobile', announceStart: false, provisionSystems: [] } });
     expect((await call('PATCH', '/settings/service-kinds/EVENT_PASS', { cookie: admin, body: { description: 'Entry for one event' } })).json).toMatchObject({ description: 'Entry for one event', identifierPrefix: 'EP-', validityDays: 2 }); // what is left out is kept
 
     const bad = await call('POST', '/settings/offer-types', { cookie: admin, body: { name: 'Nothing', template: 'VAS', behaviour: { service: null } } });

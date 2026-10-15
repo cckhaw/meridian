@@ -43,15 +43,15 @@ export async function kindsWhere(q: Queryable, test: (b: BehaviourSwitches) => b
   return (await q.query(`SELECT ${TYPE_COLS} FROM offer_types`)).rows.map(withEffective).filter((t) => test(t.effective)).map((t) => t.id);
 }
 
-/** Checks a set of switches the way the order engine will need them: coherent, and any service kind it names exists and is on. */
+/** Checks a set of switches the way the order engine will need them: coherent, and any service type it names exists and is on. */
 async function checkSwitches(q: Queryable, b: BehaviourSwitches): Promise<void> {
   const problems = switchProblems(b);
   if (problems.length) throw invalid(problems.join(' '));
   if (b.service && !isBuiltinKind(b.service)) {
     const k = await getServiceKind(q, b.service);
-    if (!k) throw invalid(`unknown service kind ${b.service}`);
-    if (k.status !== 'ACTIVE') throw invalid(`the service kind ${k.name} is switched off`);
-  } else if (b.service && !(await q.query('SELECT 1 FROM service_kinds WHERE id=$1', [b.service])).rows.length) throw invalid(`unknown service kind ${b.service}`);
+    if (!k) throw invalid(`unknown service type ${b.service}`);
+    if (k.status !== 'ACTIVE') throw invalid(`the service type ${k.name} is switched off`);
+  } else if (b.service && !(await q.query('SELECT 1 FROM service_kinds WHERE id=$1', [b.service])).rows.length) throw invalid(`unknown service type ${b.service}`);
 }
 const cleanSwitches = (v: Partial<BehaviourSwitches> | undefined, base: BehaviourSwitches): BehaviourSwitches => {
   const steps = (v?.steps ?? base.steps).filter((x, i, a) => a.indexOf(x) === i) as OrderStep[];
@@ -192,13 +192,14 @@ export async function prepareOffer<T extends { kind?: string; template?: string;
     const has = (m: string) => rows.some((r) => r.mechanic === m);
     out.fulfilment = { ...o.fulfilment, options: unique, requiresShipping: has('SHIP'), requiresCollection: has('COLLECT'), requiresInstallation: has('INSTALL'), requiresSimActivation: has('SIM'), inventorySkus: o.fulfilment?.inventorySkus ?? [] };
   }
-  // A service kind that expires: the offer may set its own length (a 7-day pass beside a 30-day pass); otherwise the kind's default applies.
+  // A service type that expires: the offer may set its own length (a 7-day pass beside a 30-day pass); otherwise the kind's default applies.
   const sk = type.effective.service && !isBuiltinKind(type.effective.service) ? await getServiceKind(q, type.effective.service) : null;
   const days = (o as { validityDays?: number }).validityDays;
   if (sk?.expires) { if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) throw invalid('the validity is 1 to 3650 days'); } else delete (out as { validityDays?: number }).validityDays;
   // How the charging system knows this plan. Only an offer that starts a service can have one.
   const mapping = cleanOcsMapping((o as { ocs?: unknown }).ocs);
   if (mapping && type.effective.service == null) throw invalid('Only an offer that starts a service can have an OCS plan code.');
+  if (mapping && type.effective.service && !(await getServiceKind(q, type.effective.service))?.ocsEnabled) throw invalid('Services of this type are not provisioned into the charging system. Switch it on under Settings → Service types first.');
   if (mapping) (out as { ocs?: unknown }).ocs = mapping; else delete (out as { ocs?: unknown }).ocs;
   if (type.effective.needsInstallation && out.fulfilment && !out.fulfilment.requiresInstallation && ids) {
     throw invalid('fibre offers need an installation option');

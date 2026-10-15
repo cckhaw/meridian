@@ -27,7 +27,10 @@ function Settings() {
   const sp = useSearchParams();
   const current = sectionById(sp.get('section'));
   // The store-front moved to the Integration page; old links still land in the right place.
-  useEffect(() => { if (sp.get('section') === 'storefront') router.replace('/admin/integrations?item=storefront'); }, [sp, router]);
+  useEffect(() => {
+    if (sp.get('section') === 'storefront') router.replace('/admin/integrations?item=storefront');
+    if (sp.get('section') === 'service-kinds') router.replace(`${path}?section=service-types`); // renamed
+  }, [sp, router, path]);
   const [q, setQ] = useState('');
   const { data, error, loading, reload } = useApi('/settings');
   const open = (id: string | null) => router.push(id ? `${path}?section=${id}` : path, { scroll: false });
@@ -103,7 +106,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;
-    case 'service-kinds': return <ServiceKindSettings />;
+    case 'service-types': return <ServiceKindSettings />;
     case 'cancellation': return <CancellationSettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;

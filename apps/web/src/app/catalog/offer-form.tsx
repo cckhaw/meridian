@@ -370,7 +370,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
               {b.needsPartner && <Field label="Partner code" hint="e.g. netflix"><Input required value={f.partner} onChange={set('partner')} /></Field>}
               {serviceKind?.expires && <Field label="Valid for (days)" hint={`From the day it starts, then it ends by itself. Leave blank for the ${serviceKind.name.toLowerCase()} default of ${serviceKind.validityDays} days.`}><Input type="number" min="1" max="3650" value={f.validity} onChange={set('validity')} placeholder={String(serviceKind.validityDays)} /></Field>}
             </Card>
-            {config.ocsEnabled && b.service && (
+            {config.ocsEnabled && b.service && serviceKind?.ocsEnabled !== false && (
               <Card className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2"><div className="font-medium">Charging system (OCS)</div><p className="text-footnote text-label2">How your charging system knows this plan. Without a plan code, customers who buy it are not created in the OCS.</p></div>
                 <Field label="OCS plan code" hint="The plan or product code in the OCS, for example PLAN_5G_100."><Input value={f.ocsCode} onChange={set('ocsCode')} maxLength={60} placeholder="PLAN_5G_100" /></Field>

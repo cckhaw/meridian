@@ -4,6 +4,7 @@ import { audit } from './audit.js';
 import { getOffer } from './catalog.js';
 import type { Db, Queryable, Row } from './db.js';
 import { invalid, notFound } from './errors.js';
+import { getServiceKind } from './service-kinds.js';
 import { OCS_COMMANDS, OCS_COMMAND_LABEL, OCS_VENDORS, TEMPLATE_VARS, ocsVendor, type OcsCommandName, type OcsConnector, type OcsPlan, type OcsRequest, type PlanParams } from './ocs-vendors/index.js';
 
 /**
@@ -75,6 +76,8 @@ export async function enqueueOcs(q: Queryable, command: OcsCommandName, serviceI
   const svc = (await q.query('SELECT * FROM services WHERE id=$1', [serviceId])).rows[0];
   if (!svc) return null;
   const provisioned = (await q.query(`SELECT 1 FROM ocs_jobs WHERE service_id=$1 AND command='PROVISION' LIMIT 1`, [serviceId])).rows.length > 0;
+  const kind = await getServiceKind(q, (svc.serviceKind ?? svc.type) as string);
+  if (kind && !kind.ocsEnabled) return null; // the service type is switched off for the charging system
   const offer = await getOffer(q, svc.offerId as string).catch(() => null);
   const plan = offer ? planOf(offer) : null;
   let cmd = command;

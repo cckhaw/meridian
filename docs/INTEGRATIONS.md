@@ -42,7 +42,7 @@ Charging-system (OCS) provisioning has its own guide: [OCS.md](OCS.md).
 | Online store-front | Online store-front | The self-serve web shop (apps/storefront) and any other client you build | Built in; needs configuring |
 | Payments | Stripe | Stripe (cards and wallets for the store-front) | Built in; needs configuring |
 | Payments | Payment provider webhook and terminals | A payment provider, bank terminal or QR scheme that confirms payments | API: the other system calls Meridian |
-| Network and SIM provisioning | Network provisioning (HLR/HSS, policy control) | The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service kind | Outbox: a connector you deploy delivers it |
+| Network and SIM provisioning | Network provisioning (HLR/HSS, policy control) | The core network: HLR/HSS, PCRF/PCF, plus any platform you name on a service type | Outbox: a connector you deploy delivers it |
 | Network and SIM provisioning | eSIM profile server (SM-DP+) | Your SM-DP+ (GSMA eSIM profile server) | Stand-in; real connector to be written |
 | Network and SIM provisioning | SIM and number batch files | Your SIM vendor (ICCID, IMSI, eSIM codes) and your numbering plan | By hand; no connector yet |
 | Number portability (MNP) | Port-in (numbers coming to us) | The national porting clearinghouse and the donor operators | Outbox: a connector you deploy delivers it |
