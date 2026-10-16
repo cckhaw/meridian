@@ -1,17 +1,20 @@
 import { audit } from './audit.js';
+import { permissionDomain, permissionKey, resolvePermission } from './permission-catalog.js';
 import type { Queryable } from './db.js';
 import { invalid, rejected } from './errors.js';
 import { ALL_PERMISSIONS, CHANNELS, isBuiltinRole, isPermission, MODULES, ROLE_IDS, ROLES, roleCreditLimit, roleDef, rolePermissions, type DataScope, type Permission, type RoleBook, type RoleDef, type RoleId, type RoleOverrides } from './rbac.js';
 
 const KEY = 'rolePermissions';
 const CUSTOM_KEY = 'customRoles';
+const DISABLED_KEY = 'disabledRoles';
 
 /** Changes to built-in roles plus the roles administrators created, read from the database. */
 export async function getRoleOverrides(q: Queryable): Promise<RoleBook> {
-  const rows = (await q.query(`SELECT key, value FROM settings WHERE key IN ($1, $2)`, [KEY, CUSTOM_KEY])).rows;
+  const rows = (await q.query(`SELECT key, value FROM settings WHERE key IN ($1, $2, $3)`, [KEY, CUSTOM_KEY, DISABLED_KEY])).rows;
   const raw = rows.find((r) => r.key === KEY)?.value as Record<string, { permissions?: unknown; creditLimitMinor?: unknown }> | undefined;
   const list = rows.find((r) => r.key === CUSTOM_KEY)?.value as RoleDef[] | undefined;
-  const book: RoleBook = { changes: {}, custom: {} };
+  const off = rows.find((r) => r.key === DISABLED_KEY)?.value;
+  const book: RoleBook = { changes: {}, custom: {}, disabled: Array.isArray(off) ? off.filter((x): x is string => typeof x === 'string') : [] };
   for (const c of Array.isArray(list) ? list : []) {
     if (!c?.id || isBuiltinRole(c.id)) continue;
     book.custom[c.id] = { id: c.id, label: String(c.label), summary: String(c.summary ?? ''), scope: c.scope, home: c.home || '/', permissions: (c.permissions ?? []).filter(isPermission), ...('creditLimitMinor' in c ? { creditLimitMinor: c.creditLimitMinor } : {}) };
@@ -98,15 +101,19 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
 const CHANNEL_NAME: Record<string, string> = { SELF_SERVE: 'online self-serve', RETAIL_ASSISTED: 'assisted at a store', QUICK_SALE: 'quick sale at a store', TELESALES: 'telesales', DEALER: 'through a dealer', CALL_CENTER: 'call center' };
 for (const c of CHANNELS) INFO[`order:create:${c}`] = ['Selling', `Sell ${CHANNEL_NAME[c]}`, `Create orders on the ${c.toLowerCase().replace(/_/g, ' ')} channel`];
 
-export interface PermissionInfo { id: Permission; group: string; label: string; hint: string; superuserOnly: boolean }
+export interface PermissionInfo { id: Permission; /** domain:resource:action */ key: string; domain: string; group: string; label: string; hint: string; superuserOnly: boolean }
 export const permissionCatalogue = (): PermissionInfo[] => ALL_PERMISSIONS.map((id) => {
   const [group, label, hint] = INFO[id] ?? ['Other', id, ''];
-  return { id, group, label, hint, superuserOnly: SUPERUSER_ONLY.includes(id) };
+  return { id, key: permissionKey(id), domain: permissionDomain(id), group, label, hint, superuserOnly: SUPERUSER_ONLY.includes(id) };
 });
 
 export interface RoleView {
   id: RoleId; label: string; summary: string; scope: string; home: string; permissions: Permission[]; defaults: Permission[]; creditLimitMinor?: number | null; defaultCreditLimitMinor?: number | null;
   customised: boolean; custom: boolean; users: number; modules: string[];
+  /** The stable name outside the database (ROLE_CALL_CENTER_AGENT); a created role has none. */
+  code?: string;
+  /** Switched off: it keeps its users and settings but grants nothing. */
+  disabled: boolean;
 }
 
 const viewOf = (id: string, book: RoleBook, users: Map<string, number>): RoleView => {
@@ -116,6 +123,7 @@ const viewOf = (id: string, book: RoleBook, users: Map<string, number>): RoleVie
   return {
     id, label: d.label, summary: d.summary, scope: d.scope, home: d.home, permissions: perms, defaults: d.permissions, creditLimitMinor: roleCreditLimit(id, book), defaultCreditLimitMinor: d.creditLimitMinor,
     customised: !custom && !!book.changes[id], custom, users: users.get(id) ?? 0, modules: MODULES.filter((m) => m.anyOf.some((p) => perms.includes(p))).map((m) => m.label),
+    code: d.code, disabled: !!book.disabled?.includes(id),
   };
 };
 
@@ -131,7 +139,8 @@ export async function listRoles(q: Queryable): Promise<RoleView[]> {
   return [...ROLE_IDS, ...Object.keys(book.custom).sort((a, b) => book.custom[a]!.label.localeCompare(book.custom[b]!.label))].map((id) => viewOf(id, book, users));
 }
 
-const cleanPerms = (id: string, raw: string[]): Permission[] => {
+const cleanPerms = (id: string, named: string[]): Permission[] => {
+  const raw = named.map((n) => resolvePermission(n) ?? n);   // a permission id, a domain:resource:action key, or an alias
   const bad = raw.filter((p) => !isPermission(p));
   if (bad.length) throw invalid(`unknown permission ${bad.join(', ')}`);
   const perms = [...new Set(raw as Permission[])];
@@ -261,4 +270,16 @@ export async function deleteCustomRole(q: Queryable, actor: string, id: string):
 
 async function save(q: Queryable, actor: string, key: string, v: unknown) {
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [key, JSON.stringify(v), actor]);
+}
+
+/** Switches a role off (its users keep it but it grants nothing, at once) or back on. The Administrator role cannot be switched off: nobody could manage roles any more. */
+export async function setRoleDisabled(q: Queryable, actor: string, id: string, disabled: boolean): Promise<RoleView> {
+  const book = await getRoleOverrides(q);
+  if (!roleDef(id, book)) throw invalid(`unknown role ${id}`);
+  if (disabled && KEEP[id]) throw invalid(`${roleDef(id, book)!.label} cannot be switched off: nobody could manage roles any more.`);
+  const now = new Set(book.disabled ?? []);
+  if (disabled) now.add(id); else now.delete(id);
+  await save(q, actor, DISABLED_KEY, [...now]);
+  await audit(q, actor, 'role', id, disabled ? 'disable' : 'enable', { users: (await holders(q, true)).get(id) ?? 0 });
+  return (await listRoles(q)).find((r) => r.id === id)!;
 }

@@ -2043,4 +2043,27 @@ describe('offer type switches and service types', () => {
     expect((await call('GET', '/auth/me', { cookie: must.cookie })).json.user.mfaEnrollRequired).toBe(true);
     await call('POST', '/settings/security-policy', { cookie: su, body: { mfa: { requirement: 'OFF' } } });
   });
+  it('roles: permissions can be named by domain:resource:action, a role can be cloned and switched off, and the store manager sees only their store', async () => {
+    const su = await root();
+    const list = (await call('GET', '/roles', { cookie: su })).json;
+    expect(list.find((r: any) => r.id === 'call-center')).toMatchObject({ code: 'ROLE_CALL_CENTER_AGENT', disabled: false });
+    expect(list.map((r: any) => r.code)).toContain('ROLE_RETAIL_MANAGER');
+    const perms = (await call('GET', '/roles/permissions', { cookie: su })).json.permissions;
+    expect(perms.find((p: any) => p.id === 'billing:credit')).toMatchObject({ key: 'billing:credit_note:issue', domain: 'billing' });
+    const clone = await call('POST', '/roles', { cookie: su, body: { name: 'Waiver desk', copyFrom: 'call-center', scope: 'staff' } });
+    expect(clone.status).toBe(200);
+    const edited = await call('PATCH', `/roles/${clone.json.id}`, { cookie: su, body: { permissions: ['customer:profile:read', 'billing:invoice:waive', 'dashboard:overview:read'] } });
+    expect(edited.json.permissions.sort()).toEqual(['billing:credit', 'customer:read', 'dashboard:read']);
+    // a store manager is bound to a store; another store's orders are invisible to them
+    const mgr = await staff(['retail-manager'], { storeId: 'STORE-SG-001' });
+    expect((await call('GET', '/orders?limit=5', { cookie: mgr.cookie })).status).toBe(200);
+    expect((await call('GET', '/gl/reconcile', { cookie: mgr.cookie })).status).toBe(403);
+    // switching a role off takes its access away at once, and the Administrator role cannot be switched off
+    const off = await call('POST', '/roles/retail-manager/disable', { cookie: su, body: { disabled: true } });
+    expect(off.json).toMatchObject({ disabled: true });
+    expect((await call('GET', '/orders?limit=5', { cookie: mgr.cookie })).status).toBe(403);
+    expect((await call('POST', '/roles/admin/disable', { cookie: su, body: { disabled: true } })).status).toBe(400);
+    await call('POST', '/roles/retail-manager/disable', { cookie: su, body: { disabled: false } });
+    expect((await call('GET', '/orders?limit=5', { cookie: mgr.cookie })).status).toBe(200);
+  });
 });

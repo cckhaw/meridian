@@ -1,4 +1,4 @@
-import { DomainError, forbidden, type Row, type SessionUser } from '@meridian/core';
+import { assertOrgScope, DomainError, forbidden, type Row, type SessionUser } from '@meridian/core';
 
 export { forbidden };
 
@@ -9,10 +9,5 @@ export function assertCustomer(u: SessionUser, customerId: string) {
   if (u.scope.customerId && u.scope.customerId !== customerId) throw notFound();
 }
 export function assertOrder(u: SessionUser, o: Row) {
-  const s = u.scope;
-  if (s.unrestricted) return;
-  if (s.customerId && o.customerId === s.customerId) return;
-  if (s.storeId && o.storeId === s.storeId) return;
-  if (s.dealerId && o.dealerId === s.dealerId) return;
-  throw notFound();
+  assertOrgScope(u, o); // the shared organisation-scope check: customer, store or dealer
 }

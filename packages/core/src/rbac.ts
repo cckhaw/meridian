@@ -60,7 +60,7 @@ export const isPermission = (p: string): p is Permission => (ALL_PERMISSIONS as 
 
 export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
-  'retail-store', 'dealer', 'dealer-desk', 'customer-service', 'team-lead', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'inventory-ops',
+  'retail-store', 'retail-manager', 'dealer', 'dealer-desk', 'customer-service', 'team-lead', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'inventory-ops',
 ] as const;
 export type BuiltinRoleId = (typeof ROLE_IDS)[number];
 /** A role id: one of the built-in roles, or the id of a role an administrator created. */
@@ -74,6 +74,8 @@ export type DataScope = 'staff' | 'customer' | 'store' | 'dealer';
 
 export interface RoleDef {
   id: RoleId;
+  /** The stable name integrations and documents use for the role (for example ROLE_CALL_CENTER_AGENT). The id is what the database holds. */
+  code?: string;
   label: string;
   summary: string;
   scope: DataScope;
@@ -125,11 +127,17 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'catalog:read', 'order:read', ...ch('TELESALES'), 'order:payment', 'numbering:select'],
   },
   'retail-store': {
-    id: 'retail-store', label: 'Retail Store', scope: 'store', home: '/orders/new?channel=RETAIL_ASSISTED',
+    id: 'retail-store', label: 'Retail Store Assistant', scope: 'store', home: '/orders/new?channel=RETAIL_ASSISTED',
     summary: 'Sells over the counter at one store: assisted and quick-sale orders, SIM changes, store stock. Sees only that store’s orders and stock.',
     permissions: ['customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'),
       'order:payment', 'order:fulfil', 'order:cancel', 'inventory:read', 'inventory:write', 'inventory:transfer', 'commission:read', 'billing:read', 'billing:pay',
       'store:assist', 'kyc:attest', 'numbering:select'],
+  },
+  'retail-manager': {
+    id: 'retail-manager', label: 'Retail Store Manager', scope: 'store', home: '/orders',
+    summary: 'Runs one store: sees that store’s sales and orders, approves exceptions at the counter, moves and writes off its stock, and sees its commission. Sees only that store’s records.',
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'), 'order:payment', 'order:fulfil', 'order:cancel',
+      'order:override', 'inventory:read', 'inventory:write', 'inventory:transfer', 'inventory:writeoff', 'commission:read', 'billing:read', 'billing:pay', 'store:assist', 'kyc:attest', 'numbering:select'],
   },
   dealer: {
     id: 'dealer', label: 'Dealer', scope: 'dealer', home: '/orders/new?channel=DEALER',
@@ -148,7 +156,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
       'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'billing:simulate', 'collections:manage', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   'team-lead': {
-    id: 'team-lead', label: 'Team Lead', scope: 'staff', home: '/cases', creditLimitMinor: 100_000,
+    id: 'team-lead', label: 'Call Center Supervisor', scope: 'staff', home: '/cases', creditLimitMinor: 100_000,
     summary: 'Leads a support team: watches SLAs and escalations, groups cases into network incidents, approves refunds above an agent’s limit.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'mnp:manage', 'order:read', 'order:cancel',
       'billing:read', 'billing:credit', 'billing:simulate', 'collections:manage', 'case:read', 'case:create', 'case:write', 'case:supervise', 'catalog:read'],
@@ -180,8 +188,19 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   },
 };
 
+/** The stable codes the roles are known by outside the database (documents, identity-provider group mappings, audit reports). */
+export const ROLE_CODES: Record<BuiltinRoleId, string> = {
+  admin: 'ROLE_ADMIN', 'product-configurator': 'ROLE_PRODUCT_CONFIGURATOR', 'billing-ops': 'ROLE_BILLING_OPS', 'rating-charging': 'ROLE_RATING_ADMIN', 'self-serve': 'ROLE_CUSTOMER_SELFCARE',
+  'call-center': 'ROLE_CALL_CENTER_AGENT', telesales: 'ROLE_TELESALES', 'retail-store': 'ROLE_RETAIL_AGENT', 'retail-manager': 'ROLE_RETAIL_MANAGER', dealer: 'ROLE_DEALER_AGENT', 'dealer-desk': 'ROLE_DEALER_DESK',
+  'customer-service': 'ROLE_CUSTOMER_SERVICE', 'team-lead': 'ROLE_CALL_CENTER_SUPERVISOR', finance: 'ROLE_FINANCE_OFFICER', fraud: 'ROLE_FRAUD_ANALYST', 'revenue-assurance': 'ROLE_REVENUE_ASSURANCE',
+  compliance: 'ROLE_KYC_COMPLIANCE', 'inventory-ops': 'ROLE_OPERATIONS_SUPPORT',
+};
+for (const id of ROLE_IDS) ROLES[id].code = ROLE_CODES[id];
+/** The role for a code (ROLE_CALL_CENTER_AGENT → call-center), or undefined. */
+export const roleIdOfCode = (code: string): BuiltinRoleId | undefined => ROLE_IDS.find((r) => ROLE_CODES[r] === code.trim().toUpperCase());
+
 /** Priority for choosing the landing page when a user holds several roles. */
-const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'inventory-ops', 'product-configurator', 'rating-charging', 'self-serve'];
+const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-manager', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'inventory-ops', 'product-configurator', 'rating-charging', 'self-serve'];
 
 // ───────────────────────── modules (navigation) ─────────────────────────
 export interface ModuleDef {
@@ -232,14 +251,16 @@ export interface Principal {
 export interface RoleBook {
   changes: Partial<Record<string, { permissions?: Permission[]; creditLimitMinor?: number | null }>>;
   custom: Record<string, RoleDef>;
+  /** Roles switched off: the role stays, with its users, but grants nothing until switched back on. */
+  disabled?: string[];
 }
 export type RoleOverrides = RoleBook;
-export const EMPTY_BOOK: RoleBook = { changes: {}, custom: {} };
+export const EMPTY_BOOK: RoleBook = { changes: {}, custom: {}, disabled: [] };
 
 /** A role's definition, built-in or created. */
 export const roleDef = (id: RoleId, book?: RoleBook): RoleDef | undefined => book?.custom[id] ?? (isBuiltinRole(id) ? ROLES[id] : undefined);
 /** The permissions a role has right now. */
-export const rolePermissions = (id: RoleId, book?: RoleBook): Permission[] => book?.changes[id]?.permissions ?? roleDef(id, book)?.permissions ?? [];
+export const rolePermissions = (id: RoleId, book?: RoleBook): Permission[] => (book?.disabled?.includes(id) ? [] : book?.changes[id]?.permissions ?? roleDef(id, book)?.permissions ?? []);
 export const roleCreditLimit = (id: RoleId, book?: RoleBook): number | null | undefined => {
   const c = book?.changes[id];
   return c && 'creditLimitMinor' in c ? c.creditLimitMinor : roleDef(id, book)?.creditLimitMinor;
@@ -270,7 +291,8 @@ export interface Scope { customerId?: string; storeId?: string; dealerId?: strin
  * A role that is not known (removed since) counts as scoped to nothing, never as unrestricted.
  */
 export function scopeOf(p: Principal, book?: RoleBook): Scope {
-  if (p.isSuperuser || p.roles.some((r) => roleDef(r, book)?.scope === 'staff')) return { unrestricted: true };
+  const live = p.roles.filter((r) => !book?.disabled?.includes(r)); // a switched-off role neither grants access nor widens what the others may see
+  if (p.isSuperuser || live.some((r) => roleDef(r, book)?.scope === 'staff')) return { unrestricted: true };
   const s: Scope = { unrestricted: false };
   for (const r of p.roles) {
     const sc = roleDef(r, book)?.scope;

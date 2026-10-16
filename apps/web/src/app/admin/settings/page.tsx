@@ -15,6 +15,7 @@ import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
 import { RegionalSettingsForm } from './regional';
+import { RolesSettings } from './roles';
 import { SecurityPolicySettings } from './security-policy';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
 
@@ -119,8 +120,16 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'early-termination': return <EtcSettings />;
     case 'device-financing': return <FinancingSettings />;
     case 'security-policy': return <SecurityPolicySettings />;
+    case 'roles': return <RolesFromApi />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;
     default: return <Empty>This section is not available yet.</Empty>;
   }
+}
+
+/** The roles matrix reads its own list, so it stays current as people tick boxes. */
+function RolesFromApi() {
+  const roles = useApi<any[]>('/roles');
+  if (!roles.data) return <Spinner />;
+  return <RolesSettings roles={roles.data as never} reload={roles.reload} />;
 }

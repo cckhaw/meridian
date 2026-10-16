@@ -19,7 +19,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 671 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 682 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -47,6 +47,7 @@ Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environme
 | Customers and segments, Bill cycles | Customer fields and segments, the 28 bill cycles | [CUSTOMERS.md](docs/CUSTOMERS.md) |
 | Offer types, Fulfilment options, Service types | What an offer can be and how it is fulfilled and provisioned | [CATALOG.md](docs/CATALOG.md) |
 | Cancellation | Cooling-off and cancellation terms per order part | [ORDERS.md](docs/ORDERS.md) |
+| Roles and permissions | The role-by-permission matrix, clone and switch off roles, data scope (store, dealer, customer) | [ROLES.md](docs/ROLES.md), [SECURITY.md](docs/SECURITY.md) |
 | Security policy | Password rules and expiry, lockout, session timeouts, forgotten-password recovery, two-step sign-in (MFA). Everyone also has **My profile** for their details, password, two-step sign-in, devices and alerts | [SECURITY.md](docs/SECURITY.md) |
 | Early termination | Rules and formulas for the charge when a contract ends early | [LIFECYCLE.md](docs/LIFECYCLE.md) |
 | Device financing | Instalments over the contract, credit-check bands, fallback | [FINANCING.md](docs/FINANCING.md) |

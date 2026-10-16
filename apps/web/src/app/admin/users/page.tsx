@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { StorePicker } from '@/app/stores/store-picker';
 import { useRegional } from '@/components/settings-provider';
-import { RolesEditor } from './roles-editor';
+import { RolesSettings } from '../settings/roles';
 import { useMultiMarket } from '@/lib/markets';
 import { dt, label, money } from '@/lib/format';
 
@@ -65,7 +65,7 @@ export default function Users() {
 
       <SectionTitle>Roles and permissions</SectionTitle>
       <p className="-mt-2 mb-3 text-subhead text-label2">Choose what each role can do. A user can hold several roles and gets everything they allow.</p>
-      <RolesEditor roles={roleList as never} onChanged={() => { void roles.reload(); }} />
+      <RolesSettings roles={roleList as never} reload={() => roles.reload()} />
     </>
   );
 }

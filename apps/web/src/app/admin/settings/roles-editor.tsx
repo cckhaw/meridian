@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
 import { money } from '@/lib/format';
 
-interface RoleView { custom: boolean; home: string; id: string; label: string; summary: string; scope: string; permissions: string[]; defaults: string[]; creditLimitMinor?: number | null; defaultCreditLimitMinor?: number | null; customised: boolean; users: number; modules: string[] }
-interface PermInfo { id: string; group: string; label: string; hint: string; superuserOnly: boolean }
+export interface RoleView { custom: boolean; code?: string; disabled: boolean; home: string; id: string; label: string; summary: string; scope: string; permissions: string[]; defaults: string[]; creditLimitMinor?: number | null; defaultCreditLimitMinor?: number | null; customised: boolean; users: number; modules: string[] }
+interface PermInfo { id: string; key: string; domain: string; group: string; label: string; hint: string; superuserOnly: boolean }
 
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -54,6 +54,7 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
   const [home, setHome] = useState(role.home);
   const save = useAction(onChanged);
   const remove = useAction(onDeleted);
+  const other = useAction(onChanged);
   const groups = useMemo(() => { const m = new Map<string, PermInfo[]>(); for (const p of catalogue) m.set(p.group, [...(m.get(p.group) ?? []), p]); return [...m.entries()]; }, [catalogue]);
   const creditMinor = unlimited ? null : Math.round((Number(credit) || 0) * 100);
   const creditDirty = perms.includes('billing:credit') && creditMinor !== (role.creditLimitMinor ?? 0);
@@ -68,7 +69,7 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
         {top}
         {roles.map((r) => (
           <button key={r.id} type="button" onClick={() => setSel(r.id)} aria-current={r.id === role.id} className={`flex min-h-tap w-full items-center justify-between gap-2 rounded-control px-3 py-2 text-left text-subhead ${r.id === role.id ? 'bg-accent/10 font-medium text-accent' : 'hover:bg-surface2'}`}>
-            <span>{r.label}</span>
+            <span>{r.label}{r.disabled && <span className="ml-1.5 text-caption text-label2">off</span>}</span>
             <span className="flex items-center gap-1">{r.custom && <span className="text-caption text-label2">custom</span>}{r.customised && <span className="h-2 w-2 rounded-full bg-accent" title="Changed from the default" />}<span className="text-caption text-label2">{r.users}</span></span>
           </button>
         ))}
@@ -117,11 +118,14 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
           </div>
         )}
         {role.modules.length > 0 && <p className="mt-4 text-footnote text-label2">Saved access opens: {role.modules.join(' · ')}.</p>}
-        {(save.error || remove.error) && <div className="mt-3"><Alert>{save.error || remove.error}</Alert></div>}{save.ok && !dirty && <div className="mt-3"><Alert tone="success">{save.ok}</Alert></div>}
+        {role.disabled && <div className="mt-3"><Alert tone="info">This role is switched off: it grants nothing right now.</Alert></div>}
+        {(save.error || remove.error || other.error) && <div className="mt-3"><Alert>{save.error || remove.error || other.error}</Alert></div>}{other.ok && <div className="mt-3"><Alert tone="success">{other.ok}</Alert></div>}{save.ok && !dirty && <div className="mt-3"><Alert tone="success">{save.ok}</Alert></div>}
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button disabled={!dirty || save.busy} onClick={() => save.run(() => patch(`/roles/${role.id}`, { ...(role.custom ? { name, summary, scope, home } : {}), permissions: perms, ...(perms.includes('billing:credit') ? { creditLimitMinor: creditMinor } : {}) }), 'Saved')}>{save.busy ? 'Saving…' : 'Save changes'}</Button>
           {dirty && <Button variant="secondary" onClick={() => { setPerms(role.permissions); setCredit(role.creditLimitMinor === null ? '' : String((role.creditLimitMinor ?? 0) / 100)); setUnlimited(role.creditLimitMinor === null); setName(role.label); setSummary(role.summary); setScope(role.scope); setHome(role.home); }}>Discard</Button>}
           {role.customised && <Button variant="plain" disabled={save.busy} onClick={() => { if (confirm(`Put ${role.label} back to its default permissions?`)) void save.run(() => post(`/roles/${role.id}/reset`), 'Back to the default'); }}>Reset to default</Button>}
+          <Button variant="plain" disabled={other.busy} onClick={() => { const n = prompt(`Name for the copy of ${role.label}`, `Copy of ${role.label}`); if (n?.trim()) void other.run(async () => { const r = await post('/roles', { name: n.trim(), copyFrom: role.id, scope: role.scope === 'customer' ? 'staff' : role.scope, home: role.home }); setSel(r.id); }, 'Copied. Adjust the copy and save.'); }}>Clone</Button>
+          {role.id !== 'admin' && <Button variant="plain" disabled={other.busy} onClick={() => { if (role.disabled || confirm(`Switch off ${role.label}? Its ${role.users} user(s) keep the role but get nothing from it until you switch it back on.`)) void other.run(() => post(`/roles/${role.id}/disable`, { disabled: !role.disabled }), role.disabled ? 'Switched on' : 'Switched off'); }}>{role.disabled ? 'Switch on' : 'Switch off'}</Button>}
           {role.custom && <Button variant="plain" disabled={remove.busy} onClick={() => { if (confirm(`Delete the role ${role.label}?`)) void remove.run(() => del(`/roles/${role.id}`)); }}>Delete role</Button>}
           {!role.custom && <span className="text-footnote text-label2">{added + removed > 0 ? `Compared with the default: ${added} added, ${removed} removed` : 'Same as the default'}</span>}
         </div>
