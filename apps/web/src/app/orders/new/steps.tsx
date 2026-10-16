@@ -11,7 +11,7 @@ import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
 import { FinancingPanel } from './financing-panel';
 import { FiberCoverageCheck, type FiberApi } from '@meridian/ui';
-import { MONTHS, SWATCH, financeable, flatLines, isExclusive, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
+import { MONTHS, SWATCH, clashesWith, financeable, flatLines, isExclusive, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
 export interface Party { id: string; name: string }
@@ -26,6 +26,8 @@ export interface Wizard {
   quote: any | null; quoting: boolean; quoteError: string | null;
   customer: Cust | null; setCustomer: (c: Cust | null) => void; accountId: string; setAccountId: (id: string) => void; canCreateCustomer: boolean;
   address: string; setAddress: (s: string) => void;
+  /** Pairs of offer types that cannot be in the same order. */
+  conflicts: Array<[string, string]>;
   /** Live installation times from the field-service system (when Settings allows): offered, the one chosen, and whether the agent chose to book later. */
   booking: { enabled: boolean; slot: { id: string; start: string; end: string } | null; setSlot: (s: { id: string; start: string; end: string } | null) => void; later: boolean; setLater: (b: boolean) => void };
   /** How the goods reach the customer (what every goods offer allows), the one chosen, and the store for collection. */
@@ -72,7 +74,7 @@ function OfferPicker({ w, kind, step, outright, placeholder, noteFor }: { w: Wiz
   const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}${scope}&q=${encodeURIComponent(term)}`);
   // An order carries one mobile plan (a family plan brings its other lines as members), so once a plan is chosen the other plans wait until it is removed.
   const planChosen = w.items.find((i) => isExclusive(i.offer));
-  const waits = (o: any) => isExclusive(o) && !!planChosen && planChosen.offer.id !== o.id;
+  const waits = (o: any) => (isExclusive(o) && !!planChosen && planChosen.offer.id !== o.id) || !!clashesWith(o, w.items, w.conflicts);
   const toggle = (o: any) => { if (!waits(o)) w.setItems((cur) => (cur.some((i) => i.offer.id === o.id) ? cur.filter((i) => i.offer.id !== o.id) : [...cur, newItem(o)])); };
   // When nothing is listed, find out whether offers exist in some other market, so the message can say why instead of pretending there are none.
   const elsewhere = useApi<{ items: any[] }>(!list.loading && list.items.length === 0 && !term && multi ? `/catalog?limit=1&status=ACTIVE${scope}` : null);
@@ -88,7 +90,7 @@ function OfferPicker({ w, kind, step, outright, placeholder, noteFor }: { w: Wiz
         </Alert>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
-        {list.items.map((o) => <OfferCard key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} disabled={waits(o)} note={waits(o) ? `One plan per order: remove ${planChosen!.offer.name} to choose this one` : noteFor?.(o)} />)}
+        {list.items.map((o) => <OfferCard key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} disabled={waits(o)} note={waits(o) ? (clashesWith(o, w.items, w.conflicts) ? `Not available with ${clashesWith(o, w.items, w.conflicts)!.offer.name}: remove it to choose this one` : `One plan per order: remove ${planChosen!.offer.name} to choose this one`) : noteFor?.(o)} />)}
       </div>
       {list.items.length > 0 && <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="offers" />}
     </>

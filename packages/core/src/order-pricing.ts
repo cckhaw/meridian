@@ -1,3 +1,4 @@
+import { typeConflictIn } from './offer-conflicts.js';
 import { getFinancing, usableCheck } from './device-financing.js';
 import { hiddenFixedKinds } from './fiber-client.js';
 import { behaviourOf, type DeviceDeal, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
@@ -153,6 +154,8 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
       offers.set(of.id, of);
     }
   }
+  const clash = await typeConflictIn(q, [...offers.values()]);
+  if (clash) fail(clash);
   const violations = await checkDependencies(q, input.customerId ?? null, [...offers.keys()]);
   if (violations.length) fail(violations.join(' '));
   // Goods in one order travel together: they must share a way to reach the customer (counter sales hand them over at once).
