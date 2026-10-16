@@ -3,7 +3,7 @@ import { Alert, Button, Card, Field, Input } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ApiError, post } from '@/lib/api';
+import { api, ApiError, post } from '@/lib/api';
 import { useBrand } from '@/components/settings-provider';
 import { useAuth } from '@/lib/auth';
 
@@ -19,6 +19,13 @@ export function LoginForm() {
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [sso, setSso] = useState<Array<{ id: string; label: string }>>([]);
+  useEffect(() => { api<{ items: Array<{ id: string; label: string }> }>('/auth/sso/providers').then((r) => setSso(r.items)).catch(() => {}); }, []);
+  const startSso = async (id: string) => {
+    setBusy(true); setError(null);
+    try { try { sessionStorage.setItem('sso-next', next ?? '/'); } catch { /* private mode */ } const r = await post<{ url: string }>('/auth/sso/start', { providerId: id }); window.location.href = r.url; }
+    catch (e) { setError(e instanceof ApiError ? e.message : 'Single sign-on is not available right now.'); setBusy(false); }
+  };
   const [error, setError] = useState<string | null>(null);
   // Second step: set when the password was right but a code is needed.
   const [mfa, setMfa] = useState<null | { token: string; methods: string[]; method: string; sentTo?: string }>(null);
@@ -116,6 +123,11 @@ export function LoginForm() {
             {error && <Alert>{error}</Alert>}
             <Button type="submit" className="w-full" disabled={busy || !username || !password}>{busy ? 'Signing in…' : 'Sign in'}</Button>
           </form>
+          {sso.length > 0 && (
+            <div className="mt-4 space-y-2 border-t border-separator pt-4">
+              {sso.map((p) => <Button key={p.id} type="button" variant="secondary" className="w-full" disabled={busy} onClick={() => void startSso(p.id)}>{p.label}</Button>)}
+            </div>
+          )}
         </Card>
         <p className="mt-4 text-center"><Link href="/forgot-password" className="inline-flex min-h-tap items-center text-subhead text-accent">Forgot your password?</Link></p>
         <p className="mt-6 text-center text-footnote text-label2">Access is limited to authorised users. Activity is logged.</p>

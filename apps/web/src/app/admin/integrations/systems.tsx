@@ -3,6 +3,7 @@ import { Badge, Card } from '@meridian/ui';
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { dt } from '@/lib/format';
+import { AuthConnections } from './authentication';
 import { EndpointManager, type Hub } from './integration-hub';
 import { OcsPanel } from './ocs';
 import { KycPanel, PaymentsPanel, StorefrontPanel } from './storefront';
@@ -37,8 +38,10 @@ const FILTERS = [{ value: 'all', label: 'All' }, { value: 'action', label: 'Need
 /** Item id → the kinds of hub connection that belong to it, so a system's address and credentials are edited on the system itself. */
 export const ITEM_KINDS: Record<string, string[]> = {
   'network-provisioning': ['HLR_HSS', 'UDM', 'PCRF'], esim: ['SMDP_PLUS'], ocs: ['OCS'], wfm: ['WFM_GATEWAY', 'SLOT_SYNC'], 'payment-webhook': ['PAYMENT_GATEWAY'],
-  sap: ['SAP_FICO'], 'credit-bureau': ['CREDIT_BUREAU'], 'event-bus': ['EVENT_BUS'],
+  sap: ['SAP_FICO'], 'sso-oidc': ['IDP_OIDC'], 'sso-saml': ['IDP_SAML'], ldap: ['LDAP'], 'otp-gateway': ['OTP_GATEWAY'], 'credit-bureau': ['CREDIT_BUREAU'], 'event-bus': ['EVENT_BUS'],
 };
+
+const AUTH_KIND: Record<string, 'IDP_OIDC' | 'IDP_SAML' | 'LDAP' | 'OTP_GATEWAY'> = { 'sso-oidc': 'IDP_OIDC', 'sso-saml': 'IDP_SAML', ldap: 'LDAP', 'otp-gateway': 'OTP_GATEWAY' };
 
 /** The systems of one area: each a card with its status, and, opened, what it is for, what to provide, and its connection details. */
 export function SystemList({ items, hub, reload, target }: { items: Item[]; hub: Hub; reload: () => void | Promise<void>; target?: string | null }) {
@@ -135,7 +138,7 @@ function Row({ item: i, open, onToggle, origin, hub, reload }: { item: Item; ope
           {i.id === 'ekyc' && <KycPanel />}
           {i.id === 'ocs' && <OcsPanel />}
 
-          {ITEM_KINDS[i.id] && <EndpointManager kinds={ITEM_KINDS[i.id]!} h={hub} reload={reload} />}
+          {AUTH_KIND[i.id] ? <AuthConnections kind={AUTH_KIND[i.id]!} h={hub} reload={reload} /> : ITEM_KINDS[i.id] && <EndpointManager kinds={ITEM_KINDS[i.id]!} h={hub} reload={reload} />}
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-footnote">
             {i.configure && !['storefront', 'stripe', 'ekyc', 'ocs'].includes(i.id) && <Link href={i.configure.href} className="inline-flex min-h-[32px] items-center text-accent">{i.configure.label} ›</Link>}

@@ -28,7 +28,7 @@ export async function requestPasswordReset(db: Db, i: { identifier: string; ip?:
   await db.query('INSERT INTO auth_attempts (key) VALUES ($1)', [ikey]);
   if (tries >= 20) return done;
 
-  const u = (await db.query(`SELECT * FROM users WHERE (lower(username)=$1 OR lower(email)=$1) AND NOT is_superuser AND status='ACTIVE' AND password_hash IS NOT NULL LIMIT 1`, [id])).rows[0];
+  const u = (await db.query(`SELECT * FROM users WHERE (lower(username)=$1 OR lower(email)=$1) AND NOT is_superuser AND status='ACTIVE' AND auth_source='LOCAL' AND password_hash IS NOT NULL LIMIT 1`, [id])).rows[0];
   if (!u) return done;
   const recent = (await db.query(`SELECT count(*) AS n FROM password_reset_tokens WHERE user_id=$1 AND created_at > now() - interval '1 hour'`, [u.id])).rows[0]!.n as number;
   if (recent >= policy.recovery.maxRequestsPerHour) return done;

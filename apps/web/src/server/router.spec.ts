@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
+import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, setAuthHttp, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -1813,7 +1813,7 @@ describe('offer type switches and service types', () => {
     const bo = await staff(['billing-ops']);
     expect((await call('GET', '/settings/integration-hub', { cookie: bo.cookie })).status).toBe(403);
     const hub = await call('GET', '/settings/integration-hub', { cookie: su });
-    expect(hub.json.groups).toHaveLength(6);
+    expect(hub.json.groups).toHaveLength(7);
     expect(hub.json.scopes.map((x: any) => x.id)).toContain('sim:swap');
     const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Self-care app', channel: 'SELF_CARE', scopes: ['subscriber:read', 'event:subscribe'] } });
     expect(made.status).toBe(201);
@@ -2091,5 +2091,28 @@ describe('offer type switches and service types', () => {
     const closed = await call('POST', '/store/cash-drawer/close', { cookie: mgr.cookie, body: { date: day, countedMinor: st.expectedMinor } });
     expect(closed.status).toBe(200);
     expect((await call('POST', '/store/cash-drawer/close', { cookie: mgr.cookie, body: { date: day, countedMinor: st.expectedMinor } })).status).toBe(422);
+  });
+  it('sign-in integrations: settings are checked, the sign-in button is public, and the redirect carries PKCE', async () => {
+    const su = await root();
+    const body = { group: 'auth', kind: 'IDP_OIDC', name: 'Okta', url: 'https://acme.okta.example', secret: 'shh', config: { clientId: 'abc', redirectUri: 'https://crm.example.com/login/sso', vendor: 'OKTA' } };
+    expect((await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { ...body, config: { redirectUri: body.config.redirectUri } } })).status).toBe(400);
+    const saved = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body });
+    expect(saved.status).toBe(201);
+    expect(JSON.stringify(saved.json)).not.toContain('shh');
+    const list = await call('GET', '/auth/sso/providers');
+    expect(list.json.items).toEqual([{ id: saved.json.id, label: 'Sign in with Okta', vendor: 'OKTA' }]);
+    setAuthHttp(async () => Response.json({ issuer: 'https://acme.okta.example', authorization_endpoint: 'https://acme.okta.example/auth', token_endpoint: 'https://acme.okta.example/token', jwks_uri: 'https://acme.okta.example/keys' }));
+    const start = await call('POST', '/auth/sso/start', { body: { providerId: saved.json.id } });
+    expect(start.status).toBe(200);
+    const u = new URL(start.json.url);
+    expect(u.searchParams.get('code_challenge_method')).toBe('S256'); expect(u.searchParams.get('client_id')).toBe('abc');
+    expect((await call('POST', '/auth/sso/callback', { body: { state: 'x'.repeat(20), code: 'c' } })).status).toBe(401);   // an unknown state is refused
+    setAuthHttp(null);
+    const agent = await staff(['call-center']);
+    expect((await call('POST', `/settings/integration-hub/auth/directory/${saved.json.id}/sync`, { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('GET', '/settings/integration-hub/auth/directory/runs', { cookie: su })).json.items).toEqual([]);
+    const reg = (await call('GET', '/integrations', { cookie: su })).json;
+    expect(reg.items.find((i: any) => i.id === 'sso-oidc').state.status).toBe('CONNECTED');
+    expect(reg.items.find((i: any) => i.id === 'ldap').state.status).toBe('NEEDS_SETUP');
   });
 });
