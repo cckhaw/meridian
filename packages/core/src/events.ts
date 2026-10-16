@@ -8,8 +8,8 @@ import { queueOutbox } from './lifecycle-state.js';
  * The dispatcher then fans it out into one delivery per outbound webhook, per TM Forum 688 listener and per mapped topic, and delivers each with its own
  * retries. A listener sees only the events it asked for, in TM Forum event shape.
  */
-export type DomainEventType = 'ORDER_CREATED' | 'ORDER_CANCELLED' | 'ORDER_COMPLETED' | 'SIM_SWAPPED' | 'MSISDN_CHANGED' | 'OWNERSHIP_TRANSFERRED' | 'SERVICE_SUSPENDED' | 'SERVICE_RESUMED' | 'SERVICE_BARRED' | 'SERVICE_TERMINATED' | 'PLAN_CHANGED' | 'VAS_CHANGED' | 'PAYMENT_RECEIVED' | 'INVOICE_ISSUED' | 'CONTRACT_GENERATED';
-export const EVENT_TYPES: DomainEventType[] = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED'];
+export type DomainEventType = 'ORDER_CREATED' | 'ORDER_CANCELLED' | 'ORDER_COMPLETED' | 'SIM_SWAPPED' | 'MSISDN_CHANGED' | 'OWNERSHIP_TRANSFERRED' | 'SERVICE_SUSPENDED' | 'SERVICE_RESUMED' | 'SERVICE_BARRED' | 'SERVICE_TERMINATED' | 'PLAN_CHANGED' | 'VAS_CHANGED' | 'PAYMENT_RECEIVED' | 'INVOICE_ISSUED' | 'CONTRACT_GENERATED' | 'KYC_SUBMITTED' | 'KYC_DECIDED';
+export const EVENT_TYPES: DomainEventType[] = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED', 'KYC_SUBMITTED', 'KYC_DECIDED'];
 
 /** The TM Forum event each business event is announced as, and the resource it carries. */
 export const TMF_EVENT: Record<DomainEventType, { type: string; resource: string; domain: string }> = {
@@ -28,6 +28,8 @@ export const TMF_EVENT: Record<DomainEventType, { type: string; resource: string
   PAYMENT_RECEIVED: { type: 'PaymentCreateEvent', resource: 'payment', domain: 'payment' },
   INVOICE_ISSUED: { type: 'CustomerBillCreateEvent', resource: 'customerBill', domain: 'customerBillManagement' },
   CONTRACT_GENERATED: { type: 'DocumentCreateEvent', resource: 'document', domain: 'documentManagement' },
+  KYC_SUBMITTED: { type: 'PartyIdentificationSubmittedEvent', resource: 'kycCase', domain: 'partyManagement' },
+  KYC_DECIDED: { type: 'PartyIdentificationDecidedEvent', resource: 'kycCase', domain: 'partyManagement' },
 };
 
 // ───────────────────────── raising an event ─────────────────────────

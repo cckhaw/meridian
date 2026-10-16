@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRegional } from '@/components/settings-provider';
 import { useApi } from '@/lib/api';
 import { useSegments } from '@/lib/segments';
+import { emptyIdentity, IdentityFields, identityPayload, type IdentityState } from '@/components/identity-capture';
 
 /** Two-letter country codes offered in the country list (named with the browser's own country names). */
 const COUNTRIES = ['SG', 'MY', 'ID', 'TH', 'VN', 'PH', 'BN', 'KH', 'LA', 'MM', 'CN', 'HK', 'TW', 'JP', 'KR', 'IN', 'LK', 'BD', 'PK', 'AU', 'NZ', 'AE', 'SA', 'QA', 'GB', 'IE', 'FR', 'DE', 'NL', 'ES', 'IT', 'CH', 'SE', 'NO', 'DK', 'US', 'CA', 'MX', 'BR', 'ZA', 'EG', 'NG', 'KE'];
@@ -23,6 +24,8 @@ export function CustomerForm({ submitLabel, busy, error, initial, onSubmit }: { 
   const fields = meta.data?.customers?.fields ?? {};
   const cycles = meta.data?.billCycles as { days: number[]; defaultCycle: number; defaultDay: number; defaultMode: string } | undefined;
   const [f, setF] = useState<CustomerFormValues>({ segment: '', displayName: '', idDocument: '', email: '', phone: '', dateOfBirth: '', gender: '', line1: '', line2: '', postcode: '', city: '', state: '', country: '', billCycle: '', ...initial });
+  const [idn, setIdn] = useState<IdentityState>(emptyIdentity());
+  const [problem, setProblem] = useState('');
   const set = (k: keyof CustomerFormValues) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const show = (k: string) => (fields[k] ?? 'optional') !== 'hidden';
   const req = (k: string) => fields[k] === 'required';
@@ -33,9 +36,17 @@ export function CustomerForm({ submitLabel, busy, error, initial, onSubmit }: { 
   if (meta.error) return <Alert>{meta.error}</Alert>;
   if (!meta.data) return <Spinner />; // the settings decide which details appear, so wait for them rather than show fields that then vanish
 
+  const segmentId = f.segment || segs.list[0]?.id || '';
+  const individual = segs.individual(segmentId);
+  const dobShown = show('dateOfBirth');
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    // No customer without an identity check: the ID details and live photographs travel with the customer.
+    const p = identityPayload(idn, individual, { dobKnown: dobShown && !!f.dateOfBirth });
+    if ('missing' in p) { setProblem(p.missing); return; }
+    setProblem('');
     onSubmit({
+      identity: { ...p.identity, dateOfBirth: (dobShown ? f.dateOfBirth : idn.dateOfBirth) || undefined },
       segment: f.segment || segs.list[0]?.id, displayName: f.displayName, idDocument: f.idDocument,
       email: f.email || undefined, phone: f.phone || undefined, dateOfBirth: f.dateOfBirth || undefined, gender: f.gender || undefined,
       address: { line1: f.line1, line2: f.line2, postcode: f.postcode, city: f.city, state: f.state, country },
@@ -51,7 +62,7 @@ export function CustomerForm({ submitLabel, busy, error, initial, onSubmit }: { 
         {(cycles?.days ?? Array.from({ length: 28 }, (_, i) => i + 1)).map((d) => <option key={d} value={d}>Day {d}</option>)}</Select></Field>
       {show('email') && <Field label="E-mail"><Input type="email" required={req('email')} value={f.email} onChange={set('email')} /></Field>}
       {show('phone') && <Field label="Phone"><Input type="tel" required={req('phone')} value={f.phone} onChange={set('phone')} /></Field>}
-      {show('dateOfBirth') && <Field label="Date of birth"><Input type="date" max={today} min="1900-01-01" required={req('dateOfBirth')} value={f.dateOfBirth} onChange={set('dateOfBirth')} /></Field>}
+      {show('dateOfBirth') && <Field label="Date of birth" hint="Needed for the identity check."><Input type="date" max={today} min="1900-01-01" required value={f.dateOfBirth} onChange={set('dateOfBirth')} /></Field>}
       {show('gender') && <Field label="Gender"><Select required={req('gender')} value={f.gender} onChange={set('gender')}><option value="">{req('gender') ? 'Choose…' : 'Not stated'}</option>{GENDERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>}
       {show('address') && (
         <div className="grid gap-4 sm:col-span-2 sm:grid-cols-2">
@@ -63,7 +74,8 @@ export function CustomerForm({ submitLabel, busy, error, initial, onSubmit }: { 
       {show('city') && <Field label="City"><Input autoComplete="address-level2" required={req('city')} value={f.city} onChange={set('city')} /></Field>}
       {show('state') && <Field label="State or region"><Input autoComplete="address-level1" required={req('state')} value={f.state} onChange={set('state')} /></Field>}
       {show('country') && <Field label="Country"><Select required={req('country')} value={country} onChange={set('country')}><option value="">Choose…</option>{[...new Set([...(country && !COUNTRIES.includes(country) ? [country] : []), ...COUNTRIES])].map((c) => <option key={c} value={c}>{countryName(c)}</option>)}</Select></Field>}
-      {error && <div className="sm:col-span-2"><Alert>{error}</Alert></div>}
+      <IdentityFields state={idn} onChange={setIdn} individual={individual} hideDob={dobShown} disabled={busy} />
+      {(problem || error) && <div className="sm:col-span-2"><Alert>{problem || error}</Alert></div>}
       <div className="sm:col-span-2"><Button type="submit" disabled={busy}>{busy ? 'Saving…' : submitLabel}</Button></div>
     </form>
   );

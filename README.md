@@ -60,6 +60,7 @@ Everything about outside systems is under the **Integration** menu (next to Sett
 ## Documentation
 
 - [Fibre coverage and serviceability](docs/FIBER_COVERAGE.md): the separately deployed coverage service, port locks, TMF 645/673, the admin hub, and the module switch
+- [Identity verification (KYC)](docs/KYC.md): live-camera photographs, the review queue, what approval and rejection do to orders
 - [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
 - [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies, bulk offer import, offer type switches and service types, markets
 - [Dunning and collections](docs/DUNNING.md): configurable rule-based ladders per market and customer type, late fees, QR payment links (PromptPay, PayNow, DuitNow, QRIS, QR Ph), exclusions, partial payments, payment arrangements, collection agency placements, Southeast Asia starter rules

@@ -1,5 +1,5 @@
 'use client';
-import { AgreementSigner, Alert, Badge, Button, Card, FiberCoverageCheck, Field, Input, Select, Spinner, type AgreementView, type FiberApi, type SignedPayload } from '@meridian/ui';
+import { AgreementSigner, Alert, Badge, Button, Card, FiberCoverageCheck, Field, IdCamera, Input, Select, Spinner, type AgreementView, type CapturedPhoto, type FiberApi, type SignedPayload } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -12,8 +12,8 @@ interface View {
   quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; instalmentMinor?: number } }>; financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean }; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; requiresInstallation?: boolean; taxName: string } | null;
   fiber?: { reservationId: string } | null;
   personal: Record<string, string | undefined>; personalProblems: string[]; address: Record<string, string> | null; consent: Record<string, unknown> | null;
-  kyc: { status: string; method: string; reason: string | null; returned: boolean } | null; documents: string[];
-  order: { id: string; number?: string | null; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; lines: Array<{ name: string; quantity: number }> } | null;
+  kyc: { status: string; method: string; reason: string | null; returned: boolean; needsReview?: boolean; canOrderWhileWaiting?: boolean } | null; documents: string[];
+  order: { id: string; number?: string | null; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; kycHold?: boolean; lines: Array<{ name: string; quantity: number }> } | null;
 }
 
 const ID_LABEL: Record<string, string> = { NATIONAL_ID: 'National ID card', PASSPORT: 'Passport', DRIVING_LICENCE: 'Driving licence', RESIDENCE_PERMIT: 'Residence permit' };
@@ -73,7 +73,9 @@ export function Wizard() {
   const header = <Summary view={view} />;
 
   // ── outcomes outside the form ──
-  if (view.status === 'KYC_REVIEW') return <Outcome title="We’re checking your ID" body="A team member is reviewing your documents. This page updates by itself; you can also come back later with the same browser." busy>{header}</Outcome>;
+  // A clean check does not hold the shopper up: they go on to pay while a person reviews it, and the service is switched on when it is approved.
+  const notYet = view.status === 'KYC_REVIEW' && !view.kyc?.canOrderWhileWaiting;
+  if (notYet) return <Outcome title="We’re checking your ID" body="A team member is reviewing your photos. This page updates by itself; you can also come back later with the same browser." busy>{header}</Outcome>;
   if (view.status === 'KYC_REJECTED') return (
     <Outcome title="We couldn’t verify your identity" body={view.kyc?.reason ?? 'The details or documents did not pass our checks.'} tone="danger">
       <Button onClick={async () => { await api('/application', { method: 'DELETE' }); router.push('/'); }}>Start again</Button>
@@ -102,7 +104,8 @@ export function Wizard() {
   }
 
   // ── the form ──
-  const approved = view.status === 'KYC_APPROVED';
+  const approved = view.status === 'KYC_APPROVED' || (view.status === 'KYC_REVIEW' && !!view.kyc?.canOrderWhileWaiting);
+  const inReview = view.status === 'KYC_REVIEW';
   const stepNo = approved ? 4 : ({ details: 1, documents: 2, address: 3, review: 3 } as const)[current];
   return (
     <div className="mx-auto max-w-xl space-y-5">
@@ -111,7 +114,7 @@ export function Wizard() {
       {header}
       {error && <Alert>{error}</Alert>}
       {approved
-        ? <Approved onError={setError} onPayment={(p) => { setPayment(p); void refresh(); }} />
+        ? <Approved inReview={inReview} onError={setError} onPayment={(p) => { setPayment(p); void refresh(); }} />
         : current === 'details' ? <Details view={view} onDone={async () => { setStep(null); await refresh(); }} />
         : current === 'documents' ? <Documents view={view} onChange={refresh} onBack={() => setStep('details')} onDone={() => setStep(null)} />
         : current === 'address' ? <AddressForm view={view} onDone={async () => { setStep(null); await refresh(); }} />
@@ -193,58 +196,33 @@ function Details({ view, onDone }: { view: View; onDone: () => void | Promise<vo
   );
 }
 
-const readBase64 = (file: Blob) => new Promise<string>((resolve, reject) => {
-  const r = new FileReader(); r.onerror = () => reject(new Error('Could not read that file.'));
-  r.onload = () => resolve(String(r.result).split(',')[1] ?? ''); r.readAsDataURL(file);
-});
-/** Phone photos are huge; shrink to a sensible size client-side so uploads are fast and under the limit. */
-async function prepare(file: File, maxBytes: number): Promise<string> {
-  if (file.type === 'application/pdf') { if (file.size > maxBytes) throw new Error('That PDF is too large.'); return readBase64(file); }
-  const bmp = await createImageBitmap(file).catch(() => null);
-  if (!bmp) throw new Error('That file is not a photo we can read. Use a JPEG or PNG.');
-  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
-  c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
-  const blob = await new Promise<Blob | null>((res) => c.toBlob(res, 'image/jpeg', 0.85));
-  if (!blob || blob.size > maxBytes) throw new Error('That photo is still too large. Try a smaller one.');
-  return readBase64(blob);
-}
-
 function Documents({ view, onChange, onBack, onDone }: { view: View; onChange: () => Promise<unknown>; onBack: () => void; onDone: () => void }) {
-  const { kyc } = useConfig();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const need: Array<[string, string, string]> = [
-    ['ID_FRONT', `Front of your ${ID_LABEL[view.personal.idType ?? ''] ?? 'ID'}`, 'environment'],
-    ...(view.personal.idType === 'PASSPORT' ? [] : [['ID_BACK', 'Back of your ID', 'environment'] as [string, string, string]]),
-    ['SELFIE', 'A selfie, face clearly visible', 'user'],
-  ];
-  const upload = async (kind: string, file?: File) => {
-    if (!file) return;
+  const [shots, setShots] = useState<Record<string, CapturedPhoto>>({});
+  // The ID photos are taken live with the camera: there is no way to pick a picture from the gallery or to upload a file.
+  const need: Array<{ kind: string; label: string; hint: string; facing: 'environment' | 'user'; frame: 'card' | 'face' | 'page' }> = view.personal.idType === 'PASSPORT'
+    ? [{ kind: 'ID_FRONT', label: 'Your passport photo page', hint: 'The page with your photo and number.', facing: 'environment', frame: 'page' }, { kind: 'SELFIE', label: 'A selfie', hint: 'Your face clearly visible, in good light.', facing: 'user', frame: 'face' }]
+    : [{ kind: 'ID_FRONT', label: `Front of your ${ID_LABEL[view.personal.idType ?? ''] ?? 'ID'}`, hint: 'The side with your photo.', facing: 'environment', frame: 'card' }, { kind: 'ID_BACK', label: 'Back of your ID', hint: 'The other side.', facing: 'environment', frame: 'card' }, { kind: 'SELFIE', label: 'A selfie', hint: 'Your face clearly visible, in good light.', facing: 'user', frame: 'face' }];
+  const upload = async (kind: string, p: CapturedPhoto | null) => {
+    if (!p) return;
+    setShots((s) => ({ ...s, [kind]: p }));
     setBusy(kind); setError(null);
-    try { await api('/application/documents', { method: 'POST', json: { kind, dataBase64: await prepare(file, kyc.maxDocumentBytes) } }); await onChange(); }
-    catch (e) { setError((e as Error).message); } finally { setBusy(null); }
+    try { await api('/application/documents', { method: 'POST', json: { kind, dataBase64: p.dataBase64, capture: p.capture } }); await onChange(); }
+    catch (e) { setError((e as Error).message); setShots((s) => { const { [kind]: _x, ...rest } = s; return rest; }); } finally { setBusy(null); }
   };
-  const done = need.every(([k]) => view.documents.includes(k));
+  const done = need.every((n) => view.documents.includes(n.kind));
   return (
     <Card>
       <div className="space-y-4">
         <h2 className="text-title3 font-semibold">Verify your identity</h2>
-        <p className="text-subhead text-label2">Take or upload clear photos. All four corners of the ID must be visible and the text readable. Your documents are encrypted and only used to verify who you are.</p>
+        <p className="text-subhead text-label2">Take a photo of your ID and a selfie with your camera. Fit the whole ID in the frame, flat, with the text readable. Photos from your gallery can’t be used. They are encrypted and only used to verify who you are.</p>
         <ul className="space-y-3">
-          {need.map(([kind, label, cam]) => {
-            const has = view.documents.includes(kind);
-            return (
-              <li key={kind} className="flex items-center gap-3 rounded-control border border-separator p-3">
-                <span className="flex-1"><span className="block font-medium">{label}</span>{has ? <Badge tone="success">Uploaded</Badge> : <span className="text-footnote text-label2">JPEG, PNG or PDF</span>}</span>
-                <label className="inline-flex min-h-tap cursor-pointer items-center rounded-control bg-surface2 px-4 text-subhead font-medium focus-within:ring-2 focus-within:ring-accent">
-                  {busy === kind ? 'Uploading…' : has ? 'Replace' : 'Add photo'}
-                  <input type="file" accept="image/*,application/pdf" capture={cam as 'user' | 'environment'} className="sr-only" aria-label={`${label}: choose file`} disabled={busy !== null} onChange={(e) => { void upload(kind, e.target.files?.[0]); e.target.value = ''; }} />
-                </label>
-              </li>
-            );
-          })}
+          {need.map((n) => (
+            <li key={n.kind}><IdCamera label={n.label} hint={n.hint} facing={n.facing} frame={n.frame} disabled={busy !== null} done={view.documents.includes(n.kind)} value={shots[n.kind] ?? null} onChange={(p) => void upload(n.kind, p)} /></li>
+          ))}
         </ul>
+        {busy && <p className="text-footnote text-label2" role="status">Saving the photo…</p>}
         {error && <Alert>{error}</Alert>}
         <div className="flex gap-2"><Button variant="secondary" onClick={onBack}>Back</Button><Button className="flex-1" disabled={!done || busy !== null} onClick={onDone}>Continue</Button></div>
       </div>
@@ -334,7 +312,7 @@ function Review({ view, onBack, onSubmitted }: { view: View; onBack: () => void;
   );
 }
 
-function Approved({ onPayment, onError }: { onPayment: (p: PaymentStart) => void; onError: (m: string) => void }) {
+function Approved({ onPayment, onError, inReview }: { onPayment: (p: PaymentStart) => void; onError: (m: string) => void; inReview?: boolean }) {
   const [busy, setBusy] = useState(false);
   const go = async () => {
     setBusy(true);
@@ -344,8 +322,8 @@ function Approved({ onPayment, onError }: { onPayment: (p: PaymentStart) => void
   return (
     <Card>
       <div className="space-y-4 text-center">
-        <h2 className="text-title2 font-semibold">You’re verified</h2>
-        <p className="text-subhead text-label2">Review your order above, then continue to payment.</p>
+        <h2 className="text-title2 font-semibold">{inReview ? 'Your ID is being checked' : 'You’re verified'}</h2>
+        <p className="text-subhead text-label2">{inReview ? 'You don’t need to wait. Review your order above and pay now: we switch your service on as soon as the check is approved. If it can’t be approved, the order is cancelled and you are refunded in full.' : 'Review your order above, then continue to payment.'}</p>
         <Button onClick={go} disabled={busy} className="w-full">{busy ? 'Please wait…' : 'Continue to payment'}</Button>
       </div>
     </Card>
@@ -359,6 +337,7 @@ function Done({ order, shipping }: { order: NonNullable<View['order']>; shipping
         <div className="space-y-3 text-center" role="status">
           <div aria-hidden className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-success/15 text-title2 text-success">✓</div>
           <h1 className="text-title1 font-bold">{['COMPLETED', 'ACTIVATED'].includes(order.state) ? 'You’re all set' : 'Order received'}</h1>
+          {order.kycHold && <p className="rounded-control bg-surface2 p-3 text-subhead" role="note">We’re still checking your ID. Your service is switched on as soon as it is approved, usually within a few hours. If it can’t be approved you are refunded in full.</p>}
           <p className="text-body text-label2">Order {order.number ?? order.id.slice(0, 8).toUpperCase()} · {order.state.toLowerCase().replace(/_/g, ' ')}</p>
           <ul className="text-subhead">{order.lines.map((l) => <li key={l.name}>{l.name}{l.quantity > 1 ? ` × ${l.quantity}` : ''}</li>)}</ul>
           {order.numbers.length > 0 && <p className="rounded-control bg-surface2 p-3 text-subhead">Your new number: <strong className="tabular-nums">{order.numbers.join(', ')}</strong></p>}

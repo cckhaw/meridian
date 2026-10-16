@@ -35,3 +35,7 @@ Written in **Settings → Document templates** (`/settings/document-templates`):
 - **Document templates** (`/settings/document-templates`, permission `document:template`): the list of templates with the live version and any unpublished draft; a rich-text editor (headings, emphasis, lists, quotes, rules, alignment; pasting brings plain text only) with a token picker; **Preview** with sample details; **Versions** with who published what and when, how many signed documents each has, and a line-by-line comparison of any two; **Where it applies** (contexts, offer types, in use or not). Saving keeps a draft; **Publish** asks minor or major and shows the number it will become.
 - **Settings → Documents**: signature required at order and at plan change, send signed copies, and the retention periods.
 - The PDF viewer inside the page needs the browser's own PDF support; **Download** always opens the file in its own tab. Two addresses (`/api/documents/:id/file` and the link form) are the only ones the CRM allows itself to frame.
+
+## Identity photographs
+
+Identity photographs (ID front/back, selfie, company certificate) are vault documents of kind `KYC`, linked to their case by `kyc_case_id`, encrypted, status *pending verification* until the case is decided (then verified or rejected). See [KYC.md](KYC.md).

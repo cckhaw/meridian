@@ -10,7 +10,8 @@ import { createAccount, createCustomer, getCustomer } from './customers.js';
 import type { Db, Queryable, Row } from './db.js';
 import { DomainError, invalid, notFound, rejected } from './errors.js';
 import { gatewayById, type GatewayEvent } from './gateways.js';
-import { addDocument, attestInPerson, personalProblems, submitRemote, syncCase, markVerified, type Attestation, type Personal } from './kyc.js';
+import { claimCaseDocuments } from './documents.js';
+import { addDocument, attestInPerson, listDocuments, personalProblems, submitRemote, syncCase, markVerified, type Attestation, type Capture, type Personal } from './kyc.js';
 import { advanceOrder, cancelOrder, getOrder, placeOrderTx, type OrderInput } from './orders.js';
 import { runCreditCheck } from './device-financing.js';
 import { createsService, priceBasket } from './order-pricing.js';
@@ -206,7 +207,7 @@ export interface AppPatch { /** The agreement signed on screen (null clears it);
 export async function updateApplication(q: Queryable, id: string, access: AppAccess, p: AppPatch): Promise<Row> {
   const a = await load(q, id, access);
   // Identity and basket are frozen once KYC is decided; the delivery address and the consent (signed last, at the counter) stay open until checkout.
-  const open = a.status === 'DRAFT' || (a.status === 'KYC_APPROVED' && !p.lines && !p.personal);
+  const open = a.status === 'DRAFT' || ((a.status === 'KYC_APPROVED' || a.status === 'KYC_REVIEW') && !p.lines && !p.personal);
   if (!open) throw rejected('This application can no longer be edited.');
   if (new Date(a.expiresAt) < new Date()) throw rejected('This application has expired. Please start again.');
   const sets: string[] = []; const vals: unknown[] = [id];
@@ -254,12 +255,12 @@ export async function applicationAgreements(q: Queryable, id: string, access: Ap
   return { ...r, signed: !!a.agreement, signedAt: (a.agreement as { at?: string } | null)?.at ?? null };
 }
 
-export async function uploadDocument(q: Queryable, id: string, access: AppAccess, kind: Parameters<typeof addDocument>[2], bytes: Buffer) {
+export async function uploadDocument(q: Queryable, id: string, access: AppAccess, kind: Parameters<typeof addDocument>[2], bytes: Buffer, capture?: Capture | null) {
   const a = await load(q, id, access);
   // Identity documents are frozen once KYC is decided; the customer's signature is captured last, at the counter.
   const ok = a.status === 'DRAFT' || (a.status === 'KYC_APPROVED' && kind === 'SIGNATURE' && access.channel === 'RETAIL_ASSISTED');
   if (!ok) throw rejected('Documents can only be added while the application is open.');
-  return addDocument(q, id, kind, bytes);
+  return addDocument(q, id, kind, bytes, capture, await getStoreSettings(q), { username: access.staff?.username ?? 'applicant', ip: access.ip ?? null, userAgent: access.userAgent ?? null });
 }
 
 export async function submitKyc(q: Queryable, id: string, access: AppAccess, attestation?: Attestation): Promise<Row> {
@@ -298,9 +299,12 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     await q.query('SELECT 1 FROM applications WHERE id=$1 FOR UPDATE', [id]);
     const a = await load(q, id, access);
     if (a.status === 'ORDERED' && a.orderId) return { order: await getOrder(q, a.orderId), appId: a.id }; // retry: same answer
-    if (a.status !== 'KYC_APPROVED') throw rejected(({ DRAFT: 'Identity verification must be completed first.', KYC_REVIEW: 'Identity verification is still being reviewed.', KYC_REJECTED: 'Identity verification was not approved.' } as Record<string, string>)[a.status] ?? `This application is ${a.status.toLowerCase().replace('_', ' ')}.`);
-    if (new Date(a.expiresAt) < new Date()) throw rejected('This application has expired. Please start again.');
     const st = await getStoreSettings(q);
+    // A clean case that is only waiting for a person does not hold the shopper up: the order is taken and the service is switched on when the check is approved.
+    const kycCase = (await q.query('SELECT id, flags FROM kyc_cases WHERE application_id=$1', [id])).rows[0];
+    const inReview = a.status === 'KYC_REVIEW' && st.kycGate === 'BEFORE_ACTIVATION' && !!kycCase && !(kycCase.flags as string[]).length;
+    if (a.status !== 'KYC_APPROVED' && !inReview) throw rejected(({ DRAFT: 'Identity verification must be completed first.', KYC_REVIEW: 'Identity verification is still being reviewed.', KYC_REJECTED: 'Identity verification was not approved.' } as Record<string, string>)[a.status] ?? `This application is ${a.status.toLowerCase().replace('_', ' ')}.`);
+    if (new Date(a.expiresAt) < new Date()) throw rejected('This application has expired. Please start again.');
     const consent = a.consent as Consent | null;
     if (!consent?.acceptedTerms || !consent.privacyAccepted || consent.termsVersion !== st.termsVersion) throw rejected('The terms and privacy notice must be accepted.');
     if (access.channel === 'RETAIL_ASSISTED' && !consent.authorisedAssistant) throw rejected('The customer must authorise the assistant to complete this order on their behalf.');
@@ -325,8 +329,10 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
         throw e;
       }
     }
-    await markVerified(q, customerId);
+    if (a.status === 'KYC_APPROVED') await markVerified(q, customerId);
+    else await q.query(`UPDATE customers SET kyc_status='PENDING_REVIEW' WHERE id=$1 AND kyc_status <> 'VERIFIED'`, [customerId]);
     await q.query(`UPDATE kyc_cases SET customer_id=$2 WHERE application_id=$1`, [id, customerId]);
+    if (kycCase) await claimCaseDocuments(q, kycCase.id, customerId);
     const acct = (await q.query(`SELECT id FROM accounts WHERE customer_id=$1 AND status='ACTIVE' LIMIT 1`, [customerId])).rows[0];
     if (!acct) await createAccount(q, customerId, {});
 
@@ -447,13 +453,13 @@ export async function testGatewayOutcome(db: Db, appId: string, access: AppAcces
 export async function applicationView(q: Queryable, id: string, access: AppAccess): Promise<Record<string, unknown>> {
   const a = await load(q, id, access);
   const case_ = (await q.query('SELECT id, status, flags, decision_reason, checks, method, id_number_masked FROM kyc_cases WHERE application_id=$1', [id])).rows[0];
-  const docs = (await q.query('SELECT kind FROM kyc_documents WHERE application_id=$1', [id])).rows.map((r) => r.kind as string);
+  const docs = (await listDocuments(q, id)).map((d) => d.kind as string);
   const st = await getStoreSettings(q);
   const quote = await quoteBasket(q, { lines: a.lines, channel: a.channel, customerId: a.customerId }).catch(() => null);
   let order: Row | null = null;
   if (a.orderId) {
     const o = await getOrder(q, a.orderId);
-    order = { id: o.id, number: o.number ?? null, state: o.state, totalMinor: o.totalMinor, currency: o.currency, trackingNumber: o.fulfilment?.trackingNumber ?? null, failureReason: o.failureReason ?? null,
+    order = { id: o.id, number: o.number ?? null, state: o.state, totalMinor: o.totalMinor, currency: o.currency, trackingNumber: o.fulfilment?.trackingNumber ?? null, failureReason: o.failureReason ?? null, kycHold: !!o.kycHold,
       numbers: (o.services as Row[]).filter((s) => s.type === 'MOBILE').map((s) => s.identifier), lines: (o.lines as Row[]).map((l) => ({ name: l.description, quantity: l.quantity })) };
   }
   const p = a.personal as Partial<Personal>;
@@ -462,7 +468,7 @@ export async function applicationView(q: Queryable, id: string, access: AppAcces
     id: a.id, channel: a.channel, status: a.status, expiresAt: a.expiresAt, lines: a.lines, quote,
     personal: { ...personalSafe, idNumberMasked: case_?.idNumberMasked }, personalProblems: personalProblems(p),
     address: a.address, consent: a.consent, termsVersion: st.termsVersion, termsUrl: st.termsUrl, privacyUrl: st.privacyUrl,
-    kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW' } : null,
+    kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW', canOrderWhileWaiting: a.status === 'KYC_REVIEW' && st.kycGate === 'BEFORE_ACTIVATION' && !(case_.flags as string[]).length } : null,
     agreementSigned: !!a.agreement, fiber: a.fiber ?? null, documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
   };
 }

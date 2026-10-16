@@ -47,7 +47,7 @@ export default function Customers() {
                   <span aria-hidden className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-subhead font-semibold ${!segs.individual(c.segment) ? 'bg-accent text-accent-fg' : 'bg-accent/15 text-accent'}`}>{initials(c.displayName)}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{c.displayName}</span>
-                    <span className="block truncate text-footnote text-label2">{segs.name(c.segment)} · {c.phone ?? c.email ?? 'no contact on file'}{c.kycStatus === 'VERIFIED' ? ' · ID verified' : ''}</span>
+                    <span className="block truncate text-footnote text-label2">{segs.name(c.segment)} · {c.phone ?? c.email ?? 'no contact on file'}{c.kycStatus === 'VERIFIED' ? ' · ID verified' : c.kycStatus === 'PENDING_REVIEW' ? ' · ID in review' : c.kycStatus === 'REJECTED' ? ' · ID not approved' : ''}</span>
                   </span>
                   <span className="hidden shrink-0 text-right text-footnote text-label2 sm:block">
                     <span className="block">{Number(c.serviceCount).toLocaleString()} service{Number(c.serviceCount) === 1 ? '' : 's'}</span>

@@ -66,7 +66,7 @@ export async function documentLog(q: Queryable, f: { documentId?: string; custom
 // ───────────────────────── storing and reading bytes ─────────────────────────
 export interface NewDocument {
   kind: 'KYC' | 'CONTRACT' | 'SIGNATURE'; category: string; name: string; contentType: string; bytes: Buffer;
-  customerId?: string | null; applicationId?: string | null; orderId?: string | null; serviceId?: string | null;
+  customerId?: string | null; applicationId?: string | null; orderId?: string | null; serviceId?: string | null; kycCaseId?: string | null;
   encrypt?: boolean; status?: DocStatus; expiresAt?: string | null; retentionUntil?: string | null; templateVersionId?: string | null; meta?: Record<string, unknown>;
 }
 export async function putDocument(q: Queryable, i: NewDocument, actor: string, fetchImpl?: typeof fetch): Promise<Row> {
@@ -75,10 +75,10 @@ export async function putDocument(q: Queryable, i: NewDocument, actor: string, f
   let storage: 'DB' | 'S3' = 'DB', key: string | null = null, data: Buffer | null = stored;
   if (s3) { key = `${i.kind.toLowerCase()}/${i.customerId ?? 'none'}/${id}`; await s3Put(s3, key, stored, i.encrypt ? 'application/octet-stream' : i.contentType, fetchImpl); storage = 'S3'; data = null; }
   const r = (await q.query(
-    `INSERT INTO documents (id, kind, category, customer_id, application_id, order_id, service_id, name, content_type, size_bytes, sha256, storage, storage_key, data, encrypted, status, expires_at, retention_until, template_version_id, meta, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+    `INSERT INTO documents (id, kind, category, customer_id, application_id, order_id, service_id, name, content_type, size_bytes, sha256, storage, storage_key, data, encrypted, status, expires_at, retention_until, template_version_id, meta, created_by, kyc_case_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
     [id, i.kind, i.category, i.customerId ?? null, i.applicationId ?? null, i.orderId ?? null, i.serviceId ?? null, i.name.slice(0, 200), i.contentType, i.bytes.length, sha256Hex(i.bytes), storage, key, data, !!i.encrypt,
-     i.status ?? 'ACTIVE', i.expiresAt ?? null, i.retentionUntil ?? null, i.templateVersionId ?? null, JSON.stringify(i.meta ?? {}), actor])).rows[0]!;
+     i.status ?? 'ACTIVE', i.expiresAt ?? null, i.retentionUntil ?? null, i.templateVersionId ?? null, JSON.stringify(i.meta ?? {}), actor, i.kycCaseId ?? null])).rows[0]!;
   return r;
 }
 
@@ -131,9 +131,15 @@ export async function mirrorLegacyDocument(q: Queryable, kycDocumentId: string, 
     VALUES ('KYC',$1,$2,$3,$4,$5,$6,$7,'KYC_LEGACY',$8,true,'PENDING_VERIFICATION','applicant') ON CONFLICT (storage_key) WHERE storage = 'KYC_LEGACY' DO NOTHING`,
     [o.category, o.customerId ?? null, o.applicationId, o.kind.toLowerCase(), o.contentType, o.sizeBytes, o.sha256, kycDocumentId]);
 }
-export async function settleLegacyDocuments(q: Queryable, applicationId: string, outcome: 'APPROVED' | 'REJECTED', customerId: string | null, by: string | null) {
-  await q.query(`UPDATE documents SET status=$2, verified_by=$3, verified_at=now(), customer_id=COALESCE(customer_id,$4)
-     WHERE storage='KYC_LEGACY' AND application_id=$1 AND purged_at IS NULL`, [applicationId, outcome === 'APPROVED' ? (by ? 'VERIFIED_MANUAL' : 'VERIFIED_AUTO') : 'REJECTED', by ?? 'system', customerId]);
+/** The case decision settles every live piece of evidence in it (and the store-front's older rows for the same application). */
+export async function settleCaseDocuments(q: Queryable, c: { caseId: string; applicationId: string | null }, outcome: 'APPROVED' | 'REJECTED', customerId: string | null, by: string | null, reason?: string | null) {
+  await q.query(`UPDATE documents SET status=$3, status_reason=$6, verified_by=$4, verified_at=now(), customer_id=COALESCE(customer_id,$5)
+     WHERE purged_at IS NULL AND status NOT IN ('SUPERSEDED','PURGED_RETENTION') AND (kyc_case_id=$1 OR ($2::uuid IS NOT NULL AND application_id=$2 AND storage='KYC_LEGACY'))`,
+    [c.caseId, c.applicationId, outcome === 'APPROVED' ? (by ? 'VERIFIED_MANUAL' : 'VERIFIED_AUTO') : 'REJECTED', by ?? 'system', customerId, outcome === 'REJECTED' ? reason ?? null : null]);
+}
+/** Evidence taken before the shopper became a customer belongs to the customer from checkout on, so the clean-up of unclaimed uploads leaves it alone. */
+export async function claimCaseDocuments(q: Queryable, caseId: string, customerId: string) {
+  await q.query(`UPDATE documents SET customer_id=$2 WHERE kyc_case_id=$1 AND customer_id IS NULL`, [caseId, customerId]);
 }
 
 // ───────────────────────── listing ─────────────────────────
@@ -214,7 +220,8 @@ export async function sweepDocuments(db: Db, now = new Date(), actor = 'system',
   return db.tx(async (q) => {
     const expired = (await q.query(`UPDATE documents SET status='EXPIRED' WHERE kind='KYC' AND purged_at IS NULL AND status IN ('VERIFIED_AUTO','VERIFIED_MANUAL') AND expires_at IS NOT NULL AND expires_at < $1 RETURNING id, customer_id`, [now.toISOString()])).rows;
     for (const r of expired) await logDocument(q, who, 'EXPIRE', { documentId: r.id, customerId: r.customerId });
-    const stale = (await q.query(`SELECT id FROM documents WHERE kind='KYC' AND customer_id IS NULL AND storage <> 'KYC_LEGACY' AND status='PENDING_VERIFICATION' AND purged_at IS NULL AND created_at < $1`, [new Date(now.getTime() - s.tempUploadHours * 3_600_000).toISOString()])).rows;
+    const stale = (await q.query(`SELECT id FROM documents WHERE kind='KYC' AND customer_id IS NULL AND storage <> 'KYC_LEGACY' AND status='PENDING_VERIFICATION' AND purged_at IS NULL AND created_at < $1
+        AND (kyc_case_id IS NULL OR NOT EXISTS (SELECT 1 FROM kyc_cases k LEFT JOIN applications a ON a.id = k.application_id WHERE k.id = documents.kyc_case_id AND k.status IN ('PENDING','RETURNED') AND COALESCE(a.status,'KYC_REVIEW') NOT IN ('EXPIRED','CANCELLED')))`, [new Date(now.getTime() - s.tempUploadHours * 3_600_000).toISOString()])).rows;
     for (const r of stale) await purgeDocument(q, r.id, who, `Unclaimed upload removed after ${s.tempUploadHours} hours`, fetchImpl);
     // Customers with no live service and at least one ended: the retention clock starts at the last termination.
     const ended = (await q.query(

@@ -7,6 +7,7 @@ import { patch, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useSegments } from '@/lib/segments';
 import { d, dt, label, money, tone } from '@/lib/format';
+import { KycCard } from '@/components/kyc-card';
 import { AccountPane } from './account-pane';
 import { CasesPanel } from './cases-panel';
 import { DocumentsPanel } from './documents-panel';
@@ -51,7 +52,7 @@ export function CustomerView({ id }: { id: string }) {
 
   return (
     <>
-      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{segs.name(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><Badge tone={cust.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{cust.kycStatus === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
+      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge>{segs.name(cust.segment)}</Badge><Badge tone={tone(cust.status)}>{label(cust.status)}</Badge><Badge tone={cust.kycStatus === 'VERIFIED' ? 'success' : cust.kycStatus === 'REJECTED' ? 'danger' : 'warning'}>{({ VERIFIED: 'KYC verified', PENDING_REVIEW: 'KYC in review', REJECTED: 'KYC not approved' } as Record<string, string>)[cust.kycStatus] ?? 'KYC not verified'}</Badge><span>{cust.email ?? 'no email'} · {cust.phone ?? 'no phone'} · ID {cust.idDocumentRef}</span></span>}>{cust.displayName}</LargeTitle>
 
       {(cust.dateOfBirth || cust.gender || cust.address) && (
         <p className="-mt-3 mb-4 px-1 text-subhead text-label2">
@@ -156,6 +157,7 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
         </tbody></TableWrap>
       )}</>}
 
+      {can('customer:read') && <KycCard customerId={id} context="customer" />}
       {can('case:read') && <CasesPanel customerId={id} cases={c.cases} onChange={() => void reload()} />}
       {can('case:read') && <InteractionsPanel customerId={id} onChange={() => void reload()} />}
       {can('document:read', 'document:kyc') && <DocumentsPanel customerId={id} />}
