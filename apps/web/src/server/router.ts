@@ -514,6 +514,13 @@ clientRoute('POST', '/store/applications/:id/documents', async (c) => {
   return core.uploadDocument(c.db, c.params.id!, selfAccess(c), b.kind, Buffer.from(b.dataBase64, 'base64'), b.capture);
 }, { maxBody: DOC_BODY });
 clientRoute('POST', '/store/applications/:id/kyc', async (c) => { await core.submitKyc(c.db, c.params.id!, selfAccess(c)); return core.applicationView(c.db, c.params.id!, selfAccess(c)); });
+clientRoute('POST', '/store/applications/:id/mydigitalid', async (c) => {
+  await core.applicationView(c.db, c.params.id!, selfAccess(c));   // only the holder of the application may start it
+  return core.mydigitalidBegin(c.db, { context: 'STORE', applicationId: c.params.id! });
+});
+clientRoute('GET', '/store/applications/:id/mydigitalid/:sessionId', async (c) => { await core.applicationView(c.db, c.params.id!, selfAccess(c)); return core.mydigitalidSession(c.db, c.params.sessionId!, { applicationId: c.params.id! }); });
+/** The store-front's return page hands over what the provider sent. The one-time state is what proves it is the same browser session. */
+clientRoute('POST', '/store/mydigitalid/complete', async (c) => core.mydigitalidComplete(c.db, z.object({ state: z.string().min(10).max(200), code: z.string().max(4000).optional(), error: z.string().max(100).optional() }).parse(c.body)));
 const payOpts = z.object({ gateway: z.string().max(20).optional(), returnUrl: z.string().max(500).optional() });
 clientRoute('POST', '/store/applications/:id/checkout', async (c) => {
   const r = await core.checkout(c.db, c.params.id!, selfAccess(c), payOpts.parse(c.body ?? {}));
@@ -937,6 +944,13 @@ const newCustomer = z.object({
   dateOfBirth: blank(z.string().max(10)), gender: blank(z.string().max(20)), address: addressInput.optional(),
   parentCustomerId: uuid.optional(), account: z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).optional(),
 });
+/** The settings decide which details are asked for: hidden ones are dropped, required ones must be filled. Shared by creating a customer with photographs and with MyDigital ID. */
+async function prepareCustomer(db: core.Db, raw: unknown): Promise<core.NewCustomer> {
+  const input = newCustomer.parse(raw);
+  const details = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: input.email, phone: input.phone, dateOfBirth: input.dateOfBirth, gender: input.gender, address: input.address });
+  const billCycleDay = await core.resolveBillCycle(db, input.account?.billCycleDay);
+  return { ...input, email: details.email, phone: details.phone, dateOfBirth: details.dateOfBirth, gender: details.gender, address: details.address, account: { ...input.account, billCycleDay } } as core.NewCustomer;
+}
 get('/customers', 'customer:search', ({ db, query }) => core.searchCustomers(db, { q: str(query, 'q'), segment: str(query, 'segment'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/customers', 'customer:create', async ({ db, user, req, body }) => {
   // A customer normally comes into being with their first order. The order wizard says so (context: 'order'); the Customers screen needs the setting.
@@ -944,13 +958,10 @@ post('/customers', 'customer:create', async ({ db, user, req, body }) => {
   const viaOrder = ctx === 'order';
   if (!viaOrder && !(await core.getCustomerSettings(db)).allowCreateWithoutOrder) throw new DomainError('REJECTED', 'Customers are created while placing their first order. Your administrator has not allowed creating one on its own (Settings → Customers).');
   const { identity, ...rest } = z.object({ identity: identityInput }).passthrough().parse(body);   // identity is not optional: no customer without an identity check
-  const input = newCustomer.parse(rest);
-  // The settings decide which details are asked for: hidden ones are dropped, required ones must be filled.
-  const details = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: input.email, phone: input.phone, dateOfBirth: input.dateOfBirth, gender: input.gender, address: input.address });
-  const billCycleDay = await core.resolveBillCycle(db, input.account?.billCycleDay);
-  const r = await core.createCustomerWithKyc(db, { ...input, email: details.email, phone: details.phone, dateOfBirth: details.dateOfBirth, gender: details.gender, address: details.address, account: { ...input.account, billCycleDay } } as core.NewCustomer,
+  const input = await prepareCustomer(db, rest);
+  const r = await core.createCustomerWithKyc(db, input,
     { source: viaOrder ? 'CRM_ORDER' : 'CRM_CUSTOMER', actor: user.username, storeId: user.scope.storeId ?? null, who: docWho(user, req), evidence: toEvidence(identity.documents),
-      identity: { idType: identity.idType, idExpiry: identity.idExpiry, nationality: identity.nationality, dateOfBirth: identity.dateOfBirth ?? details.dateOfBirth } });
+      identity: { idType: identity.idType, idExpiry: identity.idExpiry, nationality: identity.nationality, dateOfBirth: identity.dateOfBirth ?? input.dateOfBirth } });
   await core.audit(db, user.username, 'customer', r.customer.id as string, 'CREATED', { kycCase: r.kyc.caseId });
   return r;
 }, { maxBody: 6_500_000 });
@@ -962,6 +973,36 @@ post('/customers/:id/kyc', 'customer:write', async ({ db, user, req, params, bod
     identity: { idType: b.idType, idNumber: b.idNumber, idExpiry: b.idExpiry, nationality: b.nationality, dateOfBirth: b.dateOfBirth } }));
   return { caseId: c.id, status: c.status, flags: c.flags, kyc: await core.customerKycView(db, params.id!) };
 }, { maxBody: 6_500_000 });
+
+// ───────────────────────── MyDigital ID: the other way to prove identity ─────────────────────────
+const idPlain = z.object({ idType: z.enum(['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT']), idExpiry: blank(z.string().max(10)), nationality: blank(z.string().max(60)), dateOfBirth: blank(z.string().max(10)) });
+get('/kyc/methods', 'customer:read', ({ db }) => core.kycMethods(db));
+/** A new customer who proves identity with MyDigital ID. Nothing is created until the provider confirms; the form waits (encrypted) in the session. */
+post('/kyc/mydigitalid/customer', 'customer:create', async ({ db, user, body }) => {
+  const { identity, context, ...rest } = z.object({ identity: idPlain, context: z.literal('order').optional() }).passthrough().parse(body);
+  const customer = await prepareCustomer(db, rest);
+  return core.mydigitalidBegin(db, { context: 'CRM_NEW', actor: user.username, draft: { customer, identity: { ...identity, idExpiry: identity.idExpiry ?? undefined, nationality: identity.nationality ?? undefined, dateOfBirth: identity.dateOfBirth ?? customer.dateOfBirth ?? undefined, idNumber: customer.idDocument }, source: context === 'order' ? 'CRM_ORDER' : 'CRM_CUSTOMER', storeId: user.scope.storeId ?? null } });
+});
+post('/customers/:id/kyc/mydigitalid', 'customer:write', async ({ db, user, params, body }) => {
+  assertCustomer(user, params.id!);
+  const b = idPlain.extend({ idNumber: z.string().min(4).max(40), context: z.enum(['order', 'customer']).optional() }).parse(body);
+  return core.mydigitalidBegin(db, { context: 'CRM_EXISTING', customerId: params.id!, actor: user.username, draft: { identity: { idType: b.idType, idNumber: b.idNumber, idExpiry: b.idExpiry ?? undefined, nationality: b.nationality ?? undefined, dateOfBirth: b.dateOfBirth ?? undefined }, source: b.context === 'order' ? 'CRM_ORDER' : 'CRM_CUSTOMER' } });
+});
+/** The CRM screen asks while the pop-up is open. Only the person who started it can see the answer. */
+get('/kyc/mydigitalid/sessions/:id', 'customer:read', ({ db, user, params }) => core.mydigitalidSession(db, params.id!, { actor: user.username }));
+route('POST', '/kyc/mydigitalid/test', 'settings:manage', ({ db }) => core.mydigitalidTest(db));
+/** Where MyDigital ID sends the browser back to in the CRM (the address registered with the provider). It finishes the check and shows a short page to close. */
+open('GET', '/kyc/mydigitalid/callback', async ({ db, query }) => {
+  const state = String(query.get('state') ?? ''), code = query.get('code') ? String(query.get('code')) : undefined, error = query.get('error') ? String(query.get('error')) : undefined;
+  let title = 'Done', text = 'You can close this window and go back to Meridian.';
+  try {
+    const r = await core.mydigitalidComplete(db, { state, code, error });
+    if (r.status === 'FAILED') { title = 'Could not confirm'; text = r.message; } else text = `${r.message} You can close this window and go back to Meridian.`;
+  } catch (e) { title = 'Link no longer valid'; text = e instanceof DomainError ? e.message : 'Start again from Meridian.'; }
+  const esc = (v: string) => v.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]!);
+  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><body style="font:16px system-ui;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center"><main><h1 style="font-size:22px">${esc(title)}</h1><p>${esc(text)}</p></main><script>try{window.opener&&window.opener.postMessage({type:'mydigitalid-done'},'*');setTimeout(function(){window.close()},1500)}catch(e){}</script>`,
+    { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' } });
+});
 
 /** The 360 shows only the sections a user's permissions cover, so e.g. a dealer never sees invoices or cases. */
 function redact360(u: SessionUser, c: core.Row) {

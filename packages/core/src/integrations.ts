@@ -322,11 +322,19 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Identity and compliance ─────────────
   {
-    id: 'ekyc', group: 'Identity, credit and collections', name: 'Identity verification (eKYC)', with: 'An eKYC vendor (document check, liveness, registry lookup)',
-    summary: 'Online applicants upload ID documents and a compliance officer reviews them (or, in automatic mode, clean applications are approved by the rules alone). In the CRM, staff sight the original ID in person. The rules below apply to the store-front, the CRM or both, as marked. No eKYC vendor is called today; automatic mode is meant to sit behind one.',
-    maturity: 'MANUAL', direction: 'OUT',
-    needs: ['Choose an eKYC vendor', 'Add a connector that verifies the document and selfie and feeds the result into the same checks', 'Keep automatic approval off until it exists'],
-    configure: { label: 'Identity rules', href: '/admin/integrations?item=ekyc' }, doc: 'STOREFRONT.md', keywords: 'ekyc kyc identity verification liveness document id vendor compliance',
+    id: 'ekyc', group: 'Identity, credit and collections', name: 'Identity verification (ID check service)', with: 'An ID check service over REST (document OCR, face match, liveness), or the built-in simulator',
+    summary: 'Applicants and customers photograph their ID with the live camera, as always. With a service connected, the photographs and the typed details go to it after the local rules: a clean pass is verified at once and the waiting order released; a doubtful answer opens a review task with the service’s verdict in front of the reviewer; a fail rejects the case and cancels and refunds the order. If the service cannot be reached the case drops to manual review and nobody is rejected because of it. A service that only checks the document is fine: what it does not return is not judged. The rules below apply to the store-front, the CRM or both, as marked.',
+    maturity: 'BUILT', direction: 'OUT',
+    needs: ['Add the service below: its address, the key, and where its answer keeps the verdict, extracted fields and scores (the defaults suit a typical service)', 'Set the face-match limits, and whether a clean pass is approved without a person', 'Try it first with the simulator: an ID number ending 9999 fails, 0000 goes to review, 5555 simulates an outage'],
+    configure: { label: 'Identity rules', href: '/admin/integrations?item=ekyc' }, doc: 'KYC.md', keywords: 'ekyc kyc identity verification liveness document id vendor compliance ocr face match provider',
+  },
+  {
+    id: 'mydigitalid', group: 'Identity, credit and collections', name: 'MyDigital ID', with: 'MyDigital ID (an OpenID Connect identity provider)',
+    summary: 'A second way to prove identity, offered next to the photographs. The customer approves in their MyDigital ID app and comes back; Meridian checks the signed answer and compares the name, ID number and date of birth with what was entered, then the same rules (age, expiry, duplicates) run. A confirmed identity is verified without photographs; if anything does not match, nothing is created and the customer can correct the details or take the photographs instead.',
+    maturity: 'BUILT', direction: 'BOTH',
+    endpoints: [{ method: 'GET', path: '/api/kyc/mydigitalid/callback', purpose: 'Where MyDigital ID returns the browser in the CRM (register it as the CRM redirect address)', auth: 'None; the one-time state proves the attempt' }],
+    needs: ['Register Meridian with MyDigital ID and receive a client id and secret', 'Register the redirect addresses: the CRM one shown above, and the store-front’s /apply/mydigitalid', 'Add the connection below (issuer, client id, secret, redirect addresses) and use “Test the connection”', 'Check the claim names MyDigital ID sends for the name, ID number and date of birth'],
+    doc: 'KYC.md', keywords: 'mydigital id mydigitalid digital identity oidc kyc malaysia government login',
   },
   {
     id: 'secrets', group: 'Platform', name: 'Keys that protect customer data', with: 'Your secrets store',
@@ -445,6 +453,7 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
   const embedded = !(env.DATABASE_URL ?? '').trim();
   const fibre = await fiberStatus(q);
   const authCounts = new Map<string, number>((await q.query(`SELECT kind, count(*)::int AS n FROM integration_endpoints WHERE group_key='auth' AND enabled GROUP BY kind`)).rows.map((r) => [r.kind as string, r.n as number]));
+  const identityCounts = new Map<string, number>((await q.query(`SELECT kind, count(*)::int AS n FROM integration_endpoints WHERE group_key='identity' AND enabled GROUP BY kind`)).rows.map((r) => [r.kind as string, r.n as number]));
   const lastSync = ((await q.query(`SELECT max(finished_at) AS at FROM directory_sync_runs WHERE status='OK'`)).rows[0]?.at as string | null) ?? null;
   const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q), wfmSet = await getWfmSettings(q);
 
@@ -472,6 +481,12 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
         if (def.id === 'sso-saml') { status = 'STAND_IN'; detail = n ? `${n} provider${n === 1 ? '' : 's'} stored. Sign-in through SAML is not available yet.` : 'Not available yet; use OpenID Connect.'; }
         else if (!n) { status = 'NEEDS_SETUP'; detail = 'Nothing connected yet.'; }
         else { status = 'CONNECTED'; detail = def.id === 'ldap' ? `${n} director${n === 1 ? 'y' : 'ies'} connected.${lastSync ? ` Last sync ${lastSync.slice(0, 16).replace('T', ' ')} UTC.` : ' Not synced yet.'}` : `${n} connected.`; }
+        break;
+      }
+      case 'ekyc': case 'mydigitalid': {
+        const n = identityCounts.get(def.id === 'ekyc' ? 'KYC_OCR' : 'KYC_MYDIGITALID') ?? 0;
+        if (!n) { status = 'MANUAL'; detail = def.id === 'ekyc' ? 'No service connected: every case waits for a person (or the rules alone in automatic mode).' : 'Not set up; customers use the photographs.'; }
+        else { status = 'CONNECTED'; detail = def.id === 'ekyc' ? 'A service checks the photographs before a person is asked.' : 'Offered to customers next to the photographs.'; }
         break;
       }
       case 'storefront':

@@ -29,7 +29,7 @@ export default function KycQueue() {
               <tr key={c.id}>
                 <Td><Link className="font-medium text-accent" href={`/kyc/${c.id}`}>{c.fullName}</Link></Td>
                 <Td className="text-label2">{ID_TYPE_LABEL[c.idType] ?? c.idType} {c.idNumberMasked}</Td>
-                <Td>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')}</Td>
+                <Td>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')}{c.method === 'MYDIGITAL_ID' ? ' · MyDigital ID' : ''}</Td>
                 <Td>{c.flags.length ? c.flags.map((f: string) => <Badge key={f} tone="warning">{FLAG_TEXT[f] ?? label(f)}</Badge>) : <span className="text-label2">Clean</span>}</Td>
                 <Td className="text-label2">{dt(c.submittedAt ?? c.createdAt)}{c.overdue && <> <Badge tone="danger">Overdue</Badge></>}</Td>
                 <Td>{c.waitingOrders > 0 ? <Badge tone="warning">{c.waitingOrders} {c.waitingOrders === 1 ? 'order' : 'orders'}</Badge> : <span className="text-label2">–</span>}</Td>

@@ -1827,7 +1827,7 @@ describe('offer type switches and service types', () => {
     const bo = await staff(['billing-ops']);
     expect((await call('GET', '/settings/integration-hub', { cookie: bo.cookie })).status).toBe(403);
     const hub = await call('GET', '/settings/integration-hub', { cookie: su });
-    expect(hub.json.groups).toHaveLength(7);
+    expect(hub.json.groups).toHaveLength(8);
     expect(hub.json.scopes.map((x: any) => x.id)).toContain('sim:swap');
     const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Self-care app', channel: 'SELF_CARE', scopes: ['subscriber:read', 'event:subscribe'] } });
     expect(made.status).toBe(201);
@@ -2285,5 +2285,51 @@ describe('identity check at customer creation', () => {
     expect((await call('GET', `/orders/${order.json.id}`, { cookie: su })).json).toMatchObject({ kycHold: false, state: 'COMPLETED', serviceCount: 1 });
     expect((await call('GET', `/customers/${cid}/kyc`, { cookie: su })).json.status).toBe('VERIFIED');
     expect((await call('GET', `/kyc/documents/${(await call('GET', `/kyc/cases/${made.json.kyc.caseId}`, { cookie: officer.cookie })).json.documents[0].id}`, { cookie: officer.cookie })).headers.get('content-type')).toBe('image/jpeg');
+  });
+  it('with an ID check service connected, a pass is verified at once, a fail is rejected, and MyDigital ID can be refused cleanly', async () => {
+    const su = await root();
+    const bodyFor = (id: string) => ({ context: 'order', segment: 'CONSUMER', displayName: 'Pia Provider', idDocument: id, ...IDENTITY() });
+    const ocr = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'identity', kind: 'KYC_OCR', name: 'ID check', config: { mode: 'SIMULATOR' } } });
+    expect(ocr.status).toBe(201);
+    const mdid = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'identity', kind: 'KYC_MYDIGITALID', name: 'MyDigital ID', url: 'https://mydigital.example.gov/oidc', secret: 's', config: { clientId: 'c', redirectUriCrm: 'https://crm.example.com/api/kyc/mydigitalid/callback' } } });
+    expect(mdid.status).toBe(201);
+    try {
+      expect((await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'identity', kind: 'KYC_MYDIGITALID', name: 'Bad', url: 'https://x.example.com', config: { clientId: 'c' } } })).status).toBe(400);   // no redirect address
+      expect(JSON.stringify(mdid.json)).not.toContain('"s"');
+      const methods = (await call('GET', '/kyc/methods', { cookie: su })).json;
+      expect(methods).toMatchObject({ photos: true, ocr: true, mydigitalid: { crm: true, store: false } });
+      const stamp = Math.random().toString(36).slice(2, 8);
+      const pass = await call('POST', '/customers', { cookie: su, body: bodyFor(`IDP${stamp}A`) });
+      expect(pass.json.kyc.status).toBe('APPROVED');
+      expect(pass.json.customer.kycStatus).toBe('VERIFIED');
+      const failed = await call('POST', '/customers', { cookie: su, body: bodyFor(`IDP${stamp}9999`) });
+      expect(failed.json.kyc.status).toBe('REJECTED');
+      const doubt = await call('POST', '/customers', { cookie: su, body: bodyFor(`IDP${stamp}0000`) });
+      expect(doubt.json.kyc).toMatchObject({ status: 'PENDING', flags: ['PROVIDER_REVIEW'] });
+      const officer = await staff(['compliance']);
+      expect((await call('GET', `/kyc/cases/${doubt.json.kyc.caseId}`, { cookie: officer.cookie })).json.checks.provider).toMatchObject({ status: 'REVIEW', mode: 'SIMULATOR' });
+      const reg = (await call('GET', '/integrations', { cookie: su })).json;
+      expect(reg.items.find((i: any) => i.id === 'ekyc').state.status).toBe('CONNECTED');
+      expect(reg.items.find((i: any) => i.id === 'mydigitalid').state.status).toBe('CONNECTED');
+
+      // MyDigital ID: the discovery document, then the customer says no in their app
+      setAuthHttp(async () => Response.json({ issuer: 'https://mydigital.example.gov/oidc', authorization_endpoint: 'https://mydigital.example.gov/oidc/authorize', token_endpoint: 'https://mydigital.example.gov/oidc/token', jwks_uri: 'https://mydigital.example.gov/oidc/keys' }));
+      try {
+        const start = await call('POST', '/kyc/mydigitalid/customer', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Mia Digital', idDocument: `IDM${stamp}`, identity: { idType: 'NATIONAL_ID', dateOfBirth: '1990-01-01' } } });
+        expect(start.status).toBe(200);
+        const u = new URL(start.json.url);
+        expect(u.searchParams.get('client_id')).toBe('c'); expect(u.searchParams.get('code_challenge_method')).toBe('S256');
+        expect((await call('GET', `/kyc/mydigitalid/sessions/${start.json.sessionId}`, { cookie: officer.cookie })).status).toBe(404);          // only whoever started it
+        const back = await call('GET', `/kyc/mydigitalid/callback?state=${u.searchParams.get('state')}&error=access_denied`, { origin: null });
+        expect(back.status).toBe(200); expect(back.headers.get('content-type')).toMatch(/text\/html/);
+        expect(back.text).toMatch(/did not approve/);
+        expect((await call('GET', `/kyc/mydigitalid/sessions/${start.json.sessionId}`, { cookie: su })).json).toMatchObject({ status: 'FAILED' });
+        expect((await call('GET', `/customers?q=IDM${stamp}`, { cookie: su })).json.items).toEqual([]);                                          // nothing was created
+        expect((await call('GET', '/kyc/mydigitalid/callback?state=nonsense-state-value', { origin: null })).text).toMatch(/no longer valid/);
+        expect((await call('POST', '/kyc/mydigitalid/test', { cookie: su })).json).toMatchObject({ ok: true });
+      } finally { setAuthHttp(null); }
+    } finally {
+      for (const e of [ocr.json, mdid.json]) await call('DELETE', `/settings/integration-hub/endpoints/${e.id}`, { cookie: su });
+    }
   });
 });

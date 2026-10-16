@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
 import { d, dt, label, money } from '@/lib/format';
 import { useAuth } from '@/lib/auth';
-import { DOC_LABEL, FLAG_TEXT, ID_TYPE_LABEL, REASONS, SOURCE_LABEL } from '../flags';
+import { DOC_LABEL, FLAG_TEXT, ID_TYPE_LABEL, METHOD_LABEL, REASONS, SOURCE_LABEL } from '../flags';
 
 export default function KycCase() {
   const { id } = useParams<{ id: string }>();
@@ -31,10 +31,41 @@ export default function KycCase() {
   const mine = !!me && (c.submittedBy === me.username || c.attestation?.by === me.username);
   return (
     <>
-      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><span>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')}</span>{c.status === 'PENDING' && <Badge tone={c.overdue ? 'danger' : 'warning'}>{c.overdue ? 'Overdue' : 'Due'} {dt(c.dueAt)}</Badge>}{c.customer && <Link className="text-accent" href={`/customers/${c.customer.id}`}>Open the customer</Link>}</span>}>{c.fullName}</LargeTitle>
+      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><span>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')} · {METHOD_LABEL[c.method] ?? c.method}</span>{c.status === 'PENDING' && <Badge tone={c.overdue ? 'danger' : 'warning'}>{c.overdue ? 'Overdue' : 'Due'} {dt(c.dueAt)}</Badge>}{c.customer && <Link className="text-accent" href={`/customers/${c.customer.id}`}>Open the customer</Link>}</span>}>{c.fullName}</LargeTitle>
       <p className="mb-4"><Link href="/kyc" className="text-subhead text-accent">← Back to the queue</Link></p>
       {c.flags.length > 0 && <div className="mb-4"><Alert tone="info">{c.flags.map((f: string) => FLAG_TEXT[f] ?? label(f)).join(' · ')}</Alert></div>}
       {c.status !== 'PENDING' && <div className="mb-4"><Alert tone={c.status === 'APPROVED' ? 'success' : 'danger'}>{label(c.status)} by {c.decidedBy} on {dt(c.decidedAt)}{c.decisionReason ? `: ${c.decisionReason}` : ''}</Alert></div>}
+
+      {(c.checks?.provider || c.checks?.mydigitalid) && (
+        <Card className="mb-5">
+          <SectionTitle>{c.checks.provider ? 'ID check service' : 'MyDigital ID'}</SectionTitle>
+          {c.checks.provider && (() => {
+            const v = c.checks.provider;
+            const tone = v.status === 'PASS' ? 'success' : v.status === 'FAIL' ? 'danger' : 'warning';
+            const yes = (x: boolean | null) => (x === null || x === undefined ? 'Not checked' : x ? 'Matches what was entered' : 'Differs from what was entered');
+            return (
+              <div className="space-y-3">
+                <p className="flex flex-wrap items-center gap-2 text-subhead"><Badge tone={tone}>{({ PASS: 'Passed', REVIEW: 'Not sure', FAIL: 'Failed', UNAVAILABLE: 'Not available' } as Record<string, string>)[v.status] ?? v.status}</Badge><span className="text-label2">{v.mode === 'SIMULATOR' ? 'Simulator' : 'REST service'} · {dt(v.checkedAt)} · {v.ms} ms{v.reference ? ` · ref ${v.reference}` : ''}</span></p>
+                {v.reasons?.length > 0 && <ul className="list-disc space-y-1 pl-5 text-subhead">{v.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>}
+                {v.status !== 'UNAVAILABLE' && (
+                  <dl className="grid gap-x-4 gap-y-1 text-subhead sm:grid-cols-[auto_1fr]">
+                    <dt className="text-label2">Document</dt><dd>{v.checks.document ? label(v.checks.document) : 'Not reported'}</dd>
+                    <dt className="text-label2">Name</dt><dd>{yes(v.checks.nameMatch)}</dd>
+                    <dt className="text-label2">Date of birth</dt><dd>{yes(v.checks.dobMatch)}</dd>
+                    <dt className="text-label2">ID number</dt><dd>{yes(v.checks.idNumberMatch)}</dd>
+                    <dt className="text-label2">Face match</dt><dd>{v.checks.faceMatch === null ? 'Not checked' : `${Math.round(v.checks.faceMatch * 100)}%`}</dd>
+                    <dt className="text-label2">Liveness</dt><dd>{v.checks.liveness ? label(v.checks.liveness) : 'Not checked'}</dd>
+                  </dl>)}
+                <p className="text-footnote text-label2">The service’s verdict helps, it does not decide for you. Compare the photographs yourself before approving.</p>
+              </div>);
+          })()}
+          {c.checks.mydigitalid && (
+            <div className="space-y-2 text-subhead">
+              <p>The customer proved their identity with MyDigital ID on {dt(c.checks.mydigitalid.verifiedAt)}. Name, ID number and date of birth matched what was entered. There are no photographs for this case.</p>
+              <p className="text-footnote text-label2">Provider reference {c.checks.mydigitalid.subject}. {c.flags.length ? 'A rule below flagged it, so it needs a person.' : 'Automatic approval is off, so it needs a person.'}</p>
+            </div>)}
+        </Card>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>
@@ -58,7 +89,7 @@ export default function KycCase() {
 
         <Card>
           <SectionTitle>Documents</SectionTitle>
-          {c.documents.length === 0 ? <p className="text-subhead text-label2">No documents were uploaded{c.method === 'IN_PERSON' ? ' (original ID sighted in store)' : ''}.</p> : (
+          {c.documents.length === 0 ? <p className="text-subhead text-label2">No documents were uploaded{c.method === 'IN_PERSON' ? ' (original ID sighted in store)' : c.method === 'MYDIGITAL_ID' ? ' (identity confirmed by MyDigital ID)' : ''}.</p> : (
             <ul className="grid grid-cols-2 gap-3">
               {c.documents.map((doc: any) => (
                 <li key={doc.id}>

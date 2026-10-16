@@ -1,3 +1,4 @@
+import { kycMethods, verifiedAssertion } from './kyc-providers.js';
 import { decryptText, encryptText } from './field-crypto.js';
 import { decodeSignature, previewOrderAgreements } from './agreements.js';
 import { getTypeConflicts } from './offer-conflicts.js';
@@ -302,7 +303,7 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     const st = await getStoreSettings(q);
     // A clean case that is only waiting for a person does not hold the shopper up: the order is taken and the service is switched on when the check is approved.
     const kycCase = (await q.query('SELECT id, flags FROM kyc_cases WHERE application_id=$1', [id])).rows[0];
-    const inReview = a.status === 'KYC_REVIEW' && st.kycGate === 'BEFORE_ACTIVATION' && !!kycCase && !(kycCase.flags as string[]).length;
+    const inReview = a.status === 'KYC_REVIEW' && st.kycGate === 'BEFORE_ACTIVATION' && !!kycCase && !(kycCase.flags as string[]).filter((f) => f !== 'PROVIDER_UNAVAILABLE').length;
     if (a.status !== 'KYC_APPROVED' && !inReview) throw rejected(({ DRAFT: 'Identity verification must be completed first.', KYC_REVIEW: 'Identity verification is still being reviewed.', KYC_REJECTED: 'Identity verification was not approved.' } as Record<string, string>)[a.status] ?? `This application is ${a.status.toLowerCase().replace('_', ' ')}.`);
     if (new Date(a.expiresAt) < new Date()) throw rejected('This application has expired. Please start again.');
     const consent = a.consent as Consent | null;
@@ -468,7 +469,8 @@ export async function applicationView(q: Queryable, id: string, access: AppAcces
     id: a.id, channel: a.channel, status: a.status, expiresAt: a.expiresAt, lines: a.lines, quote,
     personal: { ...personalSafe, idNumberMasked: case_?.idNumberMasked }, personalProblems: personalProblems(p),
     address: a.address, consent: a.consent, termsVersion: st.termsVersion, termsUrl: st.termsUrl, privacyUrl: st.privacyUrl,
-    kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW', canOrderWhileWaiting: a.status === 'KYC_REVIEW' && st.kycGate === 'BEFORE_ACTIVATION' && !(case_.flags as string[]).length } : null,
+    kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW', canOrderWhileWaiting: a.status === 'KYC_REVIEW' && st.kycGate === 'BEFORE_ACTIVATION' && !(case_.flags as string[]).filter((f) => f !== 'PROVIDER_UNAVAILABLE').length } : null,
+    identity: { mydigitalid: !!(await verifiedAssertion(q, id, p)) },
     agreementSigned: !!a.agreement, fiber: a.fiber ?? null, documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
   };
 }
@@ -498,7 +500,7 @@ export async function storeConfig(q: Queryable) {
   const [brand, regional, st, gw] = await Promise.all([getBranding(q), getRegional(q), getStoreSettings(q), activeGateways(q)]);
   return {
     brand: { name: brand.name, theme: brand.theme, logo: brand.logo ? { sha256: brand.logo.sha256, width: brand.logo.width, height: brand.logo.height } : null, favicon: brand.favicon ? { sha256: brand.favicon.sha256 } : null },
-    regional, kyc: { mode: st.kycMode, minAge: st.minAge, requiresBack: ['NATIONAL_ID', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'], maxDocumentBytes: 2_500_000, idTypes: ['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'] },
+    regional, kyc: { mode: st.kycMode, minAge: st.minAge, requiresBack: ['NATIONAL_ID', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'], maxDocumentBytes: 2_500_000, idTypes: ['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'], methods: await kycMethods(q) },
     terms: { version: st.termsVersion, termsUrl: st.termsUrl || null, privacyUrl: st.privacyUrl || null },
     payment: { gateways: gw.list.map((g) => ({ id: g.id, label: g.label, ...g.publicConfig() })), default: gw.default?.id ?? null },
     modules: { fiberCoverage: (await fiberModuleEnabled(q)) && fiberConfigured() },

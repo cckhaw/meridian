@@ -19,6 +19,8 @@ type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 let httpImpl: Fetch = (url, init) => fetch(url, init);
 export const setAuthHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => fetch(url, init)); };
 const http = (url: string, init: RequestInit = {}, timeoutMs = 10_000) => httpImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+/** The same call, for the other OpenID Connect integrations (MyDigital ID) so one test seam serves them all. */
+export const authHttp = http;
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const b64u = (b: Buffer) => b.toString('base64url');

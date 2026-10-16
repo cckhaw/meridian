@@ -96,6 +96,13 @@ async function readStored(q: Queryable, row: Row, fetchImpl?: typeof fetch): Pro
   return row.encrypted ? decryptBytes(raw) : raw;
 }
 
+/** The bytes of a stored document, for the server's own use (the ID check service). Not logged as a person viewing it. */
+export async function loadDocumentBytes(q: Queryable, id: string, fetchImpl?: typeof fetch): Promise<Buffer> {
+  const row = (await q.query('SELECT * FROM documents WHERE id=$1', [id])).rows[0];
+  if (!row) throw notFound('document', id);
+  return readStored(q, row, fetchImpl);
+}
+
 // ───────────────────────── identity documents ─────────────────────────
 export async function uploadKyc(q: Queryable, i: { customerId: string; category: string; name?: string; bytes: Buffer; expiresAt?: string | null }, who: DocWho, fetchImpl?: typeof fetch): Promise<Row> {
   if (!(KYC_CATEGORIES as readonly string[]).includes(i.category)) throw invalid(`The category must be one of ${KYC_CATEGORIES.join(', ')}.`);

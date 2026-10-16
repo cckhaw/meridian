@@ -4,12 +4,13 @@ import { conflict, DomainError, invalid, notFound } from './errors.js';
 import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
 import { resetEventGate } from './events.js';
 import { authEndpointProblem } from './auth-provider-config.js';
+import { identityEndpointProblem } from './kyc-provider-config.js';
 
 /**
  * Integration hub: the settings behind the northbound API gateway and the outside systems Meridian talks to, in six groups. Secrets entered here are encrypted
  * (MERIDIAN_DATA_KEY) and never sent back to the browser: a view says only whether one is set. Credentials that *we* issue (OAuth clients, API keys) are kept as hashes.
  */
-export const HUB_GROUPS = ['gateway', 'webhooks', 'wfm', 'network', 'finance', 'events', 'auth'] as const;
+export const HUB_GROUPS = ['gateway', 'webhooks', 'wfm', 'network', 'finance', 'events', 'auth', 'identity'] as const;
 export type HubGroup = (typeof HUB_GROUPS)[number];
 
 /** The kinds of endpoint each group holds. */
@@ -33,6 +34,10 @@ export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: s
     { kind: 'PAYMENT_GATEWAY', label: 'Payment provider', hint: 'DuitNow, PromptPay, QRIS, SGQR, card processors: credentials and the callback address' },
   ],
   events: [{ kind: 'EVENT_BUS', label: 'Event bus', hint: 'Kafka brokers or another event stream' }],
+  identity: [
+    { kind: 'KYC_OCR', label: 'ID check service (OCR, face match, liveness)', hint: 'A REST service that reads the ID photographs: address, token, how to read its answer, and when a clean answer approves on its own' },
+    { kind: 'KYC_MYDIGITALID', label: 'MyDigital ID', hint: 'Prove identity with MyDigital ID instead of photographs: issuer, client id and secret, redirect addresses and which claims carry the name, ID number and date of birth' },
+  ],
   auth: [
     { kind: 'IDP_OIDC', label: 'Single sign-on (OpenID Connect)', hint: 'Microsoft Entra ID, Okta, Ping Identity, Keycloak: issuer, client id and secret, which group gets which role' },
     { kind: 'IDP_SAML', label: 'Single sign-on (SAML 2.0)', hint: 'Provider address, entity id and signing certificate. Stored and checked; assertions are not accepted yet' },
@@ -77,7 +82,7 @@ export async function saveHubEndpoint(q: Queryable, actor: string, i: HubEndpoin
   const name = (i.name ?? '').trim();
   if (!name || name.length > 80) throw invalid('Give it a name of up to 80 characters.');
   for (const [v, what] of [[i.url, 'The address'], [i.fallbackUrl, 'The fallback address']] as const) if (v) { const p = hubUrlProblem(v, what); if (p) throw invalid(p); }
-  const authProblem = i.group === 'auth' ? authEndpointProblem(i.kind, { url: i.url, config: i.config }) : null;
+  const authProblem = i.group === 'auth' ? authEndpointProblem(i.kind, { url: i.url, config: i.config }) : i.group === 'identity' ? identityEndpointProblem(i.kind, { url: i.url, config: i.config }) : null;
   if (authProblem) throw invalid(authProblem);
   const timeout = i.timeoutMs ?? 10000;
   if (!Number.isInteger(timeout) || timeout < 100 || timeout > 120000) throw invalid('The timeout is 100 to 120,000 milliseconds.');

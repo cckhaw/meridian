@@ -89,7 +89,7 @@ function KycForm({ initial, reload }: { initial: StoreSettings; reload: () => vo
       <p className="text-footnote text-label2">One set of rules for both ways of selling. The badge on each line says where it applies.</p>
       <div className="divide-y divide-separator">
         <Row title="Online sign-ups are approved by" where={<Where store />}
-          hint="Manual: a compliance officer reviews every application. Automatic: applications that pass every rule are approved without review (only with an eKYC provider behind it).">
+          hint="Manual: a compliance officer reviews every application. Automatic: applications that pass every rule are approved without review. An ID check service or MyDigital ID, when connected below, approves a clean pass by its own setting.">
           <Select aria-label="Online sign-ups are approved by" value={f.kycMode} onChange={(e) => set('kycMode', e.target.value as StoreSettings['kycMode'])}><option value="manual">A compliance officer (recommended)</option><option value="auto">Automatic rules only</option></Select>
         </Row>
         <Row title="Photographs" where={<Where store crm />}

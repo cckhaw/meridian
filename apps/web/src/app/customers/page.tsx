@@ -72,5 +72,5 @@ function NewCustomer({ onDone }: { onDone: () => void }) {
     const r = await run(() => post('/customers', body));
     if (r) { onDone(); router.push(`/customers/${r.customer.id}`); }
   };
-  return <Card className="mb-6"><CustomerForm submitLabel="Create customer" busy={busy} error={error} onSubmit={(b) => void submit(b)} /></Card>;
+  return <Card className="mb-6"><CustomerForm submitLabel="Create customer" busy={busy} error={error} onSubmit={(b) => void submit(b)} onConfirmed={(id) => { onDone(); router.push(`/customers/${id}`); }} /></Card>;
 }

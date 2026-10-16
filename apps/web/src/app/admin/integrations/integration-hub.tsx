@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
 import { dt, label } from '@/lib/format';
 
-type Tab = 'gateway' | 'webhooks' | 'wfm' | 'network' | 'finance' | 'events' | 'auth';
+type Tab = 'gateway' | 'webhooks' | 'wfm' | 'network' | 'finance' | 'events' | 'auth' | 'identity';
 
 export interface Hub {
   groups: Tab[]; endpointKinds: Record<string, Array<{ kind: string; label: string; hint: string }>>; endpoints: any[]; oauthClients: any[]; apiKeys: any[]; rateLimits: Array<{ channel: string; perMinute: number; enabled: boolean; isDefault: boolean }>;
