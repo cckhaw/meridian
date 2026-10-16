@@ -9,7 +9,7 @@ import { CHANNELS } from './rbac.js';
 import { getMarketSettings, getRegional } from './settings.js';
 
 export const OFFER_IMPORT_MAX_ROWS = 1000;
-type Col = 'group' | 'id' | 'name' | 'type' | 'description' | 'monthly' | 'upfront' | 'tax' | 'term' | 'free' | 'etc' | 'subsidy' | 'retail' | 'fulfilment' | 'skus' | 'variants' | 'deals' | 'channels' | 'requires' | 'excludes' | 'partner' | 'market' | 'status' | 'golive';
+type Col = 'group' | 'id' | 'name' | 'type' | 'description' | 'monthly' | 'upfront' | 'tax' | 'term' | 'free' | 'etc' | 'subsidy' | 'retail' | 'fulfilment' | 'skus' | 'variants' | 'deals' | 'channels' | 'requires' | 'excludes' | 'partner' | 'market' | 'status' | 'golive' | 'validity' | 'ocs' | 'susmode' | 'susfee' | 'groupplan' | 'maxmembers' | 'members' | 'pool' | 'chars';
 /** Header names (as written in the template, plus a few natural variants) -> the column they mean. */
 const HEADERS: Record<string, Col> = {
   group_id: 'group', group: 'group', offer_id: 'id', id: 'id', name: 'name', offer_name: 'name', type: 'type', offer_type: 'type', description: 'description',
@@ -17,12 +17,14 @@ const HEADERS: Record<string, Col> = {
   contract_months: 'term', contract: 'term', contract_free_months: 'free', etc_percent: 'etc', subsidy: 'subsidy', device_retail_price: 'retail', retail_price: 'retail',
   fulfilment: 'fulfilment', fulfilment_options: 'fulfilment', stock_skus: 'skus', skus: 'skus', colours_storage: 'variants', variants: 'variants', device_contracts: 'deals', deals: 'deals',
   channels: 'channels', sold_through: 'channels', requires: 'requires', excludes: 'excludes', partner_code: 'partner', partner: 'partner', market: 'market', country: 'market', status: 'status', go_live_date: 'golive', active_from: 'golive',
+  validity_days: 'validity', ocs_plan_code: 'ocs', suspension_mode: 'susmode', suspension_fee: 'susfee', group_plan: 'groupplan', max_group_members: 'maxmembers', allowed_member_offers: 'members', shared_pool_quota_gb: 'pool', characteristics: 'chars',
 };
 /** The order of the columns in the template and in an export. */
 const ORDER: Array<[string, Col]> = [
   ['group_id', 'group'], ['offer_id', 'id'], ['name', 'name'], ['type', 'type'], ['description', 'description'], ['monthly_fee', 'monthly'], ['upfront_price', 'upfront'], ['prices_include_tax', 'tax'],
   ['contract_months', 'term'], ['contract_free_months', 'free'], ['etc_percent', 'etc'], ['subsidy', 'subsidy'], ['device_retail_price', 'retail'], ['fulfilment', 'fulfilment'], ['stock_skus', 'skus'],
   ['colours_storage', 'variants'], ['device_contracts', 'deals'], ['channels', 'channels'], ['requires', 'requires'], ['excludes', 'excludes'], ['partner_code', 'partner'], ['market', 'market'], ['status', 'status'], ['go_live_date', 'golive'],
+  ['validity_days', 'validity'], ['ocs_plan_code', 'ocs'], ['suspension_mode', 'susmode'], ['suspension_fee', 'susfee'], ['group_plan', 'groupplan'], ['max_group_members', 'maxmembers'], ['allowed_member_offers', 'members'], ['shared_pool_quota_gb', 'pool'], ['characteristics', 'chars'],
 ];
 
 export interface OfferImportRow { line: number; id: string; name: string; action: 'CREATE' | 'UPDATE'; status: 'OK' | 'ERROR' | 'SKIPPED'; message?: string }
@@ -130,7 +132,28 @@ function plan(get: (c: Col) => string, has: (c: Col) => boolean, ctx: Ctx, exist
   if (status === 'SCHEDULED' && !/^\d{4}-\d{2}-\d{2}$/.test(goLive)) bad('A scheduled offer needs go_live_date as YYYY-MM-DD.');
   if (goLive && status !== 'SCHEDULED') bad('go_live_date only goes with status SCHEDULED.');
 
+  // more terms: how long an expiring service lasts, the charging-system plan, what a suspension costs, group-plan terms and free-form characteristics
+  const validity = cell('validity') ? whole(cell('validity'), 'validity_days', 1, 3650) : undefined;
+  if (validity !== undefined && existing && validity !== existing.validityDays) bad('validity_days cannot be changed on an existing offer by a file: edit the offer in the catalog.');
+  const ocs = cell('ocs') ? { planCode: cell('ocs'), ...(existing?.ocs?.params ? { params: existing.ocs.params } : {}) } : undefined;
+  const susMode = cell('susmode').toUpperCase();
+  if (susMode && !['PAUSE', 'MAINTENANCE_FEE'].includes(susMode)) bad('suspension_mode: use PAUSE or MAINTENANCE_FEE.');
+  const suspension = susMode ? { mode: susMode, ...(susMode === 'MAINTENANCE_FEE' ? { monthlyFeeMinor: cell('susfee') ? amount(cell('susfee'), 'suspension_fee', r) : bad('A maintenance-fee suspension needs suspension_fee.') } : {}) } : undefined;
+  const gpText = cell('groupplan');
+  const gp = gpText ? yes(gpText) : null;
+  if (gpText && gp === null) bad(`group_plan: write yes or no (not “${gpText}”).`);
+  const groupTerms = gp === true
+    ? { isGroupOffer: true, maxGroupMembers: whole(cell('maxmembers') || bad('A group plan needs max_group_members.'), 'max_group_members', 1, 50), allowedMemberOfferIds: list(cell('members')), ...(cell('pool') ? { sharedPoolQuotaGb: whole(cell('pool'), 'shared_pool_quota_gb', 0, 100000) } : {}) }
+    : gp === false && existing ? null : undefined;
+  const characteristics = cell('chars') ? Object.fromEntries(list(cell('chars')).map((kv) => {
+    const i = kv.indexOf('=');
+    if (i < 1) bad(`characteristics: “${kv}” should look like name=value, separated by |.`);
+    const k = kv.slice(0, i).trim(), v = kv.slice(i + 1).trim();
+    return [k, v === 'true' ? true : v === 'false' ? false : v !== '' && !Number.isNaN(Number(v)) ? Number(v) : v];
+  })) : undefined;
+
   const common = {
+    ...(validity !== undefined && !existing ? { validityDays: validity } : {}), ...(ocs ? { ocs } : {}), ...(suspension ? { suspension } : {}), ...(groupTerms !== undefined ? { group: groupTerms } : {}), ...(characteristics ? { characteristics } : {}),
     description: cell('description') || undefined, ...(pricesGiven || !existing ? { prices } : {}), ...(contract ? { contract } : {}), ...(fulfilment ? { fulfilment } : {}),
     ...(cell('partner') ? { partnerCode: cell('partner') } : {}), ...(cell('requires') ? { requires: list(cell('requires')) } : {}), ...(cell('excludes') ? { excludes: list(cell('excludes')) } : {}),
     ...(channels ? { salesChannels: channels } : {}), ...(variants ? { variants } : {}), ...(deals ? { deals } : {}),
@@ -242,7 +265,10 @@ function offerRow(n: OfferNode, r: Pick<RegionalSettings, 'exponent'>): Record<C
     variants: (n.variants ?? []).map((v) => `${v.colour}:${v.storage ?? ''}:${v.sku}:${v.priceDeltaMinor ? plain(v.priceDeltaMinor) : ''}`).join('|'),
     deals: (n.deals ?? []).map((d) => `${d.termMonths}:${plain(d.subsidyMinor)}${d.waiveInLastMonths !== undefined ? `:${d.waiveInLastMonths}` : ''}`).join('|'),
     channels: (n.salesChannels ?? []).join('|'), requires: n.requires.join('|'), excludes: n.excludes.join('|'), partner: n.partnerCode ?? '', market: n.markets[0] ?? '',
-    status: n.status === 'RETIRED' ? '' : n.status, golive: '',
+    status: n.status === 'RETIRED' ? '' : n.status, golive: n.status === 'SCHEDULED' && n.activeFrom ? String(n.activeFrom).slice(0, 10) : '',
+    validity: n.validityDays ? String(n.validityDays) : '', ocs: n.ocs?.planCode ?? '', susmode: n.suspension?.mode ?? '', susfee: n.suspension?.monthlyFeeMinor !== undefined ? plain(n.suspension.monthlyFeeMinor) : '',
+    groupplan: n.group?.isGroupOffer ? 'yes' : '', maxmembers: n.group?.isGroupOffer ? String(n.group.maxGroupMembers) : '', members: n.group?.isGroupOffer ? n.group.allowedMemberOfferIds.join('|') : '',
+    pool: n.group?.sharedPoolQuotaGb !== undefined ? String(n.group.sharedPoolQuotaGb) : '', chars: Object.entries(n.characteristics ?? {}).map(([k, v]) => `${k}=${v}`).join('|'),
   };
 }
 
@@ -263,6 +289,8 @@ export async function offersTemplate(q: Queryable, o: { withOffers?: boolean } =
     '# stock_skus: SKUs separated by |. colours_storage: Colour:Storage:SKU:price difference, separated by | (for example Black:256GB:MJW44LL/A:0|Black:512GB:MJW54LL/A:300).',
     '# device_contracts (outright devices): months:subsidy[:free months] separated by | (for example 24:400|12:200). channels: ' + CHANNELS.join(', ') + '. requires and excludes: offer ids separated by |.',
     '# status: DRAFT, SCHEDULED (with go_live_date as YYYY-MM-DD, the start of that day in UTC) or ACTIVE.',
+    '# validity_days: how long an expiring service lasts (new offers only). ocs_plan_code: the plan code in the charging system. suspension_mode: PAUSE or MAINTENANCE_FEE (with suspension_fee).',
+    '# group_plan: yes for a family or shared plan, with max_group_members, allowed_member_offers (offer ids separated by |, empty for any mobile plan) and shared_pool_quota_gb. characteristics: name=value separated by |.',
     ORDER.map(([h]) => h).join(','),
   ];
   const rows: string[] = [];

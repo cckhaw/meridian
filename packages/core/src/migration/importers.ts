@@ -9,6 +9,7 @@ import { postJournal } from '../ledger.js';
 import { defaultCycleDay, getBillCycles } from '../customer-config.js';
 import { getMarketSettings, marketDuplicates, marketFor } from '../settings.js';
 import { importOffers } from '../offer-import.js';
+import { importStock } from '../inventory-import.js';
 import { getMatcher } from '../nrm.js';
 import { shardFor } from '../shard.js';
 import { importFields } from './entities.js';
@@ -145,7 +146,7 @@ const customers: Importer = {
       }
       batch.set(ref, { id, path });
       if (hash && seg.individual) batchHash.add(hash);
-      ins.push({ ref, id, shard: shardFor(id), segment: str(r.segment), name: str(r.display_name), docRef, hash: hash || null, market, parent: parentId, path, email: opt(r.email), phone: opt(r.phone), status: str(r.status) || 'ACTIVE', kyc: str(r.kyc_status) || 'NOT_VERIFIED', kycAt: opt(r.kyc_verified_at), dob: opt(r.date_of_birth), gender: opt(r.gender), address: json(r.address), createdAt: opt(r.created_at) });
+      ins.push({ ref, id, shard: shardFor(id), segment: str(r.segment), name: str(r.display_name), docRef, hash: hash || null, market, parent: parentId, path, email: opt(r.email), phone: opt(r.phone), status: str(r.status) || 'ACTIVE', kyc: str(r.kyc_status) || 'NOT_VERIFIED', kycAt: opt(r.kyc_verified_at), dob: opt(r.date_of_birth), gender: opt(r.gender), address: json(r.address), vipFlag: r.vip === true, risk: str(r.credit_risk) || 'NORMAL', createdAt: opt(r.created_at) });
     }
     if (ctx.write && ins.length) {
       const c = (k: string) => ins.map((x) => x[k]);
@@ -154,7 +155,8 @@ const customers: Importer = {
         { n: 'id_document_ref', t: 'text', v: c('docRef') }, { n: 'id_document_hash', t: 'text', v: c('hash') }, { n: 'market_code', t: 'text', v: c('market') }, { n: 'parent_customer_id', t: 'uuid', v: c('parent') },
         { n: 'hierarchy_path', t: 'text', v: c('path'), expr: 't.hierarchy_path::ltree' }, { n: 'email', t: 'text', v: c('email') }, { n: 'phone', t: 'text', v: c('phone') }, { n: 'status', t: 'text', v: c('status') },
         { n: 'kyc_status', t: 'text', v: c('kyc') }, { n: 'kyc_verified_at', t: 'timestamptz', v: c('kycAt') }, { n: 'date_of_birth', t: 'date', v: c('dob') }, { n: 'gender', t: 'text', v: c('gender') },
-        { n: 'address', t: 'text', v: c('address'), expr: 't.address::jsonb' }, { n: 'created_at', t: 'timestamptz', v: c('createdAt'), expr: 'COALESCE(t.created_at, now())' },
+        { n: 'address', t: 'text', v: c('address'), expr: 't.address::jsonb' }, { n: 'vip', t: 'boolean', v: c('vipFlag') }, { n: 'credit_risk', t: 'text', v: c('risk') },
+        { n: 'created_at', t: 'timestamptz', v: c('createdAt'), expr: 'COALESCE(t.created_at, now())' },
       ]);
     }
     await remember(ctx, 'customers', ins.map((x) => ({ ref: x.ref as string, id: x.id as string })));
@@ -271,6 +273,9 @@ const services: Importer = {
     }
     const dupReg = new Set((await q.query('SELECT r.type, r.identifier FROM identifier_registry r JOIN unnest($1::text[], $2::text[]) u(ty, idf) ON r.type = u.ty AND r.identifier = u.idf', [rows.map((r) => str(r.rec.type)), rows.map((r) => str(r.rec.identifier))])).rows.map((d) => `${d.type}:${d.identifier}`));
 
+    const parentRefs = rows.map((r) => str(r.rec.parent_service_id));
+    const parentMap = await refMap(q, 'services', parentRefs);
+    const parentSeen = await seenKeys(ctx, 'services', parentRefs);
     const batch = new Set<string>(), batchIdent = new Set<string>();
     const ins: Array<Record<string, any>> = [];
     for (const [i, row] of rows.entries()) {
@@ -290,9 +295,13 @@ const services: Importer = {
       if (dupSvc.has(idk) || (!TERMINAL.has(status) && dupReg.has(idk))) { out[i] = err(`${ident} is already in use by another service.`, 'identifier', 'DUPLICATE_IDENTIFIER'); continue; }
       const id = UUID.test(ref) ? ref.toLowerCase() : randomUUID();
       if (taken.has(id)) { out[i] = err(`A service with the id ${ref} already exists.`, 'id', 'DUPLICATE_KEY'); continue; }
+      const pref = parentRefs[i]!;
+      if (pref && pref !== ref && !parentMap.has(pref) && !batch.has(pref) && !parentSeen.has(`services:${pref}`)) { out[i] = err(`The parent service ${pref} was not found. List the mobile service before the value-added services that belong to it.`, 'parent_service_id', 'UNKNOWN_REFERENCE'); continue; }
+      if (pref === ref) { out[i] = err('A service cannot be its own parent.', 'parent_service_id', 'INVALID'); continue; }
       batch.add(ref); batchIdent.add(idk);
       ins.push({ ref, id, shard: acct.shardId, account: aid, customer: acct.customerId, type, ident, iccid: opt(r.iccid), offer: str(r.offer_id), status, contractStart: opt(r.contract_start), term: opt(r.contract_term_months), activatedAt: opt(r.activated_at),
-        terminatedAt: opt(r.terminated_at), termReason: opt(r.terminated_reason), suspReason: opt(r.suspended_reason), susKind: status === 'SUSPENDED' ? 'ADMIN' : null, bar: str(r.bar_level) || 'NONE', imsi: opt(r.imsi), vip: opt(r.vip_tier), kind: opt(r.service_kind), expires: opt(r.expires_at), createdAt: opt(r.created_at) });
+        terminatedAt: opt(r.terminated_at), termReason: opt(r.terminated_reason), suspReason: opt(r.suspended_reason), susKind: status === 'SUSPENDED' ? str(r.suspension_kind) || 'ADMIN' : null, suspAt: status === 'SUSPENDED' ? opt(r.suspended_at) ?? new Date().toISOString() : null, suspUntil: opt(r.suspend_until), bar: str(r.bar_level) || 'NONE', imsi: opt(r.imsi), vip: opt(r.vip_tier), vipEtc: opt(r.vip_etc_bps),
+        numStatus: opt(r.number_status), parentRef: pref || null, swapped: opt(r.sim_swapped_at), deal: json(r.deal), kind: opt(r.service_kind), expires: opt(r.expires_at), createdAt: opt(r.created_at) });
     }
     if (ctx.write && ins.length) {
       const c = (k: string) => ins.map((x) => x[k]);
@@ -301,7 +310,8 @@ const services: Importer = {
         { n: 'type', t: 'text', v: c('type'), expr: 't.type::service_type' }, { n: 'identifier', t: 'text', v: c('ident') }, { n: 'iccid', t: 'text', v: c('iccid') }, { n: 'offer_id', t: 'text', v: c('offer') },
         { n: 'status', t: 'text', v: c('status'), expr: 't.status::service_status' }, { n: 'contract_start', t: 'timestamptz', v: c('contractStart') }, { n: 'contract_term_months', t: 'smallint', v: c('term') },
         { n: 'activated_at', t: 'timestamptz', v: c('activatedAt') }, { n: 'terminated_at', t: 'timestamptz', v: c('terminatedAt') }, { n: 'terminated_reason', t: 'text', v: c('termReason') },
-        { n: 'suspended_reason', t: 'text', v: c('suspReason') }, { n: 'suspension_kind', t: 'text', v: c('susKind') }, { n: 'suspended_at', t: 'timestamptz', v: ins.map((x) => (x.status === 'SUSPENDED' ? new Date().toISOString() : null)) },
+        { n: 'suspended_reason', t: 'text', v: c('suspReason') }, { n: 'suspension_kind', t: 'text', v: c('susKind') }, { n: 'suspended_at', t: 'timestamptz', v: c('suspAt') }, { n: 'suspend_until', t: 'date', v: c('suspUntil') },
+        { n: 'vip_etc_bps', t: 'integer', v: c('vipEtc') }, { n: 'number_status', t: 'text', v: c('numStatus') }, { n: 'sim_swapped_at', t: 'timestamptz', v: c('swapped') }, { n: 'deal', t: 'text', v: c('deal'), expr: 't.deal::jsonb' },
         { n: 'bar_level', t: 'text', v: c('bar') }, { n: 'imsi', t: 'text', v: c('imsi') }, { n: 'vip_tier', t: 'text', v: c('vip') }, { n: 'service_kind', t: 'text', v: c('kind') },
         { n: 'expires_at', t: 'timestamptz', v: c('expires') }, { n: 'created_at', t: 'timestamptz', v: c('createdAt'), expr: 'COALESCE(t.created_at, now())' },
       ]);
@@ -322,6 +332,15 @@ const services: Importer = {
         const withImsi = live.filter((x) => x.imsi);
         if (withImsi.length) await q.query(`INSERT INTO imsi_inventory (imsi, state, iccid, service_id) SELECT m, 'ACTIVE', i, s FROM unnest($1::text[], $2::text[], $3::uuid[]) AS t(m, i, s)
                          ON CONFLICT (imsi) DO UPDATE SET state='ACTIVE', service_id=EXCLUDED.service_id, iccid=COALESCE(EXCLUDED.iccid, imsi_inventory.iccid), updated_at=now()`, [withImsi.map((x) => x.imsi), withImsi.map((x) => x.iccid), withImsi.map((x) => x.id)]);
+      }
+    }
+    if (ctx.write) {
+      // A value-added service points at the mobile service it belongs to: resolved once the batch is in (the parent may be in this batch or an earlier load).
+      const kids = ins.filter((x) => x.parentRef);
+      if (kids.length) {
+        const own = new Map(ins.map((x) => [x.ref as string, x.id as string]));
+        const pid = kids.map((x) => own.get(x.parentRef) ?? parentMap.get(x.parentRef) ?? null);
+        await q.query(`UPDATE services s SET parent_service_id = u.p FROM unnest($1::uuid[], $2::uuid[]) u(id, p) WHERE s.id = u.id AND u.p IS NOT NULL`, [kids.map((x) => x.id), pid]);
       }
     }
     await remember(ctx, 'services', ins.map((x) => ({ ref: x.ref, id: x.id })));
@@ -526,7 +545,7 @@ const catalog: Importer = {
         try {
           const found = (await q.query('SELECT level FROM catalog_nodes WHERE id=$1', [str(r.id)])).rows[0];
           if (found) { out[i] = skip(`${str(r.id)} is already in the catalog.`); await q.query('RELEASE SAVEPOINT node'); continue; }
-          await createNode(q, { id: str(r.id), level: str(r.level) as 'NETWORK_TYPE', name: str(r.name), parentId: str(r.parent_id) || null, status: (str(r.status) || 'ACTIVE') as 'ACTIVE', networkType: str(r.network_type) || undefined, markets: Array.isArray(r.markets) ? (r.markets as string[]) : [] } as never, ctx.actor);
+          await createNode(q, { id: str(r.id), level: str(r.level) as 'NETWORK_TYPE', name: str(r.name), parentId: str(r.parent_id) || null, status: (str(r.status) || 'ACTIVE') as 'ACTIVE', networkType: str(r.network_type) || undefined, activeFrom: opt(r.active_from) ?? undefined, markets: Array.isArray(r.markets) ? (r.markets as string[]) : [] } as never, ctx.actor);
           await q.query('RELEASE SAVEPOINT node');
         } catch (e) {
           await q.query('ROLLBACK TO SAVEPOINT node');
@@ -540,7 +559,100 @@ const catalog: Importer = {
   },
 };
 
+// ───────────────────────── warehouses and opening stock ─────────────────────────
+const warehouses: Importer = {
+  batch: 500,
+  async run(ctx, rows) {
+    const q = ctx.q;
+    const out: RowResult[] = rows.map(() => OK);
+    const ids = rows.map((r) => str(r.rec.id));
+    const names = rows.map((r) => str(r.rec.name).toLowerCase());
+    const found = (await q.query('SELECT id, lower(name) AS name FROM warehouses WHERE id = ANY($1::text[]) OR lower(name) = ANY($2::text[])', [ids.filter(Boolean), names])).rows;
+    const foundIds = new Set(found.map((w) => w.id as string)), foundNames = new Set(found.map((w) => w.name as string));
+    const seen = await seenKeys(ctx, 'warehouses#name', names);
+    const seenId = await seenKeys(ctx, 'warehouses', ids.filter(Boolean));
+    const inBatch = new Set<string>(), idsInBatch = new Set<string>();
+    const ins: Array<{ ref: string; id: string; name: string; address: unknown; status: string; at: unknown }> = [];
+    for (const [i, row] of rows.entries()) {
+      const r = row.rec, id = ids[i]!, name = str(r.name);
+      if (id && !/^[A-Za-z0-9][A-Za-z0-9-]{1,39}$/.test(id)) { out[i] = err('The id is letters, digits and dashes, 2 to 40 characters (WH-00001).', 'id', 'BAD_FORMAT'); continue; }
+      if (id && foundIds.has(id)) { out[i] = skip(`Warehouse ${id} is already there.`); continue; }
+      if (foundNames.has(names[i]!)) { out[i] = err(`There is already a warehouse called ${name}.`, 'name', 'DUPLICATE_NAME'); continue; }
+      if (inBatch.has(names[i]!) || seen.has(`warehouses#name:${names[i]}`)) { out[i] = err(`${name} appears more than once in the file.`, 'name', 'DUPLICATE_KEY'); continue; }
+      if (id && (idsInBatch.has(id) || seenId.has(`warehouses:${id}`))) { out[i] = err(`The id ${id} appears more than once in the file.`, 'id', 'DUPLICATE_KEY'); continue; }
+      inBatch.add(names[i]!); if (id) idsInBatch.add(id);
+      ins.push({ ref: id || `line-${row.line}`, id, name, address: opt(r.address), status: str(r.status) || 'ACTIVE', at: opt(r.created_at) });
+    }
+    if (ctx.write && ins.length) {
+      const made = (await q.query(
+        `INSERT INTO warehouses (id, name, address, status, created_by, created_at)
+         SELECT COALESCE(NULLIF(t.id, ''), 'WH-' || lpad(nextval('warehouse_id_seq')::text, 5, '0')), t.name, t.address, t.status, $5, COALESCE(t.at, now())
+           FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $6::timestamptz[]) AS t(id, name, address, status, at) RETURNING id, lower(name) AS name`,
+        [ins.map((x) => x.id), ins.map((x) => x.name), ins.map((x) => x.address), ins.map((x) => x.status), ctx.actor, ins.map((x) => x.at)])).rows;
+      const byName = new Map(made.map((m) => [m.name as string, m.id as string]));
+      await remember(ctx, 'warehouses', ins.map((x) => ({ ref: x.ref, id: byName.get(x.name.toLowerCase())! })));
+    } else {
+      await remember(ctx, 'warehouses', ins.filter((x) => x.id).map((x) => ({ ref: x.id, id: x.id })));
+      await keyNote(ctx, ins.map((x) => `warehouses#name:${x.name.toLowerCase()}`));
+    }
+    return out;
+  },
+  async undo(q, jobId, limit) {
+    const ids = await createdIds(q, 'warehouses', jobId, limit);
+    if (!ids.length) return 0;
+    // A warehouse that has since received stock or been part of a transfer stays: taking it out would lose that history.
+    const used = new Set((await q.query(`SELECT DISTINCT location_id AS id FROM inventory_stock WHERE location_id = ANY($1::text[]) UNION SELECT from_location FROM stock_transfers WHERE from_location = ANY($1::text[]) UNION SELECT to_location FROM stock_transfers WHERE to_location = ANY($1::text[])`, [ids.map((x) => x.id)])).rows.map((r) => r.id as string));
+    if (used.size) throw new Error(`Warehouse ${[...used][0]} now holds stock or has transfers; clear that first.`);
+    await q.query('DELETE FROM warehouses WHERE id = ANY($1::text[])', [ids.map((x) => x.id)]);
+    await forget(q, 'warehouses', ids.map((x) => x.ref));
+    return ids.length;
+  },
+};
+
+/** Opening stock: each row sets the count at a location, through the stock screen's own loader (same checks, same movement ledger). */
+const stock: Importer = {
+  batch: 1000, raw: true,
+  async run(ctx, rows) {
+    const text = (list: BatchRow[]) => ['location_id,sku,quantity,action', ...list.map((r) => [str(r.rec.location_id), str(r.rec.sku), str(r.rec.on_hand), 'SET'].map(csvCell).join(','))].join('\r\n') + '\r\n';
+    const res = (await importStock(ctx.db, text(rows), { apply: false, actor: ctx.actor, confirmRepeat: true })).rows;
+    const out: RowResult[] = rows.map((_, i) => { const r = res[i]; return !r ? OK : r.status === 'ERROR' ? err(r.message ?? 'Not accepted.') : r.status === 'SKIPPED' ? { status: 'SKIPPED' as const, message: r.message } : OK; });
+    if (ctx.write) {
+      const good = rows.filter((_, i) => out[i]!.status === 'OK');
+      if (good.length) await importStock(ctx.db, text(good), { apply: true, actor: ctx.actor, confirmRepeat: true });
+    }
+    return out;
+  },
+};
+
+const lineItems: Importer = {
+  batch: 200, raw: true,
+  async run(ctx, rows) {
+    const out: RowResult[] = rows.map(() => OK);
+    const run = async (q: Queryable, commit: boolean) => {
+      for (const [i, row] of rows.entries()) {
+        const r = row.rec;
+        await q.query('SAVEPOINT item');
+        try {
+          if ((await q.query('SELECT 1 FROM catalog_nodes WHERE id=$1', [str(r.id)])).rows.length) { out[i] = skip(`${str(r.id)} is already in the catalog.`); await q.query('RELEASE SAVEPOINT item'); continue; }
+          const parent = (await q.query('SELECT level FROM catalog_nodes WHERE id=$1', [str(r.parent_id)])).rows[0];
+          if (!parent || parent.level !== 'OFFER') { out[i] = err(`The offer ${str(r.parent_id)} was not found. Load offers first.`, 'parent_id', 'UNKNOWN_REFERENCE'); await q.query('RELEASE SAVEPOINT item'); continue; }
+          await createNode(q, { id: str(r.id), level: 'LINE_ITEM', name: str(r.name), parentId: str(r.parent_id), status: (str(r.status) || 'ACTIVE') as 'ACTIVE', itemType: str(r.item_type), quantity: r.quantity === null || r.quantity === undefined || r.quantity === '' ? undefined : Number(r.quantity), unit: opt(r.unit) ?? undefined, unlimited: r.unlimited === true, sku: opt(r.sku) ?? undefined, description: opt(r.description) ?? undefined, markets: [] } as never, ctx.actor);
+          await q.query('RELEASE SAVEPOINT item');
+        } catch (e) {
+          await q.query('ROLLBACK TO SAVEPOINT item');
+          out[i] = err((e as { details?: string[] }).details?.length ? (e as { details: string[] }).details.join('; ') : (e as Error).message);
+        }
+      }
+      if (!commit) throw new Error('__check__');
+    };
+    try { await ctx.db.tx((q) => run(q, ctx.write)); } catch (e) { if ((e as Error).message !== '__check__') throw e; }
+    return out;
+  },
+};
+
 export const IMPORTERS: Record<string, Importer> = {
+  line_items: lineItems,
+  warehouses, inventory_stock: stock,
   catalog_structure: catalog,
   offers: viaScreen(importOffers as unknown as Loader, { batch: 500 }),
   stores: viaScreen(importStores as unknown as Loader, { batch: 1000 }),

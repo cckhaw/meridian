@@ -17,14 +17,44 @@ Everything is driven by the entity descriptions, so a new record type is one def
 
 ## The data sets
 
+There are 106 data sets in 10 domains (16 of them can be loaded). Each is one definition in `migration/entities.ts` (the first engine's sets) or `migration/entities-modules.ts` (the sets of the later modules, written as one line per column).
+
 | Domain | Data sets |
 |---|---|
-| **Product** | Catalog structure (network types, categories, groups), offers, offer types, fulfilment options, service types, VIP number tiers (slabs), terms: cancellation and return rules, terms: store terms and privacy links |
-| **Customer** | Customer segments, customers, accounts, service groups and their members |
-| **Operations** | Stores, dealers, agents, commission plans, rules (with volume slabs), claw-back policies, plan assignments |
-| **Subscriber and financial** | Services, SIM inventory (ICCID), IMSI pool, number inventory (MSISDN), sub-ledger balances (trial balance), account balances (receivables), active dunning cases |
+| **Product** | Catalog structure, offers, offer line items, offer types, offer types that cannot be ordered together, fulfilment options, service types, VIP number tiers (slabs), bundle discount rules, terms: cancellation and return rules, terms: store terms and privacy links |
+| **Customer** | Customer segments, customers, accounts, service groups and their members, customer segment changes |
+| **Operations** | Stores, dealers, agents, commission plans, rules (with volume slabs), claw-back policies, plan assignments, commission earnings (ledger), settlements, payout batches and closed periods, warehouses, stock on hand, stock movements, stock transfers (lines and SIMs), store cash-drawer closings |
+| **Subscriber and financial** | Services, SIM inventory (ICCID), IMSI pool, number inventory (MSISDN), donor operators, number port-in requests, scheduled plan changes, voluntary suspensions, service and number lifecycle history, sub-ledger balances (trial balance), account balances (receivables), active dunning cases |
+| **Orders and sales** | Orders (with lines and fulfilment groups), payments, payment intents, order state history, sign-up applications (store-front and assisted), credit checks (device financing) |
+| **Billing, dunning and finance** | Bill cycles, bill templates and versions, bill runs, invoices and lines, late-fee configurations, dunning rules and steps, early-termination rules, payment arrangements, collection placements, recurring service charges, posting rules (chart-of-accounts mapping), journal batches, reconciliation reports and exceptions |
+| **Cases and field service** | Case taxonomy, SLA matrix, cases, case history, refund requests, customer interactions, field-service appointments (work orders), installation appointments |
+| **Documents and KYC** | Agreement templates and versions, the document vault records, signatures, the document access log, KYC cases |
+| **Fibre coverage** | Providers, cabinets, distribution points, ports, coverage areas, waiting list, expansion requests |
+| **Security, integration and platform** | Staff users, fraud blacklist and alerts, API clients (OAuth2), API keys, webhook subscriptions, integration endpoints, rate-limit rules, event topic mappings, all settings groups, audit log |
 
 Enterprise departments and IoT hierarchies are customers: a department has a parent customer, and an IoT hierarchy is the IoT enterprise segment with its departments. Both are in the customers file (`parent_customer_id`, `segment`), and nested under their parents in JSON.
+
+**Nesting in JSON.** Orders carry their lines and fulfilment groups; invoices their lines; dunning rules their steps; bill templates and agreement templates their versions; stock transfers their lines; fibre providers their cabinets and each cabinet its distribution points; plus the older nests (customers → accounts → services, dealers → agents, commission plans → rules, policies and assignments, service groups → members).
+
+### What is never in a file
+
+A column that holds a secret is not in any data set, so no mode (not even an unmasked export) can write it: password hashes, MFA secrets and recovery codes, sessions and reset tokens, OAuth client secrets, API-key hashes, webhook signing secrets, integration endpoint credentials, fibre adapter secrets, application access tokens, the encrypted ID number of a KYC case, the contents of stored documents and KYC images, payout files (they hold bank details) and profile pictures. Inside JSON settings (the settings groups, integration endpoint settings, webhook filters) any key that looks like a secret, password, token, credential or API key is replaced with `(not exported)`. After loading into another environment, re-issue client secrets and set integration credentials again.
+
+Personal data that an export keeps is masked in a masked export: applicant details on applications, IP addresses and GPS tags on signatures and the access log, the holder's ID number on port-in requests, fibre waiting-list contacts, document names, fraud-alert identifiers, and (as keyed codes) the ID hash on credit checks and KYC cases and the blacklist values.
+
+### Documents and the vault
+
+The export carries the **records** of the vault (kind, owner, name, size, SHA-256, where the file is stored, status, retention, the template version it came from), the signature records with their content seal, and the access log. It does not carry the files. To move the files, copy the document bucket (the `storage_key` of each record says where its file is) or, for files held in the database, take a database backup; keep the document data key (`MERIDIAN_DATA_KEY`) the same or the files cannot be opened. The agreement templates and every version of their HTML are in the export.
+
+### Keeping the module up to date
+
+`migration/modules.spec.ts` fails the build when the schema moves ahead of the migration module:
+
+* every database table must be described by a data set, or named in the spec's `LEFT_OUT` list with the reason it is not exported (queues, caches, sessions, scratch data, binary content);
+* every column of a described table must be in its data set, or named in `NOT_IN_FILE` with the reason (a secret, a file content, a value rebuilt from other records);
+* every reference must point at a data set, every dependency must load in an earlier or the same phase, and no export may carry a planted secret.
+
+So adding a table or column in a migration means adding it to the data set (or giving the reason) in the same change. A template's version changes when its columns do, and an import records the version it was made from.
 
 ## Exporting
 
@@ -58,13 +88,13 @@ For every data set there is a CSV and a JSON template: the exact header, one lin
 
 | Phase | Data sets that can be loaded | Notes |
 |---|---|---|
-| 1 Catalog and inventory pools | Catalog structure, offers, SIMs (ICCID), IMSIs, numbers (MSISDN) | Structure and offers use the same code as their screens. Numbers are classified into VIP tiers with the live patterns unless the file gives a tier. Once any number is in the inventory, new mobile orders draw their number from it, so load the whole pool (or none) before taking orders. |
-| 2 Stores, dealers, agents | Stores, dealers, agents | Same loaders as the Dealers and Stores screens (give every row an id to make a re-run safe: an empty id adds a new record each time). |
-| 3 Customers and accounts | Customers (including enterprise departments and IoT hierarchies), accounts | `id` is your key for the record; later files point at it. A parent is listed before its departments. Individuals are unique by ID document. |
-| 4 Services | Services (with the number, SIM and IMSI they use) | The number, SIM and IMSI inventory rows are marked in use, and the number is registered platform-wide. No charging-system or commission side effects: the old system already provisioned the service. |
+| 1 Catalog, configuration and inventory pools | Catalog structure (including scheduled nodes), offers, offer line items, SIMs (ICCID), IMSIs, numbers (MSISDN) | Structure, offers and line items use the same code as their screens. Offers carry every newer term (validity, charging-plan code, suspension terms, group-plan terms, characteristics: see [CATALOG.md](CATALOG.md)). Numbers are classified into VIP tiers with the live patterns unless the file gives a tier. Once any number is in the inventory, new mobile orders draw their number from it, so load the whole pool (or none) before taking orders. |
+| 2 Stores, dealers, agents, warehouses, stock and users | Stores, dealers, agents, warehouses, stock on hand | Same loaders as the Dealers, Stores and Warehouses screens (give every row an id to make a re-run safe: an empty id adds a new record each time; for a warehouse an id that exists is skipped and a name already used by another warehouse is a problem). **Stock on hand** is an opening count: each row sets the count at that place and stock code, through the stock screen's own loader, so the movement ledger records it and a second load leaves the same numbers. |
+| 3 Customers and accounts | Customers (including enterprise departments and IoT hierarchies; VIP and credit-risk flags), accounts | `id` is your key for the record; later files point at it. A parent is listed before its departments. Individuals are unique by ID document. |
+| 4 Services | Services (with the number, SIM and IMSI they use, the device deal, a suspension's kind, start and end date, the ported-in number status, the VIP early-termination multiplier, the last SIM swap and the parent service of a value-added service) | The number, SIM and IMSI inventory rows are marked in use, and the number is registered platform-wide. A value-added service names the mobile service it belongs to in `parent_service_id`; list the parent first. No charging-system or commission side effects: the old system already provisioned the service. |
 | 5 Balances and dunning | Account balances, active dunning cases | See below. |
 
-Group, commission and the settings-like data sets (offer types, fulfilment options, service types, VIP slabs, cancellation rules, terms, segments, sub-ledger trial balance) are **export only**: they are small, change often through their own screens, and are better set up there.
+Everything else is **export only**: the settings-like sets (offer types, offer-type conflicts, fulfilment options, service types, VIP slabs, cancellation rules, terms, segments, commission configuration, dunning, billing, case, document, fibre and integration configuration) are small, change often through their own screens and are better set up there, and the transaction records (orders, invoices, payments, cases, appointments, documents, ledgers and histories) are a backup and audit trail, not something to fabricate on another system: a legacy system's customers, accounts, services and opening balances come in through the sets above, and its history stays in its own archive. Fibre infrastructure has its own loader in the Fibre coverage app (`docs/FIBER_COVERAGE.md`).
 
 **Order is enforced.** A job for a data set waits (status *Waiting*, "Waiting for Customers to finish") while any job it depends on, or any earlier phase, is still checking, waiting to be loaded or loading. A file also fails its check if it points at a key that has not been loaded. The archive from an export names its files by phase.
 
@@ -87,7 +117,7 @@ This is the queue-and-worker the specification describes, built on the database 
 ### Keys, repeats and rollback
 
 * Every record a load creates is remembered in `migration_refs` against the key it had in the old system. That is how accounts find their customer, and why **loading the same file twice does nothing**: keys already loaded are skipped and counted as such.
-* **Rollback** (button on the job, or automatic when the error threshold is breached while loading) takes out what the job created, in slices, for customers, accounts, services, number pools, SIM and IMSI pools, opening balances and dunning cases. It stops with a message if something now depends on the records (an account that has since got services or invoices). Catalog structure, offers, stores, dealers and agents are loaded by the screens' own code and **cannot be taken out automatically**; if a load of those is stopped, what was loaded stays and the file can be loaded again.
+* **Rollback** (button on the job, or automatic when the error threshold is breached while loading) takes out what the job created, in slices, for customers, accounts, services, number pools, SIM and IMSI pools, opening balances, dunning cases and warehouses (a warehouse that has since received stock or been part of a transfer stays, with a message). It stops with a message if something now depends on the records (an account that has since got services or invoices). Catalog structure, offers, line items, stores, dealers, agents and stock counts are loaded by the screens' own code and **cannot be taken out automatically** (a stock count has no "before" to go back to: correct it with a new count); if a load of those is stopped, what was loaded stays and the file can be loaded again.
 * Cancelling a job leaves rows already loaded in place; roll back to remove them.
 
 ### Customers, accounts, services
@@ -119,6 +149,7 @@ The bucket needs a CORS rule allowing `PUT` from the CRM's origin. In this mode 
 
 * Exports run in the web request that downloads them. Very large tables must be taken in parts on a serverless host. No object storage is used for exports: the archive is streamed to the browser and not kept.
 * Uploads kept in the database (the default) are limited to 256 MB; larger files need the object store. Uploaded pieces stay in the database until the upload is discarded: clear old ones with `DELETE FROM migration_uploads WHERE created_at < now() - interval '30 days'`.
-* Stores, dealers, agents, offers and catalog structure load with the screens' own code: they are loaded in batches (hundreds to a thousand rows), not bulk statements, and their batch is not in the same transaction as the job's progress, so a crash between the two could repeat a batch (rows with an id update; rows without an id would be added again).
+* Stores, dealers, agents, offers, line items, stock counts and catalog structure load with the screens' own code: they are loaded in batches (hundreds to a thousand rows), not bulk statements, and their batch is not in the same transaction as the job's progress, so a crash between the two could repeat a batch (rows with an id update; rows without an id would be added again).
 * A parent listed after its child in a file of stores, dealers or catalog structure larger than one batch fails the check; keep parents first.
-* Group, commission and the other settings-like data sets are export only.
+* Group, commission, billing, case, document, fibre, integration and the other settings-like and transactional data sets are export only (see the table above).
+* The size of the full archive is the size of the database: take large tables (orders, invoices, order lines, the audit log, stock movements) in parts on a serverless host.

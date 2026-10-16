@@ -5,20 +5,26 @@ import type { Queryable } from '../db.js';
  * these descriptions, so adding a record type is writing one definition, not another feature.
  */
 export const DOMAINS = [
-  { id: 'product', label: 'Product', description: 'Catalog structure, offers, offer types, fulfilment options, service types, VIP number tiers, terms and cancellation rules' },
+  { id: 'product', label: 'Product', description: 'Catalog structure, offers, offer types and the types that cannot be ordered together, fulfilment options, service types, VIP number tiers, bundle rules, terms and cancellation rules' },
   { id: 'customer', label: 'Customer', description: 'Customer segments, customers (with enterprise departments and IoT hierarchies), accounts, service groups and their members' },
-  { id: 'operations', label: 'Operations', description: 'Stores, dealers, agents and commission plans' },
-  { id: 'subscriber', label: 'Subscriber and financial', description: 'Services, the SIM, IMSI and number inventory, ledger balances and active dunning cases' },
+  { id: 'operations', label: 'Operations', description: 'Stores, dealers, agents, commission plans and earnings, warehouses, stock and transfers' },
+  { id: 'subscriber', label: 'Subscriber and financial', description: 'Services, the SIM, IMSI and number inventory, number porting, scheduled plan changes, ledger balances and active dunning cases' },
+  { id: 'sales', label: 'Orders and sales', description: 'Orders with their lines and fulfilment groups, payments, sign-up applications and credit checks' },
+  { id: 'billing', label: 'Billing, dunning and finance', description: 'Bill cycles, templates and runs, invoices, dunning rules, late fees, early-termination rules, posting rules, arrangements and collections' },
+  { id: 'care', label: 'Cases and field service', description: 'Case taxonomy and SLAs, cases and their history, customer interactions, field-service and installation appointments' },
+  { id: 'documents', label: 'Documents and KYC', description: 'Agreement templates and versions, the document vault records, signatures, the access log and identity verifications' },
+  { id: 'fiber', label: 'Fibre coverage', description: 'Providers, cabinets, distribution points, ports, coverage areas, the waiting list and expansion requests' },
+  { id: 'platform', label: 'Security, integration and platform', description: 'Staff users, fraud blacklist, API clients and keys, webhooks, integration endpoints, rate limits, event topics, all settings and the audit log' },
 ] as const;
 export type DomainId = (typeof DOMAINS)[number]['id'];
 
 /** The order records must be loaded in, so that whatever a record points at is already there. */
 export const PHASES = [
-  { phase: 1, label: 'Catalog and inventory pools' },
-  { phase: 2, label: 'Stores, dealers and agents' },
+  { phase: 1, label: 'Catalog, configuration and inventory pools' },
+  { phase: 2, label: 'Stores, dealers, agents, warehouses, stock and users' },
   { phase: 3, label: 'Customers and accounts' },
   { phase: 4, label: 'Services, subscriptions and group mappings' },
-  { phase: 5, label: 'Ledger balances and dunning cases' },
+  { phase: 5, label: 'Balances, dunning cases and transaction history' },
 ] as const;
 
 export type FieldType = 'text' | 'int' | 'money' | 'date' | 'timestamp' | 'bool' | 'enum' | 'json' | 'ref' | 'list';

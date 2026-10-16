@@ -1,36 +1,9 @@
-import type { Queryable } from '../db.js';
 import { OFFER_FILE_COLUMNS, offersExportPage } from '../offer-import.js';
-import type { EntityDef, FieldDef, ReadPage, Rec } from './types.js';
+import { ACTIVE, children, f, keyset, simple } from './entity-kit.js';
+import { MODULE_ENTITIES } from './entities-modules.js';
+import type { EntityDef, Rec } from './types.js';
 
-/**
- * Every record type the migration engine knows. Reads use keyset paging only (never OFFSET): a page costs the same at row one and at row twenty million,
- * and each page follows the table's own index order. A composite cursor is its parts joined with "|".
- */
-type Kt = 'uuid' | 'text' | 'bigint' | 'int' | 'smallint';
-interface KeysetOptions { select: string; from: string; where?: string; order: string[]; types: Kt[]; keyOf: (r: Rec) => unknown[] }
-
-async function keyset(q: Queryable, o: KeysetOptions, after: string | null, limit: number): Promise<ReadPage> {
-  const parts = after ? after.split('|').map(decodeURIComponent) : null;
-  const cond = parts ? `(${o.order.join(', ')}) > (${parts.map((_, i) => `$${i + 2}::${o.types[i]}`).join(', ')})` : 'TRUE';
-  const rows = (await q.query(`SELECT ${o.select} FROM ${o.from} WHERE ${o.where ?? 'TRUE'} AND ${cond} ORDER BY ${o.order.join(', ')} LIMIT $1`, [limit + 1, ...(parts ?? [])])).rows as Rec[];
-  const more = rows.length > limit;
-  const page = rows.slice(0, limit);
-  const last = page[page.length - 1];
-  return { rows: page, next: more && last ? o.keyOf(last).map((p) => encodeURIComponent(String(p))).join('|') : null };
-}
-/** A table read in order of one column. */
-const simple = (o: { select: string; from: string; where?: string; key: string; type: Kt; field: string }) => (q: Queryable, after: string | null, limit: number) =>
-  keyset(q, { select: o.select, from: o.from, where: o.where, order: [o.key], types: [o.type], keyOf: (r) => [r[o.field]] }, after, limit);
-
-/** Rows of a child table for a page of parent keys. */
-const children = (o: { select: string; from: string; col: string; type: 'uuid' | 'text'; order: string }) => async (q: Queryable, field: string, keys: string[]): Promise<Rec[]> => {
-  if (field !== o.col) throw new Error(`cannot nest ${o.from} by ${field}`);
-  return (await q.query(`SELECT ${o.select} FROM ${o.from} WHERE ${o.col} = ANY($1::${o.type}[]) ORDER BY ${o.order}`, [keys])).rows as Rec[];
-};
-const f = (name: string, type: FieldDef['type'], hint: string, example: string, more: Partial<FieldDef> = {}): FieldDef => ({ name, type, hint, example, ...more });
-const ACTIVE = ['ACTIVE', 'INACTIVE'];
-
-export const ENTITIES: EntityDef[] = [
+const CORE_ENTITIES: EntityDef[] = [
   // ───────────────────────── Product ─────────────────────────
   {
     id: 'catalog_structure', label: 'Catalog structure', domain: 'product', phase: 1, importable: true, dependsOn: [], table: 'catalog_nodes',
@@ -43,10 +16,12 @@ export const ENTITIES: EntityDef[] = [
       f('code', 'text', 'Short code (made from the name when empty)', 'sim-only'),
       f('parent_id', 'ref', 'The id of the level above: a network type has none, a category sits under a network type, a group under a category', 'cat-mobile-plans', { ref: 'catalog_structure' }),
       f('network_type', 'text', 'For a network type: mobile, fiber or iot', 'mobile'),
-      f('status', 'enum', 'DRAFT, ACTIVE or RETIRED', 'ACTIVE', { values: ['DRAFT', 'ACTIVE', 'RETIRED'] }),
+      f('status', 'enum', 'DRAFT, SCHEDULED (goes live on active_from), ACTIVE or RETIRED', 'ACTIVE', { values: ['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED'] }),
+      f('active_from', 'timestamp', 'For a SCHEDULED node: when it goes live (ISO 8601)', ''),
       f('markets', 'list', 'Two-letter market codes, separated by |, or empty for every market', 'SG|MY'),
+      f('sort_order', 'int', 'Order among its siblings (an export keeps it; on import the order of the file is used)', '10'),
     ],
-    read: (q, a, l) => keyset(q, { select: `id, level, name, code, parent_id, data->>'networkType' AS network_type, status, markets`, from: 'catalog_nodes', where: `level <> 'OFFER'`, order: ['id'], types: ['text'], keyOf: (r) => [r.id] }, a, l),
+    read: (q, a, l) => keyset(q, { select: `id, level, name, code, parent_id, data->>'networkType' AS network_type, status, active_from, markets, sort_order`, from: 'catalog_nodes', where: `level IN ('NETWORK_TYPE','CATEGORY','GROUP')`, order: ['id'], types: ['text'], keyOf: (r) => [r.id] }, a, l),
   },
   {
     id: 'offers', label: 'Offers', domain: 'product', phase: 1, importable: true, dependsOn: ['catalog_structure'], table: 'catalog_nodes',
@@ -58,6 +33,25 @@ export const ENTITIES: EntityDef[] = [
       const p = await offersExportPage(q, a, l);
       return { rows: p.rows, next: p.next };
     },
+  },
+  {
+    id: 'line_items', label: 'Offer line items (what an offer includes)', domain: 'product', phase: 1, importable: true, dependsOn: ['offers'], table: 'catalog_nodes',
+    description: 'The components of each offer shown to customers: allowances (data, minutes, SMS), devices and perks, with the stock code a device reserves.',
+    note: 'Every row names its offer in parent_id. A line item that is already in the catalog is skipped.',
+    fields: [
+      f('id', 'text', 'Unique id: lowercase letters, digits and dashes', 'li-30gb-data', { required: true, pattern: '^[a-z0-9][a-z0-9-]{0,59}$' }),
+      f('parent_id', 'ref', 'The offer this line item belongs to', 'plan-sim-5g', { required: true, ref: 'offers' }),
+      f('name', 'text', 'Shown to customers', '30 GB data', { required: true, max: 100 }),
+      f('item_type', 'enum', 'Kind of component', 'DATA', { required: true, values: ['DATA', 'VOICE', 'SMS', 'SIM', 'DEVICE', 'ACCESSORY', 'SERVICE', 'CONTENT', 'OTHER'] }),
+      f('quantity', 'int', 'Amount of the allowance, or number of units (empty when unlimited)', '30'),
+      f('unit', 'text', 'GB, min, SMS, unit…', 'GB'),
+      f('unlimited', 'bool', 'No limit', 'false'),
+      f('sku', 'text', 'Stock code reserved when the offer is sold (devices)', ''),
+      f('description', 'text', 'Longer wording', ''),
+      f('status', 'enum', 'DRAFT, ACTIVE or RETIRED', 'ACTIVE', { values: ['DRAFT', 'ACTIVE', 'RETIRED'] }),
+      f('sort_order', 'int', 'Order within the offer (an export keeps it; on import the order of the file is used)', '10'),
+    ],
+    read: (q, a, l) => keyset(q, { select: `id, parent_id, name, data->>'itemType' AS item_type, (data->>'quantity')::int AS quantity, data->>'unit' AS unit, COALESCE((data->>'unlimited')::boolean, false) AS unlimited, data->>'sku' AS sku, data->>'description' AS description, status, sort_order`, from: 'catalog_nodes', where: `level = 'LINE_ITEM'`, order: ['id'], types: ['text'], keyOf: (r) => [r.id] }, a, l),
   },
   {
     id: 'offer_types', label: 'Offer types', domain: 'product', phase: 1, importable: false, dependsOn: [], table: 'offer_types',
@@ -77,9 +71,9 @@ export const ENTITIES: EntityDef[] = [
     id: 'service_types', label: 'Service types', domain: 'product', phase: 1, importable: false, dependsOn: [], table: 'service_kinds',
     description: 'Mobile, Fibre, IoT, Subscription and the types you defined, with how the network and charging system hear about their services.',
     fields: [f('id', 'text', 'Id', 'MOBILE', { required: true }), f('name', 'text', 'Name', 'Mobile', { required: true }), f('description', 'text', 'Description', ''), f('is_builtin', 'bool', 'Comes with the platform', 'true'),
-      f('status', 'enum', 'ACTIVE or INACTIVE', 'ACTIVE', { values: ACTIVE }), f('identifier_prefix', 'text', 'Identifiers start with', '+'), f('expires', 'bool', 'Ends by itself', 'false'), f('validity_days', 'int', 'Default length in days', ''),
+      f('status', 'enum', 'ACTIVE or INACTIVE', 'ACTIVE', { values: ACTIVE }), f('sort_order', 'int', 'Order in lists', '10'), f('identifier_prefix', 'text', 'Identifiers start with', '+'), f('expires', 'bool', 'Ends by itself', 'false'), f('validity_days', 'int', 'Default length in days', ''),
       f('provision_systems', 'json', 'Systems told', '[]'), f('provision_instruction', 'text', 'Start instruction', 'PROVISION'), f('deprovision_instruction', 'text', 'End instruction', 'DEPROVISION'), f('announce_start', 'bool', 'Tell the network at the start', 'false'), f('ocs_enabled', 'bool', 'Provision into the charging system', 'true')],
-    read: simple({ select: 'id, name, description, is_builtin, status, identifier_prefix, expires, validity_days, provision_systems, provision_instruction, deprovision_instruction, announce_start, ocs_enabled', from: 'service_kinds', key: 'id', type: 'text', field: 'id' }),
+    read: simple({ select: 'id, name, description, is_builtin, status, sort_order, identifier_prefix, expires, validity_days, provision_systems, provision_instruction, deprovision_instruction, announce_start, ocs_enabled', from: 'service_kinds', key: 'id', type: 'text', field: 'id' }),
   },
   {
     id: 'vip_tiers', label: 'VIP number tiers (slabs)', domain: 'product', phase: 1, importable: false, dependsOn: [], table: 'msisdn_vip_tier_rules',
@@ -134,11 +128,13 @@ export const ENTITIES: EntityDef[] = [
       f('date_of_birth', 'date', 'YYYY-MM-DD', '1990-04-12', { pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
       f('gender', 'text', 'As held', ''),
       f('address', 'json', 'Address as a JSON object (line1, city, postcode, country)', '{"line1":"1 Raffles Place","city":"Singapore","postcode":"048616","country":"SG"}'),
+      f('vip', 'bool', 'A VIP customer: dunning rules and care can treat them differently', 'false'),
+      f('credit_risk', 'enum', 'NORMAL, or HIGH for a history of bad credit (drives deposits and device financing)', 'NORMAL', { values: ['NORMAL', 'HIGH'] }),
       f('created_at', 'timestamp', 'When the customer was created (ISO 8601)', '2022-01-15T00:00:00Z'),
     ],
     nest: [{ as: 'accounts', entity: 'accounts', parentField: 'id', childField: 'customer_id' }],
     read: (q, a, l) => keyset(q, {
-      select: `shard_id, id, segment, display_name, id_document_ref, id_document_hash, market_code, parent_customer_id, status, email, phone, kyc_status, kyc_verified_at, date_of_birth, gender, address, created_at`,
+      select: `shard_id, id, segment, display_name, id_document_ref, id_document_hash, market_code, parent_customer_id, status, email, phone, kyc_status, kyc_verified_at, date_of_birth, gender, address, vip, credit_risk, created_at`,
       from: 'customers', order: ['shard_id', 'id'], types: ['smallint', 'uuid'], keyOf: (r) => [r.shardId, r.id],
     }, a, l),
   },
@@ -171,9 +167,9 @@ export const ENTITIES: EntityDef[] = [
     id: 'service_groups', label: 'Service groups (family and shared)', domain: 'customer', phase: 4, importable: false, dependsOn: ['accounts'], table: 'service_groups',
     description: 'Groups of services that share allowances or a discount: family plans and the like.',
     fields: [f('id', 'text', 'Id', '', { required: true }), f('customer_id', 'ref', 'Customer', '', { ref: 'customers' }), f('account_id', 'ref', 'Account', '', { ref: 'accounts' }), f('name', 'text', 'Name', 'Tan family'), f('status', 'text', 'Status', 'ACTIVE'),
-      f('offer_id', 'ref', 'The group plan', '', { ref: 'offers' }), f('max_supplementary', 'int', 'Most members besides the head', '3'), f('origin', 'text', 'How it was created', 'ORDER'), f('benefits', 'json', 'Shared allowances and discounts', '{}'), f('created_at', 'timestamp', 'Created', '')],
+      f('offer_id', 'ref', 'The group plan', '', { ref: 'offers' }), f('max_supplementary', 'int', 'Most members besides the head', '3'), f('origin', 'text', 'How it was created', 'ORDER'), f('benefits', 'json', 'Shared allowances and discounts', '{}'), f('closed_at', 'timestamp', 'When the group was closed', ''), f('created_at', 'timestamp', 'Created', '')],
     nest: [{ as: 'members', entity: 'group_members', parentField: 'id', childField: 'group_id' }],
-    read: (q, a, l) => keyset(q, { select: 'shard_id, id, customer_id, account_id, name, status, offer_id, max_supplementary, origin, benefits, created_at', from: 'service_groups', order: ['shard_id', 'id'], types: ['smallint', 'uuid'], keyOf: (r) => [r.shardId, r.id] }, a, l),
+    read: (q, a, l) => keyset(q, { select: 'shard_id, id, customer_id, account_id, name, status, offer_id, max_supplementary, origin, benefits, closed_at, created_at', from: 'service_groups', order: ['shard_id', 'id'], types: ['smallint', 'uuid'], keyOf: (r) => [r.shardId, r.id] }, a, l),
   },
   {
     id: 'group_members', label: 'Service group members', domain: 'customer', phase: 4, importable: false, dependsOn: ['service_groups', 'services'], table: 'service_group_members',
@@ -290,11 +286,19 @@ export const ENTITIES: EntityDef[] = [
       f('vip_tier', 'text', 'VIP tier of the number', ''),
       f('service_kind', 'text', 'The service type, for one you defined', ''),
       f('expires_at', 'timestamp', 'When it ends by itself', ''),
+      f('suspension_kind', 'enum', 'Why a suspended service is suspended: VOLUNTARY, CREDIT, DUNNING, FRAUD or ADMIN (empty when not suspended)', '', { values: ['VOLUNTARY', 'CREDIT', 'DUNNING', 'FRAUD', 'ADMIN'] }),
+      f('suspended_at', 'timestamp', 'When the suspension began', ''),
+      f('suspend_until', 'date', 'A voluntary suspension ends and resumes by itself on this date', '', { pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
+      f('vip_etc_bps', 'int', 'Early-termination multiplier of the number’s VIP tier at sale, 10000 = 1×', ''),
+      f('number_status', 'enum', 'TEMPORARY while a ported-in number is not yet switched, PORTED_IN once it is (empty for an ordinary number)', '', { values: ['TEMPORARY', 'PORTED_IN'] }),
+      f('parent_service_id', 'ref', 'For a value-added service: the key of the mobile service it was added to', '', { ref: 'services' }),
+      f('sim_swapped_at', 'timestamp', 'When the SIM was last swapped (fraud screens look at recent swaps)', ''),
+      f('deal', 'json', 'The device deal (retail price, subsidy, instalments, early-termination terms) the service was sold with', ''),
       f('created_at', 'timestamp', 'When the record was created (ISO 8601)', '2023-02-01T00:00:00Z'),
     ],
-    byParent: children({ select: 'id, account_id, type, identifier, offer_id, status, activated_at, contract_start, contract_term_months, terminated_at, terminated_reason, suspended_reason, bar_level, iccid, imsi, vip_tier, service_kind, expires_at, created_at', from: 'services', col: 'account_id', type: 'uuid', order: 'account_id, identifier, id' }),
+    byParent: children({ select: 'id, account_id, type, identifier, offer_id, status, activated_at, contract_start, contract_term_months, terminated_at, terminated_reason, suspended_reason, bar_level, iccid, imsi, vip_tier, service_kind, expires_at, suspension_kind, suspended_at, suspend_until, vip_etc_bps, number_status, parent_service_id, sim_swapped_at, deal, created_at', from: 'services', col: 'account_id', type: 'uuid', order: 'account_id, identifier, id' }),
     read: (q, a, l) => keyset(q, {
-      select: `shard_id, id, account_id, type, identifier, offer_id, status, activated_at, contract_start, contract_term_months, terminated_at, terminated_reason, suspended_reason, bar_level, iccid, imsi, vip_tier, service_kind, expires_at, created_at`,
+      select: `shard_id, id, account_id, type, identifier, offer_id, status, activated_at, contract_start, contract_term_months, terminated_at, terminated_reason, suspended_reason, bar_level, iccid, imsi, vip_tier, service_kind, expires_at, suspension_kind, suspended_at, suspend_until, vip_etc_bps, number_status, parent_service_id, sim_swapped_at, deal, created_at`,
       from: 'services', order: ['shard_id', 'identifier', 'id'], types: ['smallint', 'text', 'uuid'], keyOf: (r) => [r.shardId, r.identifier, r.id],
     }, a, l),
   },
@@ -335,6 +339,8 @@ export const ENTITIES: EntityDef[] = [
     read: simple({ select: `r.id::text AS run_id, r.account_id, a.dunning_stage AS stage, r.anchor_due, r.started_at, r.last_step`, from: 'dunning_runs r JOIN accounts a ON a.id = r.account_id', where: `r.status = 'ACTIVE'`, key: 'r.id', type: 'bigint', field: 'runId' }),
   },
 ];
+
+export const ENTITIES: EntityDef[] = [...CORE_ENTITIES, ...MODULE_ENTITIES];
 
 export const entityById = (id: string): EntityDef | undefined => ENTITIES.find((e) => e.id === id);
 export const exportFields = (e: EntityDef) => e.fields.filter((x) => !x.importOnly);
