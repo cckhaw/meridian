@@ -9,7 +9,7 @@ import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
  * Credentials for an externally hosted store-front. A key looks like `mk_live_<prefix>_<secret>`: the prefix finds the row, only a hash of
  * the secret is stored, and the full key is shown once at creation. Keys are for server-to-server calls and must never reach a browser.
  */
-export const API_SCOPES = ['store', ...NORTHBOUND_SCOPES] as const;
+export const API_SCOPES = ['store', 'fiber', ...NORTHBOUND_SCOPES] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 export interface ApiClient { id: string; name: string; scopes: ApiScope[]; status: string; channel: string; /** Set when the key must also sign each request (partner channels). */ hmacSecretEnc: string | null }
 
