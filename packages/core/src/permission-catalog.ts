@@ -21,6 +21,7 @@ const KEYS: Record<string, string> = {
   'case:read': 'case:case:read', 'case:create': 'case:case:create', 'case:write': 'case:case:update', 'case:supervise': 'case:sla:supervise', 'collections:manage': 'collections:debt:manage',
   'commission:read': 'commission:ledger:read', 'commission:configure': 'commission:plan:configure', 'commission:settle': 'commission:statement:settle',
   'dealer:read': 'dealer:partner:read', 'dealer:manage': 'dealer:partner:manage', 'store:manage': 'store:outlet:manage', 'store:assist': 'store:counter:assist',
+  'store:report': 'store:sales:read', 'store:cashdrawer': 'store:cash_drawer:reconcile', 'fraud:read': 'fraud:alert:read', 'fraud:manage': 'fraud:alert:manage', 'fraud:bar': 'fraud:service:hard_bar',
   'kyc:attest': 'kyc:document:attest', 'kyc:review': 'kyc:case:review',
   'audit:read': 'audit:log:read', 'migration:export': 'migration:data:export', 'migration:import': 'migration:data:import', 'user:manage': 'iam:user:manage', 'settings:manage': 'system:settings:manage',
 };
@@ -36,7 +37,8 @@ export const PERMISSION_ALIASES: Record<string, Permission> = {
   'catalog:offer:publish': 'catalog:write', 'catalog:category:create': 'catalog:write',
   'finance:journal:export_sap': 'finance:export', 'finance:bad_debt:write_off': 'collections:manage',
   'case:escalation:handle': 'case:supervise', 'order:capture:assisted': 'order:create:RETAIL_ASSISTED', 'order:capture:quick_sale': 'order:create:QUICK_SALE', 'order:capture:dealer': 'order:create:DEALER',
-  'stock:request:manage': 'inventory:transfer', 'mnp:port_in:capture': 'order:create:DEALER',
+  'stock:request:manage': 'inventory:transfer', 'fraud:sim_swap:track': 'fraud:read', 'fraud:usage_spike:alert': 'fraud:read', 'fraud:blacklist:manage': 'fraud:manage', 'fraud:service:override_bar': 'fraud:bar',
+  'store:sales:track': 'store:report', 'store:commission:attribute': 'store:report', 'inventory:stock:override': 'inventory:writeoff', 'mnp:port_in:capture': 'order:create:DEALER',
 };
 const BY_KEY = new Map<string, Permission>([...Object.entries(KEYS)].map(([id, k]) => [k, id as Permission]));
 

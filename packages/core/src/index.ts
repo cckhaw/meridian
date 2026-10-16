@@ -138,3 +138,5 @@ export * from './mfa.js';
 export * from './profile.js';
 export * from './permission-catalog.js';
 export * from './access-guards.js';
+export * from './fraud.js';
+export * from './store-desk.js';

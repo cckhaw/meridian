@@ -38,8 +38,8 @@ function activeId(nav: NavItem[], path: string): string | undefined {
 /** Sidebar sections: what you do, grouped by the job it belongs to. Modules not listed fall under "Back office". */
 const GROUPS: Array<{ label: string; ids: string[] }> = [
   { label: '', ids: ['overview'] },
-  { label: 'Sell', ids: ['sell', 'dealers', 'stores'] },
-  { label: 'Customers & service', ids: ['customers', 'orders', 'cases', 'mnp', 'kyc'] },
+  { label: 'Sell', ids: ['sell', 'dealers', 'stores', 'storedesk'] },
+  { label: 'Customers & service', ids: ['customers', 'orders', 'cases', 'mnp', 'kyc', 'fraud'] },
   { label: 'Money', ids: ['billing', 'finance', 'commission'] },
   { label: 'Products & stock', ids: ['catalog', 'inventory'] },
   { label: 'Administration', ids: ['users', 'settings', 'integrations', 'audit'] },

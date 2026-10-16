@@ -253,6 +253,38 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
   };
 });
 get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+// ───────────────────────── fraud desk and store desk ─────────────────────────
+const alertBody = z.object({ kind: z.enum(core.ALERT_KINDS), severity: z.enum(core.FRAUD_SEVERITIES).optional(), summary: z.string().min(1).max(500), serviceId: uuid.optional(), identifier: z.string().max(60).optional() });
+get('/fraud/alerts', 'fraud:read', ({ db, query }) => core.listAlerts(db, { status: str(query, 'status'), kind: str(query, 'kind'), limit: num(query, 'limit') }));
+post('/fraud/alerts', 'fraud:manage', async ({ db, user, body }) => {
+  const b = alertBody.parse(body);
+  const svc = b.serviceId ? (await db.query('SELECT account_id, customer_id, identifier FROM services WHERE id=$1', [b.serviceId])).rows[0] : undefined;
+  return core.raiseAlert(db, { ...b, accountId: svc?.accountId, customerId: svc?.customerId, identifier: b.identifier ?? svc?.identifier, source: 'MANUAL', actor: user.username });
+});
+post('/fraud/alerts/:id/resolve', 'fraud:manage', ({ db, user, params, body }) => { const b = z.object({ decision: z.enum(['CONFIRMED', 'DISMISSED']), note: z.string().max(500).optional() }).parse(body); return core.resolveAlert(db, params.id!, b.decision, user.username, b.note); });
+post('/fraud/scan', 'fraud:manage', ({ db, user }) => core.scanSimSwaps(db, { actor: user.username }));
+get('/fraud/sim-swaps', 'fraud:read', ({ db, query }) => core.recentSimSwaps(db, num(query, 'days') ?? 30).then((items) => ({ items })));
+post('/fraud/services/:id/bar', 'fraud:bar', ({ db, user, params, body }) => core.hardBar(db, params.id!, z.object({ reason: z.string().min(1).max(300) }).parse(body).reason, user.username));
+post('/fraud/services/:id/release', 'fraud:bar', ({ db, user, params, body }) => core.releaseBar(db, params.id!, z.object({ reason: z.string().min(1).max(300) }).parse(body).reason, user.username));
+get('/fraud/blacklist', 'fraud:read', ({ db }) => core.listBlacklist(db).then((items) => ({ items })));
+post('/fraud/blacklist', 'fraud:manage', ({ db, user, body }) => { const b = z.object({ kind: z.enum(core.BLACKLIST_KINDS), value: z.string().min(3).max(120), reason: z.string().min(1).max(300) }).parse(body); return core.blacklistAdd(db, { ...b, actor: user.username }); });
+route('DELETE', '/fraud/blacklist/:id', 'fraud:manage', ({ db, user, params }) => core.blacklistRemove(db, params.id!, user.username).then(() => ({ ok: true })));
+
+/** The store a store-desk call is about: the user's own store, or (for head-office staff) the one named. */
+const deskStore = (u: SessionUser, query: URLSearchParams): string => {
+  const id = u.scope.storeId ?? (u.scope.unrestricted ? str(query, 'storeId') : undefined);
+  if (!id) throw new DomainError('INVALID', 'Choose a store.');
+  return id;
+};
+get('/store/sales', 'store:report', ({ db, user, query }) => core.storeSales(db, deskStore(user, query), { from: str(query, 'from'), to: str(query, 'to') }));
+get('/store/cash-drawer', 'store:cashdrawer', async ({ db, user, query }) => {
+  const id = deskStore(user, query);
+  return { ...await core.drawerStatus(db, id, str(query, 'date') ?? new Date().toISOString().slice(0, 10)), storeId: id, history: await core.listClosings(db, id) };
+});
+post('/store/cash-drawer/close', 'store:cashdrawer', ({ db, user, query, body }) => {
+  const b = z.object({ date: z.string().max(10), countedMinor: z.number().int().min(0).max(1e12), note: z.string().max(300).optional() }).parse(body);
+  return core.closeDrawer(db, deskStore(user, query), b, user.username);
+});
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
 get('/meta', null, async ({ db, user }) => ({ ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), cardLink: (await core.activeGateways(db, process.env, 'CRM')).list.some((g) => !!g.createPaymentLink), customers: await core.getCustomerSettings(db), billCycles: await (async () => { const c = await core.getBillCycles(db); return { ...c, defaultDay: core.defaultCycleDay(c) }; })() }));
 

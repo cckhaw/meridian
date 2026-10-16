@@ -2066,4 +2066,30 @@ describe('offer type switches and service types', () => {
     await call('POST', '/roles/retail-manager/disable', { cookie: su, body: { disabled: false } });
     expect((await call('GET', '/orders?limit=5', { cookie: mgr.cookie })).status).toBe(200);
   });
+  it('fraud desk and store desk: only the right roles reach them, the blacklist stops a sign-up, and a store manager closes their own drawer', async () => {
+    const analyst = await staff(['fraud']);
+    const agent = await staff(['call-center']);
+    expect((await call('GET', '/fraud/alerts', { cookie: agent.cookie })).status).toBe(403);
+    const made = await call('POST', '/fraud/alerts', { cookie: analyst.cookie, body: { kind: 'USAGE_SPIKE', severity: 'HIGH', summary: 'Data usage 50x normal' } });
+    expect(made.status).toBe(200);
+    expect((await call('GET', '/fraud/alerts', { cookie: analyst.cookie })).json.open).toBeGreaterThan(0);
+    expect((await call('POST', `/fraud/alerts/${made.json.alert.id}/resolve`, { cookie: analyst.cookie, body: { decision: 'DISMISSED', note: 'roaming' } })).json.status).toBe('DISMISSED');
+    expect((await call('POST', '/fraud/scan', { cookie: analyst.cookie })).status).toBe(200);
+    const bl = await call('POST', '/fraud/blacklist', { cookie: analyst.cookie, body: { kind: 'ID_DOCUMENT', value: 'BLK-998877', reason: 'forged' } });
+    expect(bl.status).toBe(200);
+    expect(JSON.stringify((await call('GET', '/fraud/blacklist', { cookie: analyst.cookie })).json)).not.toContain('998877');
+    const su = await root();
+    const blocked = await call('POST', '/customers', { cookie: su, body: { segment: 'CONSUMER', displayName: 'Blocked Person', idDocument: 'blk-998877' } });
+    expect(blocked.status).toBe(422);
+    expect((await call('DELETE', `/fraud/blacklist/${bl.json.id}`, { cookie: analyst.cookie })).status).toBe(200);
+    // the store desk is for the store manager, and works on their own store
+    const mgr = await staff(['retail-manager'], { storeId: 'STORE-SG-001' });
+    expect((await call('GET', '/store/sales', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('GET', '/store/sales', { cookie: mgr.cookie })).json).toMatchObject({ storeId: 'STORE-SG-001' });
+    const day = new Date().toISOString().slice(0, 10);
+    const st = (await call('GET', `/store/cash-drawer?date=${day}`, { cookie: mgr.cookie })).json;
+    const closed = await call('POST', '/store/cash-drawer/close', { cookie: mgr.cookie, body: { date: day, countedMinor: st.expectedMinor } });
+    expect(closed.status).toBe(200);
+    expect((await call('POST', '/store/cash-drawer/close', { cookie: mgr.cookie, body: { date: day, countedMinor: st.expectedMinor } })).status).toBe(422);
+  });
 });

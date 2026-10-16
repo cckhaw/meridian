@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
+import { assertNotBlacklisted } from './fraud.js';
 import type { Account, Customer, CustomerSegment } from '@meridian/types';
 import { effectiveMarket, marketDuplicates, marketFor } from './settings.js';
 import type { Queryable, Row } from './db.js';
@@ -38,6 +39,7 @@ export async function createCustomer(q: Queryable, input: NewCustomer): Promise<
   const shardId = shardFor(id);
   const marketCode = await effectiveMarket(q, input.marketCode);
   const hash = hashIdDocument(input.idDocument);
+  await assertNotBlacklisted(q, { idHash: hash, email: input.email, msisdn: input.phone });
   // Individuals must be unique by ID document; companies and fleets (non-individual segments) may legitimately share one.
   const segment = await assertSegmentUsable(q, input.segment);
   if (segment.individual) {

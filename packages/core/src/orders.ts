@@ -1,4 +1,5 @@
 import { enqueueOcs } from './ocs.js';
+import { assertNotBlacklisted } from './fraud.js';
 import { randomUUID } from 'node:crypto';
 import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type PaymentMethod } from '@meridian/types';
 import { ruleSatisfied, listBundleRules } from './bundles.js';
@@ -157,6 +158,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
   // Everything about price, eligibility and payment structure is decided in one place, shared with the quote the order wizard shows.
   const priced = await priceBasket(q, { ...input, customerId });
   const customer = priced.customer!;
+  { const c = (await q.query('SELECT id_document_hash, email, phone FROM customers WHERE id=$1', [customerId])).rows[0]; if (c) await assertNotBlacklisted(q, { idHash: c.idDocumentHash, email: c.email, msisdn: c.phone }); }
   if (input.installationSlot) {
     const slot = new Date(input.installationSlot);
     if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now()) throw invalid('the installation date must be in the future');

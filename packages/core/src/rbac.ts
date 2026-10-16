@@ -49,6 +49,11 @@ const CORE_PERMISSIONS = [
   'migration:import', // load data from files: templates, a check that changes nothing, then the load
   'user:manage',
   'store:assist', 'kyc:attest', 'kyc:review',
+  'store:report', // a store's sales by day, salesperson and payment method, with the commission they earned
+  'store:cashdrawer', // count the cash drawer at the end of the day and sign off the difference
+  'fraud:read', // the fraud desk: alerts, SIM-swap anomalies and the blacklist (values shown only as a hint)
+  'fraud:manage', // work alerts, raise one by hand, add to and remove from the blacklist
+  'fraud:bar', // hard-bar a service for fraud, and lift the bar
   'settings:manage', // super user only: regional format, branding, payment gateways, store-front API keys
 ] as const;
 
@@ -137,7 +142,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'retail-manager', label: 'Retail Store Manager', scope: 'store', home: '/orders',
     summary: 'Runs one store: sees that store’s sales and orders, approves exceptions at the counter, moves and writes off its stock, and sees its commission. Sees only that store’s records.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'), 'order:payment', 'order:fulfil', 'order:cancel',
-      'order:override', 'inventory:read', 'inventory:write', 'inventory:transfer', 'inventory:writeoff', 'commission:read', 'billing:read', 'billing:pay', 'store:assist', 'kyc:attest', 'numbering:select'],
+      'order:override', 'inventory:read', 'inventory:write', 'inventory:transfer', 'inventory:writeoff', 'commission:read', 'billing:read', 'billing:pay', 'store:assist', 'kyc:attest', 'numbering:select', 'store:report', 'store:cashdrawer'],
   },
   dealer: {
     id: 'dealer', label: 'Dealer', scope: 'dealer', home: '/orders/new?channel=DEALER',
@@ -167,9 +172,9 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     permissions: ['dashboard:read', 'finance:read', 'finance:export', 'finance:configure', 'billing:read', 'billing:approve', 'billing:simulate', 'billing:template', 'billing:print', 'billing:credit', 'collections:manage', 'customer:search', 'customer:read', 'commission:read', 'commission:configure', 'commission:settle'],
   },
   fraud: {
-    id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/orders',
-    summary: 'Reviews orders and accounts: can suspend a service and cancel an order before it ships.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'service:read', 'service:suspend', 'order:read', 'order:cancel', 'audit:read', 'case:read', 'case:create', 'case:write', 'kyc:review'],
+    id: 'fraud', label: 'Fraud Analyst', scope: 'staff', home: '/fraud',
+    summary: 'Watches for fraud: SIM-swap anomalies and usage spikes, hard-bars a service, keeps the blacklist, and can cancel an order before it ships.',
+    permissions: ['fraud:read', 'fraud:manage', 'fraud:bar', 'dashboard:read', 'customer:search', 'customer:read', 'service:read', 'service:suspend', 'order:read', 'order:cancel', 'audit:read', 'case:read', 'case:create', 'case:write', 'kyc:review'],
   },
   compliance: {
     id: 'compliance', label: 'KYC Compliance Officer', scope: 'staff', home: '/kyc',
@@ -219,6 +224,8 @@ export const MODULES: ModuleDef[] = [
   { id: 'orders', label: 'Orders', href: '/orders', icon: 'box', anyOf: ['order:read'] },
   { id: 'billing', label: 'Billing', href: '/billing', icon: 'doc', anyOf: ['billing:read'] },
   { id: 'cases', label: 'Cases', href: '/cases', icon: 'bubble', anyOf: ['case:read'] },
+  { id: 'fraud', label: 'Fraud desk', href: '/fraud', icon: 'shield', anyOf: ['fraud:read'] },
+  { id: 'storedesk', label: 'Store desk', href: '/store', icon: 'store', anyOf: ['store:report', 'store:cashdrawer'] },
   { id: 'kyc', label: 'KYC reviews', href: '/kyc', icon: 'shield', anyOf: ['kyc:review'] },
   { id: 'mnp', label: 'Number porting', href: '/mnp', icon: 'swap', anyOf: ['mnp:manage'] },
   { id: 'catalog', label: 'Catalog', href: '/catalog', icon: 'grid', anyOf: ['catalog:read'] },
