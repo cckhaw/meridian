@@ -3,12 +3,14 @@ import { Alert, Button, Card, Field, Input } from '@meridian/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { ApiError, post } from '@/lib/api';
+import { BrandMark, useBrand } from '@/components/brand';
 
 const safeNext = (n: string | null) => (n && n.startsWith('/') && !n.startsWith('//') && !n.includes('\\') ? n : '/settings/fiber-coverage');
 
 function Form() {
   const router = useRouter();
   const next = safeNext(useSearchParams().get('next'));
+  const brand = useBrand();
   const [u, setU] = useState(''); const [p, setP] = useState(''); const [code, setCode] = useState('');
   const [challenge, setChallenge] = useState<string | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
@@ -22,9 +24,9 @@ function Form() {
     <main className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-[16px] bg-accent text-title2 font-bold text-accent-fg">F</div>
-          <h1 className="text-title1 font-bold tracking-tight">Fibre coverage</h1>
-          <p className="mt-1 text-body text-label2">Sign in with your Meridian account</p>
+          <div className="mb-3"><BrandMark size="lg" /></div>
+          <h1 className="text-title2 font-semibold tracking-tight">Fibre coverage</h1>
+          <p className="mt-1 text-body text-label2">Sign in with your {brand.name} account</p>
         </div>
         <Card>
           {!challenge ? (

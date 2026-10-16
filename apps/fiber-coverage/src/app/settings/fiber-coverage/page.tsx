@@ -10,6 +10,7 @@ import { Network } from '@/components/network';
 import { Overview } from '@/components/overview';
 import { Providers } from '@/components/providers';
 import { post, useApi } from '@/lib/api';
+import { BrandMark } from '@/components/brand';
 
 // Leaflet touches `window`, so the map loads in the browser only.
 const MapView = dynamic(() => import('@/components/map').then((m) => m.MapView), { ssr: false, loading: () => <p className="text-subhead text-label2">Loading the map…</p> });
@@ -30,7 +31,7 @@ function Hub() {
   return (
     <div className="mx-auto max-w-6xl px-4 pb-24 pt-4 sm:px-6">
       <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-separator pb-3 pt-[var(--sat)]">
-        <span className="text-title3 font-bold">Meridian</span><span className="text-subhead text-label2">Fibre coverage</span>
+        <BrandMark /><span className="text-subhead text-label2">Fibre coverage</span>
         <div className="ml-auto flex items-center gap-2"><span className="hidden text-subhead text-label2 sm:inline">{me.data?.displayName}</span><ThemeToggle /><Button variant="secondary" onClick={() => void signOut()}>Sign out</Button></div>
       </div>
       <LargeTitle subtitle="Where fibre reaches, who owns it, how many ports are left, and holding a port while a customer checks out.">
