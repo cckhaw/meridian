@@ -136,3 +136,5 @@ export * from './security-policy.js';
 export * from './password-recovery.js';
 export * from './mfa.js';
 export * from './profile.js';
+export * from './permission-catalog.js';
+export * from './access-guards.js';

@@ -47,7 +47,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'use YYYY-MM-DD');
 const blank = <T extends z.ZodTypeAny>(t: T) => z.preprocess((v) => (v === '' ? undefined : v), t.optional()); // HTML forms send '' for untouched fields
 const num = (q: URLSearchParams, k: string) => (q.get(k) ? Number(q.get(k)) : undefined);
 const str = (q: URLSearchParams, k: string) => q.get(k) || undefined;
-const need = (u: SessionUser, p: Permission) => { if (!u.permissions.has(p)) throw forbidden(`Your role does not allow this (${p}).`); };
+const need = (u: SessionUser, p: Permission) => core.requirePermissions(u, p);
 
 // ───────────────────────── public: health and auth ─────────────────────────
 open('GET', '/health', () => ({ status: 'ok' }));
@@ -263,6 +263,7 @@ const roleBody = z.object({ name: z.string().max(60).optional(), summary: z.stri
 post('/roles', 'user:manage', ({ db, user, body }) => core.createCustomRole(db, user.username, roleBody.parse(body)));
 patch('/roles/:id', 'user:manage', ({ db, user, params, body }) => core.updateRole(db, user.username, params.id!, roleBody.parse(body)));
 route('DELETE', '/roles/:id', 'user:manage', ({ db, user, params }) => core.deleteCustomRole(db, user.username, params.id!));
+post('/roles/:id/disable', 'user:manage', ({ db, user, params, body }) => core.setRoleDisabled(db, user.username, params.id!, z.object({ disabled: z.boolean() }).parse(body).disabled));
 post('/roles/:id/reset', 'user:manage', ({ db, user, params }) => core.resetRole(db, user.username, params.id!));
 get('/users', 'user:manage', ({ db, query }) => core.listUsers(db, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 const newUser = z.object({

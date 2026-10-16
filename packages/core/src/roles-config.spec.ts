@@ -70,7 +70,7 @@ describe('maintaining what a role can do', () => {
     expect(s.user.scope).toMatchObject({ unrestricted: false, storeId: 'STORE-SG-001' });
 
     await expect(createCustomRole(db, 'root', { name: 'shop supervisor' })).rejects.toThrow(/already a role/);
-    await expect(createCustomRole(db, 'root', { name: 'Retail Store' })).rejects.toThrow(/already a role/);
+    await expect(createCustomRole(db, 'root', { name: 'Retail Store Assistant' })).rejects.toThrow(/already a role/);
     await expect(createCustomRole(db, 'root', { name: 'Sneaky', permissions: ['settings:manage'] })).rejects.toThrow(/super user/);
     await expect(updateRole(db, 'root', 'shop-supervisor', { scope: 'dealer' })).rejects.toThrow(/cannot change/);
     await expect(updateRole(db, 'root', 'retail-store', { name: 'Renamed' })).rejects.toThrow(/built-in/);
