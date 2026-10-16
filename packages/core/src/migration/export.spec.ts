@@ -8,7 +8,7 @@ import { parseCsv } from '../csv.js';
 import type { Db } from '../db.js';
 import { placeOrder } from '../orders.js';
 import { freshDb, newCustomer } from '../test-helpers.js';
-import { ENTITIES, createExportJob, publishTemplates, startExport, templateCsv, templateJson, templateVersion, entityById, maskValue, looksMasked } from './index.js';
+import { DOMAINS, ENTITIES, createExportJob, publishTemplates, startExport, templateCsv, templateJson, templateVersion, entityById, maskValue, looksMasked } from './index.js';
 
 let db: Db;
 beforeAll(async () => {
@@ -123,7 +123,7 @@ describe('export', () => {
 
 describe('templates and masking', () => {
   it('every data set can be exported and has a template with its header, constraints and examples', async () => {
-    const all = await createExportJob(db, 'root', { domains: ['product', 'customer', 'operations', 'subscriber'], format: 'CSV' }, { canUnmask: false });
+    const all = await createExportJob(db, 'root', { domains: DOMAINS.map((d) => d.id), format: 'CSV' }, { canUnmask: false });
     const files = unzip(await download(all.id));
     const manifest = JSON.parse(files['manifest.json']!);
     expect(manifest.files.map((f: any) => f.id).sort()).toEqual(ENTITIES.map((e) => e.id).sort());

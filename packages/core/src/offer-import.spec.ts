@@ -7,7 +7,7 @@ import { freshDb } from './test-helpers.js';
 let db: Db;
 beforeAll(async () => { db = await freshDb(); });
 afterAll(async () => { await db.close(); });
-const H = 'group_id,offer_id,name,type,description,monthly_fee,upfront_price,prices_include_tax,contract_months,contract_free_months,etc_percent,subsidy,device_retail_price,fulfilment,stock_skus,colours_storage,device_contracts,channels,requires,excludes,partner_code,market,status,go_live_date';
+const H = 'group_id,offer_id,name,type,description,monthly_fee,upfront_price,prices_include_tax,contract_months,contract_free_months,etc_percent,subsidy,device_retail_price,fulfilment,stock_skus,colours_storage,device_contracts,channels,requires,excludes,partner_code,market,status,go_live_date,validity_days,ocs_plan_code,suspension_mode,suspension_fee,group_plan,max_group_members,allowed_member_offers,shared_pool_quota_gb,characteristics';
 const csv = (...rows: string[]) => [H, ...rows].join('\r\n');
 const check = (t: string) => importOffers(db, t, { apply: false, actor: 'admin' });
 const load = (t: string) => importOffers(db, t, { apply: true, actor: 'admin' });
