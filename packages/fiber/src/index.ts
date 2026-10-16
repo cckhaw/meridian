@@ -10,3 +10,4 @@ export * from './dashboard.js';
 export * from './import.js';
 export * from './tmf645-adapter.js';
 export * from './coverage-service.js';
+export * from './seed-demo.js';

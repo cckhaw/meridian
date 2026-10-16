@@ -130,3 +130,7 @@ export async function mapFeatures(q: Queryable, f: { providerId?: string; bbox?:
   for (const c of cabs) features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] }, properties: { layer: 'cabinet', id: c.id, code: c.code, name: c.name, provider: c.providerCode, status: c.status } });
   return { type: 'FeatureCollection', features };
 }
+
+export async function listPolygons(q: Queryable, providerId?: string): Promise<Row[]> {
+  return (await q.query(`SELECT g.id, g.name, g.kind, g.capacity_status, g.speed_tiers_mbps, g.source, g.dp_id, g.created_at, pr.code AS provider_code, pr.id AS provider_id FROM fiber_coverage_polygons g JOIN fiber_providers pr ON pr.id=g.provider_id ${providerId ? 'WHERE g.provider_id=$1' : ''} ORDER BY g.created_at DESC LIMIT 1000`, providerId ? [providerId] : [])).rows;
+}

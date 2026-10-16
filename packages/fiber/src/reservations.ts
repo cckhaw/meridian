@@ -103,3 +103,9 @@ export async function sweepExpiredLocks(db: Db): Promise<{ released: number }> {
     return { released: rows.length };
   });
 }
+
+export async function listReservations(q: Queryable, f: { state?: string; limit?: number } = {}): Promise<Row[]> {
+  return (await q.query(
+    `SELECT r.*, pr.code AS provider_code, d.code AS dp_code, p.port_no FROM fiber_reservations r JOIN fiber_providers pr ON pr.id=r.provider_id LEFT JOIN fiber_dps d ON d.id=r.dp_id LEFT JOIN fiber_ports p ON p.id=r.port_id
+      ${f.state ? 'WHERE r.state=$2' : ''} ORDER BY r.created_at DESC LIMIT $1`, f.state ? [Math.min(f.limit ?? 100, 500), f.state] : [Math.min(f.limit ?? 100, 500)])).rows;
+}
