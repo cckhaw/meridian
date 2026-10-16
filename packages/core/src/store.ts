@@ -1,3 +1,5 @@
+import { decryptText, encryptText } from './field-crypto.js';
+import { decodeSignature, previewOrderAgreements } from './agreements.js';
 import { getTypeConflicts } from './offer-conflicts.js';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fiberConfigured, fiberConfirmLock, fiberModuleEnabled, fiberVerifyLock } from './fiber-client.js';
@@ -163,7 +165,7 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
 }
 
 // ───────────────────────── applications ─────────────────────────
-export interface AppAccess { channel: StoreChannel; clientId?: string | null; token?: string; staff?: { username: string; storeId?: string | null; canSeeAll?: boolean } }
+export interface AppAccess { channel: StoreChannel; clientId?: string | null; token?: string; /** Of the request (stored with a signature). */ ip?: string | null; userAgent?: string | null; staff?: { username: string; storeId?: string | null; canSeeAll?: boolean } }
 
 async function load(q: Queryable, id: string, access: AppAccess): Promise<Row> {
   const a = (await q.query('SELECT * FROM applications WHERE id=$1', [id])).rows[0];
@@ -199,7 +201,7 @@ export async function createApplication(q: Queryable, o: { channel: StoreChannel
   return { application, token };
 }
 
-export interface AppPatch { lines?: CartLine[]; personal?: Partial<Personal>; address?: Address; consent?: Partial<Consent>; /** The fibre port held for this application (null releases the choice). */ fiber?: { reservationId: string } | null }
+export interface AppPatch { /** The agreement signed on screen (null clears it); kept until checkout. */ agreement?: { image: string; signerName?: string; geo?: { lat: number; lon: number; accuracy?: number } | null; versionIds?: string[] } | null; lines?: CartLine[]; personal?: Partial<Personal>; address?: Address; consent?: Partial<Consent>; /** The fibre port held for this application (null releases the choice). */ fiber?: { reservationId: string } | null }
 
 export async function updateApplication(q: Queryable, id: string, access: AppAccess, p: AppPatch): Promise<Row> {
   const a = await load(q, id, access);
@@ -229,11 +231,27 @@ export async function updateApplication(q: Queryable, id: string, access: AppAcc
     const c = p.consent;
     add('consent', JSON.stringify({ ...(a.consent ?? {}), ...c, termsVersion: st.termsVersion, at: new Date().toISOString(), by: access.staff?.username ?? 'applicant' }));
   }
+  if (p.agreement !== undefined) {
+    if (p.agreement === null) add('agreement', null);
+    else {
+      decodeSignature(p.agreement.image);   // refuses anything that is not a signature picture
+      add('agreement', JSON.stringify({ signatureEnc: encryptText(p.agreement.image), signerName: p.agreement.signerName?.slice(0, 120) ?? null, geo: p.agreement.geo ?? null, versionIds: p.agreement.versionIds ?? [], at: new Date().toISOString(), ip: access.ip ?? null, userAgent: access.userAgent?.slice(0, 300) ?? null }));
+    }
+  }
   if (p.fiber !== undefined) add('fiber', p.fiber ? JSON.stringify({ reservationId: String(p.fiber.reservationId).slice(0, 64) }) : null);
   if (sets.length) await q.query(`UPDATE applications SET ${sets.join(', ')}, updated_at=now() WHERE id=$1`, vals);
   // Keep the KYC case in step with the details so reviewers always see what the applicant last entered.
   if (p.personal) await syncCase(q, id, access.channel === 'SELF_SERVE' ? 'DOCUMENT_REMOTE' : 'IN_PERSON');
   return (await q.query('SELECT * FROM applications WHERE id=$1', [id])).rows[0]!;
+}
+
+/** The agreements this application needs (the text with the applicant's own details filled in), whether signing is mandatory, and whether they have signed. */
+export async function applicationAgreements(q: Queryable, id: string, access: AppAccess) {
+  const a = await load(q, id, access);
+  const p = (a.personal ?? {}) as Partial<Personal>, ad = a.address as Address | null;
+  const customer = a.customerId ?? (p.fullName ? { fullName: p.fullName, idNumber: p.idNumber ?? null, email: p.email ?? null, phone: p.phone ?? null, address: ad } : undefined);
+  const r = await previewOrderAgreements(q, { customerId: a.customerId ?? undefined, channel: access.channel, lines: orderLines(a.lines as CartLine[]), payment: { method: 'CREDIT_CARD' } } as never, { customer: typeof customer === 'object' ? customer : undefined, agentName: access.staff?.username ?? null });
+  return { ...r, signed: !!a.agreement, signedAt: (a.agreement as { at?: string } | null)?.at ?? null };
 }
 
 export async function uploadDocument(q: Queryable, id: string, access: AppAccess, kind: Parameters<typeof addDocument>[2], bytes: Buffer) {
@@ -313,7 +331,9 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     if (!acct) await createAccount(q, customerId, {});
 
     const staff = access.staff;
+    const ag = a.agreement as { signatureEnc: string; signerName: string | null; geo: { lat: number; lon: number; accuracy?: number } | null; versionIds: string[]; ip: string | null; userAgent: string | null } | null;
     const input: OrderInput = {
+      agreement: ag ? { signature: { image: decryptText(ag.signatureEnc), signerName: ag.signerName ?? undefined, geo: ag.geo }, versionIds: ag.versionIds, ip: ag.ip ?? access.ip ?? null, userAgent: ag.userAgent ?? access.userAgent ?? null, agentName: staff ? `${staff.username}${staff.storeId ? `, ${staff.storeId}` : ''}` : null } : undefined,
       fiberReservationId: (a.fiber as { reservationId?: string } | null)?.reservationId,
       customerId, channel: access.channel, lines: orderLines(a.lines as CartLine[]),
       payment: access.channel === 'SELF_SERVE' ? { method: 'CREDIT_CARD', deferred: true } : o.assistedPayment ?? { method: 'CASH', deferred: true },
@@ -443,7 +463,7 @@ export async function applicationView(q: Queryable, id: string, access: AppAcces
     personal: { ...personalSafe, idNumberMasked: case_?.idNumberMasked }, personalProblems: personalProblems(p),
     address: a.address, consent: a.consent, termsVersion: st.termsVersion, termsUrl: st.termsUrl, privacyUrl: st.privacyUrl,
     kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW' } : null,
-    fiber: a.fiber ?? null, documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
+    agreementSigned: !!a.agreement, fiber: a.fiber ?? null, documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
   };
 }
 

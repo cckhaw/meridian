@@ -18,4 +18,5 @@ export function sameSite(req: Request): boolean {
   if (!origin) return false;
   try { return new URL(origin).host === (req.headers.get('x-forwarded-host') ?? req.headers.get('host')); } catch { return false; }
 }
+export const shopperUa = (req: Request) => req.headers.get('user-agent')?.slice(0, 300) || null;
 export const shopperIp = (req: Request) => (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim().slice(0, 45) || null;

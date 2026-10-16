@@ -1,5 +1,6 @@
-import { formatMoney } from '@meridian/types';
+import { behaviourOf, formatMoney } from '@meridian/types';
 import { audit } from './audit.js';
+import { priceBasket, type PricedLine, type PricingInput } from './order-pricing.js';
 import type { Queryable, Row } from './db.js';
 import { invalid, rejected } from './errors.js';
 import { sanitizeHtml, textLines } from './doc-html.js';
@@ -32,26 +33,45 @@ export function decodeSignature(dataUrl: string): { bytes: Buffer; contentType: 
 // ───────────────────────── token values ─────────────────────────
 export interface OrderFacts { number?: string | null; createdAt?: Date; dueNowMinor: number; items: Array<{ name: string; kind?: string; monthlyMinor: number; contractMonths: number; msisdn?: string | null; iccid?: string | null; imei?: string | null; isPlan?: boolean }> }
 const longDate = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-async function customerValues(q: Queryable, customerId: string): Promise<Record<string, string>> {
+/** A person who is not a customer yet (a store-front applicant): what they entered while applying. */
+export interface CustomerFacts { fullName: string; idNumber?: string | null; email?: string | null; phone?: string | null; address?: { line1?: string; line2?: string; postcode?: string; city?: string; state?: string; country?: string } | null }
+const maskId = (id: string) => (id.length <= 4 ? '••••' : `•••••• ${id.slice(-4)}`);
+const addressLine = (a: Record<string, string | undefined>) => [a.line1, a.line2, [a.postcode, a.city].filter(Boolean).join(' '), a.state, a.country].filter(Boolean).join(', ');
+async function customerValues(q: Queryable, who: string | CustomerFacts): Promise<Record<string, string>> {
+  if (typeof who !== 'string') return { 'customer.fullName': who.fullName, 'customer.nationalId': who.idNumber ? maskId(who.idNumber) : '', 'customer.email': who.email ?? '', 'customer.phone': who.phone ?? '', 'customer.address': who.address ? addressLine(who.address) : '' };
+  const customerId = who;
   const c = (await q.query('SELECT display_name, email, phone, address FROM customers WHERE id=$1', [customerId])).rows[0];
   const k = (await q.query(`SELECT id_number_masked FROM kyc_cases WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 1`, [customerId])).rows[0];
   const a = (c?.address ?? {}) as Record<string, string>;
-  return { 'customer.fullName': c?.displayName ?? '', 'customer.nationalId': k?.idNumberMasked ?? '', 'customer.email': c?.email ?? '', 'customer.phone': c?.phone ?? '',
-    'customer.address': [a.line1, a.line2, [a.postcode, a.city].filter(Boolean).join(' '), a.state, a.country].filter(Boolean).join(', ') };
+  return { 'customer.fullName': c?.displayName ?? '', 'customer.nationalId': k?.idNumberMasked ?? '', 'customer.email': c?.email ?? '', 'customer.phone': c?.phone ?? '', 'customer.address': addressLine(a) };
 }
-export async function orderValues(q: Queryable, customerId: string, f: OrderFacts): Promise<Record<string, string>> {
-  const [reg, brand, cust] = await Promise.all([getRegional(q), getBranding(q), customerValues(q, customerId)]);
+export async function orderValues(q: Queryable, customer: string | CustomerFacts, f: OrderFacts): Promise<Record<string, string>> {
+  const [reg, brand, cust] = await Promise.all([getRegional(q), getBranding(q), customerValues(q, customer)]);
   const plan = f.items.find((i) => i.isPlan) ?? f.items[0], tel = f.items.find((i) => i.msisdn) ?? plan;
   const money = (n: number) => formatMoney(n, reg);
   const months = Math.max(0, ...f.items.map((i) => i.contractMonths));
-  return { ...cust, 'company.name': brand.name, 'order.orderNumber': f.number ?? 'assigned when the order is placed', 'order.createdDate': longDate(f.createdAt ?? new Date()),
+  return { ...cust, 'company.name': brand.name, 'order.orderNumber': f.number ?? '(given when the order is placed)', 'order.createdDate': longDate(f.createdAt ?? new Date()),
     'order.planName': plan?.name ?? '', 'order.monthlyFee': money(f.items.reduce((t, i) => t + i.monthlyMinor, 0)), 'order.upfrontAmount': money(f.dueNowMinor),
     'order.contractMonths': months ? `${months} months` : 'no minimum term', 'order.items': f.items.map((i) => i.name).join('; '),
     'service.msisdn': tel?.msisdn ?? 'assigned on activation', 'service.iccid': f.items.find((i) => i.iccid)?.iccid ?? 'assigned on activation', 'service.imei': f.items.find((i) => i.imei)?.imei ?? 'recorded at hand-over' };
 }
-export async function planChangeValues(q: Queryable, customerId: string, f: { from: string; to: string; effectiveDate: string; monthlyMinor: number; msisdn?: string | null }): Promise<Record<string, string>> {
+export async function planChangeValues(q: Queryable, customerId: string | CustomerFacts, f: { from: string; to: string; effectiveDate: string; monthlyMinor: number; msisdn?: string | null }): Promise<Record<string, string>> {
   const [reg, brand, cust] = await Promise.all([getRegional(q), getBranding(q), customerValues(q, customerId)]);
   return { ...cust, 'company.name': brand.name, 'change.fromPlan': f.from, 'change.toPlan': f.to, 'change.effectiveDate': f.effectiveDate, 'order.monthlyFee': formatMoney(f.monthlyMinor, reg), 'order.planName': f.to, 'service.msisdn': f.msisdn ?? '' };
+}
+
+/** What the agreement text needs from a priced basket (`priceBasket`), before and after the order exists. */
+export function factsFromPriced(p: { lines: PricedLine[]; dueNow: number }, o: { number?: string | null; createdAt?: Date } = {}): OrderFacts {
+  return { number: o.number ?? null, createdAt: o.createdAt, dueNowMinor: p.dueNow, items: p.lines.map((l) => ({ name: l.offer.name, kind: l.offer.kind as string, monthlyMinor: l.monthlyFeeMinor, contractMonths: l.deal?.termMonths ?? l.offer.contract?.termMonths ?? 0, msisdn: l.input.msisdn ?? null, isPlan: behaviourOf(l.offer).role === 'PLAN' })) };
+}
+export const offerKindsOf = (p: { lines: PricedLine[] }): string[] => [...new Set(p.lines.map((l) => l.offer.kind as string))];
+/** The agreements an order would need and their text, for the screen that asks the customer to sign. Changes nothing. */
+export async function previewOrderAgreements(q: Queryable, input: PricingInput, o: { customer?: CustomerFacts; agentName?: string | null } = {}) {
+  const p = await priceBasket(q, input, { soft: true });
+  const who = o.customer ?? input.customerId ?? null;
+  const values = who ? await orderValues(q, who, factsFromPriced(p)) : { ...sampleValues() };
+  if (o.agentName) values['signature.agentName'] = o.agentName;
+  return agreementsFor(q, { context: 'ORDER', offerKinds: offerKindsOf(p), channel: input.channel, values });
 }
 
 // ───────────────────────── what applies, and the text to show ─────────────────────────
@@ -117,18 +137,24 @@ export async function verifyContract(q: Queryable, documentId: string, who: DocW
 }
 
 // ───────────────────────── delivery and the customer's own copy ─────────────────────────
-/** Queues the signed copies of an order for the customer (WhatsApp or SMS/email through the same outbox as every other notice). The link is made when it is sent, so it is always fresh. */
-export async function queueContractDelivery(q: Queryable, orderId: string): Promise<number> {
+/** Queues signed copies for the customer (WhatsApp, SMS or email through the same outbox as every other notice). The link is made when it is sent, so it is always fresh. */
+export async function queueDocumentDelivery(q: Queryable, o: { customerId: string; documentIds: string[]; reference: string; orderId?: string | null }): Promise<number> {
   const s = await getDocumentSettings(q);
-  if (!s.deliverContracts) return 0;
-  const docs = (await q.query(`SELECT id, name, customer_id FROM documents WHERE order_id=$1 AND kind='CONTRACT' AND purged_at IS NULL AND NOT (meta ? 'deliveredAt')`, [orderId])).rows;
+  if (!s.deliverContracts || !o.documentIds.length) return 0;
+  const docs = (await q.query(`SELECT id, name FROM documents WHERE id = ANY($1::uuid[]) AND kind='CONTRACT' AND purged_at IS NULL AND NOT (meta ? 'deliveredAt')`, [o.documentIds])).rows;
   if (!docs.length) return 0;
-  const order = (await q.query('SELECT number, customer_id FROM orders WHERE id=$1', [orderId])).rows[0];
   await q.query(`INSERT INTO lifecycle_outbox (kind, instruction, payload) VALUES ('NOTIFY', 'CONTRACT_SIGNED', $1)`,
-    [JSON.stringify({ customerId: order?.customerId ?? docs[0]!.customerId, orderId, orderNumber: order?.number ?? null, documentIds: docs.map((d) => d.id), documents: docs.map((d) => d.name), message: `Your signed agreement for order ${order?.number ?? ''} is ready. Open the secure link to read or save it.`, linkTtlMinutes: 15 })]);
+    [JSON.stringify({ customerId: o.customerId, orderId: o.orderId ?? null, reference: o.reference, documentIds: docs.map((d) => d.id), documents: docs.map((d) => d.name), message: `Your signed agreement for ${o.reference} is ready. Open the secure link to read or save it.`, linkTtlMinutes: 15 })]);
   await q.query(`UPDATE documents SET meta = meta || jsonb_build_object('deliveredAt', now()::text) WHERE id = ANY($1::uuid[])`, [docs.map((d) => d.id)]);
-  for (const d of docs) await logDocument(q, { username: 'system' }, 'DELIVER', { documentId: d.id, customerId: d.customerId, detail: { orderId } });
+  for (const d of docs) await logDocument(q, { username: 'system' }, 'DELIVER', { documentId: d.id, customerId: o.customerId, detail: { reference: o.reference } });
   return docs.length;
+}
+/** The signed copies of an order, once it is paid. */
+export async function queueContractDelivery(q: Queryable, orderId: string): Promise<number> {
+  const order = (await q.query('SELECT number, customer_id FROM orders WHERE id=$1', [orderId])).rows[0];
+  if (!order) return 0;
+  const ids = (await q.query(`SELECT id FROM documents WHERE order_id=$1 AND kind='CONTRACT' AND purged_at IS NULL`, [orderId])).rows.map((r) => r.id as string);
+  return queueDocumentDelivery(q, { customerId: order.customerId, documentIds: ids, reference: `order ${order.number}`, orderId });
 }
 
 /** A customer's signed agreements, each with a 15-minute link (self-care portal, mobile app, `GET /api/v1/customers/{id}/documents`). Identity documents are never listed here. */

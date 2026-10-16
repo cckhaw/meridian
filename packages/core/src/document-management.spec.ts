@@ -1,4 +1,3 @@
-import { crc32, deflateSync } from 'node:zlib';
 import { PDFDocument } from 'pdf-lib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { customerAgreements, decodeSignature, orderValues, signAgreements, verifyContract, agreementsFor } from './agreements.js';
@@ -6,21 +5,14 @@ import type { Db } from './db.js';
 import { compareVersions, createAgreementTemplate, ensureStarterTemplates, getAgreementTemplate, listAgreementTemplates, publishAgreementTemplate, saveAgreementDraft, templateProblems, activeTemplatesFor } from './doc-templates.js';
 import { decideDocument, documentLink, documentLog, fileByLink, listVaultDocuments, openDocument, setDocumentSettings, sweepDocuments, uploadKyc } from './documents.js';
 import { placeOrder } from './orders.js';
-import { freshDb, newCustomer } from './test-helpers.js';
+import { freshDb, newCustomer, signaturePng } from './test-helpers.js';
 
 let db: Db;
 beforeAll(async () => { db = await freshDb(); });
 afterAll(async () => { await db.close(); });
 const who = { username: 'agent1', ip: '203.0.113.9', userAgent: 'vitest' };
 
-/** A small valid PNG: white with a black diagonal (stands in for a signature). */
-function png(w = 240, h = 80): Buffer {
-  const chunk = (type: string, data: Buffer) => { const t = Buffer.from(type), len = Buffer.alloc(4); len.writeUInt32BE(data.length); const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([t, data]))); return Buffer.concat([len, t, data, crc]); };
-  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
-  const raw = Buffer.alloc((w * 3 + 1) * h, 255);
-  for (let y = 0; y < h; y++) { raw[y * (w * 3 + 1)] = 0; const x = Math.floor((y / h) * w); for (let k = 0; k < 6 && x + k < w; k++) { const o = y * (w * 3 + 1) + 1 + (x + k) * 3; raw[o] = raw[o + 1] = raw[o + 2] = 0; } }
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
-}
+const png = signaturePng;
 const dataUrl = () => `data:image/png;base64,${png().toString('base64')}`;
 
 describe('agreement templates and their versions', () => {

@@ -53,6 +53,8 @@ export interface NorthOrderInput {
   payment: { method: PaymentMethod; installmentMonths?: number; reference?: string; /** The payment was already captured by the channel (needs the payment:create scope and a reference). */ captured?: boolean };
   delivery?: { method: 'SHIP' | 'COLLECT'; address?: string; pickupStoreId?: string };
   installationSlot?: string;
+  /** The customer's signature on the agreements for this order (required when Settings → Documents says orders must be signed). */
+  agreement?: { image: string; signerName?: string; geo?: { lat: number; lon: number; accuracy?: number } | null; versionIds?: string[] };
   storeId?: string; dealerId?: string; dealerAgentId?: string;
   /** Device financing. `creditCheck` runs the credit check inline (the customer's ID number, with their consent); `creditCheckId` uses one already run; `payInFull` pays a device on a contract outright. */
   creditCheck?: { idNumber: string; consent: boolean };
@@ -82,7 +84,7 @@ export async function createOrderNorth(db: Db, i: NorthOrderInput, actor: string
     customerId, accountId: i.accountId, channel, lines: i.lines, financing: { creditCheckId, payInFull: i.payInFull },
     payment: { method: i.payment.method, installmentMonths: i.payment.installmentMonths, reference: i.payment.reference, confirmed: captured },
     attribution: channel === 'SELF_SERVE' ? {} : { storeId: i.storeId, dealerId: i.dealerId, dealerAgentId: i.dealerAgentId, salespersonId: actor },
-    deliveryAddress: i.delivery?.address, delivery: i.delivery?.method ? { method: i.delivery.method, pickupStoreId: i.delivery.pickupStoreId } : undefined, installationSlot: i.installationSlot, actor,
+    deliveryAddress: i.delivery?.address, delivery: i.delivery?.method ? { method: i.delivery.method, pickupStoreId: i.delivery.pickupStoreId } : undefined, installationSlot: i.installationSlot, agreement: i.agreement ? { signature: { image: i.agreement.image, signerName: i.agreement.signerName, geo: i.agreement.geo ?? null }, versionIds: i.agreement.versionIds, agentName: null } : undefined, actor,
   });
   return toProductOrder(order, i.channel);
 }

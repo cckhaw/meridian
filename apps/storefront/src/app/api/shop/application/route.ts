@@ -1,6 +1,6 @@
 import { core } from '@/server/core';
 import { guarded, json, failure } from '@/server/respond';
-import { clearApplication, readApplication, sameSite } from '@/server/session';
+import { clearApplication, readApplication, sameSite, shopperIp, shopperUa } from '@/server/session';
 export const dynamic = 'force-dynamic';
 
 const none = () => failure(404, 'NOT_FOUND', 'No sign-up in progress.');
@@ -16,7 +16,7 @@ export const PATCH = (req: Request) => guarded(async () => {
   if (!sameSite(req)) return failure(403, 'FORBIDDEN', 'Cross-site request blocked.');
   const a = await readApplication();
   if (!a) return none();
-  return json(await core(`/store/applications/${a.id}`, { method: 'PATCH', token: a.token, json: await req.json().catch(() => ({})) }));
+  return json(await core(`/store/applications/${a.id}`, { method: 'PATCH', token: a.token, json: await req.json().catch(() => ({})), shopperIp: shopperIp(req), shopperUa: shopperUa(req) }));
 });
 
 export const DELETE = (req: Request) => guarded(async () => {

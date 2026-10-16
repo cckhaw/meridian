@@ -1,6 +1,6 @@
 import { core } from '@/server/core';
 import { guarded, json, failure } from '@/server/respond';
-import { readApplication, sameSite } from '@/server/session';
+import { readApplication, sameSite, shopperIp, shopperUa } from '@/server/session';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
@@ -13,5 +13,13 @@ export const POST = (req: Request, ctx: { params: Promise<{ action: string }> })
   if (!path) return failure(404, 'NOT_FOUND', 'not found');
   const a = await readApplication();
   if (!a) return failure(404, 'NOT_FOUND', 'No sign-up in progress.');
-  return json(await core(`/store/applications/${a.id}/${path}`, { method: 'POST', token: a.token, json: await req.json().catch(() => ({})) }));
+  return json(await core(`/store/applications/${a.id}/${path}`, { method: 'POST', token: a.token, json: await req.json().catch(() => ({})), shopperIp: shopperIp(req), shopperUa: shopperUa(req) }));
+});
+
+/** The agreements for this sign-up, with the applicant's own details filled in. */
+export const GET = (_req: Request, ctx: { params: Promise<{ action: string }> }) => guarded(async () => {
+  if ((await ctx.params).action !== 'agreements') return failure(404, 'NOT_FOUND', 'not found');
+  const a = await readApplication();
+  if (!a) return failure(404, 'NOT_FOUND', 'No sign-up in progress.');
+  return json(await core(`/store/applications/${a.id}/agreements`, { token: a.token }));
 });

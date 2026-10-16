@@ -10,7 +10,7 @@ import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
 import { FinancingPanel } from './financing-panel';
-import { FiberCoverageCheck, type FiberApi } from '@meridian/ui';
+import { AgreementSigner, FiberCoverageCheck, type AgreementView, type FiberApi, type SignedPayload } from '@meridian/ui';
 import { MONTHS, SWATCH, clashesWith, financeable, flatLines, isExclusive, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
@@ -28,6 +28,8 @@ export interface Wizard {
   address: string; setAddress: (s: string) => void;
   /** Pairs of offer types that cannot be in the same order. */
   conflicts: Array<[string, string]>;
+  /** The agreements this order needs and the customer's signature on them. */
+  agreements: { data: { required: boolean; agreements: AgreementView[] } | null; signed: SignedPayload | null; setSigned: (s: SignedPayload | null) => void };
   /** Live installation times from the field-service system (when Settings allows): offered, the one chosen, and whether the agent chose to book later. */
   booking: { enabled: boolean; slot: { id: string; start: string; end: string } | null; setSlot: (s: { id: string; start: string; end: string } | null) => void; later: boolean; setLater: (b: boolean) => void };
   /** How the goods reach the customer (what every goods offer allows), the one chosen, and the store for collection. */
@@ -501,6 +503,9 @@ export function ReviewStep({ w }: { w: Wizard }) {
           <Row k="Prices include" v={`${q.taxName} at ${q.taxBps / 100}%`} />
         </dl>
       </Card>
+      {w.agreements.data && w.agreements.data.agreements.length > 0 && (
+        <Card><AgreementSigner agreements={w.agreements.data.agreements} required={w.agreements.data.required} onChange={w.agreements.setSigned} who={w.portal ? 'you' : w.customer?.displayName ?? 'the customer'} /></Card>
+      )}
       <Card>
         <p className="mb-2 text-subhead font-semibold">Changing their mind</p>
         <Terms groups={q.groups} />

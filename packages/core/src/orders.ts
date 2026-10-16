@@ -1,4 +1,5 @@
 import { enqueueOcs } from './ocs.js';
+import { AGREEMENT_CHANNELS, factsFromPriced, offerKindsOf, orderValues, queueContractDelivery, signAgreements, type SignatureInput } from './agreements.js';
 import { cancelOrderVisit, confirmOrderVisit, holdOrderVisit, orderBookingAvailable, type OrderSlot } from './workforce.js';
 import { assertNotBlacklisted } from './fraud.js';
 import { randomUUID } from 'node:crypto';
@@ -54,6 +55,11 @@ export interface OrderInput {
   installationSlot?: string;
   /** A window chosen from the field-service system's live availability (see `findOrderSlots`); it is held for the order and booked once the order is paid. Replaces `installationSlot`. */
   installationSlotRef?: OrderSlot;
+  /**
+   * The customer's signature on the agreements that apply to this order (see agreements.ts). `ip` and `userAgent` are of the device the signature was drawn on;
+   * `agentName` is the staff member at the counter. Required when Settings → Documents says orders must be signed.
+   */
+  agreement?: { signature: SignatureInput; versionIds?: string[]; ip?: string | null; userAgent?: string | null; agentName?: string | null };
   /** Device financing: the credit check to use, or pay a device on a contract in full. */
   financing?: { creditCheckId?: string; payInFull?: boolean };
   /** The fibre port the customer was holding at checkout (from the coverage service); kept with the order so Fibre Ops can see which port it is. */
@@ -76,6 +82,8 @@ async function setState(q: Queryable, o: Row, to: OrderState, actor: string, rea
     [o.id, o.shardId, to, reason ?? null],
   );
   await q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$4,$5,$6)', [o.shardId, o.id, o.state, to, actor, reason ?? null]);
+  if (to === 'PAID') await queueContractDelivery(q, o.id);   // the signed copies go to the customer once the order is paid
+  if ((to === 'CANCELLED' || to === 'FAILED') && o.fulfilment?.agreements) await q.query(`UPDATE documents SET status='SUPERSEDED', status_reason=$2 WHERE order_id=$1 AND kind='CONTRACT' AND purged_at IS NULL`, [o.id, `Order ${to.toLowerCase()}`]);
   if ((to === 'CANCELLED' || to === 'FAILED') && o.fulfilment?.wfm) await cancelOrderVisit(q, o.id, reason ?? 'The order did not go ahead', actor);   // release the technician window held for it
   if (to === 'CANCELLED' || to === 'COMPLETED') await raiseEvent(q, to === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_COMPLETED', { accountId: o.accountId, resourceId: o.id, payload: { orderId: o.id, orderNumber: o.number, customerId: o.customerId, state: to, reason: reason ?? null } }, { onlyIfWanted: true });
   o.state = to;
@@ -220,6 +228,14 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
     );
   }
   if (priced.financing?.checkId) await attachCheckToOrder(q, priced.financing.checkId, orderId, customerId);
+  if (input.agreement || AGREEMENT_CHANNELS.includes(input.channel)) {
+    // The text is merged with this order's details (numbers and SIM as allocated just now); the exact live version of each agreement is bound to the order.
+    const al = (await q.query('SELECT position, msisdn, iccid, serial_number FROM order_lines WHERE order_id=$1 ORDER BY position', [orderId])).rows;
+    const facts = factsFromPriced(priced, { number: orderNumber });
+    facts.items.forEach((it, k) => { const r = al.find((x) => Number(x.position) === k); if (r) { it.msisdn = r.msisdn ?? it.msisdn ?? null; it.iccid = r.iccid ?? null; it.imei = r.serialNumber ?? null; } });
+    await signAgreements(q, { context: 'ORDER', offerKinds: offerKindsOf(priced), customerId, orderId, values: await orderValues(q, customerId, facts), reference: orderNumber, signature: input.agreement?.signature, versionIds: input.agreement?.versionIds, channel: input.channel,
+      ctx: { who: { username: actor, ip: input.agreement?.ip ?? null, userAgent: input.agreement?.userAgent ?? null }, method: input.channel === 'SELF_SERVE' ? 'SELF_SERVE' : 'ASSISTED', agentName: input.channel === 'SELF_SERVE' ? null : input.agreement?.agentName ?? actor } });
+  }
   if (input.installationSlotRef) await holdOrderVisit(q, { orderId, number: orderNumber, customerId, slot: input.installationSlotRef }, actor);
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
   o.state = 'DRAFT';
