@@ -12,23 +12,23 @@ import { wfmVendor, type WfmAddress, type WfmBooking, type WfmConnector, type Wf
  * one row per visit, moves the case with it (waiting for dispatch → dispatched → resolved, or back to work, or waiting for the customer), and tells the
  * customer on SMS or WhatsApp at each step.
  */
-export interface WfmSettings { vendor: string | null; enabled: boolean; configs: Record<string, Record<string, unknown>>; /** Environment variable holding the secret the field-service system signs its callbacks with. */ webhookSecretEnv: string }
-const DEFAULT: WfmSettings = { vendor: null, enabled: false, configs: {}, webhookSecretEnv: 'MERIDIAN_WFM_WEBHOOK_SECRET' };
+export interface WfmSettings { vendor: string | null; enabled: boolean; /** Offer the customer real installation times from the field-service system while the order is taken. */ bookAtOrder: boolean; configs: Record<string, Record<string, unknown>>; /** Environment variable holding the secret the field-service system signs its callbacks with. */ webhookSecretEnv: string }
+const DEFAULT: WfmSettings = { vendor: null, enabled: false, bookAtOrder: false, configs: {}, webhookSecretEnv: 'MERIDIAN_WFM_WEBHOOK_SECRET' };
 export const WEBHOOK_PATH = '/api/v1/cases/webhooks/wfm-callback';
 
 export async function getWfmSettings(q: Queryable): Promise<WfmSettings> {
   const v = (await q.query(`SELECT value FROM settings WHERE key='wfm'`)).rows[0]?.value ?? {};
   return { ...DEFAULT, ...v, configs: v.configs ?? {} };
 }
-export async function setWfmSettings(q: Queryable, actor: string, i: { vendor: string | null; enabled: boolean; config?: unknown; webhookSecretEnv?: string }): Promise<WfmSettings> {
+export async function setWfmSettings(q: Queryable, actor: string, i: { vendor: string | null; enabled: boolean; bookAtOrder?: boolean; config?: unknown; webhookSecretEnv?: string }): Promise<WfmSettings> {
   const cur = await getWfmSettings(q);
   if (i.enabled && !i.vendor) throw invalid('Choose the field-service system first.');
   const env = (i.webhookSecretEnv ?? cur.webhookSecretEnv).trim();
   if (!/^MERIDIAN_WFM_[A-Z0-9_]{1,40}$/.test(env)) throw invalid('The webhook secret variable must be named MERIDIAN_WFM_ followed by capitals, digits or underscores.');
-  const next: WfmSettings = { vendor: i.vendor, enabled: i.enabled, configs: { ...cur.configs }, webhookSecretEnv: env };
+  const next: WfmSettings = { vendor: i.vendor, enabled: i.enabled, bookAtOrder: i.bookAtOrder ?? cur.bookAtOrder, configs: { ...cur.configs }, webhookSecretEnv: env };
   if (i.vendor) { const v = wfmVendor(i.vendor); next.configs[i.vendor] = v.validate(i.config ?? cur.configs[i.vendor] ?? v.defaults()); }
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('wfm', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(next), actor]);
-  await audit(q, actor, 'settings', 'wfm', 'update', { vendor: next.vendor, enabled: next.enabled });
+  await audit(q, actor, 'settings', 'wfm', 'update', { vendor: next.vendor, enabled: next.enabled, bookAtOrder: next.bookAtOrder });
   return next;
 }
 /** The connector for the chosen system, or null when field service is off. */
@@ -53,7 +53,7 @@ export async function wfmOverview(q: Queryable, env: NodeJS.ProcessEnv = process
   let problem: string | null = null;
   if (s.vendor) { try { const v = wfmVendor(s.vendor); problem = v.create(v.validate(s.configs[s.vendor] ?? v.defaults()), env).problem(); } catch (e) { problem = (e as Error).message; } }
   const secret = !!(env[s.webhookSecretEnv] ?? '').trim();
-  return { vendor: s.vendor, enabled: s.enabled, webhookSecretEnv: s.webhookSecretEnv, webhookSecretSet: secret, callbackPath: WEBHOOK_PATH, vendors, problem };
+  return { vendor: s.vendor, enabled: s.enabled, bookAtOrder: s.bookAtOrder, webhookSecretEnv: s.webhookSecretEnv, webhookSecretSet: secret, callbackPath: WEBHOOK_PATH, vendors, problem };
 }
 export async function testWfm(q: Queryable, env: NodeJS.ProcessEnv = process.env, fetchImpl?: typeof fetch) {
   const c = await activeWfm(q, env, fetchImpl);
@@ -72,7 +72,11 @@ async function plan(q: Queryable, caseId: string) {
   if (c.isMaster || !c.customerId) throw invalid('A network incident has no address to visit: book visits on the customers’ own cases.');
   const cust = (await q.query('SELECT display_name, phone, address FROM customers WHERE id=$1', [c.customerId])).rows[0]!;
   const it = c.issueTypeId ? await issueType(q, c.issueTypeId).catch(() => null) : null;
-  const addr = (cust.address ?? {}) as WfmAddress;
+  let addr = (cust.address ?? {}) as WfmAddress;
+  if (c.orderId) {   // an installation visit goes to the address on the order, which may not be where the customer lives
+    const o = (await q.query(`SELECT fulfilment FROM orders WHERE id=$1`, [c.orderId])).rows[0];
+    if (o?.fulfilment?.address) addr = parseAddress(String(o.fulfilment.address));
+  }
   return { c, cust, skills: it?.skills ?? [], equipment: it?.equipment ?? [], needsDispatch: !!it?.needsDispatch, address: addr, issueName: it?.name ?? c.subject };
 }
 const priorityOf = (sev: string): WfmBooking['priority'] => (sev === 'CRITICAL_OUTAGE' ? 'URGENT' : sev === 'MAJOR_DEGRADATION' ? 'HIGH' : 'NORMAL');
@@ -93,16 +97,117 @@ export async function findSlots(q: Queryable, caseId: string, o: { from?: string
   const conn = await needConnector(q, env, fetchImpl);
   const p = await plan(q, caseId);
   if (!ACTIVE_STATUSES.includes(p.c.status)) throw rejected('This case is not open.');
-  const from = o.from ? new Date(o.from) : new Date(Date.now() + 3_600_000), to = o.to ? new Date(o.to) : new Date(from.getTime() + 14 * 86_400_000);
+  return availabilityFor(q, conn, { postalNode: p.c.postalNode, address: p.address, skills: p.skills, equipment: p.equipment, ...o });
+}
+
+/** Free windows for a visit, from the field-service system, less what Meridian itself has already booked. */
+async function availabilityFor(q: Queryable, conn: WfmConnector, i: { postalNode: string | null; address: WfmAddress; skills: string[]; equipment: string[]; from?: string; to?: string; durationMinutes?: number }) {
+  const from = i.from ? new Date(i.from) : new Date(Date.now() + 3_600_000), to = i.to ? new Date(i.to) : new Date(from.getTime() + 14 * 86_400_000);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from) throw invalid('Give a start and an end for the search, the end after the start.');
   if (to.getTime() - from.getTime() > 60 * 86_400_000) throw invalid('Search at most 60 days at a time.');
-  const dur = o.durationMinutes ?? 120;
+  const dur = i.durationMinutes ?? 120;
   if (!Number.isInteger(dur) || dur < 15 || dur > 600) throw invalid('A visit lasts 15 to 600 minutes.');
   const booked = Object.fromEntries((await q.query(`SELECT slot_start::text AS s, count(*) AS n FROM workforce_appointments WHERE status IN ${ACTIVE_VISIT_SQL} AND slot_start >= $1 AND slot_start <= $2 GROUP BY slot_start`, [from.toISOString(), to.toISOString()])).rows
     .map((r) => [new Date(r.s).toISOString(), Number(r.n)]));
-  const r = await conn.availability({ postalNode: p.c.postalNode, address: p.address, skills: p.skills, equipment: p.equipment, from: from.toISOString(), to: to.toISOString(), durationMinutes: dur, booked });
+  const r = await conn.availability({ postalNode: i.postalNode, address: i.address, skills: i.skills, equipment: i.equipment, from: from.toISOString(), to: to.toISOString(), durationMinutes: dur, booked });
   if (!r.ok) throw rejected(`The field-service system could not give times: ${r.detail}`);
-  return { slots: r.slots, skills: p.skills, equipment: p.equipment };
+  return { slots: r.slots, skills: i.skills, equipment: i.equipment };
+}
+
+// ───────────────────────── installation visits taken with the order ─────────────────────────
+/** The issue type whose skills and equipment an installation visit needs. */
+export const INSTALL_ISSUE = 'broadband.install.new';
+export const parseAddress = (text: string): WfmAddress => ({ line1: text.trim().slice(0, 200), postcode: [...text.matchAll(/\b\d{4,6}\b/g)].pop()?.[0] });
+
+/** Whether the order screen should offer real installation times: switched on in Settings and the field-service system is usable. */
+export async function orderBookingAvailable(q: Queryable, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch): Promise<boolean> {
+  const s = await getWfmSettings(q);
+  if (!s.enabled || !s.vendor || !s.bookAtOrder) return false;
+  const c = await activeWfm(q, env, fetchImpl).catch(() => null);
+  return !!c && !c.problem();
+}
+/** Installation times for an address, before any order or case exists. */
+export async function findOrderSlots(q: Queryable, i: { address: string; from?: string; to?: string; durationMinutes?: number }, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch) {
+  if (!(await orderBookingAvailable(q, env, fetchImpl))) throw conflict('Live installation times are not switched on. An administrator switches them on in Settings → Cases → Field service.');
+  if (!i.address?.trim()) throw invalid('Enter the installation address first.');
+  const conn = await needConnector(q, env, fetchImpl);
+  const it = await issueType(q, INSTALL_ISSUE);
+  const address = parseAddress(i.address);
+  return availabilityFor(q, conn, { postalNode: address.postcode?.toUpperCase() ?? null, address, skills: it.skills, equipment: it.equipment, from: i.from, to: i.to, durationMinutes: i.durationMinutes });
+}
+export interface OrderSlot { id: string; start: string; end: string }
+/** Opens the order's installation case and holds the chosen window for it (a few minutes, until the order is paid). Throws when the window has gone. */
+export async function holdOrderVisit(q: Queryable, o: { orderId: string; number: string; customerId: string; slot: OrderSlot }, actor: string, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch): Promise<{ caseId: string; caseNumber: string; appointmentId: string }> {
+  const { createCase } = await import('./cases.js');
+  const c = await createCase(q, { customerId: o.customerId, issueTypeId: INSTALL_ISSUE, subject: `Fibre installation for order ${o.number}` }, actor);
+  await q.query(`UPDATE cases SET order_id=$2 WHERE id=$1`, [c.id, o.orderId]);
+  await transitionCase(q, c.id, 'IN_PROGRESS', { actor });
+  const a = await holdSlot(q, c.id, { slot: o.slot }, actor, env, fetchImpl);
+  await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [o.orderId, JSON.stringify({ wfm: { caseId: c.id, caseNumber: c.number, appointmentId: a.id, slot: o.slot } })]);
+  return { caseId: c.id, caseNumber: c.number, appointmentId: a.id };
+}
+
+/** Makes the order show the visit's real window: the order's slot, the installation appointment and the installation part all follow the visit. */
+export async function recordInstallSlot(q: Queryable, orderId: string, start: Date, end: Date) {
+  const o = (await q.query(`SELECT shard_id FROM orders WHERE id=$1`, [orderId])).rows[0];
+  if (!o) return;
+  await q.query(`UPDATE orders SET fulfilment = fulfilment || $2::jsonb WHERE id=$1`, [orderId, JSON.stringify({ slot: start.toISOString() })]);
+  await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [orderId]);
+  await q.query(`INSERT INTO installation_appointments (shard_id, order_id, slot_start, slot_end) VALUES ($1,$2,$3,$4)`, [o.shardId, orderId, start.toISOString(), end.toISOString()]);
+  await q.query(`UPDATE order_groups SET details = details || $2::jsonb WHERE order_id=$1 AND kind='INSTALL'`, [orderId, JSON.stringify({ slot: start.toISOString() })]);
+}
+async function clearInstallSlot(q: Queryable, orderId: string) {
+  await q.query(`UPDATE orders SET fulfilment = fulfilment - 'slot' WHERE id=$1`, [orderId]);
+  await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status='BOOKED'`, [orderId]);
+  await q.query(`UPDATE order_groups SET details = details - 'slot' WHERE order_id=$1 AND kind='INSTALL'`, [orderId]);
+}
+const orderNote = (q: Queryable, orderId: string, actor: string, text: string) =>
+  q.query(`INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) SELECT shard_id, id, state, state, $2, $3 FROM orders WHERE id=$1`, [orderId, actor, text]);
+
+/** Once the order is paid: turns the held window into a job. If the hold ran out the same window is booked again; if that fails the order goes on without a time and the case waits for an agent. */
+export async function confirmOrderVisit(q: Queryable, order: Row, actor: string, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch): Promise<{ ok: boolean; error?: string }> {
+  const w = order.fulfilment?.wfm as { caseId: string; caseNumber: string; slot: OrderSlot } | undefined;
+  if (!w) return { ok: true };
+  try {
+    const a = (await q.query(`SELECT * FROM workforce_appointments WHERE case_id=$1 ORDER BY created_at DESC LIMIT 1`, [w.caseId])).rows[0];
+    if (a && ACTIVE_VISIT.includes(a.status) && a.status !== 'RESERVED') return { ok: true };
+    if (a?.status === 'RESERVED') {
+      try { await confirmAppointment(q, a.id, actor, env, fetchImpl); }
+      catch { await q.query(`UPDATE workforce_appointments SET status='CANCELLED', outcome_note='Hold could not be confirmed', updated_at=now() WHERE id=$1 AND status='RESERVED'`, [a.id]); await bookVisit(q, w.caseId, { slot: w.slot }, actor, env, fetchImpl); }
+    } else await bookVisit(q, w.caseId, { slot: w.slot }, actor, env, fetchImpl);
+    return { ok: true };
+  } catch (e) {
+    const why = (e as Error).message;
+    await clearInstallSlot(q, order.id);
+    await caseLog(q, w.caseId, actor, 'ORDER_VISIT_FAILED', { detail: { reason: why } });
+    await orderNote(q, order.id, actor, `The installation time ${w.slot.start.slice(0, 16).replace('T', ' ')} UTC could not be confirmed with the field-service system (${why}). Book another time from case ${w.caseNumber}.`);
+    return { ok: false, error: why };
+  }
+}
+/** The order's installation part was cancelled: release the visit and close its case. */
+export async function cancelOrderVisit(q: Queryable, orderId: string, reason: string, actor: string) {
+  const cs = (await q.query(`SELECT id FROM cases WHERE order_id=$1`, [orderId])).rows.map((r) => r.id as string);
+  if (!cs.length) return;
+  await cancelVisitsOfCases(q, cs, reason);
+  for (const id of cs) await transitionCase(q, id, 'RESOLVED', { actor, resolution: `The order's installation was cancelled: ${reason}` }).catch(() => undefined);
+}
+/** After a visit changed hands (booked, moved, cancelled) keep the order in step with it. */
+async function syncOrderVisit(q: Queryable, caseId: string, actor: string) {
+  const c = (await q.query(`SELECT order_id FROM cases WHERE id=$1`, [caseId])).rows[0];
+  if (!c?.orderId) return;
+  const live = (await q.query(`SELECT slot_start, slot_end, status FROM workforce_appointments WHERE case_id=$1 AND status IN ('REQUESTED','SCHEDULED','ASSIGNED','EN_ROUTE','ON_SITE') ORDER BY created_at DESC LIMIT 1`, [caseId])).rows[0];
+  if (live) { await recordInstallSlot(q, c.orderId, new Date(live.slotStart), new Date(live.slotEnd)); await orderNote(q, c.orderId, actor, `Installation visit is now ${new Date(live.slotStart).toISOString().slice(0, 16).replace('T', ' ')}–${new Date(live.slotEnd).toISOString().slice(11, 16)} UTC.`); }
+  else if (!(await q.query(`SELECT 1 FROM workforce_appointments WHERE case_id=$1 AND status='RESERVED'`, [caseId])).rows.length) { await clearInstallSlot(q, c.orderId); await orderNote(q, c.orderId, actor, 'The installation visit was cancelled. A new time is needed.'); }
+}
+
+/** The installation visits already booked for a customer's orders, other than on this case: an agent who has a case open can move one. */
+export async function orderVisitsFor(q: Queryable, caseId: string): Promise<Row[]> {
+  const c = (await q.query(`SELECT customer_id FROM cases WHERE id=$1`, [caseId])).rows[0];
+  if (!c?.customerId) return [];
+  return (await q.query(
+    `SELECT a.id, a.case_id, a.status, a.slot_start, a.slot_end, a.external_ref, k.number AS case_number, o.number AS order_number
+       FROM workforce_appointments a JOIN cases k ON k.id=a.case_id JOIN orders o ON o.id=k.order_id
+      WHERE k.customer_id=$1 AND k.id <> $2 AND a.status IN ('RESERVED','REQUESTED','SCHEDULED','ASSIGNED') ORDER BY a.slot_start`, [c.customerId, caseId])).rows;
 }
 
 // ───────────────────────── booking ─────────────────────────
@@ -170,6 +275,7 @@ export async function confirmAppointment(q: Queryable, appointmentId: string, ac
   const fresh = await getAppointment(q, appointmentId);
   if (status === 'SCHEDULED') await bringCaseTo(q, a.caseId, 'DISPATCHED', `wfm:${conn.vendor}`, `Technician${fresh.technicianName ? ` ${fresh.technicianName}` : ''} booked for ${when(a)}.`);
   await notifyVisit(q, await getCase(q, a.caseId), 'CASE_VISIT_BOOKED', `Your technician visit for case ${p.c.number} is booked for ${when(a)}. We will tell you when the technician is on the way.`, { appointmentId, window: { start: a.slotStart, end: a.slotEnd } });
+  await syncOrderVisit(q, a.caseId, actor);
   return fresh;
 }
 
@@ -193,6 +299,7 @@ export async function cancelAppointment(q: Queryable, appointmentId: string, rea
   const c = await getCase(q, a.caseId);
   if (!o.keepCase && (c.status === 'DISPATCHED' || c.status === 'PENDING_DISPATCH')) await transitionCase(q, a.caseId, 'IN_PROGRESS', { actor, note: `Visit cancelled: ${why}` });
   if (!o.silent && a.status !== 'RESERVED') await notifyVisit(q, c, 'CASE_VISIT_CANCELLED', `Your technician visit for case ${c.number} (${when(a)}) has been cancelled. We will be in touch to arrange another.`, { appointmentId });
+  if (a.status !== 'RESERVED') await syncOrderVisit(q, a.caseId, actor);
   return getAppointment(q, appointmentId);
 }
 

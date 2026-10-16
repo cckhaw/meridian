@@ -312,7 +312,7 @@ post('/fiber/reserve', null, ({ db, user, body }) => core.fiberReserve(db, { ...
 post('/fiber/reservations/:id/release', null, ({ db, params }) => core.fiberRelease(db, params.id!));
 post('/fiber/waitlist', null, ({ db, user, body }) => core.fiberWaitlist(db, { ...fiberWait.parse(body), customerRef: `staff:${user.username}` }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
-get('/meta', null, async ({ db, user }) => ({ modules: { fiberCoverage: await core.fiberModuleEnabled(db) }, ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), cardLink: (await core.activeGateways(db, process.env, 'CRM')).list.some((g) => !!g.createPaymentLink), customers: await core.getCustomerSettings(db), billCycles: await (async () => { const c = await core.getBillCycles(db); return { ...c, defaultDay: core.defaultCycleDay(c) }; })() }));
+get('/meta', null, async ({ db, user }) => ({ modules: { fiberCoverage: await core.fiberModuleEnabled(db), installationBooking: await core.orderBookingAvailable(db) }, ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), cardLink: (await core.activeGateways(db, process.env, 'CRM')).list.some((g) => !!g.createPaymentLink), customers: await core.getCustomerSettings(db), billCycles: await (async () => { const c = await core.getBillCycles(db); return { ...c, defaultDay: core.defaultCycleDay(c) }; })() }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', ({ db }) => core.listRoles(db));
@@ -1183,7 +1183,7 @@ const orderBody = z.object({
   lines: z.array(lineBody).min(1).max(50),
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), confirmed: z.boolean().optional() }),
   storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
-  deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(), fiberReservationId: z.string().uuid().optional(),
+  deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(), installationSlotRef: z.object({ id: z.string().min(1).max(200), start: z.string().max(40), end: z.string().max(40) }).optional(), fiberReservationId: z.string().uuid().optional(),
   delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), pickupStoreId: z.string().max(50).optional() }).optional(),
   financing: z.object({ creditCheckId: uuid.optional(), payInFull: z.boolean().optional() }).optional(),
 });
@@ -1217,6 +1217,8 @@ post('/orders/quote', null, async ({ db, user, body }) => {
   const b = orderBody.partial({ payment: true }).parse(body);
   return core.quoteOrder(db, { customerId: user.scope.customerId ?? b.customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines, financing: b.financing, payment: { method: b.payment?.method ?? 'CREDIT_CARD', installmentMonths: b.payment?.installmentMonths } });
 });
+// Live installation windows from the field-service system, when Settings → Cases → Field service says orders may book them.
+get('/orders/installation-slots', 'order:read', ({ db, query }) => core.findOrderSlots(db, { address: str(query, 'address') ?? '', from: str(query, 'from'), to: str(query, 'to') }));
 get('/orders/addons', 'order:read', ({ db, user, query }) => core.eligibleAddons(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), offerIds: (str(query, 'offers') ?? '').split(',').filter(Boolean).slice(0, 20), channel: z.enum(core.CHANNELS).parse(str(query, 'channel')),
   marketCode: user.marketCode ?? 'SG', q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
@@ -1260,7 +1262,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, financing: b.financing, actor: user.username, fiberReservationId: b.fiberReservationId,
+      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, installationSlotRef: b.installationSlotRef, financing: b.financing, actor: user.username, fiberReservationId: b.fiberReservationId,
     });
     await core.fiberConfirmLock(db, b.fiberReservationId, String(order.number ?? order.id), user.username);
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);
@@ -1592,6 +1594,7 @@ post('/cases/:id/interactions', 'case:write', ({ db, user, params, body }) => co
 
 // ── field visits ──
 get('/cases/:id/slots', 'case:write', ({ db, params, query }) => core.findSlots(db, params.id!, { from: str(query, 'from'), to: str(query, 'to'), durationMinutes: num(query, 'duration') }));
+get('/cases/:id/order-visits', 'case:write', ({ db, params }) => core.orderVisitsFor(db, params.id!).then((items) => ({ items })));
 get('/cases/:id/appointments', 'case:read', async ({ db, user, params }) => { assertCustomer(user, (await core.getCase(db, params.id!)).customerId); return { items: await core.listAppointments(db, params.id!) }; });
 const slot = z.object({ id: z.string().min(1).max(200), start: z.string().max(40), end: z.string().max(40) });
 post('/cases/:id/appointments', 'case:write', async ({ db, user, params, body }) => { const b = z.object({ slot, notes: z.string().max(1000).optional() }).parse(body); return Response.json(await core.bookVisit(db, params.id!, b, user.username), { status: 201 }); });
@@ -1604,7 +1607,7 @@ post('/appointments/:id/reschedule', 'case:write', ({ db, user, params, body }) 
 /** Delivers the cancellations queued for the field-service system. Schedule it with the SLA sweep. */
 post('/cases/wfm-outbox', superv, ({ db }) => core.deliverWfmCancels(db));
 get('/settings/cases/field-service', 'settings:manage', ({ db }) => core.wfmOverview(db));
-post('/settings/cases/field-service', 'settings:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), config: z.record(z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
+post('/settings/cases/field-service', 'settings:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), bookAtOrder: z.boolean().optional(), config: z.record(z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
 post('/settings/cases/field-service/test', 'settings:manage', ({ db }) => core.testWfm(db));
 
 // ── TM Forum Open APIs: TMF621 trouble tickets, TMF656 service problems, TMF683 party interactions ──

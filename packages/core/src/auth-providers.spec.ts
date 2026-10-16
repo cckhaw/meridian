@@ -89,7 +89,7 @@ describe('OpenID Connect sign-in', () => {
     tokenStatus = 200;
     const unsigned = `${b64u({ alg: 'none' })}.${b64u({ iss: ISSUER, aud: 'meridian', exp: now() + 99, sub: 'x', nonce: 'n' })}.`;
     await expect(verifyIdToken(unsigned, { jwks: { keys: [jwk] }, issuer: ISSUER, clientId: 'meridian', nonce: 'n' })).rejects.toThrow(/does not accept/);
-    const forged = sign({ iss: ISSUER, aud: 'meridian', exp: now() + 99, sub: 'x', nonce: 'n' }).replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'));
+    const forged = sign({ iss: ISSUER, aud: 'meridian', exp: now() + 99, sub: 'x', nonce: 'n' }).replace(/.(.{40})$/, (_m, tail: string) => `${_m[0] === 'A' ? 'B' : 'A'}${tail}`);   // change a byte in the middle: the last character's low bits can be padding, which would leave the signature valid
     await expect(verifyIdToken(forged, { jwks: { keys: [jwk] }, issuer: ISSUER, clientId: 'meridian', nonce: 'n' })).rejects.toThrow(/verified/);
     await expect(oidcFinish(db, { state: 'never-issued-state', code: 'x' })).rejects.toThrow(/expired/);
   });

@@ -46,6 +46,8 @@ export function NewOrder() {
   const [method, setMethod] = useState<'SHIP' | 'COLLECT' | ''>('');
   const [pickupStore, setPickupStore] = useState('');
   const [slot, setSlot] = useState('');
+  const [wfmSlot, setWfmSlot] = useState<{ id: string; start: string; end: string } | null>(null);
+  const [bookLater, setBookLater] = useState(false);
   const [pay, setPay] = useState({ method: 'CASH', reference: '', received: true });
   const [consent, setConsent] = useState(false);
   const [payInFull, setPayInFull] = useState(false);
@@ -93,6 +95,7 @@ export function NewOrder() {
 
   // ── which steps this order needs ──
   const needs = quote?.needs ?? { delivery: false, installation: false, sim: false };
+  const bookable = !!meta.data?.modules?.installationBooking && needs.installation;
   const methods: Array<'SHIP' | 'COLLECT'> = quote?.deliveryMethods ?? [];
   const how: 'SHIP' | 'COLLECT' | null = !needs.delivery || methods.length === 0 ? null : method && methods.includes(method) ? method : methods.includes('SHIP') ? 'SHIP' : 'COLLECT';
   const shipTo = how === 'SHIP' || (needs.delivery && how === null);
@@ -121,7 +124,7 @@ export function NewOrder() {
       case 'sim': return !portInReady(items.flatMap((i) => [i.portIn, ...(i.members ?? []).map((m) => m.portIn)]).find((p) => !portInReady(p))) ? 'Complete the port-in details.' : duplicateProblem(items) ?? quoteError ?? problems[0] ?? (numbering.data?.settings?.requireSim ? items.flatMap((i, k) => { const qi = quoteIndex(items, k); return [{ x: i as { iccid?: string; simType?: string }, l: quote?.lines?.[qi], name: i.offer.name }, ...(i.members ?? []).filter((m) => m.offerId).map((m, n) => ({ x: m as { iccid?: string; simType?: string }, l: quote?.lines?.[qi + 1 + n], name: `${i.offer.name}, member ${n + 1}` }))]; }).map(({ x, l, name }) => (l?.needsSim && !x.iccid && !x.simType ? `Choose the SIM for ${name}.` : null)).find(Boolean) ?? null : null);
       case 'payment': return quoteError;
       case 'customer': return !customer ? 'Choose or create the customer to continue.' : problems[0] ?? null;
-      case 'delivery': return how === 'COLLECT' && !pickupStore ? 'Choose the store where the customer will collect.' : shipTo && !address.trim() ? 'Enter the delivery address.' : needs.installation && !shipTo && !address.trim() ? 'Enter the installation address.' : null;
+      case 'delivery': return how === 'COLLECT' && !pickupStore ? 'Choose the store where the customer will collect.' : shipTo && !address.trim() ? 'Enter the delivery address.' : needs.installation && !shipTo && !address.trim() ? 'Enter the installation address.' : needs.installation && bookable && !wfmSlot && !bookLater ? 'Choose an installation time, or arrange it after the order.' : null;
       case 'review': return duplicateProblem(items) ?? problems[0] ?? (!consent ? 'Confirm the customer has been told the terms.' : null);
       case 'pay': return needsRef && !pay.reference.trim() ? 'Enter the receipt or approval number.' : problems[0] ?? null;
       default: return null;
@@ -133,7 +136,7 @@ export function NewOrder() {
 
   const submit = async () => {
     const o = await run(() => post('/orders', {
-      ...body, fiberReservationId: meta.data?.modules?.fiberCoverage ? fiberLock ?? undefined : undefined, installationSlot: slot ? new Date(slot).toISOString() : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
+      ...body, fiberReservationId: meta.data?.modules?.fiberCoverage ? fiberLock ?? undefined : undefined, installationSlot: !bookable && slot ? new Date(slot).toISOString() : undefined, installationSlotRef: bookable && wfmSlot ? wfmSlot : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
       delivery: how ? { method: how, pickupStoreId: how === 'COLLECT' ? pickupStore : undefined } : undefined,
       payment: { method: (quote?.dueNowMinor ?? 0) > 0 ? pay.method : 'CASH', reference: pay.reference || undefined, confirmed: cashier && pay.received && (quote?.dueNowMinor ?? 0) > 0 ? true : undefined },
       storeId: retail ? me?.storeId || store || undefined : undefined, dealerId: channel === 'DEALER' ? dealer?.id : undefined, dealerAgentId: channel === 'DEALER' ? agent?.id : undefined,
@@ -145,7 +148,7 @@ export function NewOrder() {
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
-    address, setAddress, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
+    address, setAddress: (a: string) => { setAddress(a); setWfmSlot(null); }, booking: { enabled: bookable, slot: wfmSlot, setSlot: setWfmSlot, later: bookLater, setLater: setBookLater }, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
 

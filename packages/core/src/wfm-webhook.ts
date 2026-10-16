@@ -3,6 +3,7 @@ import { caseLog, getCase } from './cases.js';
 import type { Db, Queryable, Row } from './db.js';
 import { DomainError, invalid } from './errors.js';
 import { bringCaseTo, notifyVisit } from './workforce.js';
+import { advanceOrderTx } from './orders.js';
 
 /**
  * What the field-service system tells us, and what we do about it. The system calls one URL (`/api/v1/cases/webhooks/wfm-callback`) with a JSON body and a signature
@@ -141,8 +142,16 @@ async function apply(q: Queryable, ev: WfmEvent): Promise<WfmOutcome> {
       break;
     }
   }
+  if (c.orderId) await followOrder(q, c.orderId, ev, by);
   await caseLog(q, caseId, by, 'WFM_EVENT', { detail: { type: ev.type, eventId: ev.eventId, jobRef: ev.jobRef, appointmentId: a.id } });
   return { status: 'APPLIED', detail, caseId };
+}
+
+/** An installation case's visit drives its order: once the technician is on the way the installation can no longer be cancelled, and a finished visit finishes the installation. */
+async function followOrder(q: Queryable, orderId: string, ev: WfmEvent, by: string) {
+  const move = async (type: 'dispatch_technician' | 'complete_installation') => { try { await advanceOrderTx(q, orderId, { type }, by); } catch { /* already past this step, or the order has ended */ } };
+  if (ev.type === 'EN_ROUTE' || ev.type === 'ON_SITE') await move('dispatch_technician');
+  if (ev.type === 'JOB_COMPLETED') { await move('dispatch_technician'); await move('complete_installation'); }
 }
 
 export async function listWebhookEvents(q: Queryable, f: { caseId?: string; limit?: number } = {}): Promise<Row[]> {
