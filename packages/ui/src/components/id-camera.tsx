@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Alert } from './forms';
 import { Button } from './primitives';
 
@@ -31,14 +32,18 @@ const ERRORS: Record<string, string> = {
   OverconstrainedError: 'This camera cannot be used. Try another device.',
 };
 
-/** Frames that help someone line the document up. The shape is a guide only; the whole camera picture is kept. */
+/**
+ * Frames that help someone line the document up. The shape is a guide only; the whole camera picture is kept. It is sized from the space the picture has
+ * (container query units), so it stays centred and in proportion on a tall phone, a tablet and a wide laptop screen alike.
+ */
 function Guide({ frame }: { frame: Frame }) {
   const corners = 'absolute h-6 w-6 border-white';
-  if (frame === 'face') return <div aria-hidden className="pointer-events-none absolute left-1/2 top-1/2 h-[68%] w-[52%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-2 border-dashed border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />;
-  const box = frame === 'card' ? 'aspect-[1.586] w-[86%]' : 'aspect-[0.72] h-[82%]';
+  if (frame === 'face') return <div aria-hidden className="pointer-events-none absolute inset-0 grid place-items-center [container-type:size]"><div className="rounded-[50%] border-2 border-dashed border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" style={{ height: 'min(74cqh, 96cqw / 0.76)', aspectRatio: '0.76' }} /></div>;
+  const ratio = frame === 'card' ? 1.586 : 0.72;
+  const size = frame === 'card' ? { width: `min(88cqw, 78cqh * ${ratio})`, aspectRatio: String(ratio) } : { height: `min(84cqh, 92cqw / ${ratio})`, aspectRatio: String(ratio) };
   return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 grid place-items-center">
-      <div className={`relative ${box} max-h-[86%] max-w-[92%] shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]`}>
+    <div aria-hidden className="pointer-events-none absolute inset-0 grid place-items-center [container-type:size]">
+      <div className="relative shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" style={size}>
         <span className={`${corners} left-0 top-0 rounded-tl-lg border-l-4 border-t-4`} /><span className={`${corners} right-0 top-0 rounded-tr-lg border-r-4 border-t-4`} />
         <span className={`${corners} bottom-0 left-0 rounded-bl-lg border-b-4 border-l-4`} /><span className={`${corners} bottom-0 right-0 rounded-br-lg border-b-4 border-r-4`} />
       </div>
@@ -53,6 +58,8 @@ function CameraSheet({ title, hint, facing, frame, onDone, onClose }: { title: s
   const [error, setError] = useState('');
   const [shot, setShot] = useState<CapturedPhoto | null>(null);
   const [busy, setBusy] = useState(false);
+  // The camera that really opened: a laptop or desktop only has a front-facing camera whatever was asked for.
+  const [front, setFront] = useState(facing === 'user');
 
   const stop = useCallback(() => { stream.current?.getTracks().forEach((t) => t.stop()); stream.current = null; }, []);
   const start = useCallback(async () => {
@@ -63,6 +70,8 @@ function CameraSheet({ title, hint, facing, frame, onDone, onClose }: { title: s
     try {
       const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
       stream.current = s;
+      const fm = s.getVideoTracks()[0]?.getSettings().facingMode;
+      setFront(fm ? fm === 'user' : facing === 'user' || !/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
       const v = video.current;
       if (!v) { s.getTracks().forEach((t) => t.stop()); return; }
       v.srcObject = s;
@@ -92,18 +101,21 @@ function CameraSheet({ title, hint, facing, frame, onDone, onClose }: { title: s
     if (!blob) { setBusy(false); setError('The picture could not be taken. Try again.'); return; }
     const url = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(new Error('read')); r.readAsDataURL(blob!); });
     stop();
-    setShot({ dataBase64: url.slice(url.indexOf(',') + 1), previewUrl: url, capture: { method: 'LIVE_CAMERA', at: new Date().toISOString(), facing, width: w, height: h } });
+    setShot({ dataBase64: url.slice(url.indexOf(',') + 1), previewUrl: url, capture: { method: 'LIVE_CAMERA', at: new Date().toISOString(), facing: front ? 'user' : 'environment', width: w, height: h } });
     setState('review'); setBusy(false);
   };
 
-  return (
-    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-[70] flex flex-col bg-black text-white" style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+  // Drawn on the page itself, not inside whatever screen opened it: a parent with a blur, transform or filter would otherwise shrink the "full screen" to its own box.
+  // Phones: the whole screen. Tablets and computers: a centred panel, so a wide screen is not one huge picture.
+  const sheet = (
+    <div className="fixed inset-0 z-[1000] flex items-stretch justify-center bg-black md:items-center md:bg-black/70 md:p-6" style={{ height: '100dvh' }}>
+    <div role="dialog" aria-modal="true" aria-label={title} className="relative flex h-full w-full flex-col overflow-hidden bg-black text-white md:h-[min(100%,760px)] md:max-w-[920px] md:rounded-2xl md:shadow-2xl" style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
       <div className="flex items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0"><p className="truncate text-headline font-semibold">{title}</p>{hint && <p className="text-footnote text-white/75">{hint}</p>}</div>
         <button type="button" onClick={onClose} aria-label="Close the camera" className="grid min-h-tap min-w-tap place-items-center rounded-full bg-white/15 text-title3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">×</button>
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
-        <video ref={video} playsInline muted autoPlay className={`absolute inset-0 h-full w-full object-cover ${state === 'live' || state === 'starting' ? '' : 'hidden'} ${facing === 'user' ? '-scale-x-100' : ''}`} aria-label="Camera view" />
+        <video ref={video} playsInline muted autoPlay className={`absolute inset-0 h-full w-full object-cover ${state === 'live' || state === 'starting' ? '' : 'hidden'} ${front && frame === 'face' ? '-scale-x-100' : ''}`} aria-label="Camera view" />
         {state === 'live' && <Guide frame={frame} />}
         {state === 'review' && shot && /* eslint-disable-next-line @next/next/no-img-element */ <img src={shot.previewUrl} alt={`${title}, as taken`} className="absolute inset-0 h-full w-full object-contain" />}
         {state === 'live' && error && <p role="alert" className="absolute inset-x-4 top-3 rounded-control bg-danger/90 px-3 py-2 text-center text-subhead">{error}</p>}
@@ -117,9 +129,11 @@ function CameraSheet({ title, hint, facing, frame, onDone, onClose }: { title: s
           <Button type="button" onClick={() => { onDone(shot); }}>Use this photo</Button>
         </>}
       </div>
-      {state === 'live' && <p className="px-6 pb-3 text-center text-footnote text-white/75">{frame === 'face' ? 'Look at the camera in good light. The photo is taken live.' : 'Fit the whole document in the frame, flat, with no glare. The photo is taken live.'}</p>}
+      {state === 'live' && <p className="px-6 pb-3 text-center text-footnote text-white/75">{frame === 'face' ? 'Look at the camera in good light. The photo is taken live.' : front ? 'Hold the document up to the camera, flat and level, with no glare. The photo is taken live.' : 'Fit the whole document in the frame, flat, with no glare. The photo is taken live.'}</p>}
+    </div>
     </div>
   );
+  return typeof document === 'undefined' ? null : createPortal(sheet, document.body);
 }
 
 /**
