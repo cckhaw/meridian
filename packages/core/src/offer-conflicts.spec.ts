@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
+import { storeConfig } from './store.js';
 import { getTypeConflicts, setTypeConflicts } from './offer-conflicts.js';
 import { priceBasket } from './order-pricing.js';
 import { placeOrder } from './orders.js';
@@ -28,6 +29,11 @@ describe('offer types that cannot share an order', () => {
     await expect(placeOrder(db, await basket(['plan-sim-5g', 'fiber-1g']))).rejects.toThrow(/cannot be ordered together/);
     await expect(priceBasket(db, await basket(['fiber-1g']))).resolves.toBeTruthy();                 // each alone is fine
     await expect(priceBasket(db, await basket(['plan-sim-5g']))).resolves.toBeTruthy();
+  });
+
+  it('are handed to the store-front so it can grey the second offer out', async () => {
+    await setTypeConflicts(db, 'root', [['FIBER', 'SIM_ONLY']]);
+    expect((await storeConfig(db)).typeConflicts).toEqual([['FIBER', 'SIM_ONLY']]);
   });
 
   it('can be switched off again, and rejects nonsense', async () => {

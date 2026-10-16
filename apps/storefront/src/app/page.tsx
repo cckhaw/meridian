@@ -47,11 +47,13 @@ function ContractChoice({ offer, value, plans, names, money, onChange }: { offer
 }
 
 export default function Home() {
-  const { money, brand } = useConfig();
+  const { money, brand, typeConflicts } = useConfig();
+  const conflicts = typeConflicts ?? [];
   const router = useRouter();
   const [offers, setOffers] = useState<Offer[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [kinds, setKinds] = useState<Record<string, string>>({}); // the offer type of everything seen, for the "cannot be ordered together" rules
   const [known, setKnown] = useState<Record<string, string>>({}); // names of everything seen so far, so the basket can name items from other pages
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('all');
@@ -66,7 +68,7 @@ export default function Home() {
   const [starting, setStarting] = useState(false);
   const seq = useRef(0);
 
-  const remember = (list: Offer[]) => { setKnown((k) => ({ ...k, ...Object.fromEntries(list.map((o) => [o.id, o.name])) })); setHosts((h) => ({ ...h, ...Object.fromEntries(list.map((o) => [o.id, o.hostsDevice])) })); };
+  const remember = (list: Offer[]) => { setKinds((k) => ({ ...k, ...Object.fromEntries(list.map((o) => [o.id, o.kind])) })); setKnown((k) => ({ ...k, ...Object.fromEntries(list.map((o) => [o.id, o.name])) })); setHosts((h) => ({ ...h, ...Object.fromEntries(list.map((o) => [o.id, o.hostsDevice])) })); };
   // The shop shows a dozen plans at a time and searches the rest on the server, so a large catalog stays quick.
   useEffect(() => {
     let live = true;
@@ -85,9 +87,10 @@ export default function Home() {
       const s = JSON.parse(sessionStorage.getItem('basket') ?? '{}'); if (s && typeof s === 'object') setBasket(s);
       const d = JSON.parse(sessionStorage.getItem('deals') ?? '{}'); if (d && typeof d === 'object') setDeals(d);
       const h = JSON.parse(sessionStorage.getItem('hosts') ?? '{}'); if (h && typeof h === 'object') setHosts(h);
+      const k = JSON.parse(sessionStorage.getItem('kinds') ?? '{}'); if (k && typeof k === 'object') setKinds(k);
     } catch { /* private mode */ }
   }, []);
-  useEffect(() => { try { sessionStorage.setItem('basket', JSON.stringify(basket)); sessionStorage.setItem('deals', JSON.stringify(deals)); sessionStorage.setItem('hosts', JSON.stringify(hosts)); } catch { /* ignore */ } }, [basket, deals, hosts]);
+  useEffect(() => { try { sessionStorage.setItem('basket', JSON.stringify(basket)); sessionStorage.setItem('deals', JSON.stringify(deals)); sessionStorage.setItem('hosts', JSON.stringify(hosts)); sessionStorage.setItem('kinds', JSON.stringify(kinds)); } catch { /* ignore */ } }, [basket, deals, hosts, kinds]);
 
   // Prices always come from the server; this only asks it to total the basket.
   const lines = useMemo(() => Object.entries(basket).map(([offerId, quantity]) => {
@@ -106,6 +109,9 @@ export default function Home() {
   const plansInBasket = Object.keys(basket).filter((id) => hosts[id] && !Object.entries(deals).some(([dev, v]) => v.planId === id && basket[dev]));
   const shown = offers ?? [];
   const names = new Map(Object.entries(known));
+  // Offer types the shop owner has said cannot share an order (Settings → Catalog → Offer types → Combinations): the other side waits until the first is removed.
+  const kindOf = (id: string) => kinds[id];
+  const clash = (o: Offer) => Object.keys(basket).find((id) => id !== o.id && (conflicts.some(([a, b]) => (o.kind === a && kindOf(id) === b) || (o.kind === b && kindOf(id) === a))));
 
   const start = async () => {
     setStarting(true); setError(null);
@@ -131,8 +137,9 @@ export default function Home() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:pr-0">
         {shown.map((o) => {
           const chosen = !!basket[o.id];
+          const blockedBy = chosen ? undefined : clash(o);
           return (
-            <article key={o.id} aria-label={o.name} className={`flex flex-col rounded-card border bg-surface p-5 shadow-card ${chosen ? 'border-accent ring-2 ring-accent' : 'border-transparent'}`}>
+            <article key={o.id} aria-label={o.name} className={`flex flex-col rounded-card border bg-surface p-5 shadow-card ${blockedBy ? 'opacity-60' : ''} ${chosen ? 'border-accent ring-2 ring-accent' : 'border-transparent'}`}>
               <div className="flex items-start justify-between gap-2">
                 <h2 className="text-title3 font-semibold">{o.name}</h2>
                 <Badge>{KIND_LABEL[o.kind] ?? o.kindName ?? o.kind}</Badge>
@@ -163,7 +170,8 @@ export default function Home() {
                   onChange={(v) => setDeals((d) => { const n = { ...d }; if (v) n[o.id] = v; else delete n[o.id]; return n; })} />
               )}
               <div className="mt-auto pt-4">
-                <Button variant={chosen ? 'secondary' : 'primary'} className="w-full" aria-pressed={chosen} onClick={() => toggle(o.id)}>{chosen ? 'Remove from basket' : o.kind === 'SIM_ONLY' || o.kind === 'SIM_DEVICE' ? 'Choose this plan' : 'Add to basket'}</Button>
+                {blockedBy && <p className="mb-2 text-footnote text-label2">Not available with {names.get(blockedBy) ?? quote?.lines.find((x) => x.offerId === blockedBy)?.name ?? 'something in your basket'}. Remove it to choose this one.</p>}
+                <Button variant={chosen ? 'secondary' : 'primary'} className="w-full" disabled={!!blockedBy} aria-pressed={chosen} onClick={() => toggle(o.id)}>{chosen ? 'Remove from basket' : o.kind === 'SIM_ONLY' || o.kind === 'SIM_DEVICE' ? 'Choose this plan' : 'Add to basket'}</Button>
               </div>
             </article>
           );
