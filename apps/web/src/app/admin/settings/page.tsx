@@ -17,6 +17,7 @@ import { NumberingSettings } from './numbering';
 import { RegionalSettingsForm } from './regional';
 import { RolesSettings } from './roles';
 import { SecurityPolicySettings } from './security-policy';
+import { ModulesSettings } from './modules';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
 
 /**
@@ -110,6 +111,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'appearance': return <AppearanceSettings branding={data.branding} themes={data.themes} guidance={data.logoGuidance} faviconGuidance={data.faviconGuidance} onSaved={reload} />;
     case 'customers': return <CustomerSettings />;
     case 'markets': return <MarketSettings />;
+    case 'modules': return <ModulesSettings />;
     case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
     case 'fulfilment': return <FulfilmentSettings />;

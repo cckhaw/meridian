@@ -1,4 +1,5 @@
 import type { Queryable } from './db.js';
+import { fiberStatus } from './fiber-client.js';
 import { GATEWAYS } from './gateways.js';
 import { getOcsSettings, ocsStats } from './ocs.js';
 import { getWfmSettings } from './workforce.js';
@@ -244,6 +245,22 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'SECURITY.md', keywords: 'sms whatsapp otp one-time code gateway twilio infobip 2fa mfa password recovery',
   },
 
+  {
+    id: 'fiber-coverage', group: 'Field service and logistics', name: 'Fibre coverage and serviceability', with: 'The fibre coverage service (apps/fiber-coverage), which in turn asks wholesale fibre partners',
+    summary: 'A separately deployed service answers “can this address be served, by whom, at what speed, is there a free port?” (own network plus wholesale partners, with a 24-hour partner cache) and holds a port while the customer checks out. The order screen and the store-front call it when a fibre plan is chosen. Switch it off in Settings → Modules and the coverage check, fibre installation steps and fixed-broadband plans are hidden. TM Forum 645 and 673 are offered for partners.',
+    maturity: 'BUILT', direction: 'BOTH',
+    env: [
+      { name: 'MERIDIAN_FIBER_URL', purpose: 'Base address of the coverage service, for example https://fiber.example.com', on: 'web', required: false },
+      { name: 'MERIDIAN_FIBER_API_KEY', purpose: 'A key with the fibre scope, issued in the service’s hub (Overview → Access keys)', on: 'web', required: false, secret: true },
+      { name: 'FEATURE_FIBER_COVERAGE_MODULE_ENABLED', purpose: 'Starting value of the module switch (on or off; unset means on). Settings → Modules overrides it', on: 'web', required: false },
+    ],
+    endpoints: [
+      { method: 'POST', path: '/api/v1/coverage/qualify-address', purpose: 'Availability matrix for an address or GPS point (on the coverage service)', auth: 'API key, fibre scope' },
+      { method: 'POST', path: '/api/v1/coverage/reservations', purpose: 'Hold a port while a customer checks out; then …/confirm, …/release', auth: 'API key, fibre scope' },
+    ],
+    needs: ['Deploy apps/fiber-coverage as its own project (see docs/FIBER_COVERAGE.md) and sign in to its hub to add providers, distribution points and coverage', 'Issue a key in the hub and set MERIDIAN_FIBER_URL and MERIDIAN_FIBER_API_KEY on this deployment', 'Switch the module on in Settings → Modules'],
+    configure: { label: 'Settings → Modules', href: '/admin/settings?section=modules' }, doc: 'FIBER_COVERAGE.md', keywords: 'fibre fiber ftth coverage serviceability broadband port reservation address qualification tmf 645 673 wholesale partner dp splitter',
+  },
   // ───────────── Customer messaging ─────────────
   {
     id: 'notifications', group: 'Customer messaging', name: 'SMS, email and push notifications', with: 'An SMS gateway and an email service',
@@ -426,6 +443,7 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
   const keys = (await q.query(`SELECT count(*)::int AS n FROM api_clients WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const donors = (await q.query(`SELECT count(*)::int AS n FROM donor_operators WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const embedded = !(env.DATABASE_URL ?? '').trim();
+  const fibre = await fiberStatus(q);
   const authCounts = new Map<string, number>((await q.query(`SELECT kind, count(*)::int AS n FROM integration_endpoints WHERE group_key='auth' AND enabled GROUP BY kind`)).rows.map((r) => [r.kind as string, r.n as number]));
   const lastSync = ((await q.query(`SELECT max(finished_at) AS at FROM directory_sync_runs WHERE status='OK'`)).rows[0]?.at as string | null) ?? null;
   const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q), wfmSet = await getWfmSettings(q);
@@ -441,6 +459,13 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
     let detail = '';
 
     switch (def.id) {
+      case 'fiber-coverage': {
+        const fs = fibre;
+        if (!fs.enabled) { status = 'MANUAL'; detail = 'Switched off in Settings → Modules. Fibre plans and the coverage check are hidden.'; }
+        else if (!fs.configured) { status = 'NEEDS_SETUP'; detail = 'Switched on, but MERIDIAN_FIBER_URL and MERIDIAN_FIBER_API_KEY are not set, so the coverage check is unavailable.'; }
+        else { status = 'CONNECTED'; detail = `Switched on and connected to ${fs.host}.`; }
+        break;
+      }
       case 'sso-oidc': case 'sso-saml': case 'ldap': case 'otp-gateway': {
         const kind = { 'sso-oidc': 'IDP_OIDC', 'sso-saml': 'IDP_SAML', ldap: 'LDAP', 'otp-gateway': 'OTP_GATEWAY' }[def.id]!;
         const n = authCounts.get(kind) ?? 0;

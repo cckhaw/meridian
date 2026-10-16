@@ -53,6 +53,8 @@ export interface OrderInput {
   installationSlot?: string;
   /** Device financing: the credit check to use, or pay a device on a contract in full. */
   financing?: { creditCheckId?: string; payInFull?: boolean };
+  /** The fibre port the customer was holding at checkout (from the coverage service); kept with the order so Fibre Ops can see which port it is. */
+  fiberReservationId?: string;
   actor?: string;
 }
 
@@ -190,7 +192,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
        commission_eligible, payment_method, installment_months, fulfilment, created_by, number)
      VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     [orderId, customer.shardId, customerId, input.accountId ?? null, input.channel, priced.dueNow, priced.currency, priced.marketCode, att.storeId ?? null, att.salespersonId ?? null, att.dealerId ?? null, att.dealerAgentId ?? null,
-     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(delivery ? { delivery } : {}), ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}) }), actor, orderNumber],
+     eligible, input.payment.method, months, JSON.stringify({ address: input.deliveryAddress ?? null, ...(delivery ? { delivery } : {}), ...(input.installationSlot ? { slot: new Date(input.installationSlot).toISOString() } : {}), ...(input.fiberReservationId ? { fiber: { reservationId: input.fiberReservationId } } : {}) }), actor, orderNumber],
   );
   for (const p of priced.lines) {
     const alloc = await allocateLineTx(q, p, orderId, att.storeId ?? null, actor);

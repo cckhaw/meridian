@@ -19,6 +19,12 @@ const ALL_CHANNELS = ['RETAIL_ASSISTED', 'QUICK_SALE', 'CALL_CENTER', 'TELESALES
  * A guided order: plan, device, add-ons, how to pay, customer, delivery, review, payment. One decision per screen, with the running total always in view.
  * Prices, bundle discounts and eligibility all come from the server's quote, so what is shown is exactly what will be charged.
  */
+/** The speed a fibre plan names ("Home Fibre 1 Gbps", "500 Mbps"), so the coverage check can ask for it. */
+const fiberSpeed = (items: Item[]): number | undefined => {
+  for (const i of items) { const m = /(\d+(?:\.\d+)?)\s*(g|m)bps/i.exec(String(i.offer?.name ?? '')); if (m && i.offer?.kind === 'FIBER') return Math.round(Number(m[1]) * (m[2]!.toLowerCase() === 'g' ? 1000 : 1)); }
+  return undefined;
+};
+
 export function NewOrder() {
   const { me, can } = useAuth();
   const sp = useSearchParams();
@@ -64,6 +70,7 @@ export function NewOrder() {
     if (pre) void api(`/catalog/${encodeURIComponent(pre)}`).then((o) => { if (o.level === 'OFFER' && o.status === 'ACTIVE') setItemsRaw((cur) => (cur.length ? cur : [newItem(o)])); }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [fiberLock, setFiberLock] = useState<string | null>(null);
   const setItems = useCallback((f: (c: Item[]) => Item[]) => { setItemsRaw(f); setConsent(false); setCheck(null); }, []);
   const setChannel = (c: string) => { setChannelRaw(c); setItemsRaw([]); setIndex(0); idemKey.current = crypto.randomUUID(); };
 
@@ -126,7 +133,7 @@ export function NewOrder() {
 
   const submit = async () => {
     const o = await run(() => post('/orders', {
-      ...body, installationSlot: slot ? new Date(slot).toISOString() : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
+      ...body, fiberReservationId: meta.data?.modules?.fiberCoverage ? fiberLock ?? undefined : undefined, installationSlot: slot ? new Date(slot).toISOString() : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
       delivery: how ? { method: how, pickupStoreId: how === 'COLLECT' ? pickupStore : undefined } : undefined,
       payment: { method: (quote?.dueNowMinor ?? 0) > 0 ? pay.method : 'CASH', reference: pay.reference || undefined, confirmed: cashier && pay.received && (quote?.dueNowMinor ?? 0) > 0 ? true : undefined },
       storeId: retail ? me?.storeId || store || undefined : undefined, dealerId: channel === 'DEALER' ? dealer?.id : undefined, dealerAgentId: channel === 'DEALER' ? agent?.id : undefined,
@@ -138,7 +145,7 @@ export function NewOrder() {
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
-    address, setAddress, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
+    address, setAddress, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
 

@@ -1,4 +1,5 @@
 import type { CatalogNode, CatalogNodeLevel, ContractTerms, EtcQuote, LineItemNode, OfferNode, PriceComponent } from '@meridian/types';
+import { hiddenFixedKinds } from './fiber-client.js';
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
@@ -508,7 +509,7 @@ export async function searchNodes(q: Queryable, f: { q: string; level?: string; 
 }
 
 /** The same search for sellable offers, as full nodes (price, contract, rules) — what a sales screen needs to list and add them. */
-export async function pageOffers(q: Queryable, f: { q?: string; status?: string; market?: string; channel?: string; kind?: string; notKind?: string; step?: string; outright?: boolean; limit?: number; cursor?: string }): Promise<Page<CatalogNode>> {
+export async function pageOffers(q: Queryable, f: { forSale?: boolean; q?: string; status?: string; market?: string; channel?: string; kind?: string; notKind?: string; step?: string; outright?: boolean; limit?: number; cursor?: string }): Promise<Page<CatalogNode>> {
   const limit = pageSize(f.limit, 24, 100);
   const { params, p } = sqlBuilder();
   const where = [`level = 'OFFER'`];
@@ -516,6 +517,8 @@ export async function pageOffers(q: Queryable, f: { q?: string; status?: string;
   // Comma-separated, and each may be a type id or a behaviour template ("every SIM + device type").
   if (f.kind) where.push(`kind = ANY(${p(await expandKinds(q, f.kind.split(',').filter(Boolean)))})`);
   if (f.notKind) where.push(`kind <> ALL(${p(await expandKinds(q, f.notKind.split(',').filter(Boolean)))})`);
+  // Lists used for selling (a channel, an order step, outright sale) leave out fixed broadband while the fibre module is off; the catalogue pages still show it.
+  if (f.channel || f.step || f.outright || f.forSale) { const hidden = await hiddenFixedKinds(q); if (hidden.length) where.push(`kind <> ALL(${p(hidden)})`); }
   // Offers of the types that can be picked in a step of the order wizard (1 PLAN, 2 DEVICE, 3 ADDON), as the types' switches say.
   if (f.outright) where.push(`kind = ANY(${p(await kindsWhere(q, (b) => !!b.outright))})`);
   if (f.step) where.push(`kind = ANY(${p(await kindsForStep(q, f.step))})`);

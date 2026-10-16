@@ -90,7 +90,7 @@ admin('POST', '/admin/logout', async ({ db, req }) => new Response(JSON.stringif
 admin('GET', '/admin/me', ({ user }) => ({ username: user!.username, displayName: user!.displayName }));
 
 // ───────────────────────── admin: module, settings, providers ─────────────────────────
-admin('GET', '/admin/module', async ({ db }) => ({ enabled: await fiber.moduleEnabled(db), envDefault: /^(1|true|on|yes)$/i.test(process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '') }));
+admin('GET', '/admin/module', async ({ db }) => ({ enabled: await fiber.moduleEnabled(db), envDefault: (process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '').trim() === '' || /^(1|true|on|yes)$/i.test(process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '') }));
 admin('PUT', '/admin/module', async (c) => ({ enabled: await fiber.setModuleEnabled(c.db, actor(c), z.object({ enabled: z.boolean() }).parse(c.body).enabled) }));
 admin('GET', '/admin/settings', ({ db }) => fiber.getFiberSettings(db));
 admin('PATCH', '/admin/settings', (c) => fiber.setFiberSettings(c.db, actor(c), z.object({ lockMinutes: z.number(), cacheHours: z.number(), partnerTimeoutMs: z.number(), lowPortsAbsolute: z.number(), lowPortsPercent: z.number(), adapters: z.record(z.boolean()) }).partial().parse(c.body)).catch((e) => { throw e instanceof Error && !(e instanceof DomainError) ? new DomainError('INVALID', e.message) : e; }));

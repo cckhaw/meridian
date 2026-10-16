@@ -9,6 +9,7 @@ export const GROUPS = ['General', 'Security', 'Customers', 'Catalog', 'Sales and
 
 export const SECTIONS: SettingsSection[] = [
   { id: 'regional', group: 'General', label: 'Regional format', description: 'Currency, number and date formats, time zone, tax', keywords: 'currency money format number date time timezone tax gst sst vat dial code country' },
+  { id: 'modules', group: 'General', label: 'Modules', description: 'Switch optional modules on or off, such as fibre coverage', keywords: 'module modules feature flag fibre fiber ftth coverage serviceability broadband switch on off' },
   { id: 'markets', group: 'General', label: 'Markets', description: 'Sell in one market, or in several countries', keywords: 'market markets country countries multiple single multi region territory sell availability' },
   { id: 'appearance', group: 'General', label: 'Appearance', description: 'Portal name, logo and colour theme', keywords: 'logo brand name theme colour color dark light' },
   { id: 'roles', group: 'Security', label: 'Roles and permissions', description: 'Who can do what: a role-by-permission matrix, data scope, clone and switch off', keywords: 'roles permissions rbac matrix access scope store dealer clone disable super admin catalog manager billing ops rating call center supervisor retail manager dealer agent finance fraud self care customer credit limit refund threshold' },

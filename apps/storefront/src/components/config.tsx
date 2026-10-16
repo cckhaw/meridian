@@ -8,6 +8,7 @@ export interface StoreConfig {
   kyc: { mode: string; minAge: number; idTypes: string[]; requiresBack: string[]; maxDocumentBytes: number };
   terms: { version: string; termsUrl: string | null; privacyUrl: string | null };
   payment: { gateways: Array<{ id: string; label: string }>; default: string | null };
+  modules?: { fiberCoverage?: boolean };
 }
 const Ctx = createContext<StoreConfig | null>(null);
 export const ConfigProvider = ({ value, children }: { value: StoreConfig; children: ReactNode }) => <Ctx.Provider value={value}>{children}</Ctx.Provider>;

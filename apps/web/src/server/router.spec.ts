@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, setAuthHttp, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
+import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, setAuthHttp, setFiberFetch, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -2114,5 +2114,48 @@ describe('offer type switches and service types', () => {
     const reg = (await call('GET', '/integrations', { cookie: su })).json;
     expect(reg.items.find((i: any) => i.id === 'sso-oidc').state.status).toBe('CONNECTED');
     expect(reg.items.find((i: any) => i.id === 'ldap').state.status).toBe('NEEDS_SETUP');
+  });
+  it('fibre coverage module: the switch hides fixed broadband, the coverage check and port lock work through the service, and an order confirms its port', async () => {
+    const su = await root();
+    process.env.MERIDIAN_FIBER_URL = 'https://fiber.example.com'; process.env.MERIDIAN_FIBER_API_KEY = 'mk_test_aaaaaaaaaa_' + 'k'.repeat(40);
+    const sent: Array<{ url: string; body: any }> = [];
+    let lock: { state: string; expiresAt: string | null } = { state: 'ACTIVE', expiresAt: new Date(Date.now() + 900_000).toISOString() };
+    setFiberFetch(async (url, init) => {
+      const u = String(url); sent.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (u.endsWith('/qualify-address')) return Response.json({ availability: 'AVAILABLE', location: { lat: 1.3, lng: 103.8 }, options: [], recommended: { providerId: 'p1', providerName: 'Own fibre', dp: { id: 'd1' } } });
+      if (u.endsWith('/reservations')) return Response.json({ id: '11111111-1111-4111-8111-111111111111', state: 'ACTIVE', expiresAt: lock.expiresAt }, { status: 201 });
+      if (/reservations\/[^/]+$/.test(u)) return Response.json(lock);
+      return Response.json({ state: 'CONFIRMED' });
+    });
+    const c = await customer(su, 'Fibre Fan');
+    const place = (extra: object = {}) => call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: c, lines: [{ offerId: 'fiber-1g' }], deliveryAddress: '1 Orchard Road', payment: { method: 'CASH', confirmed: true, reference: 'R-F' }, ...extra } });
+    try {
+      await call('POST', '/settings/modules', { cookie: su, body: { fiberCoverage: { enabled: false } } });
+      expect((await call('GET', '/meta', { cookie: su })).json.modules).toEqual({ fiberCoverage: false });
+      const cat = (await call('GET', '/catalog?step=PLAN&status=ACTIVE&limit=100', { cookie: su })).json;
+      expect(cat.items.map((o: any) => o.id)).not.toContain('fiber-1g');
+      expect((await place()).status).toBe(422);                                              // not sold while off
+      expect((await call('POST', '/fiber/qualify', { cookie: su, body: { postalCode: '238801' } })).status).toBe(422);
+      expect((await call('POST', '/settings/modules', { cookie: su, body: { fiberCoverage: { enabled: true } } })).json.fiberCoverage).toMatchObject({ enabled: true, configured: true });
+      expect((await call('GET', '/meta', { cookie: su })).json.modules).toEqual({ fiberCoverage: true });
+      expect((await call('GET', '/catalog?step=PLAN&status=ACTIVE&limit=100', { cookie: su })).json.items.map((o: any) => o.id)).toContain('fiber-1g');
+      const q = await call('POST', '/fiber/qualify', { cookie: su, body: { address: '1 Orchard Road', speedMbps: 1000 } });
+      expect(q.json.availability).toBe('AVAILABLE');
+      expect(sent.at(-1)).toMatchObject({ url: 'https://fiber.example.com/api/v1/coverage/qualify-address', body: { speedMbps: 1000 } });
+      expect((await call('POST', '/fiber/qualify', { cookie: su, body: { lat: 999 } })).status).toBe(400);
+      const held = (await call('POST', '/fiber/reserve', { cookie: su, body: { providerId: '00000000-0000-4000-8000-000000000001', dpId: '00000000-0000-4000-8000-000000000002' } })).json;
+      expect(held.state).toBe('ACTIVE'); expect(sent.at(-1)!.body.customerRef).toMatch(/^staff:/);
+      // a lock that ran out sends the agent back to check again, and no order is created
+      lock = { state: 'ACTIVE', expiresAt: new Date(Date.now() - 1000).toISOString() };
+      const late = await place({ fiberReservationId: held.id });
+      expect(late.status).toBe(422); expect(late.json.error.message).toMatch(/released/);
+      lock = { state: 'ACTIVE', expiresAt: new Date(Date.now() + 900_000).toISOString() };
+      const ok = await place({ fiberReservationId: held.id });
+      expect(ok.status).toBe(200);
+      expect(sent.at(-1)).toMatchObject({ url: `https://fiber.example.com/api/v1/coverage/reservations/${held.id}/confirm`, body: { orderRef: ok.json.number } });
+      expect((await call('GET', `/orders/${ok.json.id}`, { cookie: su })).json.fulfilment.fiber).toEqual({ reservationId: held.id });
+      // the integration registry says what state it is in
+      expect((await call('GET', '/integrations', { cookie: su })).json.items.find((i: any) => i.id === 'fiber-coverage').state.status).toBe('CONNECTED');
+    } finally { setFiberFetch(null); delete process.env.MERIDIAN_FIBER_URL; delete process.env.MERIDIAN_FIBER_API_KEY; await call('POST', '/settings/modules', { cookie: su, body: { fiberCoverage: { enabled: true } } }); }
   });
 });

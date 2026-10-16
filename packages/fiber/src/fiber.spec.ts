@@ -261,6 +261,8 @@ describe('TM Forum 645 and 673', () => {
 describe('module switch and settings', () => {
   it('starts from the environment flag, then follows what an administrator set, and checks the settings', async () => {
     delete process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED;
+    expect(await moduleEnabled(db)).toBe(true);   // unset: on, so existing deployments keep selling fibre
+    process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED = 'off';
     expect(await moduleEnabled(db)).toBe(false);
     process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED = 'ON';
     expect(await moduleEnabled(db)).toBe(true);
