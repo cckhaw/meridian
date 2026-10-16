@@ -20,6 +20,10 @@ export function LoginForm() {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Second step: set when the password was right but a code is needed.
+  const [mfa, setMfa] = useState<null | { token: string; methods: string[]; method: string; sentTo?: string }>(null);
+  const [code, setCode] = useState('');
+  const [useRecovery, setUseRecovery] = useState(false);
 
   useEffect(() => { if (me) router.replace(next ?? me.home); }, [me, next, router]);
 
@@ -28,6 +32,7 @@ export function LoginForm() {
     setBusy(true); setError(null);
     try {
       const r = await post('/auth/login', { username, password });
+      if (r.mfaRequired) { setMfa(r.challenge); setPassword(''); setCode(''); setUseRecovery(false); return; }
       await refresh();
       router.replace(r.user.mustChangePassword ? '/change-password' : next ?? r.user.home);
     } catch (err) {
@@ -36,6 +41,48 @@ export function LoginForm() {
       setPassword('');
     } finally { setBusy(false); }
   };
+
+  const verify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfa) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await post('/auth/verify-2fa', { challenge: mfa.token, ...(useRecovery ? { recoveryCode: code.trim() } : { code: code.replace(/\s/g, '') }) });
+      await refresh();
+      router.replace(r.user.mustChangePassword ? '/change-password' : r.user.mfaEnrollRequired ? '/profile?setup=mfa' : next ?? r.user.home);
+    } catch (err) { setError((err as ApiError).message); setCode(''); } finally { setBusy(false); }
+  };
+  const sendInstead = async (method: 'SMS' | 'EMAIL') => {
+    if (!mfa) return;
+    setBusy(true); setError(null);
+    try { const r = await post('/auth/2fa/send-code', { challenge: mfa.token, method }); setMfa({ ...mfa, method, sentTo: r.sentTo }); setUseRecovery(false); setCode(''); } catch (err) { setError((err as ApiError).message); } finally { setBusy(false); }
+  };
+  const prompt: Record<string, string> = { TOTP: 'Open your authenticator app and enter the 6-digit code.', SMS: 'We texted a 6-digit code to', EMAIL: 'We e-mailed a 6-digit code to' };
+
+  if (mfa) return (
+    <main className="grid min-h-dvh place-items-center px-4 py-10">
+      <div className="w-full max-w-sm">
+        <h1 className="mb-1 text-center text-title1 font-bold tracking-tight">Confirm it is you</h1>
+        <p className="mb-6 text-center text-body text-label2">{useRecovery ? 'Enter one of your recovery codes.' : `${prompt[mfa.method] ?? ''}${mfa.sentTo ? ` ${mfa.sentTo}.` : ''}`}</p>
+        <Card>
+          <form onSubmit={verify} className="space-y-4">
+            <Field label={useRecovery ? 'Recovery code' : '6-digit code'}>
+              <Input name="otp" inputMode={useRecovery ? 'text' : 'numeric'} autoComplete="one-time-code" autoCapitalize="none" autoCorrect="off" spellCheck={false} required autoFocus maxLength={useRecovery ? 12 : 7} value={code} onChange={(e) => setCode(e.target.value)} className="text-center font-mono text-title3 tracking-widest" />
+            </Field>
+            {error && <Alert>{error}</Alert>}
+            <Button type="submit" className="w-full" disabled={busy || code.trim().length < 6}>{busy ? 'Checking…' : 'Sign in'}</Button>
+          </form>
+          <div className="mt-4 flex flex-col gap-1 border-t border-separator pt-3 text-subhead">
+            {!useRecovery && mfa.methods.filter((m) => m !== mfa.method).map((m) => (
+              <button key={m} type="button" disabled={busy} onClick={() => (m === 'TOTP' ? (setMfa({ ...mfa, method: 'TOTP', sentTo: undefined }), setCode('')) : void sendInstead(m as 'SMS' | 'EMAIL'))} className="min-h-tap text-left text-accent">{m === 'TOTP' ? 'Use my authenticator app instead' : m === 'SMS' ? 'Text me a code instead' : 'E-mail me a code instead'}</button>))}
+            {!useRecovery && mfa.method !== 'TOTP' && <button type="button" disabled={busy} onClick={() => void sendInstead(mfa.method as 'SMS' | 'EMAIL')} className="min-h-tap text-left text-accent">Send the code again</button>}
+            <button type="button" onClick={() => { setUseRecovery((v) => !v); setCode(''); setError(null); }} className="min-h-tap text-left text-accent">{useRecovery ? 'Use a code instead' : 'I lost my phone: use a recovery code'}</button>
+            <button type="button" onClick={() => { setMfa(null); setError(null); }} className="min-h-tap text-left text-label2">‹ Back to sign in</button>
+          </div>
+        </Card>
+      </div>
+    </main>
+  );
 
   return (
     <main className="grid min-h-dvh place-items-center px-4 py-10">

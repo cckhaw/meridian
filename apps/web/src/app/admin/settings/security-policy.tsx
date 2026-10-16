@@ -8,6 +8,7 @@ interface Policy {
   lockout: { maxFailures: number; lockMinutes: number };
   session: { idleMinutes: number; absoluteHours: number; strictRoleIds: string[]; strictIdleMinutes: number };
   recovery: { enabled: boolean; channel: 'EMAIL' | 'SMS' | 'EITHER'; tokenMinutes: number; maxRequestsPerHour: number; publicUrl: string };
+  mfa: { requirement: 'OFF' | 'ROLES' | 'ALL'; roleIds: string[]; methods: Array<'TOTP' | 'SMS' | 'EMAIL'>; challengeMinutes: number };
 }
 interface View { policy: Policy; defaults: Policy }
 const Check = ({ checked, onChange, children, hint }: { checked: boolean; onChange: (v: boolean) => void; children: React.ReactNode; hint?: string }) => (
@@ -26,7 +27,9 @@ export function SecurityPolicySettings() {
   const p = draft ?? view.data.policy;
   const set = (patch: Partial<Policy>) => setDraft({ ...p, ...patch });
   const save = async () => { if (await act.run(() => post('/settings/security-policy', p), 'Saved. It applies from the next request.')) setDraft(null); };
-  const pw = p.password, lo = p.lockout, se = p.session, re = p.recovery;
+  const pw = p.password, lo = p.lockout, se = p.session, re = p.recovery, mf = p.mfa;
+  const toggleMfaRole = (id: string, on: boolean) => set({ mfa: { ...mf, roleIds: on ? [...mf.roleIds, id] : mf.roleIds.filter((x) => x !== id) } });
+  const toggleMethod = (m: 'TOTP' | 'SMS' | 'EMAIL', on: boolean) => set({ mfa: { ...mf, methods: on ? [...mf.methods, m] : mf.methods.filter((x) => x !== m) } });
   const toggleRole = (id: string, on: boolean) => set({ session: { ...se, strictRoleIds: on ? [...se.strictRoleIds, id] : se.strictRoleIds.filter((x) => x !== id) } });
   return (
     <div className="space-y-6">
@@ -74,6 +77,26 @@ export function SecurityPolicySettings() {
             </div>
             {se.strictRoleIds.length > 0 && <div className="mt-3 max-w-xs"><Field label="Their idle limit (minutes)"><Input type="number" min={5} max={720} value={se.strictIdleMinutes} onChange={(e) => set({ session: { ...se, strictIdleMinutes: n(e.target.value) } })} /></Field></div>}
           </fieldset>
+        </Card>
+      </section>
+
+      <section aria-label="Two-step sign-in" className="space-y-3">
+        <SectionTitle>Two-step sign-in (MFA)</SectionTitle>
+        <Card className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Require a second step for" hint="Otherwise people can still turn it on themselves in My profile."><Select value={mf.requirement} onChange={(e) => set({ mfa: { ...mf, requirement: e.target.value as Policy['mfa']['requirement'] } })}><option value="OFF">Nobody (optional)</option><option value="ROLES">Chosen roles</option><option value="ALL">Everyone</option></Select></Field>
+            <Field label="A sign-in code stays valid (minutes)" hint="1 to 30"><Input type="number" min={1} max={30} value={mf.challengeMinutes} onChange={(e) => set({ mfa: { ...mf, challengeMinutes: n(e.target.value) } })} /></Field>
+          </div>
+          {mf.requirement === 'ROLES' && (
+            <fieldset><legend className="mb-1 text-footnote font-medium text-label2">Roles that must use it</legend>
+              <div className="grid gap-1 sm:grid-cols-2">{(roles.data ?? []).map((r) => <Check key={r.id} checked={mf.roleIds.includes(r.id)} onChange={(v) => toggleMfaRole(r.id, v)}>{r.label}</Check>)}</div></fieldset>)}
+          <fieldset><legend className="mb-1 text-footnote font-medium text-label2">Ways people can do it</legend>
+            <div className="grid gap-1 sm:grid-cols-3">
+              <Check checked={mf.methods.includes('TOTP')} onChange={(v) => toggleMethod('TOTP', v)}>Authenticator app</Check>
+              <Check checked={mf.methods.includes('SMS')} onChange={(v) => toggleMethod('SMS', v)}>SMS code</Check>
+              <Check checked={mf.methods.includes('EMAIL')} onChange={(v) => toggleMethod('EMAIL', v)}>E-mail code</Check>
+            </div></fieldset>
+          <p className="text-footnote text-label2">People who are required to use it and have not set it up can only reach My profile until they do. SMS and e-mail codes go through the notification outbox; the SMS gateway is set under Integration. The super user’s credentials live in the environment, so a second step does not apply to that account; an administrator can clear a lost second step from Users &amp; roles.</p>
         </Card>
       </section>
 

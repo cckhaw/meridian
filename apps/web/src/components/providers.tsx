@@ -24,13 +24,14 @@ function Gate({ children }: { children: ReactNode }) {
     if (loading || isPublic) return;
     if (!me) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     else if (me.mustChangePassword && pathname !== '/change-password') router.replace('/change-password');
+    else if (me.mfaEnrollRequired && !pathname.startsWith('/profile')) router.replace('/profile?setup=mfa');
   }, [loading, me, isPublic, pathname, router]);
 
   if (isPublic) return <>{children}</>;
   if (loading || !me) return <div className="grid min-h-dvh place-items-center"><Spinner label="Loading" /></div>;
   if (me.mustChangePassword) return <main className="mx-auto max-w-md px-4 py-12">{children}</main>;
 
-  const allowed = pathname === '/change-password' || me.modules.some((m) => (m.href === '/' ? pathname === '/' : pathname === m.href || pathname.startsWith(m.href + '/')))
+  const allowed = pathname === '/change-password' || pathname === '/profile' || me.modules.some((m) => (m.href === '/' ? pathname === '/' : pathname === m.href || pathname.startsWith(m.href + '/')))
     || (pathname.startsWith('/orders/') && me.modules.some((m) => m.id === 'orders' || m.id === 'sell'))
     || ((pathname.startsWith('/catalog/manage') || pathname.startsWith('/catalog/edit')) && me.permissions.includes('catalog:write'));
   return (

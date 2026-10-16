@@ -23,6 +23,8 @@ export interface AppShellProps {
   activeHref: string;
   onSignOut: () => void;
   onChangePassword: () => void;
+  /** Where "My profile" lives. The name in the account block links to it. */
+  profileHref?: string;
   linkComponent?: (p: LinkProps) => ReactNode;
   children: ReactNode;
 }
@@ -65,7 +67,7 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
  *  - Phone: a tab bar with the four main places and a "More" sheet for the rest.
  * Navigation is whatever the server says this user may open; nothing is hard-coded per persona.
  */
-export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, onSignOut, onChangePassword, linkComponent, children }: AppShellProps) {
+export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, onSignOut, onChangePassword, profileHref = '/profile', linkComponent, children }: AppShellProps) {
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [mode, setModeState] = useState<SidebarMode>('expanded');
@@ -129,10 +131,10 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
 
   const account = (
     <div className="rail-account mx-3 mb-3 rounded-[14px] bg-label/[.05] p-2.5">
-      <div className="flex items-center gap-2.5 rail-center">
+      <Link href={profileHref} aria-current={activeHref === profileHref ? 'page' : undefined} title="My profile" className={`flex items-center gap-2.5 rounded-[10px] rail-center hover:bg-label/[.05] ${focusRing}`}>
         <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent/15 text-subhead font-semibold text-accent">{initials(user.name)}</span>
-        <div className="rail-hide min-w-0"><p className="truncate text-subhead font-medium">{user.name}</p><p className="truncate text-caption text-label2">{user.roles.join(' · ')}</p></div>
-      </div>
+        <div className="rail-hide min-w-0"><p className="truncate text-subhead font-medium">{user.name}</p><p className="truncate text-caption text-label2">{user.roles.join(' · ')} · My profile</p></div>
+      </Link>
       <div className="rail-col mt-2 flex gap-1.5">
         <button onClick={onChangePassword} aria-label="Change password" title={rail ? 'Change password' : undefined} className={`flex min-h-[34px] max-lg:min-h-tap flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote hover:opacity-80 ${focusRing}`}><Icon name="key" size={15} /><span className="rail-hide">Password</span></button>
         <button onClick={onSignOut} aria-label="Sign out" title={rail ? 'Sign out' : undefined} className={`flex min-h-[34px] max-lg:min-h-tap flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-surface text-footnote text-danger hover:opacity-80 ${focusRing}`}><Icon name="signout" size={15} /><span className="rail-hide">Sign out</span></button>
@@ -227,6 +229,10 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
                 </div>
               </section>
             ))}
+            <Link href={profileHref} onClick={() => setSheet(false)} className={`mb-2 flex min-h-tap items-center gap-3 rounded-control bg-label/[.05] px-3 ${focusRing}`}>
+              <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent/15 text-subhead font-semibold text-accent">{initials(user.name)}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-subhead font-medium">{user.name}</span><span className="block truncate text-caption text-label2">My profile</span></span><span aria-hidden className="text-label2">›</span>
+            </Link>
             <div className="flex gap-2">
               <button onClick={() => { setSheet(false); onChangePassword(); }} className={`flex min-h-tap flex-1 items-center justify-center gap-2 rounded-control bg-label/[.05] ${focusRing}`}><Icon name="key" size={18} />Password</button>
               <button onClick={onSignOut} className={`flex min-h-tap flex-1 items-center justify-center gap-2 rounded-control bg-label/[.05] text-danger ${focusRing}`}><Icon name="signout" size={18} />Sign out</button>

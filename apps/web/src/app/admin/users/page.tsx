@@ -52,6 +52,7 @@ export default function Users() {
               <Td>{u.lastLoginAt ? dt(u.lastLoginAt) : 'Never'}</Td>
               <Td right><span className="flex justify-end gap-1">
                 <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap !px-3" onClick={() => { setEditing(u); setCreating(false); }}>Edit</Button>
+                <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap !px-3" disabled={act.busy} onClick={() => { if (confirm(`Remove the second step for ${u.username}? Use this when they lost their phone and their recovery codes.`)) void act.run(() => post(`/users/${u.id}/reset-mfa`), 'Second step removed'); }}>Reset 2FA</Button>
                 {u.locked && <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap !px-3" onClick={() => act.run(() => post(`/users/${u.id}/unlock`))}>Unlock</Button>}
                 <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap !px-3" disabled={act.busy} onClick={async () => { if (confirm(`Reset the password for ${u.username}? They will be signed out everywhere.`)) { const r = await act.run(() => post(`/users/${u.id}/reset-password`)); if (r) setSecret({ who: u.username, password: r.temporaryPassword }); } }}>Reset password</Button>
               </span></Td>

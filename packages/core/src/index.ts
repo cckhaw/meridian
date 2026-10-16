@@ -134,3 +134,5 @@ export * from './device-financing.js';
 export * from './financing-check.js';
 export * from './security-policy.js';
 export * from './password-recovery.js';
+export * from './mfa.js';
+export * from './profile.js';

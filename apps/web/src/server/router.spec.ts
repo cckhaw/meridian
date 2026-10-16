@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { createCustomer, createUser, markVerified, getDb, placeOrder, requestPortOut, wfmSignature, type Db, type NewUser } from '@meridian/core';
+import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -2003,5 +2003,44 @@ describe('offer type switches and service types', () => {
     expect(a.status).toBe(200); expect(b.json).toEqual(a.json);
     expect((await call('POST', '/auth/reset-password', { body: { token: 'x'.repeat(43), newPassword: 'Brand-New-Passw0rd-1' } })).status).toBe(422);
     await call('POST', '/settings/security-policy', { cookie: su, body: { password: { minLength: 12, requireDigit: false, historyCount: 0 }, recovery: { publicUrl: '' } } });
+  });
+  it('two-step sign-in: set up an authenticator in My profile, sign in with the code, recovery codes, and a role that must have it', async () => {
+    const su = await root();
+    const u = await staff(['call-center']);
+    // setting it up: scan, then confirm with the first code
+    const start = await call('POST', '/profile/mfa/totp/start', { cookie: u.cookie });
+    expect(start.json.qrSvg).toContain('<svg');
+    const code = hotp(base32Decode(start.json.secret), totpCounter());
+    expect((await call('POST', '/profile/mfa/totp/confirm', { cookie: u.cookie, body: { code: '000000' } })).status).toBe(422);
+    const done = await call('POST', '/profile/mfa/totp/confirm', { cookie: u.cookie, body: { code } });
+    expect(done.json.recoveryCodes).toHaveLength(10);
+    // the password alone now gives a challenge, not a session
+    const H = { 'x-forwarded-for': '10.77.0.1' };
+    const first = await call('POST', '/auth/login', { headers: H, body: { username: u.username, password: u.password } });
+    expect(first.json.mfaRequired).toBe(true);
+    expect(first.headers.get('set-cookie')).toBeNull();
+    const bad = await call('POST', '/auth/verify-2fa', { headers: H, body: { challenge: first.json.challenge.token, code: '123456' } });
+    expect(bad.status).toBe(401);
+    const ok = await call('POST', '/auth/verify-2fa', { headers: H, body: { challenge: first.json.challenge.token, recoveryCode: done.json.recoveryCodes[0] } });
+    expect(ok.status).toBe(200);
+    const cookie = cookieOf(ok)!;
+    expect((await call('GET', '/auth/me', { cookie })).json.user.username).toBe(u.username);
+    expect((await call('GET', '/profile/sessions', { cookie })).json.some((x: any) => x.current)).toBe(true);
+    // refresh swaps the cookie and the old one stops working
+    const ref = await call('POST', '/auth/refresh-token', { cookie });
+    expect(ref.status).toBe(200);
+    expect((await call('GET', '/auth/me', { cookie })).status).toBe(401);
+    expect((await call('GET', '/auth/me', { cookie: cookieOf(ref)! })).status).toBe(200);
+    // an administrator can clear a lost second step
+    const id = (await call('GET', `/users?q=${u.username}`, { cookie: su })).json.items[0].id;
+    expect((await call('POST', `/users/${id}/reset-mfa`, { cookie: su })).json.ok).toBe(true);
+    expect((await call('POST', '/auth/login', { headers: H, body: { username: u.username, password: u.password } })).json.mfaRequired).toBeUndefined();
+    // required for a role: locked to My profile until set up
+    await call('POST', '/settings/security-policy', { cookie: su, body: { mfa: { requirement: 'ROLES', roleIds: ['billing-ops'] } } });
+    const must = await staff(['billing-ops']);
+    expect((await call('GET', '/customers', { cookie: must.cookie })).json.error.code).toBe('MFA_ENROLMENT_REQUIRED');
+    expect((await call('GET', '/profile', { cookie: must.cookie })).status).toBe(200);
+    expect((await call('GET', '/auth/me', { cookie: must.cookie })).json.user.mfaEnrollRequired).toBe(true);
+    await call('POST', '/settings/security-policy', { cookie: su, body: { mfa: { requirement: 'OFF' } } });
   });
 });

@@ -26,6 +26,7 @@ export async function api<T = any>(path: string, init?: RequestInit & { json?: u
     // An expired or revoked session anywhere sends the user back to sign in; the login call itself reports its own errors.
     if (res.status === 401 && code === 'UNAUTHENTICATED' && !path.startsWith('/auth/login')) toLogin();
     if (code === 'PASSWORD_CHANGE_REQUIRED' && window.location.pathname !== '/change-password') window.location.assign('/change-password');
+    if (code === 'MFA_ENROLMENT_REQUIRED' && !window.location.pathname.startsWith('/profile')) window.location.assign('/profile?setup=mfa');
     throw new ApiError(res.status, code, e?.error?.message ?? `Request failed (${res.status})`);
   }
   return res.json();
