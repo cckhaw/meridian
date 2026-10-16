@@ -6,7 +6,8 @@ import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
-import { checkPassword, getSecurityPolicy, idleMinutesFor, isReusedPassword, rememberPassword } from './security-policy.js';
+import { checkChallenge, confirmedKinds, openLoginChallenge, type LoginChallenge } from './mfa.js';
+import { checkPassword, getSecurityPolicy, idleMinutesFor, isReusedPassword, mfaRequiredFor, rememberPassword } from './security-policy.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
 import { creditLimitOf, homeOf, roleDef, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type RoleBook, type Permission, type RoleId, type Scope } from './rbac.js';
@@ -56,6 +57,8 @@ export interface SessionUser {
   isSuperuser: boolean;
   roles: RoleId[];
   mustChangePassword: boolean;
+  /** The security policy requires a second factor for this person and they have not set one up yet: they can only reach My profile until they do. */
+  mfaEnrollRequired: boolean;
   storeId: string | null;
   dealerId: string | null;
   customerId: string | null;
@@ -74,7 +77,7 @@ function toUser(r: Row, book: RoleBook): SessionUser {
   const permissions = permissionsOf(base, book);
   return {
     id: r.id, username: r.username, displayName: r.displayName, email: r.email, isSuperuser: base.isSuperuser, roles,
-    mustChangePassword: r.mustChangePassword, storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: (r.marketCode ?? 'SG').trim(),
+    mustChangePassword: r.mustChangePassword, mfaEnrollRequired: false, storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: (r.marketCode ?? 'SG').trim(),
     permissions, scope: scopeOf(base, book), creditLimitMinor: creditLimitOf(base, book),
     roleLabels: base.isSuperuser ? ['Super user'] : roles.map((x) => roleDef(x, book)!.label), home: homeOf(base, book), modules: modulesOf(base, permissions, book),
   };
@@ -83,11 +86,11 @@ function toUser(r: Row, book: RoleBook): SessionUser {
 /** What the browser is told about the signed-in user (never includes hashes). */
 export function publicUser(u: SessionUser): {
   id: string; username: string; displayName: string; isSuperuser: boolean; roles: RoleId[]; roleLabels: string[]; permissions: Permission[]; modules: NavModule[]; home: string;
-  mustChangePassword: boolean; storeId: string | null; dealerId: string | null; customerId: string | null; marketCode: string; creditLimitMinor: number | null;
+  mustChangePassword: boolean; mfaEnrollRequired: boolean; storeId: string | null; dealerId: string | null; customerId: string | null; marketCode: string; creditLimitMinor: number | null;
 } {
   return {
     id: u.id, username: u.username, displayName: u.displayName, isSuperuser: u.isSuperuser, roles: u.roles, roleLabels: u.roleLabels, permissions: [...u.permissions], modules: u.modules,
-    home: u.mustChangePassword ? '/change-password' : u.home, mustChangePassword: u.mustChangePassword, storeId: u.storeId, dealerId: u.dealerId,
+    home: u.mustChangePassword ? '/change-password' : u.mfaEnrollRequired ? '/profile?setup=mfa' : u.home, mustChangePassword: u.mustChangePassword, mfaEnrollRequired: u.mfaEnrollRequired, storeId: u.storeId, dealerId: u.dealerId,
     customerId: u.customerId, marketCode: u.marketCode, creditLimitMinor: u.creditLimitMinor,
   };
 }
@@ -99,6 +102,10 @@ export const canAny = (u: SessionUser, ps: Permission[]) => ps.some((p) => u.per
 export interface LoginResult { token: string; user: SessionUser; expiresAt: Date }
 export class RateLimited extends DomainError {
   constructor(public readonly retryAfterSeconds: number) { super('RATE_LIMITED', 'Too many sign-in attempts. Try again later.'); this.name = 'RateLimited'; }
+}
+/** The password was right but a second factor is needed: the browser is given a short-lived challenge instead of a session. */
+export class MfaRequired extends DomainError {
+  constructor(public readonly challenge: LoginChallenge) { super('UNAUTHENTICATED', 'Enter your second-factor code to finish signing in.'); this.name = 'MfaRequired'; }
 }
 const BAD_LOGIN = 'Incorrect username or password.';
 
@@ -170,6 +177,12 @@ export async function login(db: Db, i: { username: string; password: string; ip?
     await audit(db, username, 'auth', row.id, 'LOGIN_BLOCKED_LOCKED', { ip: i.ip });
     throw rejected(`This account is locked after repeated failures. Try again after ${new Date(row.lockedUntil).toISOString().slice(11, 16)} UTC or ask an administrator to unlock it.`);
   }
+  // A second factor, when the person has set one up, comes before any session is opened.
+  if ((await confirmedKinds(db, row.id)).length) {
+    const challenge = await openLoginChallenge(db, { id: row.id, name: row.displayName, email: row.email, phone: row.phone }, { ip: i.ip, userAgent: i.userAgent });
+    await audit(db, row.username, 'auth', row.id, 'LOGIN_MFA_CHALLENGE', { ip: i.ip, method: challenge.method });
+    throw new MfaRequired(challenge);
+  }
   // A password older than the policy allows must be changed before anything else can be done.
   const age = policy.password.maxAgeDays;
   const expired = age > 0 && Date.now() - new Date(row.passwordChangedAt ?? row.createdAt).getTime() > age * 86_400_000;
@@ -177,7 +190,33 @@ export async function login(db: Db, i: { username: string; password: string; ip?
     await q.query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now(), must_change_password = must_change_password OR $2 WHERE id=$1`, [row.id, expired]);
     const { token, expiresAt } = await openSession(q, row.id, '', i.ip, i.userAgent);
     await audit(q, row.username, 'auth', row.id, expired ? 'LOGIN_PASSWORD_EXPIRED' : 'LOGIN', { ip: i.ip });
-    return { token, user: toUser({ ...row, mustChangePassword: row.mustChangePassword || expired }, await getRoleOverrides(q)), expiresAt };
+    const user = toUser({ ...row, mustChangePassword: row.mustChangePassword || expired }, await getRoleOverrides(q));
+    user.mfaEnrollRequired = mfaRequiredFor(policy, user.roles);
+    return { token, user, expiresAt };
+  });
+}
+
+/** Second step of a sign-in: the code (app, SMS or e-mail) or a recovery code, against the challenge the first step returned. */
+export async function verifyMfaLogin(db: Db, i: { challenge: string; code?: string; recoveryCode?: string; ip?: string; userAgent?: string }): Promise<LoginResult> {
+  const cfg = authConfig();
+  const ikey = `ip:${i.ip ?? 'unknown'}`;
+  if ((await failures(db, `mfa:${ikey}`, cfg.windowMinutes)) >= cfg.userLimit * 3) throw new RateLimited(cfg.windowMinutes * 60);
+  let r;
+  try { r = await checkChallenge(db, { token: i.challenge, code: i.code, recoveryCode: i.recoveryCode }); }
+  catch (e) { await recordFailure(db, `mfa:${ikey}`); throw e; }
+  const row = (await db.query('SELECT * FROM users WHERE id=$1', [r.userId])).rows[0];
+  if (!row || row.status !== 'ACTIVE') throw rejected(BAD_LOGIN);
+  if (row.lockedUntil && new Date(row.lockedUntil) > new Date()) throw rejected('This account is locked. Try again later or ask an administrator.');
+  const policy = await getSecurityPolicy(db);
+  const age = policy.password.maxAgeDays;
+  const expired = age > 0 && Date.now() - new Date(row.passwordChangedAt ?? row.createdAt).getTime() > age * 86_400_000;
+  return db.tx(async (q) => {
+    await q.query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now(), must_change_password = must_change_password OR $2 WHERE id=$1`, [row.id, expired]);
+    const { token, expiresAt } = await openSession(q, row.id, '', i.ip ?? r.ip ?? undefined, i.userAgent ?? r.userAgent ?? undefined);
+    await audit(q, row.username, 'auth', row.id, r.usedRecovery ? 'LOGIN_MFA_RECOVERY_CODE' : 'LOGIN_MFA', { ip: i.ip });
+    const user = toUser({ ...row, mustChangePassword: row.mustChangePassword || expired }, await getRoleOverrides(q));
+    user.mfaEnrollRequired = false;
+    return { token, user, expiresAt };
   });
 }
 
@@ -194,10 +233,11 @@ export async function validateSession(db: Db, token: string | undefined): Promis
   if (!token || token.length < 20 || token.length > 200) return null;
   const id = sha256(token);
   const s = (await db.query(
-    `SELECT s.*, u.* , s.id AS sid, s.auth_epoch AS epoch FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id=$1`, [id])).rows[0];
+    `SELECT s.*, u.* , s.id AS sid, s.auth_epoch AS epoch, EXISTS (SELECT 1 FROM mfa_methods m WHERE m.user_id = u.id AND m.confirmed_at IS NOT NULL) AS has_mfa FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id=$1`, [id])).rows[0];
   if (!s || s.revokedAt) return null;
   const now = Date.now();
-  const idleMs = idleMinutesFor(await getSecurityPolicy(db), s.isSuperuser ? [] : (s.roles as string[])) * 60_000;
+  const policy = await getSecurityPolicy(db);
+  const idleMs = idleMinutesFor(policy, s.isSuperuser ? [] : (s.roles as string[])) * 60_000;
   if (new Date(s.expiresAt).getTime() <= now || now - new Date(s.lastSeenAt).getTime() > idleMs || s.status !== 'ACTIVE') {
     await db.query('UPDATE sessions SET revoked_at = now() WHERE id=$1 AND revoked_at IS NULL', [id]);
     return null;
@@ -210,7 +250,9 @@ export async function validateSession(db: Db, token: string | undefined): Promis
     }
   }
   if (now - new Date(s.lastSeenAt).getTime() > 60_000) await db.query('UPDATE sessions SET last_seen_at = now() WHERE id=$1', [id]);
-  return toUser({ ...s, id: s.userId }, await getRoleOverrides(db));
+  const user = toUser({ ...s, id: s.userId }, await getRoleOverrides(db));
+  user.mfaEnrollRequired = !s.isSuperuser && !s.hasMfa && mfaRequiredFor(policy, user.roles);
+  return user;
 }
 
 export const logout = (db: Db, token: string | undefined) => token ? db.query('UPDATE sessions SET revoked_at = now() WHERE id=$1 AND revoked_at IS NULL', [sha256(token)]) : Promise.resolve();

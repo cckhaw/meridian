@@ -17,6 +17,8 @@ interface Route {
   public?: boolean;
   /** Reachable while a password change is pending. */
   allowMustChange?: boolean;
+  /** Reachable while a required second factor has not been set up yet (My profile, where it is set up). */
+  allowMfaEnrol?: boolean;
   /** Skip the Origin check (machine-to-machine webhooks authenticate by signature instead). */
   noCsrf?: boolean;
   /** Authenticated by an API key (`Authorization: Bearer mk_…`), for the externally hosted store-front, instead of a browser session. */
@@ -57,6 +59,8 @@ open('POST', '/auth/login', async ({ db, body, req }) => {
     const r = await core.login(db, { username: b.username, password: b.password, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
     return new Response(JSON.stringify({ user: core.publicUser(r.user) }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie(req, r.token, r.expiresAt), 'cache-control': 'no-store' } });
   } catch (e) {
+    // Right password, but a second factor is needed: no session yet, only a short-lived challenge for the next step.
+    if (e instanceof core.MfaRequired) return new Response(JSON.stringify({ mfaRequired: true, challenge: e.challenge }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     if (e instanceof DomainError && e.code === 'REJECTED') return new Response(JSON.stringify({ error: { code: 'UNAUTHENTICATED', message: e.message } }), { status: 401, headers: { 'content-type': 'application/json' } });
     if (e instanceof core.RateLimited) return new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: e.message } }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': String(e.retryAfterSeconds) } });
     throw e;
@@ -80,6 +84,30 @@ open('POST', '/auth/reset-password', async ({ db, body, req }) => {
   return core.resetPasswordWithToken(db, { ...b, ip: clientIp(req) });
 });
 
+const authFailure = (e: unknown) => {
+  if (e instanceof DomainError && (e.code === 'REJECTED' || e.code === 'UNAUTHENTICATED')) return new Response(JSON.stringify({ error: { code: 'UNAUTHENTICATED', message: e.message } }), { status: 401, headers: { 'content-type': 'application/json' } });
+  if (e instanceof core.RateLimited) return new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: e.message } }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': String(e.retryAfterSeconds) } });
+  throw e;
+};
+// Second step of a sign-in: the app, SMS or e-mail code (or a recovery code) for the challenge the first step returned.
+open('POST', '/auth/verify-2fa', async ({ db, body, req }) => {
+  const b = z.object({ challenge: z.string().min(20).max(200), code: z.string().max(20).optional(), recoveryCode: z.string().max(30).optional() }).parse(body);
+  try {
+    const r = await core.verifyMfaLogin(db, { ...b, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
+    return new Response(JSON.stringify({ user: core.publicUser(r.user) }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie(req, r.token, r.expiresAt), 'cache-control': 'no-store' } });
+  } catch (e) { return authFailure(e); }
+});
+// "Text me instead" while signing in.
+open('POST', '/auth/2fa/send-code', async ({ db, body }) => {
+  const b = z.object({ challenge: z.string().min(20).max(200), method: z.enum(['SMS', 'EMAIL']) }).parse(body);
+  try { return await core.sendChallengeCode(db, b.challenge, b.method); } catch (e) { return authFailure(e); }
+});
+// Swaps the cookie for a fresh one without signing the person out; the session's end time does not move.
+route('POST', '/auth/refresh-token', null, async ({ db, req }) => {
+  const t = await core.refreshSession(db, readToken(req) ?? '');
+  return new Response(JSON.stringify({ ok: true, expiresAt: t.expiresAt }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie(req, t.token, t.expiresAt), 'cache-control': 'no-store' } });
+}, { allowMustChange: true });
+
 post('/auth/logout', null, async ({ db, req }) => {
   await core.logout(db, readToken(req));
   return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': clearCookie(req) } });
@@ -93,12 +121,45 @@ post('/auth/change-password', null, async ({ db, user, body, req }) => {
   return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': clearCookie(req) } }); // all sessions ended: sign in again
 }, { allowMustChange: true });
 
+// ───────────────────────── My profile (any signed-in user, about themselves only) ─────────────────────────
+const mine = { allowMfaEnrol: true };
+const otpKindBody = z.object({ kind: z.enum(['SMS', 'EMAIL']) });
+route('GET', '/profile', null, ({ db, user }) => core.getProfile(db, user), mine);
+route('PATCH', '/profile', null, ({ db, user, body }) => core.updateProfile(db, user, z.object({
+  displayName: z.string().max(100).optional(), email: z.string().max(200).nullable().optional(), phone: z.string().max(30).nullable().optional(), avatar: z.string().max(200_000).nullable().optional(),
+  currentPassword: z.string().max(1024).optional(),
+  notificationPrefs: z.object({ channels: z.object({ email: z.boolean(), sms: z.boolean(), push: z.boolean() }).partial(), events: z.object({ caseAssigned: z.boolean(), caseUpdates: z.boolean(), systemAlerts: z.boolean(), securityAlerts: z.boolean() }).partial() }).partial().optional(),
+}).parse(body) as core.ProfileUpdate), mine);
+route('GET', '/profile/security', null, async ({ db, user }) => {
+  const policy = await core.getSecurityPolicy(db);
+  return { mfa: await core.mfaStatus(db, user.id), allowedMethods: policy.mfa.methods, required: core.mfaRequiredFor(policy, user.roles), canUseMfa: !user.isSuperuser, hasPhone: !!(await db.query('SELECT phone FROM users WHERE id=$1', [user.id])).rows[0]?.phone, hasEmail: !!user.email };
+}, mine);
+const me = (u: SessionUser) => { if (u.isSuperuser) throw new DomainError('REJECTED', 'The super user signs in with credentials from the environment, so a second factor cannot be added here.'); return u; };
+route('POST', '/profile/mfa/totp/start', null, ({ db, user }) => core.beginTotp(db, { id: me(user).id, username: user.username }), mine);
+route('POST', '/profile/mfa/totp/confirm', null, ({ db, user, body }) => core.confirmTotp(db, { id: me(user).id, username: user.username }, z.object({ code: z.string().max(12) }).parse(body).code), mine);
+route('POST', '/profile/mfa/otp/start', null, async ({ db, user, body }) => {
+  const r = (await db.query('SELECT email, phone FROM users WHERE id=$1', [me(user).id])).rows[0]!;
+  return core.beginOtpMethod(db, { id: user.id, name: user.displayName, email: r.email, phone: r.phone }, otpKindBody.parse(body).kind);
+}, mine);
+route('POST', '/profile/mfa/otp/confirm', null, ({ db, user, body }) => { const b = otpKindBody.extend({ code: z.string().max(12) }).parse(body); return core.confirmOtpMethod(db, { id: me(user).id, username: user.username }, b.kind, b.code); }, mine);
+route('POST', '/profile/mfa/disable', null, async ({ db, user, body }) => {
+  const b = z.object({ kind: z.enum(['TOTP', 'SMS', 'EMAIL']), password: z.string().max(1024) }).parse(body);
+  await core.disableMethod(db, { id: me(user).id, username: user.username }, b.kind, b.password, core.mfaRequiredFor(await core.getSecurityPolicy(db), user.roles));
+  return { ok: true };
+}, mine);
+route('POST', '/profile/mfa/recovery-codes', null, async ({ db, user, body }) => ({ recoveryCodes: await core.regenerateRecoveryCodes(db, { id: me(user).id, username: user.username }, z.object({ password: z.string().max(1024) }).parse(body).password) }), mine);
+route('GET', '/profile/sessions', null, ({ db, user, req }) => core.listMySessions(db, user.id, readToken(req)), mine);
+route('POST', '/profile/sessions/revoke-others', null, ({ db, user, req }) => core.revokeOtherSessions(db, user, readToken(req)), mine);
+route('DELETE', '/profile/sessions/:id', null, async ({ db, user, params, req }) => { await core.revokeMySession(db, user, params.id!, readToken(req)); return { ok: true }; }, mine);
+post('/users/:id/reset-mfa', 'user:manage', async (c) => { await guardUserChange(c, c.params.id!); await core.resetMfa(c.db, c.user.username, c.params.id!); return { ok: true }; });
+
 // ───────────────────────── security policy (Settings → Security policy) ─────────────────────────
 const securityPolicyBody = z.object({
   password: z.object({ minLength: z.number().int(), requireUpper: z.boolean(), requireLower: z.boolean(), requireDigit: z.boolean(), requireSymbol: z.boolean(), maxAgeDays: z.number().int(), historyCount: z.number().int() }).partial().optional(),
   lockout: z.object({ maxFailures: z.number().int(), lockMinutes: z.number().int() }).partial().optional(),
   session: z.object({ idleMinutes: z.number().int(), absoluteHours: z.number().int(), strictRoleIds: z.array(z.string().max(60)).max(50), strictIdleMinutes: z.number().int() }).partial().optional(),
   recovery: z.object({ enabled: z.boolean(), channel: z.enum(['EMAIL', 'SMS', 'EITHER']), tokenMinutes: z.number().int(), maxRequestsPerHour: z.number().int(), publicUrl: z.string().max(200) }).partial().optional(),
+  mfa: z.object({ requirement: z.enum(['OFF', 'ROLES', 'ALL']), roleIds: z.array(z.string().max(60)).max(50), methods: z.array(z.enum(['TOTP', 'SMS', 'EMAIL'])).max(3), challengeMinutes: z.number().int() }).partial().optional(),
 });
 get('/settings/security-policy', 'settings:manage', async ({ db }) => ({ policy: await core.getSecurityPolicy(db), defaults: core.defaultSecurityPolicy() }));
 post('/settings/security-policy', 'settings:manage', async ({ db, user, body }) => ({ policy: await core.setSecurityPolicy(db, user.username, securityPolicyBody.parse(body) as Partial<core.SecurityPolicy>) }));
@@ -1737,6 +1798,7 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
     if (!user) return done(fail(401, 'UNAUTHENTICATED', 'Sign in to continue.', { 'set-cookie': clearCookie(req) }));
     userName = user.username;
     if (user.mustChangePassword && !rt.allowMustChange) return done(fail(403, 'PASSWORD_CHANGE_REQUIRED', 'Change your password to continue.'));
+    if (user.mfaEnrollRequired && !rt.allowMustChange && !rt.allowMfaEnrol) return done(fail(403, 'MFA_ENROLMENT_REQUIRED', 'Set up your second factor in My profile to continue.'));
     if (rt.perm && !rt.perm.some((x) => user.permissions.has(x))) {
       await core.audit(db, user.username, 'authz', p, 'DENIED', { method: req.method, needs: rt.perm }).catch(() => {});
       return done(fail(403, 'FORBIDDEN', 'Your role does not allow this.'));

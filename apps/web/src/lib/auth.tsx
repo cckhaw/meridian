@@ -4,7 +4,7 @@ import { api, post } from './api';
 
 export interface Me {
   id: string; username: string; displayName: string; isSuperuser: boolean; roles: string[]; roleLabels: string[]; permissions: string[];
-  modules: Array<{ id: string; label: string; href: string; icon: string }>; home: string; mustChangePassword: boolean;
+  modules: Array<{ id: string; label: string; href: string; icon: string }>; home: string; mustChangePassword: boolean; mfaEnrollRequired: boolean;
   storeId: string | null; dealerId: string | null; customerId: string | null; marketCode: string; creditLimitMinor: number | null;
 }
 interface AuthState { me: Me | null; loading: boolean; can: (...p: string[]) => boolean; refresh: () => Promise<void>; signOut: () => Promise<void> }
