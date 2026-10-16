@@ -1988,4 +1988,20 @@ describe('offer type switches and service types', () => {
     expect(withCheck.json.dueNowMinor).toBeGreaterThan(q.json.dueNowMinor);
     expect(JSON.stringify(chk.json)).not.toContain('FIN-ROUTER-3');
   });
+  it('security policy: administrator settings, a public password-rules endpoint, and forgot/reset without revealing accounts', async () => {
+    const su = await root();
+    const bo = await staff(['billing-ops']);
+    expect((await call('GET', '/settings/security-policy', { cookie: bo.cookie })).status).toBe(403);
+    expect((await call('POST', '/settings/security-policy', { cookie: su, body: { password: { minLength: 3 } } })).status).toBe(400);
+    const saved = await call('POST', '/settings/security-policy', { cookie: su, body: { password: { minLength: 14, requireDigit: true, historyCount: 2 }, recovery: { publicUrl: 'https://crm.example.com' } } });
+    expect(saved.json.policy.password).toMatchObject({ minLength: 14, requireDigit: true, historyCount: 2 });
+    const rules = await call('GET', '/auth/password-policy');          // public: the screens need it before sign-in
+    expect(rules.json.rules).toMatchObject({ minLength: 14, requireDigit: true });
+    expect(JSON.stringify(rules.json)).not.toMatch(/publicUrl|history/);
+    const a = await call('POST', '/auth/forgot-password', { body: { identifier: 'nobody-by-this-name' } });
+    const b = await call('POST', '/auth/forgot-password', { body: { identifier: bo.username } });
+    expect(a.status).toBe(200); expect(b.json).toEqual(a.json);
+    expect((await call('POST', '/auth/reset-password', { body: { token: 'x'.repeat(43), newPassword: 'Brand-New-Passw0rd-1' } })).status).toBe(422);
+    await call('POST', '/settings/security-policy', { cookie: su, body: { password: { minLength: 12, requireDigit: false, historyCount: 0 }, recovery: { publicUrl: '' } } });
+  });
 });

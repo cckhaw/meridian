@@ -6,7 +6,7 @@ import { useEffect, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { SettingsProvider, useBrand, type ClientPresentation } from './settings-provider';
 
-const PUBLIC = ['/login', '/pay/done'];
+const PUBLIC = ['/login', '/pay/done', '/forgot-password', '/reset-password'];
 
 export function Providers({ children, presentation }: { children: ReactNode; presentation: ClientPresentation }) {
   return <SettingsProvider value={presentation}><ThemeProvider><AuthProvider><Gate>{children}</Gate></AuthProvider></ThemeProvider></SettingsProvider>;

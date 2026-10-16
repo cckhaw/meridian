@@ -3,6 +3,7 @@ import { Alert, Button, Card, Field, Input, LargeTitle } from '@meridian/ui';
 import { useState } from 'react';
 import { post } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { PasswordField } from '@/components/password-field';
 
 export default function ChangePassword() {
   const { me } = useAuth();
@@ -26,7 +27,7 @@ export default function ChangePassword() {
         {done ? <Alert tone="success">Password changed. Signing you out so you can sign in again…</Alert> : (
           <form onSubmit={submit} className="space-y-4">
             <Field label="Current password"><Input type="password" autoComplete="current-password" required value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} /></Field>
-            <Field label="New password" hint="At least 12 characters. A passphrase works well."><Input type="password" autoComplete="new-password" required minLength={12} value={f.next} onChange={(e) => setF({ ...f, next: e.target.value })} /></Field>
+            <PasswordField value={f.next} onChange={(v) => setF({ ...f, next: v })} username={me?.username} />
             <Field label="Repeat new password"><Input type="password" autoComplete="new-password" required value={f.again} onChange={(e) => setF({ ...f, again: e.target.value })} /></Field>
             {error && <Alert>{error}</Alert>}
             <Button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Change password'}</Button>

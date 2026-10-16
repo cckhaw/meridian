@@ -6,6 +6,7 @@ import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
+import { checkPassword, getSecurityPolicy, idleMinutesFor, isReusedPassword, rememberPassword } from './security-policy.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
 import { creditLimitOf, homeOf, roleDef, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type RoleBook, type Permission, type RoleId, type Scope } from './rbac.js';
@@ -119,7 +120,7 @@ async function ensureSuperuserRow(q: Queryable, su: SuperuserConfig): Promise<Ro
 
 async function openSession(q: Queryable, userId: string, epoch: string, ip?: string, ua?: string) {
   const token = randomBytes(32).toString('base64url');
-  const expiresAt = new Date(Date.now() + authConfig().maxHours * 3_600_000);
+  const expiresAt = new Date(Date.now() + (await getSecurityPolicy(q)).session.absoluteHours * 3_600_000);
   await q.query(`INSERT INTO sessions (id, user_id, auth_epoch, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5,$6)`,
     [sha256(token), userId, epoch, expiresAt.toISOString(), ip ?? null, ua?.slice(0, 300) ?? null]);
   return { token, expiresAt };
@@ -127,6 +128,7 @@ async function openSession(q: Queryable, userId: string, epoch: string, ip?: str
 
 export async function login(db: Db, i: { username: string; password: string; ip?: string; userAgent?: string }): Promise<LoginResult> {
   const cfg = authConfig();
+  const policy = await getSecurityPolicy(db);
   const username = i.username.trim();
   const ukey = `user:${username.toLowerCase()}`, ikey = `ip:${i.ip ?? 'unknown'}`;
   if (!username || !i.password || i.password.length > 1024 || username.length > 100) throw rejected(BAD_LOGIN);
@@ -160,7 +162,7 @@ export async function login(db: Db, i: { username: string; password: string; ip?
   const ok = await verifyPassword(i.password, row?.passwordHash ?? (await dummyHash()));   // always one hash verification
   if (!row || !ok || row.status !== 'ACTIVE') {
     await recordFailure(db, ikey, ukey);
-    if (row && row.status === 'ACTIVE') await registerFailure(db, row);
+    if (row && row.status === 'ACTIVE') await registerFailure(db, row, policy);
     await audit(db, username, 'auth', row?.id ?? username, 'LOGIN_FAILED', { ip: i.ip });
     throw rejected(BAD_LOGIN);
   }
@@ -168,19 +170,21 @@ export async function login(db: Db, i: { username: string; password: string; ip?
     await audit(db, username, 'auth', row.id, 'LOGIN_BLOCKED_LOCKED', { ip: i.ip });
     throw rejected(`This account is locked after repeated failures. Try again after ${new Date(row.lockedUntil).toISOString().slice(11, 16)} UTC or ask an administrator to unlock it.`);
   }
+  // A password older than the policy allows must be changed before anything else can be done.
+  const age = policy.password.maxAgeDays;
+  const expired = age > 0 && Date.now() - new Date(row.passwordChangedAt ?? row.createdAt).getTime() > age * 86_400_000;
   return db.tx(async (q) => {
-    await q.query('UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1', [row.id]);
+    await q.query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now(), must_change_password = must_change_password OR $2 WHERE id=$1`, [row.id, expired]);
     const { token, expiresAt } = await openSession(q, row.id, '', i.ip, i.userAgent);
-    await audit(q, row.username, 'auth', row.id, 'LOGIN', { ip: i.ip });
-    return { token, user: toUser(row, await getRoleOverrides(q)), expiresAt };
+    await audit(q, row.username, 'auth', row.id, expired ? 'LOGIN_PASSWORD_EXPIRED' : 'LOGIN', { ip: i.ip });
+    return { token, user: toUser({ ...row, mustChangePassword: row.mustChangePassword || expired }, await getRoleOverrides(q)), expiresAt };
   });
 }
 
-async function registerFailure(db: Queryable, row: Row) {
-  const cfg = authConfig();
+async function registerFailure(db: Queryable, row: Row, policy: Awaited<ReturnType<typeof getSecurityPolicy>>) {
   const n = row.failedAttempts + 1;
-  if (n >= cfg.lockAfter) {
-    await db.query(`UPDATE users SET failed_attempts=$2, locked_until = now() + ($3 || ' minutes')::interval WHERE id=$1`, [row.id, n, String(cfg.lockMinutes)]);
+  if (n >= policy.lockout.maxFailures) {
+    await db.query(`UPDATE users SET failed_attempts=$2, locked_until = now() + ($3 || ' minutes')::interval WHERE id=$1`, [row.id, n, String(policy.lockout.lockMinutes)]);
     await audit(db, row.username, 'auth', row.id, 'ACCOUNT_LOCKED', { failures: n });
   } else await db.query('UPDATE users SET failed_attempts=$2 WHERE id=$1', [row.id, n]);
 }
@@ -193,7 +197,7 @@ export async function validateSession(db: Db, token: string | undefined): Promis
     `SELECT s.*, u.* , s.id AS sid, s.auth_epoch AS epoch FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id=$1`, [id])).rows[0];
   if (!s || s.revokedAt) return null;
   const now = Date.now();
-  const idleMs = authConfig().idleMinutes * 60_000;
+  const idleMs = idleMinutesFor(await getSecurityPolicy(db), s.isSuperuser ? [] : (s.roles as string[])) * 60_000;
   if (new Date(s.expiresAt).getTime() <= now || now - new Date(s.lastSeenAt).getTime() > idleMs || s.status !== 'ACTIVE') {
     await db.query('UPDATE sessions SET revoked_at = now() WHERE id=$1 AND revoked_at IS NULL', [id]);
     return null;
@@ -213,7 +217,7 @@ export const logout = (db: Db, token: string | undefined) => token ? db.query('U
 export const revokeUserSessions = (q: Queryable, userId: string) => q.query('UPDATE sessions SET revoked_at = now() WHERE user_id=$1 AND revoked_at IS NULL', [userId]);
 
 // ───────────────────────── user administration ─────────────────────────
-export interface NewUser { username: string; displayName: string; email?: string; roles: string[]; storeId?: string; dealerId?: string; customerId?: string; marketCode?: string; password?: string }
+export interface NewUser { username: string; displayName: string; email?: string; phone?: string; roles: string[]; storeId?: string; dealerId?: string; customerId?: string; marketCode?: string; password?: string }
 
 const USERNAME = /^[a-z0-9][a-z0-9._-]{2,49}$/i;
 
@@ -228,7 +232,7 @@ function parseRoles(roles: string[], book: RoleBook): RoleId[] {
   return [...new Set(roles)] as RoleId[];
 }
 const adminView = (r: Row) => ({
-  id: r.id, username: r.username, displayName: r.displayName, email: r.email, roles: r.roles, status: r.status, isSuperuser: r.isSuperuser,
+  id: r.id, username: r.username, displayName: r.displayName, email: r.email, phone: r.phone ?? null, roles: r.roles, status: r.status, isSuperuser: r.isSuperuser,
   mustChangePassword: r.mustChangePassword, locked: !!r.lockedUntil && new Date(r.lockedUntil) > new Date(), lastLoginAt: r.lastLoginAt,
   storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: r.marketCode?.trim(), createdAt: r.createdAt, createdBy: r.createdBy,
 });
@@ -251,14 +255,15 @@ export async function createUser(db: Db, actor: string, i: NewUser): Promise<{ u
   if (i.customerId && !(await db.query('SELECT 1 FROM customers WHERE id=$1', [i.customerId])).rows.length) throw notFound('customer', i.customerId);
   const temp = i.password ? undefined : temporaryPassword();
   const password = i.password ?? temp!;
-  const problem = passwordProblem(password, i.username);
+  const problem = checkPassword(await getSecurityPolicy(db), password, i.username);
   if (problem) throw invalid(problem);
   const hash = await hashPassword(password);
   try {
     const r = (await db.query(
-      `INSERT INTO users (username, display_name, email, password_hash, roles, must_change_password, store_id, dealer_id, customer_id, market_code, created_by)
-       VALUES ($1,$2,$3,$4,$5,true,$6,$7,$8,$9,$10) RETURNING *`,
-      [i.username.toLowerCase(), i.displayName.trim(), i.email ?? null, hash, roles, i.storeId ?? null, i.dealerId ?? null, i.customerId ?? null, await userMarket(db, i.marketCode), actor])).rows[0]!;
+      `INSERT INTO users (username, display_name, email, phone, password_hash, roles, must_change_password, store_id, dealer_id, customer_id, market_code, created_by)
+       VALUES ($1,$2,$3,$11,$4,$5,true,$6,$7,$8,$9,$10) RETURNING *`,
+      [i.username.toLowerCase(), i.displayName.trim(), i.email ?? null, hash, roles, i.storeId ?? null, i.dealerId ?? null, i.customerId ?? null, await userMarket(db, i.marketCode), actor, i.phone ?? null])).rows[0]!;
+    await rememberPassword(db, r.id, hash);
     await audit(db, actor, 'user', r.id, 'USER_CREATED', { username: r.username, roles });
     return { user: adminView(r), temporaryPassword: temp };
   } catch (e) {
@@ -280,7 +285,7 @@ export async function listUsers(q: Queryable, f: { q?: string; limit?: number; c
   return { items: page.items.map((r) => adminView(r)), nextCursor: page.nextCursor };
 }
 
-export async function updateUser(db: Db, actor: string, id: string, p: { displayName?: string; email?: string; roles?: string[]; status?: 'ACTIVE' | 'DISABLED'; storeId?: string | null; dealerId?: string | null; marketCode?: string }) {
+export async function updateUser(db: Db, actor: string, id: string, p: { displayName?: string; email?: string; phone?: string | null; roles?: string[]; status?: 'ACTIVE' | 'DISABLED'; storeId?: string | null; dealerId?: string | null; marketCode?: string }) {
   return db.tx(async (q) => {
     const u = (await q.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [id])).rows[0];
     if (!u || u.isSuperuser) throw notFound('user', id);
@@ -290,8 +295,8 @@ export async function updateUser(db: Db, actor: string, id: string, p: { display
     checkBinding(roles, { storeId, dealerId, customerId: u.customerId }, book);
     if (storeId && storeId !== u.storeId) await assertStoreUsable(q, storeId);
     await q.query(
-      `UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), roles=$4, status = COALESCE($5, status), store_id=$6, dealer_id=$7, market_code = COALESCE($8, market_code), updated_at=now() WHERE id=$1`,
-      [id, p.displayName?.trim() ?? null, p.email ?? null, roles, p.status ?? null, storeId, dealerId, p.marketCode ? await userMarket(q, p.marketCode) : null]);
+      `UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), phone = CASE WHEN $9::boolean THEN $10 ELSE phone END, roles=$4, status = COALESCE($5, status), store_id=$6, dealer_id=$7, market_code = COALESCE($8, market_code), updated_at=now() WHERE id=$1`,
+      [id, p.displayName?.trim() ?? null, p.email ?? null, roles, p.status ?? null, storeId, dealerId, p.marketCode ? await userMarket(q, p.marketCode) : null, p.phone !== undefined, p.phone ?? null]);
     // Permission and status changes take effect immediately, not at next login.
     if (p.roles || p.status === 'DISABLED' || p.storeId !== undefined || p.dealerId !== undefined) await revokeUserSessions(q, id);
     await audit(q, actor, 'user', id, 'USER_UPDATED', { roles: p.roles, status: p.status, marketCode: p.marketCode });
@@ -321,11 +326,15 @@ export async function changePassword(db: Db, user: SessionUser, current: string,
   if (user.isSuperuser) throw rejected('The super user password is set in the environment (MERIDIAN_SUPERUSER_PASSWORD).');
   const row = (await db.query('SELECT password_hash FROM users WHERE id=$1', [user.id])).rows[0];
   if (!row || !(await verifyPassword(current, row.passwordHash))) throw rejected('The current password is incorrect.');
-  const problem = passwordProblem(next, user.username);
+  const policy = await getSecurityPolicy(db);
+  const problem = checkPassword(policy, next, user.username);
   if (problem) throw invalid(problem);
   if (await verifyPassword(next, row.passwordHash)) throw invalid('Choose a password different from the current one.');
+  if (await isReusedPassword(db, user.id, next, verifyPassword, policy)) throw invalid(`You used that password before. Choose one you have not used in your last ${policy.password.historyCount} passwords.`);
   await db.tx(async (q) => {
-    await q.query(`UPDATE users SET password_hash=$2, must_change_password=false, password_changed_at=now(), updated_at=now() WHERE id=$1`, [user.id, await hashPassword(next)]);
+    const hash = await hashPassword(next);
+    await q.query(`UPDATE users SET password_hash=$2, must_change_password=false, password_changed_at=now(), updated_at=now() WHERE id=$1`, [user.id, hash]);
+    await rememberPassword(q, user.id, hash);
     await revokeUserSessions(q, user.id); // every other device is signed out; the caller signs in again
     await audit(q, user.username, 'user', user.id, 'PASSWORD_CHANGED');
   });

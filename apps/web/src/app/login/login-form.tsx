@@ -1,5 +1,6 @@
 'use client';
 import { Alert, Button, Card, Field, Input } from '@meridian/ui';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ApiError, post } from '@/lib/api';
@@ -69,6 +70,7 @@ export function LoginForm() {
             <Button type="submit" className="w-full" disabled={busy || !username || !password}>{busy ? 'Signing in…' : 'Sign in'}</Button>
           </form>
         </Card>
+        <p className="mt-4 text-center"><Link href="/forgot-password" className="inline-flex min-h-tap items-center text-subhead text-accent">Forgot your password?</Link></p>
         <p className="mt-6 text-center text-footnote text-label2">Access is limited to authorised users. Activity is logged.</p>
       </div>
     </main>

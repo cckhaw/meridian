@@ -6,7 +6,7 @@ import { NextResponse, type NextRequest } from 'next/server';
  */
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
-  if (pathname === '/login' || pathname === '/pay/done') return NextResponse.next();
+  if (['/login', '/pay/done', '/forgot-password', '/reset-password'].includes(pathname)) return NextResponse.next();
   const has = req.cookies.has('meridian_session') || req.cookies.has('__Host-meridian_session');
   if (has) return NextResponse.next();
   const url = req.nextUrl.clone();

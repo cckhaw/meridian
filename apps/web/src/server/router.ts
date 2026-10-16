@@ -63,6 +63,23 @@ open('POST', '/auth/login', async ({ db, body, req }) => {
   }
 });
 
+// What the sign-in, change-password and reset screens need to show the rules and the strength meter (nothing secret).
+open('GET', '/auth/password-policy', async ({ db }) => {
+  const p = await core.getSecurityPolicy(db);
+  const { minLength, requireUpper, requireLower, requireDigit, requireSymbol } = p.password;
+  return { rules: { minLength, requireUpper, requireLower, requireDigit, requireSymbol }, recovery: { enabled: p.recovery.enabled, channel: p.recovery.channel } };
+});
+// "Forgot password": the same answer whether or not the account exists. The link or code goes out through the notification outbox.
+open('POST', '/auth/forgot-password', async ({ db, body, req }) => {
+  const b = z.object({ identifier: z.string().min(1).max(200) }).parse(body);
+  await core.requestPasswordReset(db, { identifier: b.identifier, ip: clientIp(req) });
+  return { ok: true, message: 'If that account exists and has a way to reach it, a link or code is on its way.' };
+});
+open('POST', '/auth/reset-password', async ({ db, body, req }) => {
+  const b = z.object({ token: z.string().max(200).optional(), identifier: z.string().max(200).optional(), code: z.string().max(10).optional(), newPassword: z.string().min(1).max(1024) }).parse(body);
+  return core.resetPasswordWithToken(db, { ...b, ip: clientIp(req) });
+});
+
 post('/auth/logout', null, async ({ db, req }) => {
   await core.logout(db, readToken(req));
   return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': clearCookie(req) } });
@@ -75,6 +92,16 @@ post('/auth/change-password', null, async ({ db, user, body, req }) => {
   await core.changePassword(db, user, b.current, b.next);
   return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': clearCookie(req) } }); // all sessions ended: sign in again
 }, { allowMustChange: true });
+
+// ───────────────────────── security policy (Settings → Security policy) ─────────────────────────
+const securityPolicyBody = z.object({
+  password: z.object({ minLength: z.number().int(), requireUpper: z.boolean(), requireLower: z.boolean(), requireDigit: z.boolean(), requireSymbol: z.boolean(), maxAgeDays: z.number().int(), historyCount: z.number().int() }).partial().optional(),
+  lockout: z.object({ maxFailures: z.number().int(), lockMinutes: z.number().int() }).partial().optional(),
+  session: z.object({ idleMinutes: z.number().int(), absoluteHours: z.number().int(), strictRoleIds: z.array(z.string().max(60)).max(50), strictIdleMinutes: z.number().int() }).partial().optional(),
+  recovery: z.object({ enabled: z.boolean(), channel: z.enum(['EMAIL', 'SMS', 'EITHER']), tokenMinutes: z.number().int(), maxRequestsPerHour: z.number().int(), publicUrl: z.string().max(200) }).partial().optional(),
+});
+get('/settings/security-policy', 'settings:manage', async ({ db }) => ({ policy: await core.getSecurityPolicy(db), defaults: core.defaultSecurityPolicy() }));
+post('/settings/security-policy', 'settings:manage', async ({ db, user, body }) => ({ policy: await core.setSecurityPolicy(db, user.username, securityPolicyBody.parse(body) as Partial<core.SecurityPolicy>) }));
 
 // ───────────────────────── field-service (WFM) callback ─────────────────────────
 /**
@@ -178,7 +205,7 @@ route('DELETE', '/roles/:id', 'user:manage', ({ db, user, params }) => core.dele
 post('/roles/:id/reset', 'user:manage', ({ db, user, params }) => core.resetRole(db, user.username, params.id!));
 get('/users', 'user:manage', ({ db, query }) => core.listUsers(db, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 const newUser = z.object({
-  username: z.string().min(3).max(50), displayName: z.string().min(1).max(100), email: blank(z.string().email()), roles: z.array(z.string()).min(1),
+  username: z.string().min(3).max(50), displayName: z.string().min(1).max(100), email: blank(z.string().email()), phone: blank(z.string().max(30)), roles: z.array(z.string()).min(1),
   storeId: blank(z.string().max(50)), dealerId: blank(z.string().max(50)), customerId: blank(uuid), marketCode: blank(z.string().length(2)), password: blank(z.string().max(128)),
 });
 /**
@@ -197,7 +224,7 @@ const guardUserChange = async (c: Ctx, targetId: string | null, roles?: string[]
 post('/users', 'user:manage', async (c) => { const b = newUser.parse(c.body); await guardUserChange(c, null, b.roles); return core.createUser(c.db, c.user.username, b); });
 patch('/users/:id', 'user:manage', async (c) => {
   const b = z.object({
-    displayName: blank(z.string().min(1).max(100)), email: blank(z.string().email()), roles: z.array(z.string()).optional(), status: z.enum(['ACTIVE', 'DISABLED']).optional(),
+    displayName: blank(z.string().min(1).max(100)), email: blank(z.string().email()), phone: z.string().max(30).nullable().optional(), roles: z.array(z.string()).optional(), status: z.enum(['ACTIVE', 'DISABLED']).optional(),
     storeId: z.string().max(50).nullable().optional(), dealerId: z.string().max(50).nullable().optional(), marketCode: blank(z.string().length(2)),
   }).parse(c.body);
   await guardUserChange(c, c.params.id!, b.roles);

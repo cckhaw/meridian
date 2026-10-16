@@ -1,11 +1,24 @@
 # Security model
 
 ## Authentication
-- **Login** with username and password. Passwords are hashed with scrypt (N=32768, per-user salt). Minimum 12 characters, a common-password blocklist, and no username in the password.
+- **Login** with username and password. Passwords are hashed with scrypt (N=32768, per-user salt). Minimum 12 characters (configurable), a common-password blocklist, and no username in the password. The rules, lockout, session limits and recovery are set in **Settings → Security policy** (see below).
 - **Super user** credentials live only in environment variables. The super user has no password in the database, cannot be edited through the API, and changing either variable invalidates its sessions.
-- **Sessions** are opaque random tokens in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefixed and `Secure` in production). Only a SHA-256 of the token is stored. Idle timeout 30 minutes, absolute 12 hours. They are revoked on sign-out, password change or reset, role/scope change, and disabling.
-- **Brute force**: lockout after 5 failures per account, plus throttling per client address and per username (including non-existent ones). Failed and successful sign-ins are audited. Unknown and wrong-password cases return the same message and take the same time.
+- **Sessions** are opaque random tokens in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefixed and `Secure` in production). Only a SHA-256 of the token is stored. Idle timeout 30 minutes and absolute 12 hours by default (Security policy; shorter idle limits can be set for chosen roles). They are revoked on sign-out, password change or reset, role/scope change, and disabling.
+- **Brute force**: lockout after 5 failures per account (configurable), plus throttling per client address and per username (including non-existent ones). Failed and successful sign-ins are audited. Unknown and wrong-password cases return the same message and take the same time.
 - New and reset users get a one-time password and must change it at first sign-in.
+
+### Security policy (Settings → Security policy)
+
+Super user only; every change is audited and takes effect at once. Until one is saved, the defaults are what the environment variables said before (`MERIDIAN_SESSION_IDLE_MINUTES`, `_MAX_HOURS`, `MERIDIAN_LOCK_AFTER_FAILURES`, `_LOCK_MINUTES`), so upgrading changes nothing by itself.
+
+| Area | Settings |
+|---|---|
+| Passwords | Shortest length (8–64, default 12); require uppercase, lowercase, number, symbol; expire after N days (0 = never; the person must change it at their next sign-in); do not reuse the last N passwords (0–24; only hashes are kept). The common-password blocklist, no-username and no-repetition checks always apply. The change, reset and sign-up screens show the rules as a live checklist with a strength meter. |
+| Account lockout | Failed sign-ins before a lock (3–20) and how long it lasts (1–1440 minutes). |
+| Sessions | Idle sign-out (5–720 minutes), longest session (1–72 hours), and a shorter idle limit for chosen roles (counter and call-centre screens). |
+| Forgotten passwords | On or off; link by e-mail, code by SMS, or whichever the person has; how long it works (5–1440 minutes); requests per person per hour; the site's public address. |
+
+**Forgot password.** The sign-in page links to *Forgot your password?*. The person gives their username or e-mail; the answer is identical whether or not the account exists. A link (single use, built from the configured public address, never from the request's Host header) or a six-digit code (when no public address is set, or by SMS) is queued as a `PASSWORD_RESET` notification in the outbox for the e-mail/SMS connector to send. Only hashes are stored; a code locks after 5 wrong tries; a new request replaces any open one; using it ends every session and clears a lock. The super user cannot recover a password this way (it lives in the environment). The outbox row holds the live token until delivered, so protect and prune the outbox like any other secret-bearing queue.
 
 ## Authorisation
 - Every API route declares the permission it needs; the dispatcher enforces it before the handler runs, and denied attempts are audited. See [ROLES.md](ROLES.md) (generated from code and checked by a test).
