@@ -28,7 +28,39 @@ export function OfferTypeSettings() {
         actions={(t: any) => <Button variant="secondary" onClick={() => setEditing(t)}>Edit</Button>} />
       <p className="mt-3 text-footnote text-label2">Switching a type off stops it being chosen for new offers; offers already using it keep working.</p>
       {editing && <TypeForm item={editing} kinds={data.serviceKinds} onClose={() => setEditing(null)} onDone={() => { setEditing(null); void reload(); }} />}
+      <Combinations types={data.types} />
     </Card>
+  );
+}
+
+/** Which offer types cannot be sold in the same order. A rule works both ways; the order screen greys the second offer out, and orders are refused whichever channel they come from. */
+function Combinations({ types }: { types: any[] }) {
+  const rules = useApi<{ pairs: Array<[string, string]> }>('/settings/offer-type-conflicts');
+  const [a, setA] = useState('');
+  const [b, setB] = useState('');
+  const act = useAction(async () => { await rules.reload(); });
+  const name = (id: string) => types.find((t) => t.id === id)?.name ?? id;
+  const save = (pairs: Array<[string, string]>) => act.run(() => post('/settings/offer-type-conflicts', { pairs }), 'Saved');
+  if (rules.error) return <Alert>{rules.error}</Alert>;
+  if (!rules.data) return <Spinner />;
+  const pairs = rules.data.pairs;
+  const dup = !!a && !!b && pairs.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+  return (
+    <div className="mt-6 border-t border-separator pt-4">
+      <h3 className="text-title3 font-semibold">Combinations</h3>
+      <p className="mb-3 text-subhead text-label2">Offer types that cannot be sold in the same order. A rule works both ways: with “Fibre” and “SIM only” listed, choosing one greys out the other, and an order with both is refused in every channel. Types not listed here can be combined freely.</p>
+      {pairs.length === 0 && <p className="mb-3 text-subhead text-label2">No rules: every type can be ordered with every other.</p>}
+      <ul className="mb-3 space-y-2">{pairs.map(([x, y]) => (
+        <li key={`${x}|${y}`} className="flex flex-wrap items-center gap-2 rounded-control bg-surface2 px-3 py-2 text-subhead"><span className="font-medium">{name(x)}</span><span className="text-label2">cannot be ordered with</span><span className="font-medium">{name(y)}</span>
+          <Button variant="plain" className="ml-auto" disabled={act.busy} onClick={() => void save(pairs.filter(([p, q]) => !(p === x && q === y)))}>Remove</Button></li>))}</ul>
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label="Offer type"><Select value={a} onChange={(e) => setA(e.target.value)}><option value="">Choose…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
+        <span className="pb-3 text-subhead text-label2">cannot be ordered with</span>
+        <Field label="Offer type"><Select value={b} onChange={(e) => setB(e.target.value)}><option value="">Choose…</option>{types.filter((t) => t.id !== a).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
+        <Button disabled={act.busy || !a || !b || a === b || dup} onClick={async () => { if (await save([...pairs, [a, b]])) { setA(''); setB(''); } }}>Add rule</Button>
+      </div>
+      {act.error && <div className="mt-2"><Alert>{act.error}</Alert></div>}{act.ok && <div className="mt-2"><Alert tone="success">{act.ok}</Alert></div>}
+    </div>
   );
 }
 

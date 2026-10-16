@@ -81,6 +81,8 @@ export const SWATCH: Record<string, string> = {
 };
 
 /** An offer of which only one fits an order (the type's “only one per order” switch, on for mobile plans): other lines join it as members or are added as add-ons. */
+/** The item already in the order that this offer's type cannot be ordered with (Settings → Catalog → Offer types → Combinations), if any. */
+export const clashesWith = (o: any, items: Array<{ offer: any }>, pairs: Array<[string, string]>) => items.find((i) => i.offer.id !== o.id && pairs.some(([a, b]) => (o.kind === a && i.offer.kind === b) || (o.kind === b && i.offer.kind === a)));
 export const isExclusive = (o: OfferNode | any) => !!behaviourOf(o).exclusive;
 
 /** A line that gets its own SIM and number: a plan's own line, or one member line of a group plan. */

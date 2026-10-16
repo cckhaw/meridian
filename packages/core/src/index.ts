@@ -95,6 +95,7 @@ export * from './segments.js';
 export * from './groups.js';
 export * from './stores.js';
 export * from './offer-config.js';
+export * from './offer-conflicts.js';
 export * from './service-kinds.js';
 export * from './integrations.js';
 export * from './ocs.js';

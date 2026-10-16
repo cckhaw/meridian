@@ -148,7 +148,7 @@ export function NewOrder() {
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
-    address, setAddress: (a: string) => { setAddress(a); setWfmSlot(null); }, booking: { enabled: bookable, slot: wfmSlot, setSlot: setWfmSlot, later: bookLater, setLater: setBookLater }, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
+    conflicts: meta.data?.typeConflicts ?? [], address, setAddress: (a: string) => { setAddress(a); setWfmSlot(null); }, booking: { enabled: bookable, slot: wfmSlot, setSlot: setWfmSlot, later: bookLater, setLater: setBookLater }, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
 
