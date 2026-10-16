@@ -5,12 +5,24 @@ import { api, useAction } from '@/lib/api';
 import { dt } from '@/lib/format';
 import type { Profile } from './page';
 
-/** Shrinks a chosen picture to a small square before it is saved, so the profile stays light on every device. */
+/**
+ * Shrinks a chosen picture to a small square before it is saved, so the profile stays light on every device.
+ * The file is decoded without a blob: address, which the page's security policy does not allow for images (that is what made every picture "not a picture").
+ */
+async function decode(file: File): Promise<{ source: CanvasImageSource; width: number; height: number }> {
+  if (typeof createImageBitmap === 'function') {
+    try { const b = await createImageBitmap(file); return { source: b, width: b.width, height: b.height }; } catch { /* fall back to reading it as a data address */ }
+  }
+  const url = await new Promise<string>((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(new Error('The file could not be read.')); r.readAsDataURL(file); });
+  const img = await new Promise<HTMLImageElement>((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('This browser cannot open that kind of picture. Use a JPEG, PNG or WebP photo.')); i.src = url; });
+  return { source: img, width: img.width, height: img.height };
+}
 async function shrink(file: File, size = 192): Promise<string> {
-  const img = await new Promise<HTMLImageElement>((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('That file is not a picture.')); i.src = URL.createObjectURL(file); });
+  if (!file.type.startsWith('image/') && file.type !== '') throw new Error('Choose a picture file (JPEG, PNG or WebP).');
+  const { source, width, height } = await decode(file).catch(() => { throw new Error('This browser cannot open that kind of picture. Use a JPEG, PNG or WebP photo.'); });
   const c = document.createElement('canvas'); c.width = c.height = size;
-  const side = Math.min(img.width, img.height);
-  c.getContext('2d')!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+  const side = Math.min(width, height);
+  c.getContext('2d')!.drawImage(source, (width - side) / 2, (height - side) / 2, side, side, 0, 0, size, size);
   return c.toDataURL('image/jpeg', 0.85);
 }
 export const Avatar = ({ src, name, size = 64 }: { src: string | null; name: string; size?: number }) => src
