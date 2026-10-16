@@ -9,6 +9,7 @@ import { useSegments } from '@/lib/segments';
 import { d, dt, label, money, tone } from '@/lib/format';
 import { AccountPane } from './account-pane';
 import { CasesPanel } from './cases-panel';
+import { DocumentsPanel } from './documents-panel';
 import { InteractionsPanel } from './interactions-panel';
 import { HierarchyNav } from './hierarchy-nav';
 import { ServicesTable } from './services-panel';
@@ -157,6 +158,7 @@ function Overview({ c, id, onPick, reload }: { c: any; id: string; onPick: (acco
 
       {can('case:read') && <CasesPanel customerId={id} cases={c.cases} onChange={() => void reload()} />}
       {can('case:read') && <InteractionsPanel customerId={id} onChange={() => void reload()} />}
+      {can('document:read', 'document:kyc') && <DocumentsPanel customerId={id} />}
     </>
   );
 }

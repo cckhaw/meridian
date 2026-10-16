@@ -1,4 +1,5 @@
 'use client';
+import { DocumentSettings } from './documents';
 import { Alert, Empty, LargeTitle, SearchField, Spinner } from '@meridian/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
@@ -114,6 +115,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'modules': return <ModulesSettings />;
     case 'bill-cycles': return <BillCycleSettings />;
     case 'offer-types': return <OfferTypeSettings />;
+    case 'documents': return <DocumentSettings />;
     case 'fulfilment': return <FulfilmentSettings />;
     case 'service-types': return <ServiceKindSettings />;
     case 'cancellation': return <CancellationSettings />;

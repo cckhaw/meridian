@@ -41,6 +41,11 @@ export default {
         { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
         { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
       ],
-    }];
+    },
+    // A document is shown to staff inside the Documents page (a frame of our own origin), so these two addresses, and only these, may be framed by us.
+    ...['/api/documents/:id/file', '/api/documents/file/:token'].map((source) => ({ source, headers: [
+      { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+      { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+    ] }))];
   },
 };

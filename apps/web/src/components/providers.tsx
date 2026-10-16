@@ -33,6 +33,7 @@ function Gate({ children }: { children: ReactNode }) {
 
   const allowed = pathname === '/change-password' || pathname === '/profile' || me.modules.some((m) => (m.href === '/' ? pathname === '/' : pathname === m.href || pathname.startsWith(m.href + '/')))
     || (pathname.startsWith('/orders/') && me.modules.some((m) => m.id === 'orders' || m.id === 'sell'))
+    || (pathname.startsWith('/settings/document-templates') && me.permissions.includes('document:template'))
     || ((pathname.startsWith('/catalog/manage') || pathname.startsWith('/catalog/edit')) && me.permissions.includes('catalog:write'));
   return (
     <AppShell nav={me.modules} brand={brand} user={{ name: me.displayName, roles: me.roleLabels }} activeHref={pathname} onSignOut={() => void signOut()} onChangePassword={() => router.push('/change-password')}
