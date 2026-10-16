@@ -151,7 +151,7 @@ export const MODULE_ENTITIES: EntityDef[] = [
   t({ id: 'documents', label: 'Document vault (records only)', domain: 'documents', phase: 5, table: 'documents', dependsOn: ['customers'],
     description: 'Every stored document: kind, owner, name, size, SHA-256, where the file is kept, status, retention and the template version it was made from.',
     note: 'The records only: the files themselves are not in the archive. For a backup copy the bucket (the storage key says where each file is) and keep the data key; the access log is in its own file.',
-    cols: ['id*', 'kind', 'category', 'customer_id:r=customers', 'application_id:r=applications', 'order_id:r=orders', 'service_id:r=services', 'name!m', 'content_type', 'size_bytes:i', 'sha256', 'storage', 'storage_key', 'encrypted:b', 'status', 'status_reason', 'verified_by', 'verified_at', 'expires_at', 'retention_until', 'purged_at', 'template_version_id:r=template_versions', 'meta:j', 'created_by', 'created_at'] }),
+    cols: ['id*', 'kind', 'category', 'customer_id:r=customers', 'application_id:r=applications', 'kyc_case_id:r=kyc_cases', 'order_id:r=orders', 'service_id:r=services', 'name!m', 'content_type', 'size_bytes:i', 'sha256', 'storage', 'storage_key', 'encrypted:b', 'status', 'status_reason', 'verified_by', 'verified_at', 'expires_at', 'retention_until', 'purged_at', 'template_version_id:r=template_versions', 'meta:j', 'created_by', 'created_at'] }),
   t({ id: 'document_signatures', label: 'Signatures', domain: 'documents', phase: 5, table: 'document_signatures', dependsOn: ['documents'],
     description: 'The e-signature record of each signed agreement: who signed, when, how, the seal that fixes the content, and the agent’s name.',
     cols: ['id*', 'document_id:r*=documents', 'signature_document_id:r=documents', 'customer_id:r=customers', 'order_id:r=orders', 'service_id:r=services', 'template_version_id:r=template_versions', 'signer_name', 'signed_at', 'ip!m', 'user_agent', 'geo:j!m', 'agent', 'method', 'content_seal', 'created_at'] }),
@@ -159,9 +159,9 @@ export const MODULE_ENTITIES: EntityDef[] = [
     description: 'Every view, download, link, decision, purge and template change: who, from where, when.',
     cols: ['id*', 'document_id:r=documents', 'template_id:r=document_templates', 'customer_id:r=customers', 'action', 'actor', 'ip!m', 'user_agent', 'detail:j', 'at'] }),
   t({ id: 'kyc_cases', label: 'KYC cases', domain: 'documents', phase: 5, table: 'kyc_cases', dependsOn: ['customers'],
-    description: 'Identity verifications: method, status, the details checked, the checks and flags, the decision and who made it.',
+    description: 'Identity verifications from every channel (online shop, store counter, CRM order, customer record): status, the details checked, the checks and flags, who submitted and who decided, and why.',
     note: 'The ID number is never exported: only its masked form and a keyed code. The encrypted number stays in the database.',
-    cols: ['id*', 'application_id:r=applications', 'customer_id:r=customers', 'method', 'status', 'full_name', 'date_of_birth:d', 'nationality', 'id_type', 'id_number_hash!p', 'id_number_masked', 'id_expiry:d', 'flags:j', 'checks:j', 'attestation:j', 'decided_by', 'decided_at', 'decision_reason', 'created_at', 'updated_at'] }),
+    cols: ['id*', 'application_id:r=applications', 'customer_id:r=customers', 'method', 'source', 'status', 'full_name', 'date_of_birth:d', 'nationality', 'id_type', 'id_number_hash!p', 'id_number_masked', 'id_expiry:d', 'flags:j', 'checks:j', 'attestation:j', 'submitted_at', 'submitted_by', 'order_id:r=orders', 'decided_by', 'decided_at', 'decision_reason', 'reason_code', 'fraud_reported:b', 'created_at', 'updated_at'] }),
 
   // ───────────────────────── Fibre coverage ─────────────────────────
   t({ id: 'fiber_providers', label: 'Fibre providers', domain: 'fiber', phase: 1, table: 'fiber_providers',

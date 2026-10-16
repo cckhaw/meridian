@@ -6,3 +6,4 @@ export * from './components/forms';
 export * from './components/icons';
 export * from './components/fiber-coverage';
 export * from './components/signing';
+export * from './components/id-camera';

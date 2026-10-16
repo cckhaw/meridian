@@ -487,7 +487,9 @@ const addressSchema = z.object({ line1: z.string().max(120), line2: z.string().m
 const consentSchema = z.object({ acceptedTerms: z.boolean(), privacyAccepted: z.boolean(), marketingOptIn: z.boolean(), authorisedAssistant: z.boolean().optional(), creditCheck: z.boolean().optional() }).partial();
 const agreementBody = z.object({ image: z.string().max(600_000), signerName: z.string().max(120).optional(), geo: z.object({ lat: z.number(), lon: z.number(), accuracy: z.number().optional() }).nullish(), versionIds: z.array(z.string().uuid()).max(20).optional() });
 const appPatch = z.object({ agreement: agreementBody.nullable().optional(), fiber: z.object({ reservationId: z.string().uuid() }).nullable().optional(), lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
-const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(3_700_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') });
+/** How the capture screen says a photograph was taken; the server checks it again. */
+const captureInput = z.object({ method: z.literal('LIVE_CAMERA'), at: z.string().max(40), facing: z.string().max(20).optional(), width: z.number().int().optional(), height: z.number().int().optional() });
+const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(3_700_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64'), capture: captureInput.nullish() });
 const DOC_BODY = 3_800_000;
 
 clientRoute('GET', '/store/config', async ({ db }) => core.storeConfig(db));
@@ -509,7 +511,7 @@ clientRoute('GET', '/store/applications/:id/agreements', async (c) => core.appli
 clientRoute('PATCH', '/store/applications/:id', async (c) => { await core.updateApplication(c.db, c.params.id!, selfAccess(c), appPatch.parse(c.body)); return core.applicationView(c.db, c.params.id!, selfAccess(c)); });
 clientRoute('POST', '/store/applications/:id/documents', async (c) => {
   const b = docUpload.parse(c.body);
-  return core.uploadDocument(c.db, c.params.id!, selfAccess(c), b.kind, Buffer.from(b.dataBase64, 'base64'));
+  return core.uploadDocument(c.db, c.params.id!, selfAccess(c), b.kind, Buffer.from(b.dataBase64, 'base64'), b.capture);
 }, { maxBody: DOC_BODY });
 clientRoute('POST', '/store/applications/:id/kyc', async (c) => { await core.submitKyc(c.db, c.params.id!, selfAccess(c)); return core.applicationView(c.db, c.params.id!, selfAccess(c)); });
 const payOpts = z.object({ gateway: z.string().max(20).optional(), returnUrl: z.string().max(500).optional() });
@@ -555,7 +557,7 @@ get('/assisted/applications/:id/agreements', 'store:assist', ({ db, user, params
 patch('/assisted/applications/:id', 'store:assist', async ({ db, user, req, params, body }) => { await core.updateApplication(db, params.id!, staffAccess(user, req), appPatch.parse(body)); return core.applicationView(db, params.id!, staffAccess(user)); });
 route('POST', '/assisted/applications/:id/documents', 'store:assist', async ({ db, user, params, body }) => {
   const b = docUpload.parse(body);
-  return core.uploadDocument(db, params.id!, staffAccess(user), b.kind, Buffer.from(b.dataBase64, 'base64'));
+  return core.uploadDocument(db, params.id!, staffAccess(user), b.kind, Buffer.from(b.dataBase64, 'base64'), b.capture);
 }, { maxBody: DOC_BODY });
 post('/assisted/applications/:id/kyc', ['kyc:attest'], async ({ db, user, params, body }) => {
   const b = z.object({ idSighted: z.boolean(), faceMatches: z.boolean(), notes: z.string().max(300).optional() }).parse(body);
@@ -576,18 +578,20 @@ post('/assisted/applications/:id/cancel', 'store:assist', async ({ db, user, par
 // ───────────────────────── KYC review (compliance) ─────────────────────────
 get('/kyc/cases', 'kyc:review', ({ db, query }) => core.listKycCases(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/kyc/cases/:id', 'kyc:review', ({ db, user, params }) => core.getKycCase(db, params.id!, user.username));
-get('/kyc/documents/:id', 'kyc:review', async ({ db, user, params }) => {
-  const d = await core.getKycDocument(db, params.id!, user.username);
+get('/kyc/documents/:id', 'kyc:review', async ({ db, user, req, params }) => {
+  const d = await core.getKycDocument(db, params.id!, docWho(user, req));
   return new Response(new Uint8Array(d.bytes), { headers: { 'content-type': d.contentType, 'content-disposition': 'inline', 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'no-store' } });
 });
+get('/kyc/summary', 'kyc:review', ({ db }) => core.kycQueueCounts(db));
 post('/kyc/cases/:id/decision', 'kyc:review', async ({ db, user, params, body }) => {
-  const b = z.object({ decision: z.enum(['APPROVE', 'REJECT', 'RETURN']), reason: z.string().max(300).optional() }).parse(body);
-  return core.decideKycCase(db, params.id!, user.username, b, await core.getStoreSettings(db));
+  const b = z.object({ decision: z.enum(['APPROVE', 'REJECT', 'RETURN']), reason: z.string().max(300).optional(), reasonCode: z.enum(core.REASON_CODES).optional(), reportFraud: z.boolean().optional() }).parse(body);
+  // The decision, the orders it releases or cancels, and the fraud-register entry are one unit.
+  return db.tx(async (q) => core.decideKycCase(q, params.id!, user.username, b, await core.getStoreSettings(q), { canReportFraud: user.permissions.has('fraud:manage') }));
 });
 
 // ───────────────────────── store settings and API keys (super user) ─────────────────────────
 const storeSettingsSchema = z.object({
-  kycMode: z.enum(['manual', 'auto']), minAge: z.number().int(), requireKycForServices: z.boolean(), termsUrl: z.string().max(300), privacyUrl: z.string().max(300), termsVersion: z.string().max(20),
+  kycMode: z.enum(['manual', 'auto']), minAge: z.number().int(), requireKycForServices: z.boolean().optional(), kycGate: z.enum(['BEFORE_ORDER', 'BEFORE_ACTIVATION']).optional(), kycSlaHours: z.number().int().optional(), kycRequireLiveCapture: z.boolean().optional(), termsUrl: z.string().max(300), privacyUrl: z.string().max(300), termsVersion: z.string().max(20),
   applicationTtlHours: z.number().int(), gateways: z.object({ enabled: z.array(z.string().max(20)).max(10), default: z.string().max(20).nullable(), crm: z.array(z.string().max(20)).max(10).default([]) }),
 });
 get('/settings/store', 'settings:manage', async ({ db }) => ({
@@ -596,7 +600,7 @@ get('/settings/store', 'settings:manage', async ({ db }) => ({
   clients: await core.listApiClients(db),
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
-post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body)));
+post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body) as core.StoreSettings));
 // ───────────────────────── data migration: exports, templates, jobs ─────────────────────────
 const migrationAny: Permission[] = ['migration:export', 'migration:import'];
 get('/migration/meta', migrationAny, async ({ db, user }) => ({
@@ -921,6 +925,12 @@ route('DELETE', '/settings/fulfilment-options/:id', 'settings:manage', async ({ 
 
 // ───────────────────────── customers ─────────────────────────
 const addressInput = z.object({ line1: blank(z.string().max(120)), line2: blank(z.string().max(120)), postcode: blank(z.string().max(20)), city: blank(z.string().max(80)), state: blank(z.string().max(80)), country: blank(z.string().max(2)) });
+/** The identity the CRM captures with a customer: the ID details and the live photographs (a company: the certificate and the signatory's ID). */
+const identityInput = z.object({
+  idType: z.enum(['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT']), idExpiry: blank(z.string().max(10)), nationality: blank(z.string().max(60)), dateOfBirth: blank(z.string().max(10)),
+  documents: z.array(z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(1_800_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64'), capture: captureInput.nullish() })).min(1).max(6),
+});
+const toEvidence = (docs: z.infer<typeof identityInput>['documents']): core.Evidence[] => docs.map((d) => ({ kind: d.kind, bytes: Buffer.from(d.dataBase64, 'base64'), capture: d.capture ?? null }));
 const newCustomer = z.object({
   segment: z.string().min(1).max(40), displayName: z.string().min(1).max(200), idDocument: z.string().min(3).max(40),
   marketCode: z.string().length(2).optional(), email: blank(z.string().email()), phone: blank(z.string().max(30)),
@@ -928,18 +938,30 @@ const newCustomer = z.object({
   parentCustomerId: uuid.optional(), account: z.object({ name: z.string().optional(), billCycleDay: z.number().int().min(1).max(28).nullable().optional() }).optional(),
 });
 get('/customers', 'customer:search', ({ db, query }) => core.searchCustomers(db, { q: str(query, 'q'), segment: str(query, 'segment'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
-post('/customers', 'customer:create', async ({ db, user, body }) => {
+post('/customers', 'customer:create', async ({ db, user, req, body }) => {
   // A customer normally comes into being with their first order. The order wizard says so (context: 'order'); the Customers screen needs the setting.
-  const viaOrder = z.object({ context: z.literal('order').optional() }).parse(body).context === 'order';
+  const ctx = z.object({ context: z.literal('order').optional() }).parse(body).context;
+  const viaOrder = ctx === 'order';
   if (!viaOrder && !(await core.getCustomerSettings(db)).allowCreateWithoutOrder) throw new DomainError('REJECTED', 'Customers are created while placing their first order. Your administrator has not allowed creating one on its own (Settings → Customers).');
-  const input = newCustomer.parse(body);
+  const { identity, ...rest } = z.object({ identity: identityInput }).passthrough().parse(body);   // identity is not optional: no customer without an identity check
+  const input = newCustomer.parse(rest);
   // The settings decide which details are asked for: hidden ones are dropped, required ones must be filled.
   const details = core.checkCustomerDetails((await core.getCustomerSettings(db)).fields, { email: input.email, phone: input.phone, dateOfBirth: input.dateOfBirth, gender: input.gender, address: input.address });
   const billCycleDay = await core.resolveBillCycle(db, input.account?.billCycleDay);
-  const r = await core.createCustomer(db, { ...input, email: details.email, phone: details.phone, dateOfBirth: details.dateOfBirth, gender: details.gender, address: details.address, account: { ...input.account, billCycleDay } } as core.NewCustomer);
-  await core.audit(db, user.username, 'customer', r.customer.id, 'CREATED');
+  const r = await core.createCustomerWithKyc(db, { ...input, email: details.email, phone: details.phone, dateOfBirth: details.dateOfBirth, gender: details.gender, address: details.address, account: { ...input.account, billCycleDay } } as core.NewCustomer,
+    { source: viaOrder ? 'CRM_ORDER' : 'CRM_CUSTOMER', actor: user.username, storeId: user.scope.storeId ?? null, who: docWho(user, req), evidence: toEvidence(identity.documents),
+      identity: { idType: identity.idType, idExpiry: identity.idExpiry, nationality: identity.nationality, dateOfBirth: identity.dateOfBirth ?? details.dateOfBirth } });
+  await core.audit(db, user.username, 'customer', r.customer.id as string, 'CREATED', { kycCase: r.kyc.caseId });
   return r;
-});
+}, { maxBody: 6_500_000 });
+get('/customers/:id/kyc', 'customer:read', ({ db, params }) => core.customerKycView(db, params.id!));
+/** Starts, or restarts, the identity check of a customer who has none (an older record) or whose check was sent back. */
+post('/customers/:id/kyc', 'customer:write', async ({ db, user, req, params, body }) => {
+  const b = identityInput.extend({ idNumber: z.string().min(4).max(40), context: z.enum(['order', 'customer']).optional() }).parse(body);
+  const c = await db.tx((q) => core.submitCustomerKyc(q, { customerId: params.id!, source: b.context === 'order' ? 'CRM_ORDER' : 'CRM_CUSTOMER', actor: user.username, storeId: user.scope.storeId ?? null, who: docWho(user, req), evidence: toEvidence(b.documents),
+    identity: { idType: b.idType, idNumber: b.idNumber, idExpiry: b.idExpiry, nationality: b.nationality, dateOfBirth: b.dateOfBirth } }));
+  return { caseId: c.id, status: c.status, flags: c.flags, kyc: await core.customerKycView(db, params.id!) };
+}, { maxBody: 6_500_000 });
 
 /** The 360 shows only the sections a user's permissions cover, so e.g. a dealer never sees invoices or cases. */
 function redact360(u: SessionUser, c: core.Row) {

@@ -168,9 +168,11 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
   }
   const hasService = [...offers.values()].some(createsService);
   if (hasService && customer?.displayName === 'Walk-in customer') throw rejected('services need a registered customer');
-  // CRM channels only: the store-front never sells a service without an approved identity application, whatever this switch says.
-  if (hasService && customer && input.channel !== 'SELF_SERVE' && (await getStoreSettings(q)).requireKycForServices && customer.kycStatus !== 'VERIFIED') {
-    fail('Identity verification (KYC) must be completed before a service can be sold to this customer.');
+  // Identity. A customer whose check was rejected is not sold a service. With the gate at BEFORE_ORDER (CRM channels; the store-front gets there through its own
+  // application) nothing is sold until the check is approved; otherwise the order is taken and the service is activated when the check is approved.
+  if (hasService && customer && customer.kycStatus !== 'VERIFIED') {
+    if (customer.kycStatus === 'REJECTED') fail('This customer’s identity verification was not approved, so a service cannot be sold to them.');
+    else if (input.channel !== 'SELF_SERVE' && (await getStoreSettings(q)).kycGate === 'BEFORE_ORDER') fail('Identity verification (KYC) must be completed before a service can be sold to this customer.');
   }
 
   // A device on a contract is bought together with a plan: exactly one plan line, one device, and a contract the device is offered on.

@@ -146,7 +146,8 @@ const customers: Importer = {
       }
       batch.set(ref, { id, path });
       if (hash && seg.individual) batchHash.add(hash);
-      ins.push({ ref, id, shard: shardFor(id), segment: str(r.segment), name: str(r.display_name), docRef, hash: hash || null, market, parent: parentId, path, email: opt(r.email), phone: opt(r.phone), status: str(r.status) || 'ACTIVE', kyc: str(r.kyc_status) || 'NOT_VERIFIED', kycAt: opt(r.kyc_verified_at), dob: opt(r.date_of_birth), gender: opt(r.gender), address: json(r.address), vipFlag: r.vip === true, risk: str(r.credit_risk) || 'NORMAL', createdAt: opt(r.created_at) });
+      // a review in flight cannot be carried over: there is no case to decide it
+      ins.push({ ref, id, shard: shardFor(id), segment: str(r.segment), name: str(r.display_name), docRef, hash: hash || null, market, parent: parentId, path, email: opt(r.email), phone: opt(r.phone), status: str(r.status) || 'ACTIVE', kyc: ['VERIFIED', 'REJECTED'].includes(str(r.kyc_status)) ? str(r.kyc_status) : 'NOT_VERIFIED', kycAt: opt(r.kyc_verified_at), dob: opt(r.date_of_birth), gender: opt(r.gender), address: json(r.address), vipFlag: r.vip === true, risk: str(r.credit_risk) || 'NORMAL', createdAt: opt(r.created_at) });
     }
     if (ctx.write && ins.length) {
       const c = (k: string) => ins.map((x) => x[k]);

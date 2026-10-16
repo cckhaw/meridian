@@ -123,7 +123,7 @@ const CORE_ENTITIES: EntityDef[] = [
       f('status', 'enum', 'ACTIVE or another status', 'ACTIVE', { values: ['ACTIVE', 'INACTIVE', 'CLOSED'] }),
       f('email', 'text', 'Email', 'alex@example.com', { pattern: '^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$' }),
       f('phone', 'text', 'Phone in international form', '+6591234567', { pattern: '^\\+?[0-9 -]{6,20}$' }),
-      f('kyc_status', 'enum', 'NOT_VERIFIED or VERIFIED', 'VERIFIED', { values: ['NOT_VERIFIED', 'VERIFIED'] }),
+      f('kyc_status', 'enum', 'NOT_VERIFIED, PENDING_REVIEW (photographs submitted), VERIFIED or REJECTED', 'VERIFIED', { values: ['NOT_VERIFIED', 'PENDING_REVIEW', 'VERIFIED', 'REJECTED'] }),
       f('kyc_verified_at', 'timestamp', 'When identity was verified (ISO 8601)', '2024-05-01T09:30:00Z'),
       f('date_of_birth', 'date', 'YYYY-MM-DD', '1990-04-12', { pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
       f('gender', 'text', 'As held', ''),

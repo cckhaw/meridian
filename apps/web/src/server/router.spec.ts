@@ -33,6 +33,14 @@ async function signIn(username: string, password: string, ip = '10.0.0.1') {
   return { res: r, cookie: cookieOf(r) };
 }
 let n = 0;
+/** A camera-style JPEG (no photo-library metadata), different each time, and the identity payload the customer form sends with it. */
+function jpeg(): string {
+  const seg = (m: number, data: Buffer) => { const len = Buffer.alloc(2); len.writeUInt16BE(data.length + 2); return Buffer.concat([Buffer.from([0xff, m]), len, data]); };
+  const sof = Buffer.alloc(15); sof[0] = 8; sof.writeUInt16BE(800, 1); sof.writeUInt16BE(1280, 3); sof[5] = 3; sof.set([1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1], 6);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), seg(0xe0, Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1')), seg(0xfe, Buffer.from(String(Math.random()) + Date.now(), 'latin1')), seg(0xc0, sof), seg(0xda, Buffer.from([3, 1, 0, 2, 0x11, 3, 0x11, 0, 63, 0])), Buffer.from('scan'), Buffer.from([0xff, 0xd9])]).toString('base64');
+}
+const SHOT = (kind: string) => ({ kind, dataBase64: jpeg(), capture: { method: 'LIVE_CAMERA', at: new Date().toISOString() } });
+const IDENTITY = (over: Record<string, unknown> = {}) => ({ identity: { idType: 'NATIONAL_ID', idExpiry: '2099-01-01', dateOfBirth: '1990-01-01', documents: (['ID_FRONT', 'ID_BACK', 'SELFIE'] as const).map((kind) => ({ kind, dataBase64: jpeg(), capture: { method: 'LIVE_CAMERA', at: new Date().toISOString() } })), ...over } });
 /** A working staff user: created through the admin API path, past the forced password change. */
 async function staff(roles: string[], extra: Partial<NewUser> = {}) {
   const username = `u${++n}.${roles[0]}`.slice(0, 40);
@@ -45,7 +53,7 @@ async function staff(roles: string[], extra: Partial<NewUser> = {}) {
 const root = async () => (await signIn(SU.username, SU.password, '10.9.9.9')).cookie!;
 
 const customer = async (cookie: string, name = `Cust ${++n}`) =>
-  (await call('POST', '/customers', { cookie, body: { context: 'order', segment: 'CONSUMER', displayName: name, idDocument: `ID${n}${Math.random().toString(36).slice(2, 7)}` } })).json.customer.id as string;
+  (await call('POST', '/customers', { cookie, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: name, idDocument: `ID${n}${Math.random().toString(36).slice(2, 7)}` } }).then(async (r) => { if (!r.json?.customer) throw new Error(`customer not created: ${r.status} ${r.text}`); await markVerified(db, r.json.customer.id); return r; })).json.customer.id as string;
 
 describe('authentication', () => {
   it('serves health without a session but nothing else', async () => {
@@ -111,7 +119,7 @@ describe('role-based access', () => {
   it('a call-center agent can work the Customer 360 but nothing outside their role', async () => {
     const agent = await staff(['call-center']);
     const c = await customer(await root());   // call-center agents serve existing customers; onboarding is a sales role
-    expect((await call('POST', '/customers', { cookie: agent.cookie, body: { segment: 'CONSUMER', displayName: 'x', idDocument: 'S0000000A' } })).status).toBe(403);
+    expect((await call('POST', '/customers', { cookie: agent.cookie, body: { ...IDENTITY(), segment: 'CONSUMER', displayName: 'x', idDocument: 'S0000000A' } })).status).toBe(403);
     const r360 = await call('GET', `/customers/${c}`, { cookie: agent.cookie });
     expect(r360.status).toBe(200);
     expect(r360.json.customer.displayName).toMatch(/Cust/);
@@ -868,7 +876,7 @@ describe('segments, customer creation and groups', () => {
   it('creates customers outside an order only when the operator allows it', async () => {
     const admin = await root();
     const agent = await staff(['telesales']);
-    const make = (extra: object = {}) => call('POST', '/customers', { cookie: agent.cookie, body: { segment: 'CONSUMER', displayName: 'Walk Up', idDocument: `W${++n}${Math.random().toString(36).slice(2, 7)}`, ...extra } });
+    const make = (extra: object = {}) => call('POST', '/customers', { cookie: agent.cookie, body: { ...IDENTITY(), segment: 'CONSUMER', displayName: 'Walk Up', idDocument: `W${++n}${Math.random().toString(36).slice(2, 7)}`, ...extra } });
     expect((await call('GET', '/meta', { cookie: agent.cookie })).json.customers).toMatchObject({ allowCreateWithoutOrder: false });
     expect((await make()).status).toBe(422);                              // the Customers screen cannot create one
     expect((await make({ context: 'order' })).status).toBe(200);           // the order wizard can
@@ -925,7 +933,7 @@ describe('the customer form follows the settings', () => {
   it('asks for what Settings asks for, drops what is hidden, and offers only the bill cycles that are switched on', async () => {
     const admin = await root();
     const staffUser = await staff(['product-configurator']);
-    const newC = (body: Record<string, unknown>) => call('POST', '/customers', { cookie: admin, body: { context: 'order', segment: 'CONSUMER', displayName: 'Form Test', idDocument: `FT${Math.random().toString(36).slice(2, 9)}`, ...body } });
+    const newC = (body: Record<string, unknown>) => call('POST', '/customers', { cookie: admin, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Form Test', idDocument: `FT${Math.random().toString(36).slice(2, 9)}`, ...body } });
     expect((await call('POST', '/settings/customers', { cookie: staffUser.cookie, body: { allowCreateWithoutOrder: false } })).status).toBe(403);
     expect((await call('POST', '/settings/customers', { cookie: admin, body: { allowCreateWithoutOrder: false, fields: { postcode: 'required', gender: 'hidden', dateOfBirth: 'required' } } })).json.fields).toMatchObject({ postcode: 'required', gender: 'hidden' });
     const missing = await newC({ address: { line1: '1 Road' } });
@@ -1148,10 +1156,14 @@ describe('store-front API, KYC review and assisted sales', () => {
     expect(patched.json.quote.upfrontMinor).toBe(1000);
     expect(JSON.stringify(patched.json)).not.toContain('S7654321Z');
     expect((await call('POST', `/store/applications/${id}/documents`, { origin: null, headers: H, body: { kind: 'ID_FRONT', dataBase64: Buffer.from('<svg/>').toString('base64') } })).status).toBe(400);
-    for (const kind of ['ID_FRONT', 'ID_BACK', 'SELFIE']) expect((await call('POST', `/store/applications/${id}/documents`, { origin: null, headers: H, body: { kind, dataBase64: png() } })).status, kind).toBe(200);
+    for (const kind of ['ID_FRONT', 'ID_BACK', 'SELFIE']) expect((await call('POST', `/store/applications/${id}/documents`, { origin: null, headers: H, body: SHOT(kind) })).status, kind).toBe(200);
     const submitted = await call('POST', `/store/applications/${id}/kyc`, { origin: null, headers: H });
     expect(submitted.json.status).toBe('KYC_REVIEW');
+    const core = await import('@meridian/core');
+    const gateBefore = await core.getStoreSettings(db);
+    await core.setStoreSettings(db, 'root', { ...gateBefore, kycGate: 'BEFORE_ORDER' });   // with the gate before the order, the shopper waits for the decision
     expect((await call('POST', `/store/applications/${id}/checkout`, { origin: null, headers: H })).status).toBe(422); // not before approval
+    await core.setStoreSettings(db, 'root', gateBefore);
 
     // review queue: only compliance (and the super user); sales roles cannot
     const retail = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
@@ -1162,7 +1174,7 @@ describe('store-front API, KYC review and assisted sales', () => {
     const detail = await call('GET', `/kyc/cases/${kase.id}`, { cookie: officer.cookie });
     expect(detail.json.idNumber).toBe('S7654321Z');
     const img = await call('GET', `/kyc/documents/${detail.json.documents[0].id}`, { cookie: officer.cookie });
-    expect(img.headers.get('content-type')).toBe('image/png');
+    expect(img.headers.get('content-type')).toBe('image/jpeg');
     expect(img.headers.get('content-security-policy')).toContain('sandbox');
     expect((await call('GET', `/kyc/documents/${detail.json.documents[0].id}`, { cookie: retail.cookie })).status).toBe(403);
     expect((await call('POST', `/kyc/cases/${kase.id}/decision`, { cookie: officer.cookie, body: { decision: 'APPROVE' } })).status).toBe(200);
@@ -1189,7 +1201,7 @@ describe('store-front API, KYC review and assisted sales', () => {
       const created = (await call('POST', '/store/applications', { origin: null, headers: bearer(key), body: { lines: [{ offerId: 'plan-sim-5g' }] } })).json;
       const H = bearer(key, created.token);
       await call('PATCH', `/store/applications/${created.id}`, { origin: null, headers: H, body: { personal: person('S1112223Q'), consent: { acceptedTerms: true, privacyAccepted: true, marketingOptIn: false } } });
-      for (const kind of ['ID_FRONT', 'ID_BACK', 'SELFIE']) await call('POST', `/store/applications/${created.id}/documents`, { origin: null, headers: H, body: { kind, dataBase64: png() } });
+      for (const kind of ['ID_FRONT', 'ID_BACK', 'SELFIE']) await call('POST', `/store/applications/${created.id}/documents`, { origin: null, headers: H, body: SHOT(kind) });
       await call('POST', `/store/applications/${created.id}/kyc`, { origin: null, headers: H });
       const kase = (await call('GET', '/kyc/cases?status=PENDING', { cookie: su })).json.items.find((c: any) => c.applicationId === created.id);
       await call('POST', `/kyc/cases/${kase.id}/decision`, { cookie: su, body: { decision: 'APPROVE' } });
@@ -1653,7 +1665,8 @@ describe('offer type switches and service types', () => {
   it('cases: classification, SLA, lifecycle rules and interactions over the API', async () => {
     const su = await root();
     const agent = await staff(['call-center']);
-    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Case Carla', idDocument: 'S1234567D' } })).json.customer;
+    const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Case Carla', idDocument: 'S1234567D' } })).json.customer;
+    await markVerified(db, cust.id);
     const meta = (await call('GET', '/cases/meta', { cookie: agent.cookie })).json;
     expect(meta.taxonomy.length).toBeGreaterThan(3);
     expect(meta.transitions.NEW).toEqual(['IN_PROGRESS']);
@@ -1687,7 +1700,7 @@ describe('offer type switches and service types', () => {
     expect((await call('GET', '/cases/sla-board', { cookie: agent.cookie })).status).toBe(403);
     expect((await call('POST', '/cases/sla-sweep', { cookie: lead.cookie })).json).toMatchObject({ errors: [] });
     // two fault cases at one node, grouped into an incident, resolved together
-    const mk = async (name: string) => (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: name, idDocument: `S${Math.random().toString().slice(2, 9)}A`, address: { line1: '1 Road', postcode: 'RT9999' } } })).json.customer;
+    const mk = async (name: string) => (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: name, idDocument: `S${Math.random().toString().slice(2, 9)}A`, address: { line1: '1 Road', postcode: 'RT9999' } } })).json.customer;
     const [c1, c2] = [await mk('Node One'), await mk('Node Two')];
     const k1 = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c1.id, issueTypeId: 'broadband.down.los', subject: 'down' } })).json;
     const k2 = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: c2.id, issueTypeId: 'broadband.down.los', subject: 'down too' } })).json;
@@ -1724,7 +1737,7 @@ describe('offer type switches and service types', () => {
     const lead = await staff(['team-lead']);
     const SECRET = 'wfm-test-secret-0123456789';
     // not connected yet: nothing to search, and the callback does not exist
-    const k0 = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Visit Vera', idDocument: `S${Math.random().toString().slice(2, 9)}B`, address: { line1: '2 Road', postcode: 'FV1234' }, phone: '+6591230000' } })).json.customer;
+    const k0 = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Visit Vera', idDocument: `S${Math.random().toString().slice(2, 9)}B`, address: { line1: '2 Road', postcode: 'FV1234' }, phone: '+6591230000' } })).json.customer;
     const kase = (await call('POST', '/cases', { cookie: agent.cookie, body: { customerId: k0.id, issueTypeId: 'broadband.down.los', subject: 'Red light' } })).json;
     await call('POST', `/cases/${kase.id}/status`, { cookie: agent.cookie, body: { status: 'IN_PROGRESS' } });
     expect((await call('GET', `/cases/${kase.id}/slots`, { cookie: agent.cookie })).status).toBe(409);
@@ -1804,7 +1817,8 @@ describe('offer type switches and service types', () => {
     expect((await call('GET', '/collections/placements', { cookie: bo.cookie })).status).toBe(200);
     expect((await call('POST', '/collections/export', { cookie: bo.cookie, body: {} })).status).toBe(200);
     // only an administrator flags a customer as a high credit risk
-    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Risky Rob', idDocument: 'S7654321B' } })).json.customer;
+    const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Risky Rob', idDocument: 'S7654321B' } })).json.customer;
+    await markVerified(db, cust.id);
     expect((await call('PATCH', `/customers/${cust.id}`, { cookie: bo.cookie, body: { creditRisk: 'HIGH' } })).status).toBe(403);
     expect((await call('PATCH', `/customers/${cust.id}`, { cookie: su, body: { creditRisk: 'HIGH' } })).json.creditRisk).toBe('HIGH');
   });
@@ -1859,7 +1873,8 @@ describe('offer type switches and service types', () => {
   });
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
-    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;
+    const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;
+    await markVerified(db, cust.id);
     const order = await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: cust.id, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true, reference: 'R-NORTH' } } });
     expect(order.status).toBe(200);
     const svcId = (await call('GET', `/services?customerId=${cust.id}`, { cookie: su })).json.items[0].id;
@@ -1894,7 +1909,8 @@ describe('offer type switches and service types', () => {
   });
   it('northbound ordering, billing and payments: an order is captured, tracked and cancelled, an invoice link downloads without a login, and events reach a webhook', async () => {
     const su = await root();
-    const cust = (await call('POST', '/customers', { cookie: su, body: { context: 'order', segment: 'CONSUMER', displayName: 'Order Omar', idDocument: 'S1357924B' } })).json.customer;
+    const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Order Omar', idDocument: 'S1357924B' } })).json.customer;
+    await markVerified(db, cust.id);
     const c = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Super-app', channel: 'PARTNER_PORTAL', scopes: ['order:create', 'order:read', 'order:cancel', 'billing:read', 'payment:create'] } });
     const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: c.json.client.clientId, client_secret: c.json.clientSecret } });
     const h = { authorization: `Bearer ${t.json.access_token}` };
@@ -2079,7 +2095,7 @@ describe('offer type switches and service types', () => {
     expect(bl.status).toBe(200);
     expect(JSON.stringify((await call('GET', '/fraud/blacklist', { cookie: analyst.cookie })).json)).not.toContain('998877');
     const su = await root();
-    const blocked = await call('POST', '/customers', { cookie: su, body: { segment: 'CONSUMER', displayName: 'Blocked Person', idDocument: 'blk-998877' } });
+    const blocked = await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), segment: 'CONSUMER', displayName: 'Blocked Person', idDocument: 'blk-998877' } });
     expect(blocked.status).toBe(422);
     expect((await call('DELETE', `/fraud/blacklist/${bl.json.id}`, { cookie: analyst.cookie })).status).toBe(200);
     // the store desk is for the store manager, and works on their own store
@@ -2244,5 +2260,30 @@ describe('documents: agreements at order and plan change, the vault and who may 
     const r = await call('POST', `/services/${serviceId}/change-plan`, { cookie: su, body: { targetOfferId: target.id, effective: 'IMMEDIATE', agreement: { image: image(), versionIds: ag.agreements.map((a: any) => a.versionId) } } });
     expect(r.status).toBe(200);
     expect(((await call('GET', `/documents?customerId=${cid}`, { cookie: su })).json.items as any[]).some((d) => d.category === 'PLAN_CHANGE')).toBe(true);
+  });
+});
+
+describe('identity check at customer creation', () => {
+  it('refuses a customer without photographs, queues a review task with them, and the decision releases the held order', async () => {
+    const su = await root();
+    const body = (over: Record<string, unknown> = {}) => ({ context: 'order', segment: 'CONSUMER', displayName: 'Ida Identity', idDocument: `IDC${Math.random().toString(36).slice(2, 9)}`, ...over });
+    expect((await call('POST', '/customers', { cookie: su, body: body() })).status).toBe(400);                                       // no identity
+    expect((await call('POST', '/customers', { cookie: su, body: body({ identity: { idType: 'NATIONAL_ID', dateOfBirth: '1990-01-01', documents: [{ kind: 'ID_FRONT', dataBase64: jpeg(), capture: { method: 'LIVE_CAMERA', at: new Date().toISOString() } }] } }) })).status).toBe(400); // photos missing
+    const made = await call('POST', '/customers', { cookie: su, body: body(IDENTITY()) });
+    expect(made.status).toBe(200);
+    expect(made.json.customer.kycStatus).toBe('PENDING_REVIEW');
+    const cid = made.json.customer.id;
+    const view = (await call('GET', `/customers/${cid}/kyc`, { cookie: su })).json;
+    expect(view).toMatchObject({ status: 'PENDING_REVIEW', case: { status: 'PENDING', source: 'CRM_ORDER' } });
+    const order = await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: cid, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true, reference: 'R-KYC' } } });
+    expect(order.status).toBe(200);
+    expect((await call('GET', `/orders/${order.json.id}`, { cookie: su })).json).toMatchObject({ kycHold: true, serviceCount: 0 });
+    const officer = await staff(['compliance']);
+    expect((await call('GET', '/kyc/summary', { cookie: officer.cookie })).json.waiting).toBeGreaterThan(0);
+    expect((await call('POST', `/kyc/cases/${made.json.kyc.caseId}/decision`, { cookie: su, body: { decision: 'APPROVE' } })).status).toBe(422);   // four eyes: the one who took the photos cannot approve them
+    expect((await call('POST', `/kyc/cases/${made.json.kyc.caseId}/decision`, { cookie: officer.cookie, body: { decision: 'APPROVE' } })).status).toBe(200);
+    expect((await call('GET', `/orders/${order.json.id}`, { cookie: su })).json).toMatchObject({ kycHold: false, state: 'COMPLETED', serviceCount: 1 });
+    expect((await call('GET', `/customers/${cid}/kyc`, { cookie: su })).json.status).toBe('VERIFIED');
+    expect((await call('GET', `/kyc/documents/${(await call('GET', `/kyc/cases/${made.json.kyc.caseId}`, { cookie: officer.cookie })).json.documents[0].id}`, { cookie: officer.cookie })).headers.get('content-type')).toBe('image/jpeg');
   });
 });

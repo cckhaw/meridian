@@ -12,6 +12,15 @@ export interface StoreSettings {
   minAge: number;
   /** When on, staff in the CRM cannot sell a service to a customer who has not been KYC-verified. (The store-front always requires an approved identity application.) */
   requireKycForServices: boolean;
+  /**
+   * When identity must be settled. BEFORE_ACTIVATION (the default): an order can be taken while the identity check is in review, and the service is activated
+   * only once it is approved (a rejection cancels and refunds the order). BEFORE_ORDER: nothing is sold until the identity is verified.
+   */
+  kycGate: 'BEFORE_ORDER' | 'BEFORE_ACTIVATION';
+  /** Hours a review task may wait before it is shown as overdue. */
+  kycSlaHours: number;
+  /** Identity photos must be taken live with the device camera in the app. Switch off only for a partner that sends scans through the API. */
+  kycRequireLiveCapture: boolean;
   termsUrl: string;
   privacyUrl: string;
   /** Shown to the customer and recorded with their consent; bump it when the terms change. */
@@ -25,16 +34,24 @@ export interface StoreSettings {
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
-  kycMode: 'manual', minAge: 18, requireKycForServices: false, termsUrl: '', privacyUrl: '', termsVersion: '1', applicationTtlHours: 72, gateways: { enabled: [], default: null, crm: [] },
+  kycMode: 'manual', minAge: 18, requireKycForServices: false, kycGate: 'BEFORE_ACTIVATION', kycSlaHours: 4, kycRequireLiveCapture: true, termsUrl: '', privacyUrl: '', termsVersion: '1', applicationTtlHours: 72, gateways: { enabled: [], default: null, crm: [] },
 };
 
 export async function getStoreSettings(q: Queryable): Promise<StoreSettings> {
   const v = (await q.query(`SELECT value FROM settings WHERE key='store'`)).rows[0]?.value ?? {};
-  return { ...DEFAULT_STORE_SETTINGS, ...v, gateways: { ...DEFAULT_STORE_SETTINGS.gateways, ...(v.gateways ?? {}) } };
+  const merged = { ...DEFAULT_STORE_SETTINGS, ...v, gateways: { ...DEFAULT_STORE_SETTINGS.gateways, ...(v.gateways ?? {}) } } as StoreSettings;
+  // Settings saved before the gate existed carried only the on/off switch: on meant "nothing is sold until verified".
+  merged.kycGate = v.kycGate ?? (v.requireKycForServices ? 'BEFORE_ORDER' : 'BEFORE_ACTIVATION');
+  merged.requireKycForServices = merged.kycGate === 'BEFORE_ORDER';
+  return merged;
 }
 
 export async function setStoreSettings(q: Queryable, actor: string, input: StoreSettings): Promise<StoreSettings> {
   if (!['manual', 'auto'].includes(input.kycMode)) throw invalid('kycMode must be manual or auto');
+  if (input.kycGate === undefined) input = { ...input, kycGate: input.requireKycForServices ? 'BEFORE_ORDER' : 'BEFORE_ACTIVATION' };
+  if (!['BEFORE_ORDER', 'BEFORE_ACTIVATION'].includes(input.kycGate)) throw invalid('kycGate must be BEFORE_ORDER or BEFORE_ACTIVATION');
+  input = { ...input, requireKycForServices: input.kycGate === 'BEFORE_ORDER', kycSlaHours: input.kycSlaHours ?? DEFAULT_STORE_SETTINGS.kycSlaHours, kycRequireLiveCapture: input.kycRequireLiveCapture ?? true };
+  if (!Number.isInteger(input.kycSlaHours) || input.kycSlaHours < 1 || input.kycSlaHours > 24 * 14) throw invalid('the review target is 1 hour to 14 days');
   if (!Number.isInteger(input.minAge) || input.minAge < 0 || input.minAge > 100) throw invalid('minimum age must be between 0 and 100');
   if (!Number.isInteger(input.applicationTtlHours) || input.applicationTtlHours < 1 || input.applicationTtlHours > 24 * 30) throw invalid('applications can be kept open for 1 hour to 30 days');
   for (const u of [input.termsUrl, input.privacyUrl]) if (u && !/^https?:\/\/\S+$/.test(u)) throw invalid('terms and privacy links must be http(s) URLs');

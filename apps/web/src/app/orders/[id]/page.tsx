@@ -33,6 +33,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
       <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><Badge tone={tone(o.state)}>{label(o.state)}</Badge><Badge>{label(o.channel)}</Badge><span>{dt(o.createdAt)}</span></span>}>Order {o.number ?? o.id.slice(0, 8)}</LargeTitle>
       <p className="mb-4 text-body">Customer {can('customer:search') ? <Link className="text-accent" href={`/customers/${o.customerId}`}>{o.customerName}</Link> : o.customerName}{o.storeId && <> · store {o.storeId}</>}{o.salespersonId && <> · agent {o.salespersonId}</>}{o.dealerId && <> · dealer {o.dealerId}</>}</p>
       {o.failureReason && <Alert>{label(o.state)}: {o.failureReason}</Alert>}
+      {o.kycHold && <div className="mb-3"><Alert tone="info">Service activation is waiting for the customer’s identity check. It is released when a compliance officer approves it{can('customer:read') ? <> — <Link className="underline" href={`/customers/${o.customerId}`}>see the identity check</Link></> : ''}. If it is not approved, this order is cancelled and refunded.</Alert></div>}
       {aerr && <div className="mt-3"><Alert>{aerr}</Alert></div>}
 
       <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">

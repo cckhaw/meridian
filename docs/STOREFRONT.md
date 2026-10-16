@@ -68,6 +68,8 @@ Application statuses: `DRAFT` → `KYC_REVIEW` → `KYC_APPROVED` | `KYC_REJECTE
 
 ## 4. KYC
 
+> The identity workflow (camera-only photographs, the vault, the review queue, holding activation for the order) is described in [KYC.md](KYC.md); the points below predate it where they differ. In particular the shopper no longer waits for a clean review before paying, and *Require verified identity before selling any service* is now *When identity must be settled*.
+
 - **Rules** (all configurable in Settings): minimum age; ID expiry; required documents (`ID_FRONT` + `SELFIE`, plus `ID_BACK` unless a passport); duplicate identity.
 - **Duplicate identity.** An online applicant whose ID already belongs to a customer is flagged and **cannot be approved online**: attaching them to that customer’s account would bill the real owner. The officer rejects (the customer can visit a store) or sends it back. The applicant is told to visit a store; the existing customer’s id is never revealed.
 - **What is stored.** The ID number and every image are encrypted (AES-256-GCM, key derived from `MERIDIAN_DATA_KEY`, falling back to `MERIDIAN_ID_PEPPER`); a keyed hash is kept for duplicate detection and a masked form for display. Opening a case or a document is written to the audit log. The customer record keeps only `kyc_status` and `kyc_verified_at`.

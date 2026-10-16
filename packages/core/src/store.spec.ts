@@ -11,7 +11,7 @@ import { decideKycCase, type Personal, getKycCase, getKycDocument, listKycCases,
 import { advanceOrder, getOrder, placeOrder } from './orders.js';
 import { applicationAgreements, applicationView, applyGatewayEvent, cancelApplication, checkout, createApplication, createPaymentLink, expireApplications, quoteBasket, startPayment, storeCatalog, storeConfig, submitKyc, testGatewayOutcome, updateApplication, uploadDocument, type AppAccess } from './store.js';
 import { activeGateways, getStoreSettings, setStoreSettings, DEFAULT_STORE_SETTINGS } from './store-settings.js';
-import { freshDb, signatureDataUrl } from './test-helpers.js';
+import { freshDb, idPhoto, liveCapture, signatureDataUrl } from './test-helpers.js';
 import { ensureStarterTemplates } from './doc-templates.js';
 import { setDocumentSettings } from './documents.js';
 
@@ -39,7 +39,7 @@ async function selfServe(lines: Array<{ offerId: string; quantity?: number }> = 
   return { id: application.id as string, acc, clientId: client.id as string };
 }
 async function uploadAll(id: string, acc: AppAccess) {
-  for (const k of ['ID_FRONT', 'ID_BACK', 'SELFIE'] as const) await uploadDocument(db, id, acc, k, png());
+  for (const k of ['ID_FRONT', 'ID_BACK', 'SELFIE'] as const) await uploadDocument(db, id, acc, k, idPhoto(), liveCapture());
 }
 
 describe('api clients', () => {
@@ -112,11 +112,14 @@ describe('self-serve sign-up, KYC and payment', () => {
     const { id, acc } = await selfServe();
     await updateApplication(db, id, acc, { personal: person(), consent: { ...consent } });
     await expect(checkout(db, id, acc)).rejects.toThrow(/Identity verification/); // cannot skip KYC
-    await expect(submitKyc(db, id, acc)).rejects.toThrow(/Upload/);              // documents are required
+    await expect(submitKyc(db, id, acc)).rejects.toThrow(/Photograph/);              // documents are required
     await uploadAll(id, acc);
     await submitKyc(db, id, acc);
     expect((await applicationView(db, id, acc) as any).status).toBe('KYC_REVIEW');
+    const gate0 = await getStoreSettings(db);
+    await setStoreSettings(db, 'root', { ...gate0, kycGate: 'BEFORE_ORDER' });                // with the gate before the order, the shopper waits for the decision
     await expect(checkout(db, id, acc)).rejects.toThrow(/Identity verification/);
+    await setStoreSettings(db, 'root', gate0);
 
     // compliance officer
     const queue = (await listKycCases(db, { status: "PENDING" })).items;
@@ -125,8 +128,9 @@ describe('self-serve sign-up, KYC and payment', () => {
     expect(detail.idNumber).toMatch(/^S\d{7}A$/);
     expect(detail.documents).toHaveLength(3);
     const doc = await getKycDocument(db, detail.documents[0].id, 'compliance.officer');
-    expect(doc.contentType).toBe('image/png');
-    expect((await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE entity IN ('kyc_case','kyc_document') AND actor='compliance.officer'`)).rows[0]!.n).toBeGreaterThanOrEqual(2);
+    expect(doc.contentType).toBe('image/jpeg');
+    expect((await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE entity='kyc_case' AND actor='compliance.officer'`)).rows[0]!.n).toBeGreaterThanOrEqual(1);
+    expect((await db.query(`SELECT count(*)::int AS n FROM document_audit_log WHERE action='VIEW' AND actor='compliance.officer'`)).rows[0]!.n).toBeGreaterThanOrEqual(1);   // opening a photo is in the vault's access log
     await decideKycCase(db, c.id, 'compliance.officer', { decision: 'APPROVE' }, await getStoreSettings(db));
     await expect(decideKycCase(db, c.id, 'someone.else', { decision: 'REJECT', reason: 'x' }, await getStoreSettings(db))).rejects.toThrow(/already/);
     expect((await applicationView(db, id, acc) as any).status).toBe('KYC_APPROVED');
@@ -239,20 +243,26 @@ describe('self-serve sign-up, KYC and payment', () => {
 
   it('rejects files that are not images or PDFs, and oversized files', async () => {
     const a = await selfServe();
-    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', png())).rejects.toThrow(/personal details/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto(), liveCapture())).rejects.toThrow(/personal details/);
     await updateApplication(db, a.id, a.acc, { personal: person() });
-    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', Buffer.from('<svg onload=alert(1)/>'))).rejects.toThrow(/JPEG, PNG, WebP or PDF/);
-    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', Buffer.concat([png(), Buffer.alloc(3_000_000)]))).rejects.toThrow(/larger/);
-    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', Buffer.from('%PDF-1.4 test'))).resolves.toMatchObject({ kind: 'ID_FRONT' });
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', Buffer.from('<svg onload=alert(1)/>'), liveCapture())).rejects.toThrow(/camera/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', Buffer.concat([idPhoto(), Buffer.alloc(3_000_000)]), liveCapture())).rejects.toThrow(/larger/);
+    // identity photos are taken live: a file, a PDF, a gallery photo, a stale or a tiny picture are all refused
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', Buffer.from('%PDF-1.4 test'), liveCapture())).rejects.toThrow(/camera/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto())).rejects.toThrow(/Take the photo with the camera/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto({ exif: true }), liveCapture())).rejects.toThrow(/gallery/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto(), liveCapture(new Date(Date.now() - 3_600_000)))).rejects.toThrow(/not taken just now/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto({ w: 200, h: 120 }), liveCapture())).rejects.toThrow(/too small/);
+    await expect(uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto(), liveCapture())).resolves.toMatchObject({ kind: 'ID_FRONT' });
   });
 
   it('detects tampering with a stored document', async () => {
     const a = await selfServe();
     await updateApplication(db, a.id, a.acc, { personal: person() });
-    const d = await uploadDocument(db, a.id, a.acc, 'ID_FRONT', png());
-    const row = (await db.query('SELECT data FROM kyc_documents WHERE id=$1', [d.id])).rows[0]!;
+    const d = await uploadDocument(db, a.id, a.acc, 'ID_FRONT', idPhoto(), liveCapture());
+    const row = (await db.query('SELECT data FROM documents WHERE id=$1', [d.id])).rows[0]!;   // the vault holds the photo, encrypted
     const bytes = Buffer.from(row.data); bytes[bytes.length - 1]! ^= 0xff;
-    await db.query('UPDATE kyc_documents SET data=$2 WHERE id=$1', [d.id, bytes]);
+    await db.query('UPDATE documents SET data=$2 WHERE id=$1', [d.id, bytes]);
     await expect(getKycDocument(db, d.id, 'x')).rejects.toThrow();
   });
 
@@ -403,7 +413,7 @@ describe('assisted sale (customer is in the store)', () => {
 describe('KYC required for services', () => {
   it('blocks selling a service to an unverified customer in the CRM once switched on', async () => {
     const s = await getStoreSettings(db);
-    await setStoreSettings(db, 'root', { ...s, requireKycForServices: true });
+    await setStoreSettings(db, 'root', { ...s, kycGate: 'BEFORE_ORDER' });
     try {
       const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'Unverified', idDocument: 'UNV-0001' });
       const order = { customerId: customer.id, channel: 'RETAIL_ASSISTED' as const, attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CASH' as const, confirmed: true, reference: 'R' }, lines: [{ offerId: 'plan-sim-5g' }] };

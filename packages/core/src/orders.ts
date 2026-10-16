@@ -258,10 +258,21 @@ async function patchGroup(q: Queryable, id: string, set: string, params: unknown
 /** The first moment anything about the order became irreversible; kept for older screens and reports. */
 const markPointOfNoReturn = (q: Queryable, o: Row) => q.query('UPDATE orders SET point_of_no_return_at = COALESCE(point_of_no_return_at, now()) WHERE id=$1', [o.id]);
 
+/**
+ * Is service activation waiting for the customer's identity? True while the customer is not verified and an identity check is open for them (submitted, or sent
+ * back for new photographs). A customer with no check at all (an older record, a migrated one) is not held: nobody has asked for their identity yet.
+ */
+export async function kycHold(q: Queryable, customerId: string): Promise<boolean> {
+  const r = (await q.query(
+    `SELECT c.kyc_status, EXISTS (SELECT 1 FROM kyc_cases k WHERE k.customer_id = c.id AND k.status IN ('PENDING','RETURNED')) AS open FROM customers c WHERE c.id=$1`, [customerId])).rows[0];
+  return !!r && r.kycStatus !== 'VERIFIED' && !!r.open;
+}
+
 /** Mirrors the open parts of the order into the older `pending_tasks` list. */
 async function syncTasks(q: Queryable, o: Row) {
   const gs = await groupRows(q, o.id);
-  const tasks = gs.filter((g) => OPEN_GROUP.includes(g.status) && g.kind !== 'ACTIVATION').map((g) => (g.kind === 'INSTALL' ? 'INSTALL' : 'SHIP'));
+  const tasks: string[] = gs.filter((g) => OPEN_GROUP.includes(g.status) && g.kind !== 'ACTIVATION').map((g) => (g.kind === 'INSTALL' ? 'INSTALL' : 'SHIP'));
+  if (gs.some((g) => g.kind === 'ACTIVATION' && g.status === 'PENDING') && (await kycHold(q, o.customerId))) tasks.push('KYC');
   await q.query('UPDATE orders SET pending_tasks=$2 WHERE id=$1', [o.id, tasks]);
   o.pendingTasks = tasks;
 }
@@ -372,7 +383,7 @@ async function progress(q: Queryable, o: Row, ctx: Ctx) {
     const lines = await orderLines(q, o.id);
     const goods = findGroup(gs, 'GOODS');
     const waitsForDevice = goods && OPEN_GROUP.includes(goods.status) && lines.some((l) => l.fulfilGroup === 'GOODS' && l.status === 'ACTIVE' && (createsService(l.offer) || l.attachPosition != null)); // a plan bought with a device on a contract switches on when the device arrives
-    if (!waitsForDevice) {
+    if (!waitsForDevice && !(await kycHold(q, o.customerId))) {   // identity first: the service is switched on when the check is approved
       await consumeReservations(q, o.id, 'ACTIVATION');
       await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'ACTIVATION' && l.status === 'ACTIVE' && createsService(l.offer)));
       await patchGroup(q, act.id, `status='DONE', done_at=now()`);
@@ -687,6 +698,7 @@ export async function advanceOrderTx(q: Queryable, orderId: string, action: Orde
       }
       case 'complete_installation': {
         const g = want('INSTALL', 'LOCKED');
+        if (await kycHold(q, o.customerId)) throw rejected('The customer’s identity check is still waiting for review. The installation can be completed, and the service switched on, once it is approved.');
         if (!o.fulfilment.dispatched) throw rejected('dispatch the technician first');
         await q.query(`UPDATE installation_appointments SET status='DONE' WHERE order_id=$1 AND status='DISPATCHED'`, [orderId]);
         await patchGroup(q, g.id, `status='DONE', done_at=now()`);
@@ -869,8 +881,12 @@ async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: st
  * part is cancelled and the rest stay; pass `groups` to cancel just some. Orders not yet paid are cancelled whole.
  */
 export async function cancelOrder(db: Db, orderId: string, reason: string, actor = 'system', opts: { groups?: GroupKind[]; initiatedBy?: Who['initiatedBy']; canOverride?: boolean } = {}): Promise<Row> {
+  return db.tx((q) => cancelOrderTx(q, orderId, reason, actor, opts));
+}
+/** The same, inside a transaction the caller already has (a rejected identity check cancels the orders waiting on it). */
+export async function cancelOrderTx(q: Queryable, orderId: string, reason: string, actor = 'system', opts: { groups?: GroupKind[]; initiatedBy?: Who['initiatedBy']; canOverride?: boolean } = {}): Promise<Row> {
   const who: Who = { initiatedBy: opts.initiatedBy ?? (actor === 'system' ? 'SYSTEM' : 'STAFF'), canOverride: !!opts.canOverride };
-  return db.tx(async (q) => {
+  {
     const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
     if (!o) throw notFound('order', orderId);
     if (TERMINAL.includes(o.state)) throw rejected(`order is already ${o.state}`);
@@ -895,7 +911,31 @@ export async function cancelOrder(db: Db, orderId: string, reason: string, actor
     await cancelGroups(q, o, kinds, reason || 'cancelled', actor, who);
     await progress(q, o, { actor }); // what is left may now be able to finish (e.g. a plan no longer waiting for a cancelled device)
     return getOrder(q, orderId);
-  });
+  }
+}
+
+/**
+ * The identity check of a customer has been decided. Approved: every order waiting to be activated goes on. Rejected: those orders are cancelled and
+ * refunded (the identity check is part of the sale, so a failed one undoes it). Returns how many orders were touched.
+ */
+export async function applyKycOutcomeToOrders(q: Queryable, customerId: string, outcome: 'APPROVED' | 'REJECTED', actor: string): Promise<{ released: number; cancelled: number }> {
+  const held = (await q.query(
+    `SELECT o.id FROM orders o JOIN order_groups g ON g.order_id = o.id AND g.kind='ACTIVATION' AND g.status='PENDING'
+      WHERE o.customer_id=$1 AND o.state NOT IN ('COMPLETED','CANCELLED','FAILED') ORDER BY o.created_at`, [customerId])).rows.map((r) => r.id as string);
+  let released = 0, cancelled = 0;
+  for (const id of held) {
+    const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [id])).rows[0];
+    if (!o || TERMINAL.includes(o.state)) continue;
+    if (outcome === 'APPROVED') {
+      await note(q, o, actor, 'Identity verified: service activation released');
+      await progress(q, o, { actor });
+      released++;
+    } else {
+      await cancelOrderTx(q, id, 'Identity verification was not approved', actor, { initiatedBy: 'SYSTEM', canOverride: true });
+      cancelled++;
+    }
+  }
+  return { released, cancelled };
 }
 
 /** Return of delivered goods as the rules allow: refund (less what the rule keeps and any damage deduction), stock back, device contract ended without a termination charge. */
@@ -1004,6 +1044,7 @@ export async function getOrder(q: Queryable, ref: string, who: Who = STAFF): Pro
     groups: groups.map((g) => { const m = meta.get(g.kind); const closed = g.status === 'CANCELLED' || g.status === 'RETURNED'; return { ...g, lockedAt: m?.lockedAt ?? null, doneAt: m?.doneAt ?? null, dueAt: m?.dueAt ?? null, refundedMinor: m?.refundedMinor ?? 0, feeMinor: closed ? m?.feeMinor ?? 0 : g.feeMinor, details: m?.details ?? {} }; }),
     cancelAll: open ? await cancelAllPreview(q, o, new Date(), who) : null,
     nextActions: nextActions(o, [...meta.values()]), cancellable,
+    kycHold: open && meta.get('ACTIVATION')?.status === 'PENDING' && (await kycHold(q, o.customerId)),
   };
 }
 

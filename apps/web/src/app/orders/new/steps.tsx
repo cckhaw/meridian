@@ -8,6 +8,7 @@ import { useSegments } from '@/lib/segments';
 import { Row, Section } from './wizard-ui';
 import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
+import { KycCard } from '@/components/kyc-card';
 import { SellingPanel } from './selling-panel';
 import { FinancingPanel } from './financing-panel';
 import { AgreementSigner, FiberCoverageCheck, type AgreementView, type FiberApi, type SignedPayload } from '@meridian/ui';
@@ -318,12 +319,13 @@ export function CustomerStep({ w }: { w: Wizard }) {
           <div className="flex items-start justify-between gap-3">
             <div><p className="text-title3 font-semibold">{w.customer.displayName}</p>
               <p className="mt-1 flex flex-wrap items-center gap-2 text-subhead text-label2"><Badge>{segs.name(w.customer.segment ?? '')}</Badge>
-                <Badge tone={(full.data?.customer.kycStatus ?? w.customer.kycStatus) === 'VERIFIED' ? 'success' : 'warning'}>{(full.data?.customer.kycStatus ?? w.customer.kycStatus) === 'VERIFIED' ? 'KYC verified' : 'KYC not verified'}</Badge>
+                <Badge tone={(full.data?.customer.kycStatus ?? w.customer.kycStatus) === 'VERIFIED' ? 'success' : 'warning'}>{({ VERIFIED: 'KYC verified', PENDING_REVIEW: 'KYC in review', REJECTED: 'KYC not approved' } as Record<string, string>)[full.data?.customer.kycStatus ?? w.customer.kycStatus ?? ''] ?? 'KYC not verified'}</Badge>
                 {full.data && <span>{full.data.serviceSummary.reduce((n: number, s: any) => n + (s.status !== 'TERMINATED' ? s.n : 0), 0)} services · {full.data.accountCount} accounts</span>}</p></div>
             <button className="text-subhead text-accent" onClick={() => { w.setCustomer(null); w.setAccountId(''); }}>Change</button>
           </div>
           {accts.length > 1 && <div className="mt-4"><Field label="Bill to account"><Select value={w.accountId} onChange={(e) => w.setAccountId(e.target.value)}><option value="">First active account</option>{accts.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field></div>}
         </Card>
+        <div className="mt-4"><KycCard embedded customerId={w.customer.id} context="order" onStatus={(st) => { if (st !== w.customer!.kycStatus) w.setCustomer({ ...w.customer!, kycStatus: st }); }} /></div>
         {w.quote?.problems?.length > 0 && <div className="mt-4 space-y-2">{w.quote.problems.map((p: string) => <Alert key={p}>{p}</Alert>)}</div>}
       </>
     );
@@ -345,7 +347,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
               <li key={c.id}><button type="button" onClick={() => w.setCustomer({ id: c.id, displayName: c.displayName, segment: c.segment, kycStatus: c.kycStatus })} className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-surface2 focus-visible:bg-surface2 focus-visible:outline-none">
                 <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent/12 font-semibold text-accent">{c.displayName.trim()[0]?.toUpperCase()}</span>
                 <span className="min-w-0 flex-1"><span className="block truncate font-medium">{c.displayName}</span><span className="block truncate text-footnote text-label2">{segs.name(c.segment)} · ID {c.idDocumentRef}{c.phone ? ` · ${c.phone}` : ''}</span></span>
-                <Badge tone={c.kycStatus === 'VERIFIED' ? 'success' : 'warning'}>{c.kycStatus === 'VERIFIED' ? 'KYC ✓' : 'KYC pending'}</Badge>
+                <Badge tone={c.kycStatus === 'VERIFIED' ? 'success' : c.kycStatus === 'REJECTED' ? 'danger' : 'warning'}>{c.kycStatus === 'VERIFIED' ? 'KYC ✓' : c.kycStatus === 'PENDING_REVIEW' ? 'KYC in review' : c.kycStatus === 'REJECTED' ? 'KYC rejected' : 'Not verified'}</Badge>
               </button></li>
             ))}
           </ul>

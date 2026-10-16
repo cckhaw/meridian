@@ -141,3 +141,7 @@ A device sold outright can also be bought on a contract with a plan (see Catalog
 ### In the online shop
 
 The shop lists each device's contracts (for example "24 months: $599 today, save $400") on its card. With a SIM plan in the basket, choosing a device offers **On a contract**: the plan, and the length. The basket total, the sign-up review and the order all use the contract price from the server, and the device is paid in full with the rest of the order (the shop does not offer instalments). The cart lines carry `attachTo` (the plan's offer id) and `dealTermMonths` through `/store/quote`, `/store/applications` and checkout.
+
+## Identity and activation
+
+With *When identity must be settled* at its default (before the service is switched on), an order for a customer whose identity check is in review is taken and paid, but its **service activation group stays pending** (the order shows a banner, and its tasks list *KYC*). Approval releases it; rejection cancels the order and refunds it. A fibre installation can be dispatched but cannot be completed until the check is approved. A customer whose check was rejected cannot be sold a service. See [KYC.md](KYC.md).
