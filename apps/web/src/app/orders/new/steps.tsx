@@ -115,6 +115,7 @@ function VariantPicker({ w, item }: { w: Wizard; item: Item }) {
   const colours = [...new Set(vs.map((v) => v.colour))];
   const cur = vs.find((v) => v.id === item.variantId) ?? vs[0];
   const storages = [...new Set(vs.map((v) => v.storage).filter(Boolean))] as string[];
+  const base = (item.offer.prices ?? []).filter((p: any) => p.type === 'ONE_TIME').reduce((t: number, p: any) => t + p.amount.amountMinor, 0);   // storage options show the full price, not the step from the base model
   const set = (variantId: string) => w.setItems((c) => c.map((i) => (i.key === item.key ? { ...i, variantId } : i)));
   const pickColour = (colour: string) => { const same = vs.filter((v) => v.colour === colour); set((same.find((v) => v.storage === cur.storage) ?? same[0]).id); };
   const colourOut = (c: string) => vs.filter((v) => v.colour === c).every((v) => stock(v.id) === 0);
@@ -145,7 +146,7 @@ function VariantPicker({ w, item }: { w: Wizard; item: Item }) {
                 <button key={st} type="button" onClick={() => v && set(v.id)} disabled={!v || s === 0} aria-pressed={on}
                   className={`min-h-[52px] rounded-control border px-5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40 ${on ? 'border-accent bg-accent/8' : 'border-separator'}`}>
                   <span className="block font-medium">{st}</span>
-                  <span className="block text-footnote text-label2">{!v ? `Not offered in ${cur.colour}` : `${v.priceDeltaMinor ? `+${money(v.priceDeltaMinor)}` : 'Included'}${s === 0 ? ' · out of stock' : s !== undefined && s <= 5 ? ` · only ${s} left` : ''}`}</span>
+                  <span className="block text-footnote text-label2">{!v ? `Not offered in ${cur.colour}` : `${money(base + (v.priceDeltaMinor ?? 0))}${s === 0 ? ' · out of stock' : s !== undefined && s <= 5 ? ` · only ${s} left` : ''}`}</span>
                 </button>
               );
             })}

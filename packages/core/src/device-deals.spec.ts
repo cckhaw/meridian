@@ -21,6 +21,13 @@ const order = async (l = lines(), channel: 'SELF_SERVE' | 'RETAIL_ASSISTED' = 'S
 };
 
 describe('a device bought on a contract with a plan', () => {
+  it('shows the retail price of the chosen colour and storage, not the base model', async () => {
+    const base = { customerId: (await newCustomer(db)).customer.id, channel: 'SELF_SERVE', payment: { method: 'CREDIT_CARD' } } as never;
+    const q = (variantId: string) => priceBasket(db, { ...(base as object), lines: lines({ options: { variantId } }) } as never);
+    const small = (await q('silver-128')).lines[1]!.deal!.retailMinor, big = (await q('black-256')).lines[1]!.deal!.retailMinor;
+    expect(big - small).toBe(10000);                                     // black-256 costs 100.00 more, and the contract's retail price says so
+  });
+
   it('only works for a device that offers contracts, on the lengths it offers', async () => {
     await expect(order([{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright', attachTo: 0, dealTermMonths: 36 } as never])).rejects.toThrow(/not offered on a 36-month contract/);
     await expect(order([{ offerId: 'plan-sim-5g' }, { offerId: 'good-toaster', attachTo: 0, dealTermMonths: 24 } as never])).rejects.toThrow(/not offered on a 24-month contract/);

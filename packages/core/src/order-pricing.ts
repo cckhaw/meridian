@@ -213,7 +213,7 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
     const fee = monthlyFee(offer);
     return {
       input: l, offer, qty, group: groupOf(offer), variant, position, attachPosition: dealDef ? l.attachTo : undefined,
-      deal: dealDef ? { ...dealDef, retailMinor: offer.prices.filter((p) => p.type === 'ONE_TIME').reduce((t, p) => t + p.amount.amountMinor, 0) } : undefined, listGross: split.gross, discountMinor: 0, discountRules: [], net: split.net, tax: split.tax, gross: split.gross,
+      deal: dealDef ? { ...dealDef, retailMinor: offer.prices.filter((p) => p.type === 'ONE_TIME').reduce((t, p) => t + p.amount.amountMinor, 0) + (variant?.priceDeltaMinor ?? 0) } : undefined, listGross: split.gross, discountMinor: 0, discountRules: [], net: split.net, tax: split.tax, gross: split.gross,
       payMode: wanted.mode, months: wanted.mode === 'INSTALLMENT' ? wanted.months ?? null : null, downMinor: wanted.mode === 'INSTALLMENT' ? wanted.downPaymentMinor ?? 0 : 0,
       paidNow: 0, financed: 0, instalmentMinor: 0,
       monthlyFeeMinor: fee ? taxSplit(fee.amount.amountMinor * qty, mk.taxBps, fee.taxInclusive).gross : 0,
