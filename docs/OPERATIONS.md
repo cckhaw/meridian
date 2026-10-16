@@ -14,8 +14,8 @@ Meridian refuses to serve traffic in production unless it is configured safely: 
 | `MERIDIAN_STRIPE_SECRET_KEY`, `_PUBLISHABLE_KEY`, `_WEBHOOK_SECRET` | no | Enable Stripe for the store-front ([STOREFRONT.md](STOREFRONT.md#5-payments)). |
 | `MERIDIAN_DATA_KEY` | no | Secret for encrypting KYC data (ID numbers, document images). Falls back to `MERIDIAN_ID_PEPPER`. **Back it up with the database; losing it makes stored identity data unreadable. Rotating it needs a re-encryption step.** |
 | `MERIDIAN_SEED` | no | `none` (default in production), `starter`, `demo` (development only; blocked in production). |
-| `MERIDIAN_SESSION_IDLE_MINUTES` / `_MAX_HOURS` | no | 30 minutes idle / 12 hours absolute. |
-| `MERIDIAN_LOCK_AFTER_FAILURES` / `_LOCK_MINUTES` | no | Lock an account after 5 failures for 15 minutes. |
+| `MERIDIAN_SESSION_IDLE_MINUTES` / `_MAX_HOURS` | no | 30 minutes idle / 12 hours absolute. These are the defaults; **Settings → Security policy** overrides them once saved ([SECURITY.md](SECURITY.md)). |
+| `MERIDIAN_LOCK_AFTER_FAILURES` / `_LOCK_MINUTES` | no | Lock an account after 5 failures for 15 minutes (defaults; Security policy overrides them). |
 | `MERIDIAN_LOGIN_IP_LIMIT` / `_USER_LIMIT` | no | Failed sign-ins per 15 minutes per address (30) and per username (10), including usernames that do not exist. |
 | `PG_POOL_MAX` | no | Connections per instance. Use 1-3 on serverless platforms. |
 | `MERIDIAN_LOGICAL_SHARDS` | no | Logical shards (default 16, matching the partitions the migrations create). Read [SCALE.md](SCALE.md) before raising it. |

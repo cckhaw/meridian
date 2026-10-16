@@ -1,0 +1,102 @@
+'use client';
+import { Alert, Button, Card, Field, Input, SectionTitle, Select, Spinner } from '@meridian/ui';
+import { useState } from 'react';
+import { post, useAction, useApi } from '@/lib/api';
+
+interface Policy {
+  password: { minLength: number; requireUpper: boolean; requireLower: boolean; requireDigit: boolean; requireSymbol: boolean; maxAgeDays: number; historyCount: number };
+  lockout: { maxFailures: number; lockMinutes: number };
+  session: { idleMinutes: number; absoluteHours: number; strictRoleIds: string[]; strictIdleMinutes: number };
+  recovery: { enabled: boolean; channel: 'EMAIL' | 'SMS' | 'EITHER'; tokenMinutes: number; maxRequestsPerHour: number; publicUrl: string };
+}
+interface View { policy: Policy; defaults: Policy }
+const Check = ({ checked, onChange, children, hint }: { checked: boolean; onChange: (v: boolean) => void; children: React.ReactNode; hint?: string }) => (
+  <label className="flex items-start gap-2 text-subhead"><input type="checkbox" className="mt-1" checked={checked} onChange={(e) => onChange(e.target.checked)} /> <span>{children}{hint && <span className="block text-footnote text-label2">{hint}</span>}</span></label>
+);
+const n = (v: string) => (v === '' ? 0 : Number(v));
+
+/** Settings → Security policy: how strong passwords must be, when accounts lock, when idle screens sign out, and how a forgotten password is recovered. */
+export function SecurityPolicySettings() {
+  const view = useApi<View>('/settings/security-policy');
+  const roles = useApi<Array<{ id: string; label: string }>>('/roles');
+  const act = useAction(async () => { await view.reload(); });
+  const [draft, setDraft] = useState<Policy | null>(null);
+  if (view.error) return <Alert>{view.error}</Alert>;
+  if (!view.data) return <Spinner />;
+  const p = draft ?? view.data.policy;
+  const set = (patch: Partial<Policy>) => setDraft({ ...p, ...patch });
+  const save = async () => { if (await act.run(() => post('/settings/security-policy', p), 'Saved. It applies from the next request.')) setDraft(null); };
+  const pw = p.password, lo = p.lockout, se = p.session, re = p.recovery;
+  const toggleRole = (id: string, on: boolean) => set({ session: { ...se, strictRoleIds: on ? [...se.strictRoleIds, id] : se.strictRoleIds.filter((x) => x !== id) } });
+  return (
+    <div className="space-y-6">
+      <Card><p className="text-subhead text-label2">These rules apply to every password and sign-in. <strong className="text-label">Until you save, the defaults are what they were before</strong>: 12 characters, lock after 5 failures for 15 minutes, 30 minutes idle. A change applies at once. The super user’s password is set in the server’s environment and is not subject to expiry or history.</p></Card>
+      {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+
+      <section aria-label="Passwords" className="space-y-3">
+        <SectionTitle>Passwords</SectionTitle>
+        <Card className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Shortest password" hint="8 to 64 characters"><Input type="number" min={8} max={64} value={pw.minLength} onChange={(e) => set({ password: { ...pw, minLength: n(e.target.value) } })} /></Field>
+            <Field label="Expire after (days)" hint="0 = never. The person must choose a new one at their next sign-in."><Input type="number" min={0} max={3650} value={pw.maxAgeDays} onChange={(e) => set({ password: { ...pw, maxAgeDays: n(e.target.value) } })} /></Field>
+            <Field label="Do not reuse the last" hint="0 = no check. Up to 24 passwords."><Input type="number" min={0} max={24} value={pw.historyCount} onChange={(e) => set({ password: { ...pw, historyCount: n(e.target.value) } })} /></Field>
+          </div>
+          <fieldset className="grid gap-2 sm:grid-cols-2">
+            <legend className="mb-1 text-footnote font-medium text-label2">A password must contain</legend>
+            <Check checked={pw.requireUpper} onChange={(v) => set({ password: { ...pw, requireUpper: v } })}>An uppercase letter</Check>
+            <Check checked={pw.requireLower} onChange={(v) => set({ password: { ...pw, requireLower: v } })}>A lowercase letter</Check>
+            <Check checked={pw.requireDigit} onChange={(v) => set({ password: { ...pw, requireDigit: v } })}>A number</Check>
+            <Check checked={pw.requireSymbol} onChange={(v) => set({ password: { ...pw, requireSymbol: v } })}>A symbol</Check>
+          </fieldset>
+          <p className="text-footnote text-label2">Always checked, whatever you choose: common passwords are refused, the password must not contain the username, and it cannot be one repeated character.</p>
+        </Card>
+      </section>
+
+      <section aria-label="Account lockout" className="space-y-3">
+        <SectionTitle>Account lockout</SectionTitle>
+        <Card className="grid gap-3 sm:grid-cols-2">
+          <Field label="Lock an account after (failed sign-ins)" hint="3 to 20"><Input type="number" min={3} max={20} value={lo.maxFailures} onChange={(e) => set({ lockout: { ...lo, maxFailures: n(e.target.value) } })} /></Field>
+          <Field label="Keep it locked for (minutes)" hint="An administrator can unlock it sooner."><Input type="number" min={1} max={1440} value={lo.lockMinutes} onChange={(e) => set({ lockout: { ...lo, lockMinutes: n(e.target.value) } })} /></Field>
+        </Card>
+      </section>
+
+      <section aria-label="Sessions" className="space-y-3">
+        <SectionTitle>Sessions</SectionTitle>
+        <Card className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Sign out after idle (minutes)" hint="5 to 720"><Input type="number" min={5} max={720} value={se.idleMinutes} onChange={(e) => set({ session: { ...se, idleMinutes: n(e.target.value) } })} /></Field>
+            <Field label="Longest a session can last (hours)" hint="Even when active. 1 to 72."><Input type="number" min={1} max={72} value={se.absoluteHours} onChange={(e) => set({ session: { ...se, absoluteHours: n(e.target.value) } })} /></Field>
+          </div>
+          <fieldset>
+            <legend className="mb-1 text-footnote font-medium text-label2">Sign these roles out sooner (counter and call-centre screens that others can walk up to)</legend>
+            <div className="grid gap-1 sm:grid-cols-2">
+              {(roles.data ?? []).map((r) => <Check key={r.id} checked={se.strictRoleIds.includes(r.id)} onChange={(v) => toggleRole(r.id, v)}>{r.label}</Check>)}
+            </div>
+            {se.strictRoleIds.length > 0 && <div className="mt-3 max-w-xs"><Field label="Their idle limit (minutes)"><Input type="number" min={5} max={720} value={se.strictIdleMinutes} onChange={(e) => set({ session: { ...se, strictIdleMinutes: n(e.target.value) } })} /></Field></div>}
+          </fieldset>
+        </Card>
+      </section>
+
+      <section aria-label="Password recovery" className="space-y-3">
+        <SectionTitle>Forgotten passwords</SectionTitle>
+        <Card className="space-y-4">
+          <Check checked={re.enabled} onChange={(v) => set({ recovery: { ...re, enabled: v } })} hint="Shows “Forgot your password?” on the sign-in page. Accounts are never revealed: the answer is the same for everyone.">Let people reset their own password</Check>
+          {re.enabled && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Send the link or code by"><Select value={re.channel} onChange={(e) => set({ recovery: { ...re, channel: e.target.value as Policy['recovery']['channel'] } })}><option value="EITHER">E-mail, or SMS if there is no e-mail</option><option value="EMAIL">E-mail only</option><option value="SMS">SMS only</option></Select></Field>
+              <Field label="Works for (minutes)" hint="5 to 1440. Single use."><Input type="number" min={5} max={1440} value={re.tokenMinutes} onChange={(e) => set({ recovery: { ...re, tokenMinutes: n(e.target.value) } })} /></Field>
+              <Field label="Requests per person per hour" hint="1 to 20"><Input type="number" min={1} max={20} value={re.maxRequestsPerHour} onChange={(e) => set({ recovery: { ...re, maxRequestsPerHour: n(e.target.value) } })} /></Field>
+              <Field label="Public address of this site" hint="https://crm.example.com. Reset links are built from it so they cannot be forged. Leave empty and e-mail carries a six-digit code instead of a link."><Input value={re.publicUrl} placeholder="https://" onChange={(e) => set({ recovery: { ...re, publicUrl: e.target.value } })} /></Field>
+            </div>)}
+          <p className="text-footnote text-label2">The message is queued in the notification outbox; the e-mail or SMS connector (Integration → Customer messaging) delivers it. People need an e-mail address or mobile number on their account.</p>
+        </Card>
+      </section>
+
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={act.busy || !draft} onClick={() => void save()}>Save</Button>
+        {draft && <Button variant="secondary" onClick={() => setDraft(null)}>Discard changes</Button>}
+        <Button variant="secondary" onClick={() => setDraft({ ...view.data!.defaults })}>Reset to the defaults</Button>
+      </div>
+    </div>
+  );
+}

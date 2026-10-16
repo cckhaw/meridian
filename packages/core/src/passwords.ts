@@ -28,8 +28,8 @@ export const dummyHash = () => (dummy ??= hashPassword('meridian-timing-equalise
 const COMMON = new Set(['password', 'password123', 'passw0rd', 'qwertyuiop', 'letmein', 'welcome', 'admin', 'administrator', 'changeme', 'meridian', 'iloveyou', '123456789012', 'qwerty123456']);
 
 /** NIST 800-63B style: length and a blocklist matter more than composition rules. Returns an error message or null. */
-export function passwordProblem(password: string, username = ''): string | null {
-  if (password.length < 12) return 'Use at least 12 characters.';
+export function passwordProblem(password: string, username = '', minLength = 12): string | null {
+  if (password.length < minLength) return `Use at least ${minLength} characters.`;
   if (password.length > 128) return 'Use at most 128 characters.';
   const lower = password.toLowerCase();
   if (COMMON.has(lower.replace(/[^a-z0-9]/g, '')) || COMMON.has(lower)) return 'That password is too common.';

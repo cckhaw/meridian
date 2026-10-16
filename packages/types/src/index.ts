@@ -6,3 +6,4 @@ export * from './regional.js';
 export * from './currencies.js';
 export * from './themes.js';
 export * from './offer-types.js';
+export * from './password-policy.js';

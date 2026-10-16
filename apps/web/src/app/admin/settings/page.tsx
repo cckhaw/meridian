@@ -15,6 +15,7 @@ import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
 import { RegionalSettingsForm } from './regional';
+import { SecurityPolicySettings } from './security-policy';
 import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
 
 /**
@@ -117,6 +118,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'dunning-rules': return <DunningSettings />;
     case 'early-termination': return <EtcSettings />;
     case 'device-financing': return <FinancingSettings />;
+    case 'security-policy': return <SecurityPolicySettings />;
     case 'numbering': return <NumberingSettings />;
     case 'donor-operators': return <DonorOperatorSettings />;
     default: return <Empty>This section is not available yet.</Empty>;
