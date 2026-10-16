@@ -191,7 +191,7 @@ export async function listGatewayCalls(q: Queryable, f: { clientRef?: string; li
 }
 
 // ───────────────────────── webhooks and TM Forum 688 subscriptions ─────────────────────────
-export const HUB_EVENT_TYPES = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED'] as const;
+export const HUB_EVENT_TYPES = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED'] as const;
 export type HubEventType = (typeof HUB_EVENT_TYPES)[number];
 
 export interface HubWebhook { id: string; kind: 'OUTBOUND' | 'INBOUND' | 'TMF688'; name: string; targetUrl: string | null; authKind: 'NONE' | 'BEARER' | 'HMAC'; hasSecret: boolean; provider: string | null; events: string[]; query: string | null;

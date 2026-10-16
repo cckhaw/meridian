@@ -49,6 +49,10 @@ const CORE_PERMISSIONS = [
   'migration:import', // load data from files: templates, a check that changes nothing, then the load
   'user:manage',
   'store:assist', 'kyc:attest', 'kyc:review',
+  'document:read', // signed agreements and who looked at them
+  'document:kyc', // identity documents in the vault: view, verify, reject, upload
+  'document:manage', // purge, change retention, run the retention sweep
+  'document:template', // write, version and publish the agreement templates
   'store:report', // a store's sales by day, salesperson and payment method, with the commission they earned
   'store:cashdrawer', // count the cash drawer at the end of the day and sign off the difference
   'fraud:read', // the fraud desk: alerts, SIM-swap anomalies and the blacklist (values shown only as a hint)
@@ -98,7 +102,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'admin', label: 'Administrator', scope: 'staff', home: '/admin/users',
     summary: 'Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits.',
     permissions: ['dashboard:read', 'numbering:read', 'user:manage', 'audit:read', 'catalog:read', 'catalog:write', 'customer:search', 'customer:read', 'service:read', 'order:read',
-      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage', 'migration:export', 'migration:import'],
+      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage', 'migration:export', 'migration:import', 'document:template'],
   },
   'product-configurator': {
     id: 'product-configurator', label: 'Product Configurator', scope: 'staff', home: '/catalog',
@@ -179,7 +183,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   compliance: {
     id: 'compliance', label: 'KYC Compliance Officer', scope: 'staff', home: '/kyc',
     summary: 'Reviews identity verification for online sign-ups and referred cases: approves, rejects, or sends back for corrections. Sees identity evidence; cannot sell or change billing.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'kyc:review', 'audit:read', 'case:read'],
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'kyc:review', 'audit:read', 'case:read', 'document:read', 'document:kyc', 'document:manage', 'document:template'],
   },
   'inventory-ops': {
     id: 'inventory-ops', label: 'Operations Support', scope: 'staff', home: '/inventory',
@@ -227,6 +231,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'fraud', label: 'Fraud desk', href: '/fraud', icon: 'shield', anyOf: ['fraud:read'] },
   { id: 'storedesk', label: 'Store desk', href: '/store', icon: 'store', anyOf: ['store:report', 'store:cashdrawer'] },
   { id: 'kyc', label: 'KYC reviews', href: '/kyc', icon: 'shield', anyOf: ['kyc:review'] },
+  { id: 'documents', label: 'Documents', href: '/documents', icon: 'doc', anyOf: ['document:read', 'document:kyc'] },
   { id: 'mnp', label: 'Number porting', href: '/mnp', icon: 'swap', anyOf: ['mnp:manage'] },
   { id: 'catalog', label: 'Catalog', href: '/catalog', icon: 'grid', anyOf: ['catalog:read'] },
   { id: 'inventory', label: 'Inventory', href: '/inventory', icon: 'cube', anyOf: ['inventory:read'] },

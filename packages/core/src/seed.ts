@@ -1,3 +1,4 @@
+import { ensureStarterTemplates } from './doc-templates.js';
 import { seedDunningRules } from './seed-dunning-rules.js';
 import type { OfferNode } from '@meridian/types';
 import { createNode } from './catalog.js';
@@ -146,6 +147,7 @@ async function seedNumbering(db: Db): Promise<void> {
 
 /** Demo tenants created through the real order/billing code paths, with history backdated so bills, an overdue account and a suspension exist. */
 export async function seedDemo(db: Db): Promise<void> {
+  await db.tx((q) => ensureStarterTemplates(q, { username: 'seed' }));   // the agreements customers sign (editable in Settings → Document templates)
   await seedNumbering(db);
   await seedDonorOperators(db);
   if ((await db.query(`SELECT 1 FROM customers WHERE display_name='Tan Wei Ming' LIMIT 1`)).rows.length) return;
