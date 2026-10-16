@@ -9,6 +9,8 @@ const csp = [
   "img-src 'self' data:",
   "font-src 'self' data:",
   "connect-src 'self'",
+  // The bill-template designer shows its PDF preview in a same-origin blob: frame.
+  "frame-src 'self' blob:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
