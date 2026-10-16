@@ -2135,13 +2135,13 @@ describe('offer type switches and service types', () => {
     const place = (extra: object = {}) => call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: c, lines: [{ offerId: 'fiber-1g' }], deliveryAddress: '1 Orchard Road', payment: { method: 'CASH', confirmed: true, reference: 'R-F' }, ...extra } });
     try {
       await call('POST', '/settings/modules', { cookie: su, body: { fiberCoverage: { enabled: false } } });
-      expect((await call('GET', '/meta', { cookie: su })).json.modules).toEqual({ fiberCoverage: false });
+      expect((await call('GET', '/meta', { cookie: su })).json.modules.fiberCoverage).toBe(false);
       const cat = (await call('GET', '/catalog?step=PLAN&status=ACTIVE&limit=100', { cookie: su })).json;
       expect(cat.items.map((o: any) => o.id)).not.toContain('fiber-1g');
       expect((await place()).status).toBe(422);                                              // not sold while off
       expect((await call('POST', '/fiber/qualify', { cookie: su, body: { postalCode: '238801' } })).status).toBe(422);
       expect((await call('POST', '/settings/modules', { cookie: su, body: { fiberCoverage: { enabled: true } } })).json.fiberCoverage).toMatchObject({ enabled: true, configured: true });
-      expect((await call('GET', '/meta', { cookie: su })).json.modules).toEqual({ fiberCoverage: true });
+      expect((await call('GET', '/meta', { cookie: su })).json.modules.fiberCoverage).toBe(true);
       expect((await call('GET', '/catalog?step=PLAN&status=ACTIVE&limit=100', { cookie: su })).json.items.map((o: any) => o.id)).toContain('fiber-1g');
       const q = await call('POST', '/fiber/qualify', { cookie: su, body: { address: '1 Orchard Road', speedMbps: 1000 } });
       expect(q.json.availability).toBe('AVAILABLE');

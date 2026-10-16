@@ -85,6 +85,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
 
           {o.appointments.length > 0 && <><SectionTitle>Installation</SectionTitle><TableWrap><thead><tr><Th>Window</Th><Th>Status</Th></tr></thead><tbody>
             {o.appointments.map((a: any, i: number) => <tr key={i}><Td>{dt(a.slotStart)} – {dt(a.slotEnd)}</Td><Td><Badge tone={tone(a.status)}>{label(a.status)}</Badge></Td></tr>)}</tbody></TableWrap></>}
+          {o.fulfilment.wfm && <p className="mt-3 text-subhead text-label2">Booked with the field-service system. To move the visit, open {can('case:read') ? <Link className="text-accent" href={`/cases/${o.fulfilment.wfm.caseId}`}>case {o.fulfilment.wfm.caseNumber}</Link> : <>case {o.fulfilment.wfm.caseNumber}</>} and choose “Move the visit”.</p>}
           {o.fulfilment.trackingNumber && <p className="mt-4 text-subhead">Tracking: <span className="font-mono">{o.fulfilment.trackingNumber}</span></p>}
           {o.fulfilment.delivery?.method === 'COLLECT'
             ? <p className="text-subhead text-label2">Collect in store: <span className="font-mono">{o.fulfilment.delivery.pickupStoreId}</span>{o.fulfilment.readyForCollection ? ' · ready for collection' : ''}</p>

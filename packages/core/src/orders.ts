@@ -1,4 +1,5 @@
 import { enqueueOcs } from './ocs.js';
+import { cancelOrderVisit, confirmOrderVisit, holdOrderVisit, orderBookingAvailable, type OrderSlot } from './workforce.js';
 import { assertNotBlacklisted } from './fraud.js';
 import { randomUUID } from 'node:crypto';
 import { behaviourOf, type OfferNode, type OrderChannel, type OrderState, type PaymentMethod } from '@meridian/types';
@@ -51,6 +52,8 @@ export interface OrderInput {
   delivery?: { method: 'SHIP' | 'COLLECT'; pickupStoreId?: string };
   /** Preferred installation visit, booked as soon as the order is paid. */
   installationSlot?: string;
+  /** A window chosen from the field-service system's live availability (see `findOrderSlots`); it is held for the order and booked once the order is paid. Replaces `installationSlot`. */
+  installationSlotRef?: OrderSlot;
   /** Device financing: the credit check to use, or pay a device on a contract in full. */
   financing?: { creditCheckId?: string; payInFull?: boolean };
   /** The fibre port the customer was holding at checkout (from the coverage service); kept with the order so Fibre Ops can see which port it is. */
@@ -73,6 +76,7 @@ async function setState(q: Queryable, o: Row, to: OrderState, actor: string, rea
     [o.id, o.shardId, to, reason ?? null],
   );
   await q.query('INSERT INTO order_state_history (shard_id, order_id, from_state, to_state, actor, reason) VALUES ($1,$2,$3,$4,$5,$6)', [o.shardId, o.id, o.state, to, actor, reason ?? null]);
+  if ((to === 'CANCELLED' || to === 'FAILED') && o.fulfilment?.wfm) await cancelOrderVisit(q, o.id, reason ?? 'The order did not go ahead', actor);   // release the technician window held for it
   if (to === 'CANCELLED' || to === 'COMPLETED') await raiseEvent(q, to === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_COMPLETED', { accountId: o.accountId, resourceId: o.id, payload: { orderId: o.id, orderNumber: o.number, customerId: o.customerId, state: to, reason: reason ?? null } }, { onlyIfWanted: true });
   o.state = to;
 }
@@ -161,6 +165,12 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
   const priced = await priceBasket(q, { ...input, customerId });
   const customer = priced.customer!;
   { const c = (await q.query('SELECT id_document_hash, email, phone FROM customers WHERE id=$1', [customerId])).rows[0]; if (c) await assertNotBlacklisted(q, { idHash: c.idDocumentHash, email: c.email, msisdn: c.phone }); }
+  if (input.installationSlotRef) {
+    if (!priced.lines.some((l) => groupOf(l.offer) === 'INSTALL')) throw invalid('this order has no installation to book a time for');
+    if (!(await orderBookingAvailable(q))) throw invalid('live installation times are not switched on');
+    if (!input.deliveryAddress?.trim()) throw invalid('enter the installation address');
+    input.installationSlot = input.installationSlotRef.start;
+  }
   if (input.installationSlot) {
     const slot = new Date(input.installationSlot);
     if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now()) throw invalid('the installation date must be in the future');
@@ -210,6 +220,7 @@ export async function placeOrderTx(q: Queryable, input: OrderInput): Promise<Row
     );
   }
   if (priced.financing?.checkId) await attachCheckToOrder(q, priced.financing.checkId, orderId, customerId);
+  if (input.installationSlotRef) await holdOrderVisit(q, { orderId, number: orderNumber, customerId, slot: input.installationSlotRef }, actor);
   const o = (await q.query('SELECT * FROM orders WHERE id=$1', [orderId])).rows[0]!;
   o.state = 'DRAFT';
   await setState(q, o, 'SUBMITTED', actor);
@@ -318,8 +329,12 @@ async function openGroups(q: Queryable, o: Row, ctx: Ctx) {
     o.pointOfNoReturnAt = new Date().toISOString();
     await activateLines(q, o, lines.filter((l) => l.fulfilGroup === 'GOODS' && createsService(l.offer)));
   }
-  const slot = o.fulfilment?.slot as string | undefined;
-  if (slot && kinds.includes('INSTALL')) await bookSlot(q, o, new Date(slot));
+  let slot = o.fulfilment?.slot as string | undefined;
+  if (kinds.includes('INSTALL') && o.fulfilment?.wfm) {   // the window was held in the field-service system while the order was taken: now it becomes a job
+    const r = await confirmOrderVisit(q, o, ctx.actor);
+    if (!r.ok) slot = undefined;
+    else { o.fulfilment = (await q.query('SELECT fulfilment FROM orders WHERE id=$1', [o.id])).rows[0]!.fulfilment; slot = o.fulfilment?.slot; }
+  } else if (slot && kinds.includes('INSTALL')) await bookSlot(q, o, new Date(slot));
   await syncTasks(q, o);
 }
 
@@ -611,8 +626,10 @@ export type OrderAction =
   | { type: 'ready_for_collection' }
   | { type: 'collect' };
 
-export async function advanceOrder(db: Db, orderId: string, action: OrderAction, actor = 'system'): Promise<Row> {
-  return db.tx(async (q) => {
+export const advanceOrder = (db: Db, orderId: string, action: OrderAction, actor = 'system'): Promise<Row> => db.tx((q) => advanceOrderTx(q, orderId, action, actor));
+/** The same, inside a transaction the caller already has (the field-service callback moves the order along with the visit). */
+export async function advanceOrderTx(q: Queryable, orderId: string, action: OrderAction, actor = 'system'): Promise<Row> {
+  {
     const o = (await q.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [orderId])).rows[0];
     if (!o) throw notFound('order', orderId);
     const ctx: Ctx = { actor };
@@ -635,6 +652,7 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
     switch (action.type) {
       case 'schedule_installation': {
         want('INSTALL', 'PENDING');
+        if (o.fulfilment?.wfm) throw rejected(`this installation is booked with the field-service system: move the visit from case ${o.fulfilment.wfm.caseNumber}`);
         const slot = new Date(action.slot);
         if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now()) throw invalid('slot must be a valid future date-time');
         await bookSlot(q, o, slot);
@@ -700,7 +718,7 @@ export async function advanceOrder(db: Db, orderId: string, action: OrderAction,
     }
     await progress(q, o, ctx);
     return getOrder(q, orderId);
-  });
+  }
 }
 
 // ───────────────────────── cancellation, returns and the installation SLA ─────────────────────────
@@ -820,7 +838,10 @@ async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: st
     if (kind === 'ACTIVATION') await releaseOrderNumbering(q, o.id, actor); // the SIM and number of a plan that is not going ahead
     const r = await refund(q, o, mine, { retainMinor: p.fee, clawbackMinor: p.claw, label: `Cancelled ${kind.toLowerCase()}` });
     await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND fulfil_group=$2 AND status='ACTIVE'`, [o.id, kind]);
-    if (kind === 'INSTALL') await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status IN ('BOOKED','DISPATCHED')`, [o.id]);
+    if (kind === 'INSTALL') {
+      await q.query(`UPDATE installation_appointments SET status='CANCELLED' WHERE order_id=$1 AND status IN ('BOOKED','DISPATCHED')`, [o.id]);
+      await cancelOrderVisit(q, o.id, reason, actor);
+    }
     await patchGroup(q, g.id, `status='CANCELLED', cancelled_at=now(), refunded_minor=$2, fee_minor=$3, details = details || $4::jsonb`, [r.refundMinor, r.retainedMinor, JSON.stringify({ cancelReason: reason, rule: p.decision.rule?.id ?? null })]);
     await note(q, o, actor, `${({ GOODS: 'Delivery', INSTALL: 'Installation', ACTIVATION: 'Service activation' })[kind]} cancelled${r.refundMinor ? `, ${fmt(r.refundMinor, o.currency)} refunded` : ''}${r.retainedMinor ? `, ${fmt(r.retainedMinor, o.currency)} kept` : ''}: ${reason}`);
   }
@@ -974,7 +995,7 @@ function nextActions(o: Row, gs: Row[]): string[] {
   if (o.state === 'PAYMENT_PENDING') return ['confirm_payment'];
   const out: string[] = [];
   const install = findGroup(gs, 'INSTALL'), goods = findGroup(gs, 'GOODS');
-  if (install?.status === 'PENDING') out.push('schedule_installation', ...(o.fulfilment?.slot ? ['dispatch_technician'] : []));
+  if (install?.status === 'PENDING') out.push(...(o.fulfilment?.wfm ? [] : ['schedule_installation']), ...(o.fulfilment?.slot ? ['dispatch_technician'] : []));  // a visit booked with the field-service system is moved from its case
   if (install?.status === 'LOCKED') out.push('complete_installation');
   if (goods?.status === 'PENDING') out.push(...(o.fulfilment?.delivery?.method === 'COLLECT' ? [o.fulfilment.readyForCollection ? 'collect' : 'ready_for_collection'] : ['ship']));
   if (goods?.status === 'LOCKED') out.push('deliver');

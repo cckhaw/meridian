@@ -199,12 +199,31 @@ function FieldVisit({ c, onChange }: { c: any; onChange: () => Promise<void> }) 
   const slots = useApi(finding ? `/cases/${c.id}/slots` : null);
   const [notes, setNotes] = useState('');
   const [reason, setReason] = useState('');
-  const act = useAction(async () => { setFinding(null); await Promise.all([visits.reload(), onChange()]); });
+  const orderVisits = useApi<{ items: any[] }>(can('case:write') && open ? `/cases/${c.id}/order-visits` : null);
+  const [moving, setMoving] = useState<any>(null);   // an installation booked with a customer's order, being moved from this case
+  const moveSlots = useApi(moving ? `/cases/${moving.caseId}/slots` : null);
+  const act = useAction(async () => { setFinding(null); setMoving(null); await Promise.all([visits.reload(), orderVisits.reload(), onChange()]); });
   if (!can('case:write') && items.length === 0) return null;
   const pick = (slot: any) => act.run(() => post(live && finding === 'reschedule' ? `/appointments/${live.id}/reschedule` : `/cases/${c.id}/appointments`, { slot, notes: notes || undefined }), 'Visit booked');
+  const moveTo = (sl: any) => act.run(() => post(`/appointments/${moving.id}/reschedule`, { slot: sl, notes: notes || undefined }), 'Installation moved');
   return (
     <Card>
       <h2 className="mb-3 text-title3 font-semibold">Field visit</h2>
+      {(orderVisits.data?.items ?? []).length > 0 && (
+        <div className="mb-4 rounded-control border border-separator p-3">
+          <p className="mb-2 text-subhead font-medium">Installations booked for this customer</p>
+          <ul className="space-y-2">{orderVisits.data!.items.map((v: any) => (
+            <li key={v.id} className="text-subhead"><div className="flex flex-wrap items-center gap-2"><span>Order {v.orderNumber}: {slotLabel({ start: v.slotStart, end: v.slotEnd })}</span><Badge tone={VISIT[v.status]?.[1] ?? 'neutral'}>{VISIT[v.status]?.[0] ?? label(v.status)}</Badge>
+              {moving?.id !== v.id && <Button variant="secondary" onClick={() => setMoving(v)}>Move this visit</Button>}</div>
+              {moving?.id === v.id && (
+                <div className="mt-2 space-y-2">
+                  {moveSlots.error && <Alert>{moveSlots.error}</Alert>}{!moveSlots.data && !moveSlots.error && <Spinner />}
+                  {moveSlots.data && moveSlots.data.slots.length === 0 && <p className="text-subhead text-label2">No technician is free in the next two weeks.</p>}
+                  {moveSlots.data && <div className="flex flex-wrap gap-2">{moveSlots.data.slots.slice(0, 24).map((sl: any) => <button key={sl.id} type="button" disabled={act.busy} onClick={() => void moveTo(sl)} className="rounded-control border border-separator bg-surface px-3 py-2 text-footnote hover:border-accent">{slotLabel(sl)}</button>)}</div>}
+                  <Button variant="plain" onClick={() => setMoving(null)}>Close</Button>
+                </div>)}
+            </li>))}</ul>
+        </div>)}
       {items.length === 0 && <p className="mb-3 text-subhead text-label2">No technician visit yet.</p>}
       <ul className="mb-3 space-y-2">{items.map((v) => (
         <li key={v.id} className="rounded-control bg-surface2 p-3 text-subhead">

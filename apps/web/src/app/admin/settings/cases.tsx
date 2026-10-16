@@ -173,16 +173,17 @@ function FieldService() {
   const act = useAction(async () => { await ov.reload(); await cs.reload(); });
   const [vendor, setVendor] = useState<string | null>(null);
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [bookAt, setBookAt] = useState<boolean | null>(null);
   const [cfg, setCfg] = useState<Record<string, any>>({});
   const [secretEnv, setSecretEnv] = useState<string | null>(null);
   const [v, setV] = useState<Record<string, any>>({});
   const [test, setTest] = useState<any>(null);
   if (ov.error) return <Alert>{ov.error}</Alert>;
   if (!ov.data || !cs.data) return <Spinner />;
-  const o = ov.data, vid = vendor ?? o.vendor ?? '', on = enabled ?? o.enabled;
+  const o = ov.data, vid = vendor ?? o.vendor ?? '', on = enabled ?? o.enabled, bookOn = bookAt ?? !!o.bookAtOrder;
   const vend = o.vendors.find((x: any) => x.id === vid);
   const conf = { ...(vend?.config ?? {}), ...cfg };
-  const dirtyConn = vendor !== null || enabled !== null || Object.keys(cfg).length > 0 || secretEnv !== null;
+  const dirtyConn = vendor !== null || enabled !== null || bookAt !== null || Object.keys(cfg).length > 0 || secretEnv !== null;
   const cur = { dispatchGraceMinutes: v.dispatchGraceMinutes ?? String(cs.data.dispatchGraceMinutes), dispatchUnconfirmedHours: v.dispatchUnconfirmedHours ?? String(cs.data.dispatchUnconfirmedHours), autoDispatch: v.autoDispatch ?? cs.data.autoDispatch };
   return (
     <Card>
@@ -197,6 +198,7 @@ function FieldService() {
               : <Input type={f.kind === 'number' ? 'number' : 'text'} value={String(conf[f.key] ?? '')} placeholder={f.placeholder} className={f.kind === 'env' ? 'font-mono' : ''} onChange={(e) => setCfg({ ...cfg, [f.key]: f.kind === 'number' ? Number(e.target.value) : e.target.value })} />}
           </Field>))}
         <label className="flex min-h-tap items-center gap-3"><input type="checkbox" className="h-5 w-5 accent-[rgb(var(--accent))]" checked={on} onChange={(e) => setEnabled(e.target.checked)} /><span>Switched on</span></label>
+        <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={bookOn} onChange={(e) => setBookAt(e.target.checked)} /><span>Let the customer pick the installation time while the order is taken<span className="block text-footnote text-label2">The new-order screen asks the field-service system for free times at the installation address; the chosen time is held, and booked once the order is paid. It can be moved later from the installation case. Off: only a preferred date is noted.</span></span></label>
         <Field label="Callback address" hint="Give this to the field-service system. It signs each call with the secret below.">
           <Input readOnly value={`${typeof window === 'undefined' ? '' : window.location.origin}${o.callbackPath}`} className="font-mono" onFocus={(e) => e.currentTarget.select()} /></Field>
         <Field label="Callback secret (environment variable)" hint={o.webhookSecretSet && secretEnv === null ? `Set on the server. Signatures are checked with ${o.webhookSecretEnv}.` : `Not set on the server yet: add ${secretEnv ?? o.webhookSecretEnv} (16 characters or more), or callbacks are refused.`}>
@@ -205,7 +207,7 @@ function FieldService() {
         {test && <Alert tone={test.ok ? 'success' : 'danger'}>{test.detail}</Alert>}
         {act.error && <Alert>{act.error}</Alert>}{act.ok && !dirtyConn && <Alert tone="success">{act.ok}</Alert>}
         <div className="flex gap-2">
-          <Button disabled={act.busy || !dirtyConn} onClick={async () => { if (await act.run(() => post('/settings/cases/field-service', { vendor: vid || null, enabled: on && !!vid, config: vid ? conf : undefined, ...(secretEnv !== null ? { webhookSecretEnv: secretEnv } : {}) }), 'Saved')) { setVendor(null); setEnabled(null); setCfg({}); setSecretEnv(null); } }}>Save</Button>
+          <Button disabled={act.busy || !dirtyConn} onClick={async () => { if (await act.run(() => post('/settings/cases/field-service', { vendor: vid || null, enabled: on && !!vid, bookAtOrder: bookOn, config: vid ? conf : undefined, ...(secretEnv !== null ? { webhookSecretEnv: secretEnv } : {}) }), 'Saved')) { setVendor(null); setEnabled(null); setBookAt(null); setCfg({}); setSecretEnv(null); } }}>Save</Button>
           <Button variant="secondary" disabled={act.busy || !o.vendor} onClick={async () => setTest(await act.run(() => post('/settings/cases/field-service/test')))}>Test the connection</Button>
         </div>
       </div>

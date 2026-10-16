@@ -26,6 +26,8 @@ export interface Wizard {
   quote: any | null; quoting: boolean; quoteError: string | null;
   customer: Cust | null; setCustomer: (c: Cust | null) => void; accountId: string; setAccountId: (id: string) => void; canCreateCustomer: boolean;
   address: string; setAddress: (s: string) => void;
+  /** Live installation times from the field-service system (when Settings allows): offered, the one chosen, and whether the agent chose to book later. */
+  booking: { enabled: boolean; slot: { id: string; start: string; end: string } | null; setSlot: (s: { id: string; start: string; end: string } | null) => void; later: boolean; setLater: (b: boolean) => void };
   /** How the goods reach the customer (what every goods offer allows), the one chosen, and the store for collection. */
   deliveryMethods: Array<'SHIP' | 'COLLECT'>; method: 'SHIP' | 'COLLECT' | null; setMethod: (m: 'SHIP' | 'COLLECT') => void; pickupStore: string; setPickupStore: (s: string) => void;
   slot: string; setSlot: (s: string) => void;
@@ -372,10 +374,11 @@ export function DeliveryStep({ w }: { w: Wizard }) {
       )}
       {needs.installation && (
         <Card>
-          <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order.${w.quote.installationSlaDays ? ` Installations not completed within ${w.quote.installationSlaDays} days are cancelled and refunded.` : ''}`}>
+          {!w.booking.enabled && <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order.${w.quote.installationSlaDays ? ` Installations not completed within ${w.quote.installationSlaDays} days are cancelled and refunded.` : ''}`}>
             <Input type="datetime-local" min={min} value={w.slot} onChange={(e) => w.setSlot(e.target.value)} />
-          </Field>
+          </Field>}
           {(!needs.delivery || w.method === 'COLLECT') && <div className="mt-3"><Field label="Installation address"><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} /></Field></div>}
+          {w.booking.enabled && <div className="mt-4"><InstallTimes w={w} /></div>}
           {w.fiber.enabled && <div className="mt-3"><FiberCoverageCheck address={w.address} speedMbps={w.fiber.speedMbps} lock={w.fiber.lock} onLock={w.fiber.setLock} api={fiberApi} /></div>}
         </Card>
       )}
@@ -383,6 +386,40 @@ export function DeliveryStep({ w }: { w: Wizard }) {
         <p className="mb-2 text-subhead font-semibold">When you can still cancel</p>
         <Terms groups={w.quote?.groups ?? []} />
       </div>
+    </div>
+  );
+}
+
+const slotText = (s: { start: string; end: string }) => `${new Date(s.start).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}, ${s.start.slice(11, 16)}–${s.end.slice(11, 16)} UTC`;
+
+/** Real installation windows for the address, from the field-service system: the customer picks one now and it is held while the order is taken. */
+function InstallTimes({ w }: { w: Wizard }) {
+  const addr = useDebounced(w.address.trim(), 600);
+  const ready = addr.length >= 5 && !w.booking.later;
+  const slots = useApi<{ slots: Array<{ id: string; start: string; end: string; capacityLeft: number | null }> }>(ready ? `/orders/installation-slots?address=${encodeURIComponent(addr)}` : null);
+  const days = new Map<string, Array<{ id: string; start: string; end: string; capacityLeft: number | null }>>();
+  for (const s of slots.data?.slots ?? []) days.set(s.start.slice(0, 10), [...(days.get(s.start.slice(0, 10)) ?? []), s]);
+  return (
+    <div className="space-y-3">
+      <p className="text-subhead font-semibold">Installation time</p>
+      {w.booking.later
+        ? <p className="text-subhead text-label2">The time will be arranged after the order. <button type="button" className="text-accent" onClick={() => w.booking.setLater(false)}>Choose a time now</button></p>
+        : <>
+          {addr.length < 5 && <p className="text-subhead text-label2">Enter the installation address to see the times a technician can come.</p>}
+          {ready && !slots.data && !slots.error && <Spinner />}
+          {slots.error && <Alert>{slots.error}</Alert>}
+          {slots.data && days.size === 0 && <p className="text-subhead text-label2">No technician is free in the next two weeks at this address.</p>}
+          {[...days.entries()].slice(0, 10).map(([d, list]) => (
+            <div key={d}>
+              <p className="mb-1 text-footnote font-medium text-label2">{new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' })}</p>
+              <div className="flex flex-wrap gap-2">{list.map((s) => {
+                const on = w.booking.slot?.id === s.id;
+                return <button key={s.id} type="button" aria-pressed={on} onClick={() => w.booking.setSlot(on ? null : { id: s.id, start: s.start, end: s.end })} className={`rounded-control border px-3 py-2 text-footnote ${on ? 'border-accent bg-accent/10 font-semibold' : 'border-separator bg-surface hover:border-accent'}`}>{s.start.slice(11, 16)}–{s.end.slice(11, 16)} UTC</button>;
+              })}</div>
+            </div>))}
+          {w.booking.slot && <p className="text-footnote text-label2">Held for {slotText(w.booking.slot)}. It is booked once the order is paid, and can be moved later from the installation case.</p>}
+          <button type="button" className="text-footnote text-accent" onClick={() => { w.booking.setSlot(null); w.booking.setLater(true); }}>Arrange the time after the order instead</button>
+        </>}
     </div>
   );
 }
@@ -447,10 +484,10 @@ export function ReviewStep({ w }: { w: Wizard }) {
         </Card>
       ))}
       {q.bundles.length > 0 && <div className="rounded-card bg-success/10 p-4 text-subhead"><p className="font-semibold text-success">Bundle savings</p>{q.bundles.map((b: any, i: number) => <p key={i}>{b.name}: {money(b.discountMinor)} off {b.lineOffer}</p>)}</div>}
-      {(w.address || w.slot || w.method === 'COLLECT') && (
+      {(w.address || w.slot || w.booking.slot || w.method === 'COLLECT') && (
         <Card><p className="text-footnote font-semibold uppercase tracking-wide text-label2">Delivery and installation</p>
           {w.method === 'COLLECT' && <p className="text-subhead">Collect in store: <span className="font-mono">{w.pickupStore}</span></p>}
-          {w.method !== 'COLLECT' && w.address && <p className="text-subhead">{w.address}</p>}{w.slot && <p className="text-subhead text-label2">Installation visit requested for {new Date(w.slot).toLocaleString()}</p>}</Card>
+          {w.method !== 'COLLECT' && w.address && <p className="text-subhead">{w.address}</p>}{w.booking.slot && <p className="text-subhead text-label2">Installation visit held for {slotText(w.booking.slot)}</p>}{w.booking.enabled && !w.booking.slot && <p className="text-subhead text-label2">Installation time to be arranged after the order</p>}{!w.booking.enabled && w.slot && <p className="text-subhead text-label2">Installation visit requested for {new Date(w.slot).toLocaleString()}</p>}</Card>
       )}
       <Card>
         <dl>
