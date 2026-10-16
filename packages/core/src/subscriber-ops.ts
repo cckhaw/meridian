@@ -1,3 +1,4 @@
+import { agreementsFor, planChangeValues, queueDocumentDelivery, signAgreements, type SignatureInput } from './agreements.js';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { assertNotBlacklisted } from './fraud.js';
 import { behaviourOf, type OfferNode } from '@meridian/types';
@@ -305,7 +306,9 @@ export async function setStatusNorth(db: Db, ref: string, i: StatusInput, actor:
 }
 
 // ───────────────────────── plan change ─────────────────────────
-export interface NorthPlanChange { targetOfferId: string; effective: 'IMMEDIATE' | 'NEXT_BILL_CYCLE'; addOns?: string[]; acceptContractTerms?: boolean }
+export interface NorthPlanChange { targetOfferId: string; effective: 'IMMEDIATE' | 'NEXT_BILL_CYCLE'; addOns?: string[]; acceptContractTerms?: boolean;
+  /** The customer's signature on the plan change agreement (required when Settings → Documents says so). `ip`/`userAgent` are of the device they signed on. */
+  agreement?: { signature: SignatureInput; versionIds?: string[]; ip?: string | null; userAgent?: string | null; agentName?: string | null } }
 const offerNode = (r: Row): OfferNode => ({ id: r.id, name: r.name, kind: r.kind, ...r.data }) as unknown as OfferNode;
 
 export async function changePlanNorth(db: Db, ref: string, i: NorthPlanChange, actor: string) {
@@ -337,6 +340,12 @@ export async function changePlanNorth(db: Db, ref: string, i: NorthPlanChange, a
     const sim = await simulatePlanChange(q, s.id, { newOfferId: i.targetOfferId });
     const adjustMinor = i.effective === 'IMMEDIATE' ? (sim.withChange as Row).netMinor - (sim.followingStatement as Row).netMinor : 0;
     const summary = { from: sim.from, to: sim.to, statementDate: sim.statementDate, prorationMinor: adjustMinor, notes: sim.notes };
+    // The customer agrees to the change in writing: the plan change agreement is signed, sealed and stored with the service before anything moves.
+    const effDate = i.effective === 'NEXT_BILL_CYCLE' ? (sim.statementDate as string) : today();
+    const signed = await signAgreements(q, { context: 'PLAN_CHANGE', offerKinds: [String(newRow.kind)], customerId: s.customerId as string, serviceId: s.id as string, reference: String(s.identifier ?? s.id), signature: i.agreement?.signature, versionIds: i.agreement?.versionIds,
+      values: await planChangeValues(q, s.customerId as string, { from: oldRow!.name as string, to: newRow.name as string, effectiveDate: effDate, monthlyMinor: newFee.amount.amountMinor, msisdn: s.identifier as string }),
+      ctx: { who: { username: actor, ip: i.agreement?.ip ?? null, userAgent: i.agreement?.userAgent ?? null }, method: 'PLAN_CHANGE', agentName: i.agreement?.agentName ?? (actor.startsWith('api:') ? null : actor) } });
+    if (signed.length) await queueDocumentDelivery(q, { customerId: s.customerId as string, documentIds: signed.map((d) => d.documentId), reference: `your plan change on ${s.identifier}` });
     if (i.effective === 'NEXT_BILL_CYCLE') {
       const eff = sim.statementDate as string;
       await q.query(`UPDATE pending_plan_changes SET status='CANCELLED' WHERE service_id=$1 AND status='PENDING'`, [s.id]);
@@ -348,6 +357,18 @@ export async function changePlanNorth(db: Db, ref: string, i: NorthPlanChange, a
     return { status: 'APPLIED' as const, effectiveOn: today(), summary, serviceId: s.id as string, applied };
   });
   return { service: await tmfService(db, out.serviceId), result: { status: out.status, effectiveOn: out.effectiveOn, ...out.summary, ...(out.applied ?? {}) } };
+}
+
+/** What the plan change agreement says for this customer and change, and whether it must be signed: for the screen that asks them. Changes nothing. */
+export async function previewPlanChangeAgreements(db: Db, ref: string, i: { targetOfferId: string; effective: 'IMMEDIATE' | 'NEXT_BILL_CYCLE' }) {
+  const found = await resolveService(db, ref);
+  const s = (await db.query('SELECT * FROM services WHERE id=$1', [found.id])).rows[0]!;
+  const [oldRow, newRow] = await Promise.all([db.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [s.offerId]), db.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [i.targetOfferId])]).then((r) => r.map((x) => x.rows[0] as Row | undefined));
+  if (!newRow) throw notFound('plan', i.targetOfferId);
+  const fee = monthlyFee(offerNode(newRow));
+  const sim = await simulatePlanChange(db, s.id, { newOfferId: i.targetOfferId });
+  const values = await planChangeValues(db, s.customerId as string, { from: (oldRow?.name as string) ?? String(s.offerId), to: newRow.name as string, effectiveDate: i.effective === 'NEXT_BILL_CYCLE' ? (sim.statementDate as string) : today(), monthlyMinor: fee?.amount.amountMinor ?? 0, msisdn: s.identifier as string });
+  return agreementsFor(db, { context: 'PLAN_CHANGE', offerKinds: [String(newRow.kind)], values });
 }
 
 /** Moves the service to the new plan: contract, charging system buckets, the proration of this period, any plan-change fee, and the add-ons chosen with it. */

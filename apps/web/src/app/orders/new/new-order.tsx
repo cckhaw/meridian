@@ -1,4 +1,5 @@
 'use client';
+import { type AgreementView, type SignedPayload } from '@meridian/ui';
 import { Alert, Button, Card, Spinner } from '@meridian/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -50,6 +51,8 @@ export function NewOrder() {
   const [bookLater, setBookLater] = useState(false);
   const [pay, setPay] = useState({ method: 'CASH', reference: '', received: true });
   const [consent, setConsent] = useState(false);
+  const [agr, setAgr] = useState<{ required: boolean; agreements: AgreementView[] } | null>(null);
+  const [signed, setSigned] = useState<SignedPayload | null>(null);
   const [payInFull, setPayInFull] = useState(false);
   const [check, setCheck] = useState<{ id: string; score: number | null; band: string | null; fallback: boolean } | null>(null);
   const [kindHint, setKindHint] = useState<string | null>(null);
@@ -73,7 +76,7 @@ export function NewOrder() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [fiberLock, setFiberLock] = useState<string | null>(null);
-  const setItems = useCallback((f: (c: Item[]) => Item[]) => { setItemsRaw(f); setConsent(false); setCheck(null); }, []);
+  const setItems = useCallback((f: (c: Item[]) => Item[]) => { setItemsRaw(f); setConsent(false); setSigned(null); setCheck(null); }, []);
   const setChannel = (c: string) => { setChannelRaw(c); setItemsRaw([]); setIndex(0); idemKey.current = crypto.randomUUID(); };
 
   // ── the server's quote, refreshed as the basket changes ──
@@ -112,6 +115,15 @@ export function NewOrder() {
   }, [quick, portal, items, needs.delivery, needs.installation, needs.sim, can]);
   const at = Math.min(index, steps.length - 1);
   const stepId = steps[at]!;
+  // The agreements for this basket, with the customer's details filled in: fetched when the review step opens, signed there.
+  useEffect(() => {
+    if (stepId !== 'review' || quick) return;
+    const b = JSON.parse(key);
+    if (!b.lines?.length || (!portal && !b.customerId)) return;
+    let live = true;
+    api('/orders/agreements', { method: 'POST', json: b }).then((r) => { if (live) setAgr(r); }).catch(() => { if (live) setAgr(null); });
+    return () => { live = false; };
+  }, [stepId, key, quick, portal]);
 
   const problems: string[] = quote?.problems ?? [];
   const needsRef = !!(meta.data?.paymentMode === 'manual' && cashier && pay.received && (quote?.dueNowMinor ?? 0) > 0);
@@ -125,7 +137,7 @@ export function NewOrder() {
       case 'payment': return quoteError;
       case 'customer': return !customer ? 'Choose or create the customer to continue.' : problems[0] ?? null;
       case 'delivery': return how === 'COLLECT' && !pickupStore ? 'Choose the store where the customer will collect.' : shipTo && !address.trim() ? 'Enter the delivery address.' : needs.installation && !shipTo && !address.trim() ? 'Enter the installation address.' : needs.installation && bookable && !wfmSlot && !bookLater ? 'Choose an installation time, or arrange it after the order.' : null;
-      case 'review': return duplicateProblem(items) ?? problems[0] ?? (!consent ? 'Confirm the customer has been told the terms.' : null);
+      case 'review': return duplicateProblem(items) ?? problems[0] ?? (agr?.required && !signed ? 'The customer must read and sign the agreement.' : !consent ? 'Confirm the customer has been told the terms.' : null);
       case 'pay': return needsRef && !pay.reference.trim() ? 'Enter the receipt or approval number.' : problems[0] ?? null;
       default: return null;
     }
@@ -136,7 +148,7 @@ export function NewOrder() {
 
   const submit = async () => {
     const o = await run(() => post('/orders', {
-      ...body, fiberReservationId: meta.data?.modules?.fiberCoverage ? fiberLock ?? undefined : undefined, installationSlot: !bookable && slot ? new Date(slot).toISOString() : undefined, installationSlotRef: bookable && wfmSlot ? wfmSlot : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
+      ...body, fiberReservationId: meta.data?.modules?.fiberCoverage ? fiberLock ?? undefined : undefined, installationSlot: !bookable && slot ? new Date(slot).toISOString() : undefined, installationSlotRef: bookable && wfmSlot ? wfmSlot : undefined, agreement: signed ? { image: signed.image, versionIds: signed.versionIds, geo: signed.geo ?? undefined, signerName: customer?.displayName } : undefined, deliveryAddress: (shipTo || needs.installation) && address ? address : undefined,
       delivery: how ? { method: how, pickupStoreId: how === 'COLLECT' ? pickupStore : undefined } : undefined,
       payment: { method: (quote?.dueNowMinor ?? 0) > 0 ? pay.method : 'CASH', reference: pay.reference || undefined, confirmed: cashier && pay.received && (quote?.dueNowMinor ?? 0) > 0 ? true : undefined },
       storeId: retail ? me?.storeId || store || undefined : undefined, dealerId: channel === 'DEALER' ? dealer?.id : undefined, dealerAgentId: channel === 'DEALER' ? agent?.id : undefined,
@@ -148,7 +160,7 @@ export function NewOrder() {
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
     marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
-    conflicts: meta.data?.typeConflicts ?? [], address, setAddress: (a: string) => { setAddress(a); setWfmSlot(null); }, booking: { enabled: bookable, slot: wfmSlot, setSlot: setWfmSlot, later: bookLater, setLater: setBookLater }, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
+    agreements: { data: agr, signed, setSigned }, conflicts: meta.data?.typeConflicts ?? [], address, setAddress: (a: string) => { setAddress(a); setWfmSlot(null); }, booking: { enabled: bookable, slot: wfmSlot, setSlot: setWfmSlot, later: bookLater, setLater: setBookLater }, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
 

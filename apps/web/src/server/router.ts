@@ -477,7 +477,7 @@ const clientRoute = (method: string, path: string, h: (c: PublicCtx & { client: 
 /** A northbound route. `scope` null = any authenticated credential; `idempotent` makes X-Idempotency-Key mandatory. */
 const north = (method: string, path: string, scope: string | null, h: (c: PublicCtx & { principal: core.GatewayPrincipal }) => unknown, o: { idempotent?: boolean } = {}) =>
   route(method, path, null, h as unknown as Handler, { north: { scope, idempotent: o.idempotent }, noCsrf: true });
-const selfAccess = (c: { client: core.ApiClient; req: Request }): core.AppAccess => ({ channel: 'SELF_SERVE', clientId: c.client.id, token: c.req.headers.get('x-application-token') ?? undefined });
+const selfAccess = (c: { client: core.ApiClient; req: Request }): core.AppAccess => ({ channel: 'SELF_SERVE', clientId: c.client.id, token: c.req.headers.get('x-application-token') ?? undefined, ip: (c.req.headers.get('x-shopper-ip') ?? '').slice(0, 45) || clientIp(c.req), userAgent: c.req.headers.get('x-shopper-ua') ?? c.req.headers.get('user-agent') ?? undefined });
 const cartSchema = z.object({ lines: z.array(z.object({ offerId: z.string().max(80), quantity: z.number().int().min(1).max(5).optional(), attachTo: z.string().max(80).optional(), dealTermMonths: z.number().int().optional(), payInFull: z.boolean().optional() })).min(1).max(10) });
 const personalSchema = z.object({
   fullName: z.string().max(100), dateOfBirth: z.string().max(10), nationality: z.string().max(60).optional(), idType: z.enum(core.ID_TYPES), idNumber: z.string().max(30),
@@ -485,7 +485,8 @@ const personalSchema = z.object({
 }).partial();
 const addressSchema = z.object({ line1: z.string().max(120), line2: z.string().max(120).optional(), city: z.string().max(80), state: z.string().max(80).optional(), postcode: z.string().max(20), country: z.string().length(2) });
 const consentSchema = z.object({ acceptedTerms: z.boolean(), privacyAccepted: z.boolean(), marketingOptIn: z.boolean(), authorisedAssistant: z.boolean().optional(), creditCheck: z.boolean().optional() }).partial();
-const appPatch = z.object({ fiber: z.object({ reservationId: z.string().uuid() }).nullable().optional(), lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
+const agreementBody = z.object({ image: z.string().max(600_000), signerName: z.string().max(120).optional(), geo: z.object({ lat: z.number(), lon: z.number(), accuracy: z.number().optional() }).nullish(), versionIds: z.array(z.string().uuid()).max(20).optional() });
+const appPatch = z.object({ agreement: agreementBody.nullable().optional(), fiber: z.object({ reservationId: z.string().uuid() }).nullable().optional(), lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
 const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(3_700_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') });
 const DOC_BODY = 3_800_000;
 
@@ -504,6 +505,7 @@ clientRoute('POST', '/store/applications', async ({ db, body, req, client }) => 
   return Response.json({ id: r.application.id, token: r.token, expiresAt: r.application.expiresAt }, { status: 201 });
 });
 clientRoute('GET', '/store/applications/:id', async (c) => core.applicationView(c.db, c.params.id!, selfAccess(c)));
+clientRoute('GET', '/store/applications/:id/agreements', async (c) => core.applicationAgreements(c.db, c.params.id!, selfAccess(c)));
 clientRoute('PATCH', '/store/applications/:id', async (c) => { await core.updateApplication(c.db, c.params.id!, selfAccess(c), appPatch.parse(c.body)); return core.applicationView(c.db, c.params.id!, selfAccess(c)); });
 clientRoute('POST', '/store/applications/:id/documents', async (c) => {
   const b = docUpload.parse(c.body);
@@ -531,7 +533,7 @@ open('POST', '/webhooks/gateway/:gateway', async ({ db, raw, req, params }) => {
 }, { noCsrf: true });
 
 // ───────────────────────── assisted sales (shop assistant, with the customer present) ─────────────────────────
-const staffAccess = (u: SessionUser): core.AppAccess => ({ channel: 'RETAIL_ASSISTED', staff: { username: u.username, storeId: u.scope.storeId ?? null, canSeeAll: !!u.scope.unrestricted } });
+const staffAccess = (u: SessionUser, req?: Request): core.AppAccess => ({ channel: 'RETAIL_ASSISTED', ip: req ? clientIp(req) : null, userAgent: req?.headers.get('user-agent') ?? undefined, staff: { username: u.username, storeId: u.scope.storeId ?? null, canSeeAll: !!u.scope.unrestricted } });
 get('/assisted/config', 'store:assist', ({ db }) => core.storeConfig(db));
 get('/assisted/catalog', 'store:assist', async ({ db, query }) => { const { offers, ...rest } = await core.storeCatalog(db, 'RETAIL_ASSISTED', { q: str(query, 'q'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }); return { items: offers, ...rest }; });
 post('/assisted/quote', 'store:assist', ({ db, body }) => core.quoteBasket(db, { ...cartSchema.extend({ customerId: uuid.optional() }).parse(body), channel: 'RETAIL_ASSISTED' }));
@@ -549,7 +551,8 @@ post('/assisted/applications', 'store:assist', async ({ db, user, body }) => {
   return Response.json({ id: r.application.id }, { status: 201 });
 });
 get('/assisted/applications/:id', 'store:assist', ({ db, user, params }) => core.applicationView(db, params.id!, staffAccess(user)));
-patch('/assisted/applications/:id', 'store:assist', async ({ db, user, params, body }) => { await core.updateApplication(db, params.id!, staffAccess(user), appPatch.parse(body)); return core.applicationView(db, params.id!, staffAccess(user)); });
+get('/assisted/applications/:id/agreements', 'store:assist', ({ db, user, params }) => core.applicationAgreements(db, params.id!, staffAccess(user)));
+patch('/assisted/applications/:id', 'store:assist', async ({ db, user, req, params, body }) => { await core.updateApplication(db, params.id!, staffAccess(user, req), appPatch.parse(body)); return core.applicationView(db, params.id!, staffAccess(user)); });
 route('POST', '/assisted/applications/:id/documents', 'store:assist', async ({ db, user, params, body }) => {
   const b = docUpload.parse(body);
   return core.uploadDocument(db, params.id!, staffAccess(user), b.kind, Buffer.from(b.dataBase64, 'base64'));
@@ -821,7 +824,7 @@ north('POST', '/v1/services/:id/transfer-ownership', 'ownership:transfer', async
 north('POST', '/v1/services/:id/status', 'subscriber:status', ({ db, params, body, principal }) => core.setStatusNorth(db, params.id!, z.object({ action: z.enum(core.STATUS_ACTIONS), scenario: z.string().max(30).optional(), reason: z.string().max(60).optional(), months: z.number().int().optional(), until: date.optional(), unbilledUsageMinor: z.number().int().min(0).optional() }).parse(body), northActor(principal), channelOfPrincipal(principal)), { idempotent: true });
 north('POST', '/v1/services/:id/vas', 'vas:manage', ({ db, params, body, principal }) => core.manageVasNorth(db, params.id!, z.object({ action: z.enum(core.VAS_ACTIONS), offerId: z.string().max(80) }).parse(body), northActor(principal)), { idempotent: true });
 // a subscription is identified by the service it is on
-north('POST', '/v1/subscriptions/:id/change-plan', 'subscription:change', ({ db, params, body, principal }) => core.changePlanNorth(db, params.id!, z.object({ serviceId: z.string().max(60).optional(), targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']), addOns: z.array(z.string().max(80)).max(10).optional(), acceptContractTerms: z.boolean().optional() }).parse(body), northActor(principal)), { idempotent: true });
+north('POST', '/v1/subscriptions/:id/change-plan', 'subscription:change', ({ db, params, body, principal, req }) => core.changePlanNorth(db, params.id!, z.object({ serviceId: z.string().max(60).optional(), targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']), addOns: z.array(z.string().max(80)).max(10).optional(), acceptContractTerms: z.boolean().optional(), agreement: agreementBody.optional() }).transform((b) => ({ ...b, agreement: b.agreement ? { signature: { image: b.agreement.image, signerName: b.agreement.signerName, geo: b.agreement.geo ?? null }, versionIds: b.agreement.versionIds, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined } : undefined })).parse(body), northActor(principal)), { idempotent: true });
 north('DELETE', '/v1/subscriptions/:id/change-plan', 'subscription:change', async ({ db, params, principal }) => { await core.cancelPendingPlanChange(db, params.id!, northActor(principal)); return new Response(null, { status: 204 }); });
 get('/settings/integration-hub/operations', 'settings:manage', ({ db }) => core.getNorthSettings(db));
 post('/settings/integration-hub/operations', 'settings:manage', ({ db, user, body }) => core.setNorthSettings(db, user.username, z.object({ simSwapOtpRequired: z.boolean().optional(), otpTtlMinutes: z.number().int().optional(), simSwapFeeMinor: z.number().int().optional(), numberChangeFeeMinor: z.number().int().optional(), ownershipTransferFeeMinor: z.number().int().optional(), planChangeFeeMinor: z.number().int().optional() }).parse(body)));
@@ -835,6 +838,7 @@ const northOrderBody = () => z.object({
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), captured: z.boolean().optional() }),
   delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), address: z.string().max(500).optional(), pickupStoreId: z.string().max(50).optional() }).optional(),
   installationSlot: z.string().max(40).optional(), storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
+  agreement: agreementBody.optional(),
 });
 north('POST', '/v1/orders', 'order:create', async ({ db, body, principal }) => created(await core.createOrderNorth(db, northOrderBody().parse(body) as core.NorthOrderInput, northActor(principal), principal.scopes)), { idempotent: true });
 north('GET', '/v1/orders', 'order:read', ({ db, query }) => core.listOrdersNorth(db, { customerId: str(query, 'customerId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
@@ -1019,6 +1023,14 @@ post('/groups/:id/principal', 'service:manage', async ({ db, user, params, body 
 });
 
 /** Vector B: an existing single line moves to a group plan and becomes the family head; the plan's remaining slots stay open for members. */
+// Staff change a customer's plan from the service panel: the plan change agreement is shown, signed and stored with the change.
+post('/services/:id/change-plan/agreements', 'service:manage', async ({ db, params, body }) => {
+  return core.previewPlanChangeAgreements(db, params.id!, z.object({ targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']) }).parse(body));
+});
+post('/services/:id/change-plan', 'service:manage', async ({ db, user, req, params, body }) => {
+  const b = z.object({ targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']), addOns: z.array(z.string().max(80)).max(10).optional(), acceptContractTerms: z.boolean().optional(), agreement: agreementBody.optional() }).parse(body);
+  return core.changePlanNorth(db, params.id!, { ...b, agreement: b.agreement ? { signature: { image: b.agreement.image, signerName: b.agreement.signerName, geo: b.agreement.geo ?? null }, versionIds: b.agreement.versionIds, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined, agentName: user.displayName ?? user.username } : undefined }, user.username);
+});
 post('/services/:id/upgrade-to-group', 'service:manage', async ({ db, user, params, body }) => new core.GroupOrderService(db).upgrade(params.id!, z.object({ offerId: z.string().max(70) }).parse(body).offerId, user.username));
 
 // ───────────────────────── number portability into the operator (port-in) ─────────────────────────
@@ -1185,7 +1197,7 @@ const orderBody = z.object({
   lines: z.array(lineBody).min(1).max(50),
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), confirmed: z.boolean().optional() }),
   storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
-  deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(), installationSlotRef: z.object({ id: z.string().min(1).max(200), start: z.string().max(40), end: z.string().max(40) }).optional(), fiberReservationId: z.string().uuid().optional(),
+  deliveryAddress: z.string().max(500).optional(), agreement: agreementBody.optional(), installationSlot: z.string().max(40).optional(), installationSlotRef: z.object({ id: z.string().min(1).max(200), start: z.string().max(40), end: z.string().max(40) }).optional(), fiberReservationId: z.string().uuid().optional(),
   delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), pickupStoreId: z.string().max(50).optional() }).optional(),
   financing: z.object({ creditCheckId: uuid.optional(), payInFull: z.boolean().optional() }).optional(),
 });
@@ -1221,6 +1233,13 @@ post('/orders/quote', null, async ({ db, user, body }) => {
 });
 // Live installation windows from the field-service system, when Settings → Cases → Field service says orders may book them.
 get('/orders/installation-slots', 'order:read', ({ db, query }) => core.findOrderSlots(db, { address: str(query, 'address') ?? '', from: str(query, 'from'), to: str(query, 'to') }));
+// The agreements this basket needs (the text with the customer's details filled in) and whether they must be signed: shown at the review step. Same channel permission as the quote.
+post('/orders/agreements', null, async ({ db, user, body }) => {
+  const raw = z.object({ channel: z.enum(core.CHANNELS) }).parse(body);
+  need(user, `order:create:${raw.channel}` as Permission);
+  const b = orderBody.partial({ payment: true }).parse(body);
+  return core.previewOrderAgreements(db, { customerId: user.scope.customerId ?? b.customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines, financing: b.financing, payment: { method: b.payment?.method ?? 'CREDIT_CARD', installmentMonths: b.payment?.installmentMonths } } as never, { agentName: user.scope.customerId ? null : user.displayName ?? user.username });
+});
 get('/orders/addons', 'order:read', ({ db, user, query }) => core.eligibleAddons(db, {
   customerId: user.scope.customerId ?? str(query, 'customerId'), offerIds: (str(query, 'offers') ?? '').split(',').filter(Boolean).slice(0, 20), channel: z.enum(core.CHANNELS).parse(str(query, 'channel')),
   marketCode: user.marketCode ?? 'SG', q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor'),
@@ -1264,7 +1283,7 @@ post('/orders', null, async ({ db, user, body, req }) => {
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, installationSlotRef: b.installationSlotRef, financing: b.financing, actor: user.username, fiberReservationId: b.fiberReservationId,
+      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, installationSlotRef: b.installationSlotRef, agreement: b.agreement ? { signature: { image: b.agreement.image, signerName: b.agreement.signerName, geo: b.agreement.geo ?? null }, versionIds: b.agreement.versionIds, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined, agentName: portal ? null : user.displayName ?? user.username } : undefined, financing: b.financing, actor: user.username, fiberReservationId: b.fiberReservationId,
     });
     await core.fiberConfirmLock(db, b.fiberReservationId, String(order.number ?? order.id), user.username);
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);

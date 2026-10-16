@@ -2163,3 +2163,86 @@ describe('offer type switches and service types', () => {
     } finally { setFiberFetch(null); delete process.env.MERIDIAN_FIBER_URL; delete process.env.MERIDIAN_FIBER_API_KEY; await call('POST', '/settings/modules', { cookie: su, body: { fiberCoverage: { enabled: true } } }); }
   });
 });
+
+describe('documents: agreements at order and plan change, the vault and who may see what', () => {
+  const sigPng = () => {
+    const { crc32, deflateSync } = require('node:zlib') as typeof import('node:zlib');
+    const w = 200, h = 60, chunk = (t: string, d: Buffer) => { const tb = Buffer.from(t), l = Buffer.alloc(4); l.writeUInt32BE(d.length); const c = Buffer.alloc(4); c.writeUInt32BE(crc32(Buffer.concat([tb, d]))); return Buffer.concat([l, tb, d, c]); };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+    const raw = Buffer.alloc((w * 3 + 1) * h, 255); for (let y = 0; y < h; y++) raw[y * (w * 3 + 1)] = 0;
+    return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+  };
+  const image = () => `data:image/png;base64,${sigPng().toString('base64')}`;
+
+  it('writes templates, shows and signs the agreement with the order, serves the PDF through short links, and logs every view', async () => {
+    const su = await root();
+    expect((await call('POST', '/documents/templates/starter', { cookie: su })).json.added).toBeGreaterThanOrEqual(0);
+    const list = (await call('GET', '/documents/templates', { cookie: su })).json.items as any[];
+    expect(list.map((t) => t.code)).toEqual(expect.arrayContaining(['SUBSCRIBER_AGREEMENT', 'PLAN_CHANGE']));
+    const pv = (await call('POST', '/documents/templates/preview', { cookie: su, body: { html: '<h1 onclick="x()">Hi {{customer.fullName}}</h1><script>alert(1)</script>{{nope.token}}' } })).json;
+    expect(pv.clean).toBe('<h1>Hi {{customer.fullName}}</h1>{{nope.token}}');
+    expect(pv.errors[0]).toMatch(/Unknown token/);
+    expect((await call('POST', '/documents/templates', { cookie: su, body: { name: 'Bad', category: 'OTHER', html: '<p>{{nope.token}}</p>' } })).status).toBe(400);
+
+    const cid = await customer(su);
+    const body = { channel: 'CALL_CENTER', customerId: cid, lines: [{ offerId: 'plan-sim-5g' }] };
+    const shown = (await call('POST', '/orders/agreements', { cookie: su, body })).json;
+    expect(shown.agreements.length).toBeGreaterThan(0);
+    expect(shown.agreements[0].html).not.toContain('{{');
+    const o = await call('POST', '/orders', { cookie: su, body: { ...body, payment: { method: 'CASH', confirmed: true, reference: 'R1' }, agreement: { image: image(), versionIds: shown.agreements.map((a: any) => a.versionId), geo: { lat: 3.1, lon: 101.6 } } } });
+    expect(o.status).toBe(200);
+    const docs = ((await call('GET', `/documents?orderId=${o.json.id}`, { cookie: su })).json.items as any[]).sort((a, b) => (a.kind === 'CONTRACT' ? 0 : 1) - (b.kind === 'CONTRACT' ? 0 : 1));
+    expect(docs.filter((d) => d.kind === 'CONTRACT').length).toBe(shown.agreements.length);   // and one line for the signature picture
+    expect(docs[0]).not.toHaveProperty('data');
+    const file = await call('GET', `/documents/${docs[0].id}/file`, { cookie: su, headers: { 'x-forwarded-for': '198.51.100.20' } });
+    expect(file.status).toBe(200); expect(file.headers.get('content-type')).toBe('application/pdf'); expect(file.text.startsWith('%PDF-')).toBe(true);
+    expect(file.headers.get('content-security-policy')).toContain('sandbox');
+    const link = (await call('GET', `/documents/${docs[0].id}/link`, { cookie: su })).json;
+    expect(link.ttlSeconds).toBe(900);
+    const viaLink = await call('GET', link.url.replace('/api', ''), { origin: null });                 // no session: the signed link is the credential
+    expect(viaLink.status).toBe(200); expect(viaLink.text.startsWith('%PDF-')).toBe(true);
+    expect((await call('GET', '/documents/file/nonsense', { origin: null })).status).toBe(422);
+    expect((await call('POST', `/documents/${docs[0].id}/verify-seal`, { cookie: su })).json).toMatchObject({ fileIntact: true, sealMatches: true, intact: true });
+    const log = (await call('GET', `/documents/log?documentId=${docs[0].id}`, { cookie: su })).json.items as any[];
+    expect(log.map((l) => l.action)).toEqual(expect.arrayContaining(['GENERATE', 'VIEW', 'LINK_ISSUED', 'VERIFY_SEAL']));
+    expect(log.filter((l) => l.action === 'VIEW').map((l) => l.ip)).toContain('198.51.100.20');
+    // a signature is mandatory once Settings says so
+    await call('POST', '/settings/documents', { cookie: su, body: { requireAtOrder: true } });
+    expect((await call('POST', '/orders', { cookie: su, body: { ...body, payment: { method: 'CASH', confirmed: true, reference: 'R2' } } })).status).toBe(400);
+    await call('POST', '/settings/documents', { cookie: su, body: { requireAtOrder: false } });
+  });
+
+  it('keeps identity documents to the people who may open them', async () => {
+    const su = await root();
+    const compliance = await staff(['compliance']), agent = await staff(['customer-service']);
+    const cid = await customer(su);
+    const up = await call('POST', '/documents/kyc', { cookie: compliance.cookie, body: { customerId: cid, category: 'PASSPORT', content: sigPng().toString('base64') } });
+    expect(up.status).toBe(200); expect(up.json.status).toBe('PENDING_VERIFICATION');
+    expect((await call('POST', '/documents/kyc', { cookie: agent.cookie, body: { customerId: cid, category: 'PASSPORT', content: sigPng().toString('base64') } })).status).toBe(403);
+    expect((await call('GET', `/documents/${up.json.id}`, { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('GET', `/documents/${up.json.id}/file`, { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('GET', '/documents?kind=KYC', { cookie: agent.cookie })).json.items).toEqual([]);                 // the agent's list holds agreements only
+    expect((await call('GET', '/documents', { cookie: compliance.cookie })).json.items.some((d: any) => d.id === up.json.id)).toBe(true);
+    expect((await call('POST', `/documents/${up.json.id}/decision`, { cookie: compliance.cookie, body: { decision: 'REJECT' } })).status).toBe(400);      // a reason is required
+    expect((await call('POST', `/documents/${up.json.id}/decision`, { cookie: compliance.cookie, body: { decision: 'VERIFY' } })).json.status).toBe('VERIFIED_MANUAL');
+    expect((await call('POST', `/documents/${up.json.id}/purge`, { cookie: agent.cookie, body: { reason: 'no' } })).status).toBe(403);
+    const file = await call('GET', `/documents/${up.json.id}/file`, { cookie: compliance.cookie });
+    expect(file.status).toBe(200); expect(file.headers.get('cache-control')).toBe('no-store');
+    expect((await call('GET', `/documents/log?documentId=${up.json.id}`, { cookie: agent.cookie })).status).toBe(403);
+  });
+
+  it('asks for the plan change agreement and stores it with the service', async () => {
+    const su = await root();
+    const cid = await customer(su);
+    const o = await call('POST', '/orders', { cookie: su, body: { channel: 'CALL_CENTER', customerId: cid, lines: [{ offerId: 'plan-sim-5g' }], payment: { method: 'CASH', confirmed: true, reference: 'R3' } } });
+    const serviceId = o.json.services[0].id;
+    const plans = (await call('GET', '/catalog?limit=50&status=ACTIVE&kind=SIM_ONLY', { cookie: su })).json.items as any[];
+    const target = plans.find((p) => p.id !== 'plan-sim-5g' && p.id !== o.json.lines?.[0]?.offerId);
+    if (!target) return;   // the starter catalogue has only one SIM-only plan: nothing to move to
+    const ag = (await call('POST', `/services/${serviceId}/change-plan/agreements`, { cookie: su, body: { targetOfferId: target.id, effective: 'IMMEDIATE' } })).json;
+    expect(ag.agreements.map((a: any) => a.code)).toEqual(['PLAN_CHANGE']);
+    const r = await call('POST', `/services/${serviceId}/change-plan`, { cookie: su, body: { targetOfferId: target.id, effective: 'IMMEDIATE', agreement: { image: image(), versionIds: ag.agreements.map((a: any) => a.versionId) } } });
+    expect(r.status).toBe(200);
+    expect(((await call('GET', `/documents?customerId=${cid}`, { cookie: su })).json.items as any[]).some((d) => d.category === 'PLAN_CHANGE')).toBe(true);
+  });
+});

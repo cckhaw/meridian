@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, FiberCoverageCheck, Field, Input, Select, Spinner, type FiberApi } from '@meridian/ui';
+import { AgreementSigner, Alert, Badge, Button, Card, FiberCoverageCheck, Field, Input, Select, Spinner, type AgreementView, type FiberApi, type SignedPayload } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -304,11 +304,16 @@ function Review({ view, onBack, onSubmitted }: { view: View; onBack: () => void;
   const [marketing, setMarketing] = useState(false);
   const [credit, setCredit] = useState(false);
   const needsCredit = !!view.quote?.financing?.creditCheck;
+  // The agreements for this sign-up, with the shopper's own details filled in (see Settings → Document templates in the CRM).
+  const [agr, setAgr] = useState<{ required: boolean; agreements: AgreementView[] } | null>(null);
+  const [signed, setSigned] = useState<SignedPayload | null>(null);
+  useEffect(() => { let live = true; api('/application/agreements').then((r) => { if (live) setAgr(r); }).catch(() => { if (live) setAgr({ required: false, agreements: [] }); }); return () => { live = false; }; }, [view.id]);
+  const needsSignature = !!agr?.required && !signed;
   const { busy, error, run } = useSave(onSubmitted);
   const link = (url: string | null, text: string) => (url ? <a href={url} target="_blank" rel="noreferrer" className="underline">{text}</a> : <>{text}</>);
   return (
     <Card>
-      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api('/application', { method: 'PATCH', json: { consent: { acceptedTerms: accepted, privacyAccepted: privacy, marketingOptIn: marketing, ...(needsCredit ? { creditCheck: credit } : {}) } } }); await api('/application/kyc', { method: 'POST', json: {} }); }); }}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api('/application', { method: 'PATCH', json: { consent: { acceptedTerms: accepted, privacyAccepted: privacy, marketingOptIn: marketing, ...(needsCredit ? { creditCheck: credit } : {}) }, ...(signed ? { agreement: { image: signed.image, versionIds: signed.versionIds, geo: signed.geo ?? undefined, signerName: view.personal.fullName } } : {}) } }); await api('/application/kyc', { method: 'POST', json: {} }); }); }}>
         <h2 className="text-title3 font-semibold">Check and confirm</h2>
         <dl className="grid gap-x-4 gap-y-1 text-subhead sm:grid-cols-[auto_1fr]">
           <dt className="text-label2">Name</dt><dd>{view.personal.fullName}</dd>
@@ -321,8 +326,9 @@ function Review({ view, onBack, onSubmitted }: { view: View; onBack: () => void;
         <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={privacy} onChange={(e) => setPrivacy(e.target.checked)} /><span className="text-subhead">I have read the {link(terms.privacyUrl, 'privacy notice')} and agree to my ID being checked to verify my identity.</span></label>
         {needsCredit && <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={credit} onChange={(e) => setCredit(e.target.checked)} /><span className="text-subhead">I agree to a credit check on my ID number, to decide how my device is paid for over the contract.</span></label>}
         <label className="flex items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} /><span className="text-subhead text-label2">Send me offers (optional).</span></label>
+        {agr && agr.agreements.length > 0 && <AgreementSigner agreements={agr.agreements} required={agr.required} onChange={setSigned} who="you" />}
         {error && <Alert>{error}</Alert>}
-        <div className="flex gap-2"><Button type="button" variant="secondary" onClick={onBack}>Back</Button><Button type="submit" className="flex-1" disabled={busy || !accepted || !privacy || (needsCredit && !credit)}>{busy ? 'Submitting…' : 'Submit for verification'}</Button></div>
+        <div className="flex gap-2"><Button type="button" variant="secondary" onClick={onBack}>Back</Button><Button type="submit" className="flex-1" disabled={busy || !accepted || !privacy || needsSignature || (needsCredit && !credit)}>{busy ? 'Submitting…' : 'Submit for verification'}</Button></div>
       </form>
     </Card>
   );

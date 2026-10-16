@@ -119,7 +119,7 @@ async function setOutcome(q: Queryable, app: Row, c: Row, o: { case: 'PENDING' |
     [c.id, o.case, o.by, decided, o.reason ?? null, o.flags ?? null, o.checks ? JSON.stringify(o.checks) : null, o.attestation ? JSON.stringify(o.attestation) : null]);
   await q.query(`UPDATE applications SET status=$2, updated_at=now() WHERE id=$1`, [app.id, o.app]);
   if (o.case === 'APPROVED' && app.customerId) await markVerified(q, app.customerId);
-  if (decided) await settleLegacyDocuments(q, app.id, o.case === 'APPROVED' ? 'APPROVED' : 'REJECTED', app.customerId ?? null, o.by);
+  if (decided) await settleLegacyDocuments(q, app.id, o.case === 'APPROVED' ? 'APPROVED' : 'REJECTED', app.customerId ?? null, o.by && !/^auto/.test(o.by) ? o.by : null);
 }
 
 export async function markVerified(q: Queryable, customerId: string) {

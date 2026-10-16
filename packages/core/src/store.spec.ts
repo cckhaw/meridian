@@ -9,9 +9,11 @@ import type { Db } from './db.js';
 import { createCustomer } from './customers.js';
 import { decideKycCase, type Personal, getKycCase, getKycDocument, listKycCases, markVerified } from './kyc.js';
 import { advanceOrder, getOrder, placeOrder } from './orders.js';
-import { applicationView, applyGatewayEvent, cancelApplication, checkout, createApplication, createPaymentLink, expireApplications, quoteBasket, startPayment, storeCatalog, storeConfig, submitKyc, testGatewayOutcome, updateApplication, uploadDocument, type AppAccess } from './store.js';
+import { applicationAgreements, applicationView, applyGatewayEvent, cancelApplication, checkout, createApplication, createPaymentLink, expireApplications, quoteBasket, startPayment, storeCatalog, storeConfig, submitKyc, testGatewayOutcome, updateApplication, uploadDocument, type AppAccess } from './store.js';
 import { activeGateways, getStoreSettings, setStoreSettings, DEFAULT_STORE_SETTINGS } from './store-settings.js';
-import { freshDb } from './test-helpers.js';
+import { freshDb, signatureDataUrl } from './test-helpers.js';
+import { ensureStarterTemplates } from './doc-templates.js';
+import { setDocumentSettings } from './documents.js';
 
 const png = (w = 64, h = 64) => {
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
@@ -206,6 +208,33 @@ describe('self-serve sign-up, KYC and payment', () => {
     await submitKyc(db, a.id, a.acc);
     expect((await applicationView(db, a.id, a.acc) as any).status).toBe('KYC_APPROVED');
     await setStoreSettings(db, 'root', s);
+  });
+
+  it('shows the agreements to the applicant, keeps the signature until checkout, then signs them into the order and settles the identity documents in the vault', async () => {
+    const st = await getStoreSettings(db);
+    await setStoreSettings(db, 'root', { ...st, kycMode: 'auto' });
+    await ensureStarterTemplates(db, { username: 'root' });
+    await setDocumentSettings(db, 'root', { requireAtOrder: true });
+    const a = await selfServe();
+    await updateApplication(db, a.id, a.acc, { personal: person({ fullName: 'Jamie Ong' }), consent: { ...consent }, address });
+    await uploadAll(a.id, a.acc);
+    await submitKyc(db, a.id, { ...a.acc, ip: '203.0.113.50', userAgent: 'vitest-shop' });
+    expect((await applicationView(db, a.id, a.acc) as any).status).toBe('KYC_APPROVED');
+    const vault = (await db.query(`SELECT category, status FROM documents WHERE application_id=$1 AND kind='KYC' ORDER BY category`, [a.id])).rows;
+    expect(vault.map((v) => v.category)).toEqual(['NATIONAL_ID_BACK', 'NATIONAL_ID_FRONT', 'SELFIE']);
+    expect(new Set(vault.map((v) => v.status))).toEqual(new Set(['VERIFIED_AUTO']));          // the automatic check approved them
+    const shown = await applicationAgreements(db, a.id, a.acc);
+    expect(shown).toMatchObject({ required: true, signed: false });
+    expect(shown.agreements[0]!.html).toContain('Jamie Ong');
+    await expect(checkout(db, a.id, a.acc)).rejects.toThrow(/read and sign/);
+    await updateApplication(db, a.id, { ...a.acc, ip: '203.0.113.50', userAgent: 'vitest-shop' }, { agreement: { image: signatureDataUrl(), signerName: 'Jamie Ong', versionIds: shown.agreements.map((x) => x.versionId) } });
+    expect((await db.query('SELECT agreement FROM applications WHERE id=$1', [a.id])).rows[0]!.agreement.signatureEnc).not.toContain('data:image');   // stored encrypted
+    const out = await checkout(db, a.id, a.acc);
+    const docs = (await db.query(`SELECT d.id, s.ip, s.method FROM documents d JOIN document_signatures s ON s.document_id=d.id WHERE d.order_id=$1`, [out.order.id])).rows;
+    expect(docs.length).toBe(shown.agreements.length);
+    expect(docs[0]).toMatchObject({ ip: '203.0.113.50', method: 'SELF_SERVE' });
+    await setDocumentSettings(db, 'root', { requireAtOrder: false });
+    await setStoreSettings(db, 'root', st);
   });
 
   it('rejects files that are not images or PDFs, and oversized files', async () => {

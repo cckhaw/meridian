@@ -127,7 +127,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'call-center': {
     id: 'call-center', label: 'Call Center Agent', scope: 'staff', home: '/customers',
     summary: 'Handles customer queries on the Customer 360: profile, services, orders, bills, cases. Can suspend/resume, change SIM or number, take payments.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'order:read', ...ch('CALL_CENTER'), 'numbering:select',
+    permissions: ['document:read', 'dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'order:read', ...ch('CALL_CENTER'), 'numbering:select',
       'order:payment', 'billing:read', 'billing:pay', 'billing:simulate', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   telesales: {
@@ -145,7 +145,7 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'retail-manager': {
     id: 'retail-manager', label: 'Retail Store Manager', scope: 'store', home: '/orders',
     summary: 'Runs one store: sees that store’s sales and orders, approves exceptions at the counter, moves and writes off its stock, and sees its commission. Sees only that store’s records.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'), 'order:payment', 'order:fulfil', 'order:cancel',
+    permissions: ['document:read', 'dashboard:read', 'customer:search', 'customer:read', 'customer:create', 'service:read', 'service:manage', 'catalog:read', 'order:read', ...ch('RETAIL_ASSISTED', 'QUICK_SALE'), 'order:payment', 'order:fulfil', 'order:cancel',
       'order:override', 'inventory:read', 'inventory:write', 'inventory:transfer', 'inventory:writeoff', 'commission:read', 'billing:read', 'billing:pay', 'store:assist', 'kyc:attest', 'numbering:select', 'store:report', 'store:cashdrawer'],
   },
   dealer: {
@@ -161,13 +161,13 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   'customer-service': {
     id: 'customer-service', label: 'Customer Service', scope: 'staff', home: '/cases', creditLimitMinor: 20_000,
     summary: 'Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer', 'mnp:manage',
+    permissions: ['document:read', 'dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'service:terminate', 'service:transfer', 'mnp:manage',
       'order:read', 'order:cancel', 'order:override', 'billing:read', 'billing:credit', 'billing:simulate', 'collections:manage', 'case:read', 'case:create', 'case:write', 'catalog:read'],
   },
   'team-lead': {
     id: 'team-lead', label: 'Call Center Supervisor', scope: 'staff', home: '/cases', creditLimitMinor: 100_000,
     summary: 'Leads a support team: watches SLAs and escalations, groups cases into network incidents, approves refunds above an agent’s limit.',
-    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'mnp:manage', 'order:read', 'order:cancel',
+    permissions: ['document:read', 'dashboard:read', 'customer:search', 'customer:read', 'customer:write', 'service:read', 'service:manage', 'service:suspend', 'mnp:manage', 'order:read', 'order:cancel',
       'billing:read', 'billing:credit', 'billing:simulate', 'collections:manage', 'case:read', 'case:create', 'case:write', 'case:supervise', 'catalog:read'],
   },
   finance: {

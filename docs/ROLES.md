@@ -46,7 +46,7 @@ The **Code** is the stable name the role goes by outside the database (documents
 | Fraud desk |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
 | Store desk |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |
 | KYC reviews |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
-| Documents |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |
+| Documents |  |  |  |  |  | ✓ |  |  | ✓ |  |  | ✓ | ✓ |  |  |  | ✓ |  |
 | Number porting |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
 | Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  | ✓ |
 | Inventory | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  | ✓ |
@@ -122,7 +122,7 @@ The **Code** is the stable name the role goes by outside the database (documents
 | `store:assist` |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
 | `kyc:attest` |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
 | `kyc:review` |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
-| `document:read` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |
+| `document:read` |  |  |  |  |  | ✓ |  |  | ✓ |  |  | ✓ | ✓ |  |  |  | ✓ |  |
 | `document:kyc` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |
 | `document:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |
 | `document:template` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |

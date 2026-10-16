@@ -9,13 +9,14 @@ export class CoreError extends Error {
 
 export const coreConfigured = () => !!process.env.MERIDIAN_API_URL && !!process.env.MERIDIAN_API_KEY;
 
-export async function core<T = any>(path: string, init: { method?: string; json?: unknown; token?: string; shopperIp?: string | null } = {}): Promise<T> {
+export async function core<T = any>(path: string, init: { method?: string; json?: unknown; token?: string; shopperIp?: string | null; shopperUa?: string | null } = {}): Promise<T> {
   const base = process.env.MERIDIAN_API_URL?.replace(/\/$/, '');
   const key = process.env.MERIDIAN_API_KEY;
   if (!base || !key) throw new CoreError(503, 'NOT_CONFIGURED', 'The store is not connected to the CRM yet.');
   const headers: Record<string, string> = { authorization: `Bearer ${key}`, 'content-type': 'application/json' };
   if (init.token) headers['x-application-token'] = init.token;
   if (init.shopperIp) headers['x-shopper-ip'] = init.shopperIp;
+  if (init.shopperUa) headers['x-shopper-ua'] = init.shopperUa.slice(0, 300);
   let res: Response;
   try {
     res = await fetch(`${base}${path}`, { method: init.method ?? 'GET', headers, body: init.json === undefined ? undefined : JSON.stringify(init.json), cache: 'no-store', signal: AbortSignal.timeout(20_000) });
