@@ -66,7 +66,8 @@ Charging-system (OCS) provisioning has its own guide: [OCS.md](OCS.md).
 | Payments and finance | Dealer and agent payout files | Your bank (dealer transfers) and payroll (staff) | By hand; no connector yet |
 | Identity, credit and collections | Collections agency and write-offs | A collections agency and the finance system | Outbox: a connector you deploy delivers it |
 | Identity, credit and collections | Credit bureau | A credit bureau (REST) or the built-in simulator | Built in; needs configuring |
-| Identity, credit and collections | Identity verification (eKYC) | An eKYC vendor (document check, liveness, registry lookup) | By hand; no connector yet |
+| Identity, credit and collections | Identity verification (ID check service) | A REST service (document OCR, face match, liveness), or the built-in simulator | Built; configured by response map |
+| Identity, credit and collections | MyDigital ID | MyDigital ID (OpenID Connect) | Built; an alternative to the photographs |
 | Platform | Keys that protect customer data | Your secrets store | Built in; needs configuring |
 | Network, numbers and charging | Online charging gateway (Diameter Gy / 5G CHF) | The packet core and online charging (OCS/CHF) | Stand-in; real connector to be written |
 | Platform | PostgreSQL database | PostgreSQL or AlloyDB | Built in; needs configuring |

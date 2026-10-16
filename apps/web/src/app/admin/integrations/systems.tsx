@@ -6,6 +6,7 @@ import { dt } from '@/lib/format';
 import { AuthConnections } from './authentication';
 import { EndpointManager, type Hub } from './integration-hub';
 import { OcsPanel } from './ocs';
+import { IdentityConnections } from './identity';
 import { KycPanel, PaymentsPanel, StorefrontPanel } from './storefront';
 
 export type Status = 'CONNECTED' | 'NEEDS_SETUP' | 'LISTENING' | 'WAITING' | 'MANUAL' | 'STAND_IN' | 'REMOTE';
@@ -135,7 +136,8 @@ function Row({ item: i, open, onToggle, origin, hub, reload }: { item: Item; ope
 
           {i.id === 'storefront' && <StorefrontPanel />}
           {i.id === 'stripe' && <PaymentsPanel />}
-          {i.id === 'ekyc' && <KycPanel />}
+          {i.id === 'ekyc' && <><KycPanel /><IdentityConnections kind="KYC_OCR" h={hub} reload={reload} /></>}
+          {i.id === 'mydigitalid' && <IdentityConnections kind="KYC_MYDIGITALID" h={hub} reload={reload} />}
           {i.id === 'ocs' && <OcsPanel />}
 
           {AUTH_KIND[i.id] ? <AuthConnections kind={AUTH_KIND[i.id]!} h={hub} reload={reload} /> : ITEM_KINDS[i.id] && <EndpointManager kinds={ITEM_KINDS[i.id]!} h={hub} reload={reload} />}

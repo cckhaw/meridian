@@ -2,7 +2,7 @@
 import { useMultiMarket } from '@/lib/markets';
 import { Alert, Badge, Button, Card, Field, Input, LoadMore, SearchField, Segmented, Select, Spinner } from '@meridian/ui';
 import { useState } from 'react';
-import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
+import { api, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { label, money, step as moneyStep } from '@/lib/format';
 import { useSegments } from '@/lib/segments';
 import { Row, Section } from './wizard-ui';
@@ -311,6 +311,12 @@ export function CustomerStep({ w }: { w: Wizard }) {
     if (r) w.setCustomer({ id: r.customer.id, displayName: r.customer.displayName, segment: r.customer.segment, kycStatus: r.customer.kycStatus });
   };
 
+  // A new customer who proved identity with MyDigital ID was created when it was confirmed; carry on with them.
+  const confirmed = async (id: string) => {
+    const c = await api<any>(`/customers/${id}`);
+    w.setCustomer({ id, displayName: c.customer.displayName, segment: c.customer.segment, kycStatus: c.customer.kycStatus });
+  };
+
   if (w.customer) {
     const accts: any[] = full.data?.accounts ?? [];
     return (
@@ -354,7 +360,7 @@ export function CustomerStep({ w }: { w: Wizard }) {
         </>
       ) : (
         <Card>
-          <CustomerForm key={JSON.stringify(prefill)} initial={prefill} submitLabel="Create and continue" busy={busy} error={error} onSubmit={(b) => void create(b)} />
+          <CustomerForm key={JSON.stringify(prefill)} initial={prefill} context="order" submitLabel="Create and continue" busy={busy} error={error} onSubmit={(b) => void create(b)} onConfirmed={(id) => void confirmed(id)} />
         </Card>
       )}
     </>

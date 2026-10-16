@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 /** Only these actions are forwarded, each to one fixed CRM path. */
-const ACTIONS: Record<string, string> = { documents: 'documents', kyc: 'kyc', checkout: 'checkout', payment: 'payment', 'payment-test': 'payment/test' };
+const ACTIONS: Record<string, string> = { documents: 'documents', mydigitalid: 'mydigitalid', kyc: 'kyc', checkout: 'checkout', payment: 'payment', 'payment-test': 'payment/test' };
 
 export const POST = (req: Request, ctx: { params: Promise<{ action: string }> }) => guarded(async () => {
   if (!sameSite(req)) return failure(403, 'FORBIDDEN', 'Cross-site request blocked.');

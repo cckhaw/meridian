@@ -1,3 +1,4 @@
+import { checkCaseWithProvider, kycMethods, verifiedAssertion, type ProviderVerdict } from './kyc-providers.js';
 import { logDocument, openDocument, putDocument, settleCaseDocuments, type DocWho } from './documents.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './audit.js';
@@ -172,7 +173,7 @@ const KIND_TEXT: Record<DocKind, string> = { ID_FRONT: 'the front of the ID', ID
 
 // ───────────────────────── the case ─────────────────────────
 /** Creates or refreshes the KYC case from an application's personal details. Called whenever they change. */
-export async function syncCase(q: Queryable, appId: string, method: 'DOCUMENT_REMOTE' | 'IN_PERSON'): Promise<Row | null> {
+export async function syncCase(q: Queryable, appId: string, method: 'DOCUMENT_REMOTE' | 'IN_PERSON' | 'MYDIGITAL_ID'): Promise<Row | null> {
   const app = await loadApp(q, appId);
   const p = app.personal as Partial<Personal>;
   if (personalProblems(p).length) return null;
@@ -244,6 +245,33 @@ async function evaluate(q: Queryable, o: { personal: Pick<Personal, 'dateOfBirth
   return { hard, flags, checks: { evaluatedAt: new Date().toISOString(), age, idExpired: !!o.personal.idExpiry && o.personal.idExpiry < todayStr(), duplicateIdentity: flags.includes('DUPLICATE_IDENTITY'), imageReused: flags.includes('IMAGE_REUSED'), liveCapture: docs.length > 0 && docs.every((d) => d.live || d.kind === 'SIGNATURE') } };
 }
 
+/** What the automatic part of the process concluded about a case. */
+interface Judged { result: 'APPROVE' | 'REJECT' | 'REVIEW'; by: string | null; reason?: string; reasonCode?: string; flags: string[]; checks: Record<string, unknown> }
+
+/**
+ * Decides what the rules and, when one is connected, the ID check service make of a case.
+ *   service says pass, nothing else flagged, automatic approval on → approve        (customer VERIFIED, orders released)
+ *   service says fail                                              → reject         (orders cancelled and refunded)
+ *   doubtful, flagged, or the service could not be reached         → review task    (the verdict is shown to the reviewer)
+ * Without a service the earlier rule stands: only `kycMode: auto` with no flags approves by itself.
+ * A service that is down never rejects anyone and never blocks the order wait: the case just goes to a person.
+ */
+async function judgeCase(q: Queryable, o: { ev: { flags: string[]; checks: Record<string, unknown> }; c: Row; personal: Personal; individual: boolean; s: StoreSettings }): Promise<Judged> {
+  const flags = [...o.ev.flags];
+  const checks: Record<string, unknown> = { ...o.ev.checks };
+  const docs = await listCaseDocuments(q, { id: o.c.id, applicationId: o.c.applicationId });
+  const ran = o.individual ? await checkCaseWithProvider(q, { caseId: o.c.id, docs, idType: o.personal.idType, claimed: { fullName: o.personal.fullName, dateOfBirth: o.personal.dateOfBirth, idNumber: o.personal.idNumber, idExpiry: o.personal.idExpiry ?? null, nationality: o.personal.nationality ?? null } }) : null;
+  if (!ran) return o.s.kycMode === 'auto' && !flags.length ? { result: 'APPROVE', by: 'auto-rules', reason: 'All automatic checks passed', flags, checks } : { result: 'REVIEW', by: null, flags, checks };
+  const v: ProviderVerdict = ran.verdict;
+  checks.provider = v;
+  if (v.status === 'FAIL' && ran.settings.autoReject) return { result: 'REJECT', by: 'id-check-service', reason: v.reasons.join(' ') || 'The ID check service did not accept the documents.', reasonCode: 'PROVIDER', flags, checks };
+  if (v.status === 'FAIL') flags.push('PROVIDER_FAIL');
+  if (v.status === 'REVIEW') flags.push('PROVIDER_REVIEW');
+  if (v.status === 'UNAVAILABLE') flags.push('PROVIDER_UNAVAILABLE');
+  if (v.status === 'PASS' && !flags.length && ran.settings.autoApprove) return { result: 'APPROVE', by: 'id-check-service', reason: 'Passed the ID check service and all automatic checks', flags, checks };
+  return { result: 'REVIEW', by: null, flags, checks };
+}
+
 async function afterSubmit(q: Queryable, c: Row, customerId: string | null, actor: string, flags: string[], status: string) {
   await audit(q, actor, 'kyc_case', c.id, 'SUBMITTED', { customerId, source: c.source, flags });
   await raiseEvent(q, 'KYC_SUBMITTED', { resourceId: c.id, payload: { caseId: c.id, customerId, source: c.source, status, flags } }, { onlyIfWanted: true });
@@ -253,6 +281,9 @@ async function afterSubmit(q: Queryable, c: Row, customerId: string | null, acto
 export async function submitRemote(q: Queryable, appId: string, s: StoreSettings): Promise<Row> {
   const app = await loadApp(q, appId);
   if (app.status !== 'DRAFT') throw rejected(`This application is ${app.status.toLowerCase().replace('_', ' ')}.`);
+  // Identity already confirmed by MyDigital ID (and the details unchanged since): no photographs, the same rules, then approve or refer.
+  const proven = await verifiedAssertion(q, appId, app.personal as Personal);
+  if (proven) return recordAssertedIdentity(q, { applicationId: appId, customerId: app.customerId ?? null, source: 'STOREFRONT', actor: 'applicant', personal: app.personal as Personal, assertion: proven.assertion, autoApprove: proven.autoApprove });
   const c = await syncCase(q, appId, 'DOCUMENT_REMOTE');
   if (!c) throw invalid(personalProblems(app.personal).join(' '));
   const kinds = new Set((await listCaseDocuments(q, { id: c.id, applicationId: appId })).map((d) => d.kind));
@@ -260,16 +291,20 @@ export async function submitRemote(q: Queryable, appId: string, s: StoreSettings
   if (missing.length) throw invalid(`Photograph ${missing.map((k) => KIND_TEXT[k]).join(', ')}.`);
   const ev = await evaluate(q, { personal: app.personal as Personal, c, customerId: app.customerId ?? null, individual: true, s });
   await q.query('UPDATE kyc_cases SET submitted_at=now(), submitted_by=$2 WHERE id=$1', [c.id, 'applicant']);
+  let flags = ev.flags;
   if (ev.hard.length) {
     await setOutcome(q, app, c, { case: 'REJECTED', app: 'KYC_REJECTED', by: 'system', reason: ev.hard.join(' '), reasonCode: 'RULES', flags: ev.flags, checks: ev.checks });
-  } else if (s.kycMode === 'auto' && !ev.flags.length) {
-    await setOutcome(q, app, c, { case: 'APPROVED', app: 'KYC_APPROVED', by: 'auto-rules', reason: 'All automatic checks passed', flags: ev.flags, checks: ev.checks });
   } else {
-    await setOutcome(q, app, c, { case: 'PENDING', app: 'KYC_REVIEW', by: null, flags: ev.flags, checks: ev.checks });
+    const j = await judgeCase(q, { ev, c, personal: app.personal as Personal, individual: true, s });
+    flags = j.flags;
+    if (j.result === 'APPROVE') await setOutcome(q, app, c, { case: 'APPROVED', app: 'KYC_APPROVED', by: j.by, reason: j.reason, flags, checks: j.checks });
+    else if (j.result === 'REJECT') await setOutcome(q, app, c, { case: 'REJECTED', app: 'KYC_REJECTED', by: j.by, reason: j.reason, reasonCode: j.reasonCode, flags, checks: j.checks });
+    else await setOutcome(q, app, c, { case: 'PENDING', app: 'KYC_REVIEW', by: null, flags, checks: j.checks });
   }
   const done = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [c.id])).rows[0]!;
-  await afterSubmit(q, done, app.customerId ?? null, 'applicant', ev.flags, done.status);
-  if (done.status === 'APPROVED' && done.customerId) await releaseOrders(q, done.customerId, 'APPROVED', 'auto-rules');
+  await afterSubmit(q, done, app.customerId ?? null, 'applicant', flags, done.status);
+  if (done.customerId && done.status === 'APPROVED') await releaseOrders(q, done.customerId, 'APPROVED', done.decidedBy ?? 'auto-rules');
+  else if (done.customerId && done.status === 'REJECTED') await releaseOrders(q, done.customerId, 'REJECTED', done.decidedBy ?? 'system');
   return done;
 }
 
@@ -345,11 +380,77 @@ export async function submitCustomerKyc(q: Queryable, i: CustomerKycInput): Prom
   const c = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [caseId])).rows[0]!;
   const ev = await evaluate(q, { personal: pp, c, customerId: i.customerId, individual, s });
   await q.query('UPDATE kyc_cases SET submitted_at=now(), submitted_by=$2 WHERE id=$1', [caseId, i.actor]);
-  if (s.kycMode === 'auto' && !ev.flags.length) await setOutcome(q, null, c, { case: 'APPROVED', by: 'auto-rules', reason: 'All automatic checks passed', flags: ev.flags, checks: ev.checks });
-  else await setOutcome(q, null, c, { case: 'PENDING', by: null, flags: ev.flags, checks: ev.checks });
+  const j = await judgeCase(q, { ev, c, personal: pp, individual, s });
+  if (j.result === 'APPROVE') await setOutcome(q, null, c, { case: 'APPROVED', by: j.by, reason: j.reason, flags: j.flags, checks: j.checks });
+  else if (j.result === 'REJECT') await setOutcome(q, null, c, { case: 'REJECTED', by: j.by, reason: j.reason, reasonCode: j.reasonCode, flags: j.flags, checks: j.checks });
+  else await setOutcome(q, null, c, { case: 'PENDING', by: null, flags: j.flags, checks: j.checks });
   const done = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [caseId])).rows[0]!;
-  await afterSubmit(q, done, i.customerId, i.actor, ev.flags, done.status);
-  if (done.status === 'APPROVED') await releaseOrders(q, i.customerId, 'APPROVED', 'auto-rules');
+  await afterSubmit(q, done, i.customerId, i.actor, j.flags, done.status);
+  if (done.status === 'APPROVED') await releaseOrders(q, i.customerId, 'APPROVED', j.by ?? 'auto-rules');
+  else if (done.status === 'REJECTED') await releaseOrders(q, i.customerId, 'REJECTED', j.by ?? 'system');
+  return done;
+}
+
+// ───────────────────────── identity confirmed by an identity provider (MyDigital ID) ─────────────────────────
+export interface AssertedIdentity {
+  /** An application (store-front) or a customer (CRM) the check belongs to. */
+  applicationId?: string | null; customerId?: string | null; source: 'STOREFRONT' | 'CRM_ORDER' | 'CRM_CUSTOMER'; actor: string;
+  personal: Personal; individual?: boolean;
+  /** What the provider confirmed, kept on the case for the reviewer (no ID number, no tokens). */
+  assertion: Record<string, unknown>; autoApprove: boolean;
+}
+
+/**
+ * The person proved who they are with an identity provider instead of photographing their ID. The provider's answer has already been matched with what was
+ * typed. This opens the case, runs the same rules (age, expiry, duplicates) and approves it, or leaves it for a person when automatic approval is off or
+ * a rule flags it. No photographs exist for such a case; the reviewer sees the provider's confirmation instead.
+ */
+export async function recordAssertedIdentity(q: Queryable, a: AssertedIdentity): Promise<Row> {
+  const s = await getStoreSettings(q);
+  const pp = a.personal;
+  const hard = hardFailures(pp, s, todayStr());
+  if (hard.length) throw rejected(hard.join(' '));
+  const individual = a.individual ?? true;
+  let c: Row;
+  if (a.applicationId) {
+    const app = await loadApp(q, a.applicationId);
+    if (app.status !== 'DRAFT') throw rejected(`This application is ${app.status.toLowerCase().replace('_', ' ')}.`);
+    const synced = await syncCase(q, a.applicationId, 'MYDIGITAL_ID');
+    if (!synced) throw invalid(personalProblems(app.personal).join(' '));
+    c = synced;
+  } else {
+    const cid = a.customerId!;
+    const cust = (await q.query('SELECT * FROM customers WHERE id=$1', [cid])).rows[0];
+    if (!cust) throw notFound('customer', cid);
+    const prior = (await q.query(`SELECT * FROM kyc_cases WHERE customer_id=$1 AND application_id IS NULL ORDER BY created_at DESC LIMIT 1`, [cid])).rows[0];
+    if (prior && prior.status === 'PENDING') throw conflict('An identity check is already waiting for review for this customer.');
+    if (cust.kycStatus === 'VERIFIED') throw conflict('This customer is already verified.');
+    if (prior && prior.status === 'REJECTED' && (prior.fraudReported || prior.reasonCode === 'SUSPECTED_FRAUD')) throw rejected('The last identity check was rejected as suspected fraud. This customer cannot be re-submitted; speak to compliance.');
+    const hash = hashIdDocument(pp.idNumber);
+    const vals = [pp.fullName.trim(), pp.dateOfBirth, pp.nationality ?? null, pp.idType, encryptText(pp.idNumber.trim()), hash, maskIdDocument(pp.idNumber.trim()), pp.idExpiry ?? null];
+    let id: string;
+    if (prior && prior.status !== 'APPROVED') {
+      id = prior.id;
+      await q.query(`UPDATE kyc_cases SET method='MYDIGITAL_ID', source=$2, full_name=$3, date_of_birth=$4, nationality=$5, id_type=$6, id_number_enc=$7, id_number_hash=$8, id_number_masked=$9, id_expiry=$10,
+        status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, fraud_reported=false, flags='{}', checks='{}', updated_at=now() WHERE id=$1`, [id, a.source, ...vals]);
+    } else {
+      id = randomUUID();
+      await q.query(`INSERT INTO kyc_cases (id, application_id, customer_id, method, source, full_name, date_of_birth, nationality, id_type, id_number_enc, id_number_hash, id_number_masked, id_expiry)
+        VALUES ($1,NULL,$2,'MYDIGITAL_ID',$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [id, cid, a.source, ...vals]);
+    }
+    if (!cust.dateOfBirth && individual) await q.query('UPDATE customers SET date_of_birth=$2 WHERE id=$1', [cid, pp.dateOfBirth]);
+    c = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [id])).rows[0]!;
+  }
+  const customerId = (a.customerId ?? c.customerId ?? null) as string | null;
+  const ev = await evaluate(q, { personal: pp, c, customerId, individual, s });
+  const checks = { ...ev.checks, liveCapture: null, mydigitalid: a.assertion };
+  await q.query('UPDATE kyc_cases SET submitted_at=now(), submitted_by=$2 WHERE id=$1', [c.id, a.actor]);
+  const app = a.applicationId ? await loadApp(q, a.applicationId) : null;
+  if (a.autoApprove && !ev.flags.length) await setOutcome(q, app, c, { case: 'APPROVED', app: 'KYC_APPROVED', by: 'mydigital-id', reason: 'Identity confirmed by MyDigital ID', flags: ev.flags, checks });
+  else await setOutcome(q, app, c, { case: 'PENDING', app: 'KYC_REVIEW', by: null, flags: ev.flags, checks });
+  const done = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [c.id])).rows[0]!;
+  await afterSubmit(q, done, customerId, a.actor, ev.flags, done.status);
+  if (customerId && done.status === 'APPROVED') await releaseOrders(q, customerId, 'APPROVED', 'mydigital-id');
   return done;
 }
 
@@ -377,9 +478,10 @@ export async function customerKycView(q: Queryable, customerId: string): Promise
   const seg = (await q.query('SELECT individual FROM customer_segments WHERE id=$1', [cust.segment])).rows[0];
   return {
     status: cust.kycStatus, verifiedAt: cust.kycVerifiedAt, dateOfBirthKnown: !!cust.dobKnown, individual: seg?.individual ?? true, gate: s.kycGate, liveCaptureRequired: s.kycRequireLiveCapture, minAge: s.minAge,
-    case: c ? { id: c.id, status: c.status, source: c.source, flags: c.flags, submittedAt: c.submittedAt, decidedAt: c.decidedAt, decidedBy: c.decidedBy, reason: c.decisionReason ?? c.checks?.returnReason ?? null, reasonCode: c.reasonCode, idType: c.idType, idNumberMasked: c.idNumberMasked,
+    case: c ? { id: c.id, status: c.status, method: c.method, source: c.source, flags: c.flags, submittedAt: c.submittedAt, decidedAt: c.decidedAt, decidedBy: c.decidedBy, reason: c.decisionReason ?? c.checks?.returnReason ?? null, reasonCode: c.reasonCode, idType: c.idType, idNumberMasked: c.idNumberMasked,
       canResubmit: c.status === 'RETURNED' || (c.status === 'REJECTED' && !c.fraudReported && c.reasonCode !== 'SUSPECTED_FRAUD'), documents: (await listCaseDocuments(q, { id: c.id, applicationId: c.applicationId })).map(({ id, kind, status, live, takenAt }) => ({ id, kind, status, live, takenAt })) } : null,
     waitingOrders: await waitingOrders(q, customerId),
+    methods: await kycMethods(q),
   };
 }
 

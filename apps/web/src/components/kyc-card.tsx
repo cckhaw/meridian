@@ -30,7 +30,7 @@ export function KycCard({ customerId, context, onStatus, embedded }: { customerI
     <>
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={TONE[v.status as keyof typeof TONE] ?? 'neutral'}>{TEXT[v.status] ?? label(v.status)}</Badge>
-        {c && v.status !== 'VERIFIED' && <span className="text-footnote text-label2">{label(c.status)} · {SOURCE[c.source] ?? c.source}{c.submittedAt ? ` · ${dt(c.submittedAt)}` : ''}</span>}
+        {c && v.status !== 'VERIFIED' && <span className="text-footnote text-label2">{label(c.status)} · {SOURCE[c.source] ?? c.source}{c.method === 'MYDIGITAL_ID' ? ' · MyDigital ID' : ''}{c.submittedAt ? ` · ${dt(c.submittedAt)}` : ''}</span>}
         {v.status === 'VERIFIED' && v.verifiedAt && <span className="text-footnote text-label2">on {dt(v.verifiedAt)}</span>}
         {can('kyc:review') && c && <Link className="text-footnote text-accent" href={`/kyc/${c.id}`}>Open the review</Link>}
       </div>

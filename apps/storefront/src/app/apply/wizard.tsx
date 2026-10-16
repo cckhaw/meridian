@@ -11,6 +11,7 @@ interface View {
   id: string; status: string; expiresAt: string;
   quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; instalmentMinor?: number } }>; financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean }; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; requiresInstallation?: boolean; taxName: string } | null;
   fiber?: { reservationId: string } | null;
+  identity?: { mydigitalid: boolean };
   personal: Record<string, string | undefined>; personalProblems: string[]; address: Record<string, string> | null; consent: Record<string, unknown> | null;
   kyc: { status: string; method: string; reason: string | null; returned: boolean; needsReview?: boolean; canOrderWhileWaiting?: boolean } | null; documents: string[];
   order: { id: string; number?: string | null; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; kycHold?: boolean; lines: Array<{ name: string; quantity: number }> } | null;
@@ -59,7 +60,7 @@ export function Wizard() {
     if (!view) return 'details';
     if (view.personalProblems.length) return 'details';
     const need = ['ID_FRONT', 'SELFIE', ...(view.personal.idType === 'PASSPORT' ? [] : ['ID_BACK'])];
-    if (need.some((k) => !view.documents.includes(k))) return 'documents';
+    if (!view.identity?.mydigitalid && need.some((k) => !view.documents.includes(k))) return 'documents';
     if ((view.quote?.requiresShipping || view.quote?.requiresInstallation) && !view.address) return 'address';
     return 'review';
   }, [view]);
@@ -211,11 +212,40 @@ function Documents({ view, onChange, onBack, onDone }: { view: View; onChange: (
     try { await api('/application/documents', { method: 'POST', json: { kind, dataBase64: p.dataBase64, capture: p.capture } }); await onChange(); }
     catch (e) { setError((e as Error).message); setShots((s) => { const { [kind]: _x, ...rest } = s; return rest; }); } finally { setBusy(null); }
   };
-  const done = need.every((n) => view.documents.includes(n.kind));
+  const { kyc } = useConfig();
+  const mdid = kyc.methods?.mydigitalid;
+  const confirmed = !!view.identity?.mydigitalid;
+  // Photographs are always available; MyDigital ID is offered next to them when the operator has switched it on.
+  const [method, setMethod] = useState<'photos' | 'mydigitalid'>(confirmed ? 'mydigitalid' : 'photos');
+  const startMdid = async () => {
+    setBusy('mydigitalid'); setError(null);
+    try { const r = await api<{ url: string }>('/application/mydigitalid', { method: 'POST', json: {} }); window.location.assign(r.url); }
+    catch (e) { setError((e as Error).message); setBusy(null); }
+  };
+  const done = confirmed || need.every((n) => view.documents.includes(n.kind));
   return (
     <Card>
       <div className="space-y-4">
         <h2 className="text-title3 font-semibold">Verify your identity</h2>
+        {mdid?.store && (
+          <div role="radiogroup" aria-label="How do you want to verify?" className="grid grid-cols-2 gap-2">
+            {([['photos', 'Take photos of my ID'], ['mydigitalid', `Use ${mdid.label}`]] as const).map(([v, l]) => (
+              <button key={v} type="button" role="radio" aria-checked={method === v} onClick={() => setMethod(v)} className={`min-h-tap rounded-control border px-3 py-2 text-subhead font-medium ${method === v ? 'border-accent bg-accent/10 text-accent' : 'border-separator bg-surface text-label'}`}>{l}</button>
+            ))}
+          </div>
+        )}
+        {mdid?.store && method === 'mydigitalid' ? (
+          <div className="space-y-4">
+            {confirmed
+              ? <Alert tone="success">Your identity is confirmed with {mdid.label}. No photos are needed.</Alert>
+              : <p className="text-subhead text-label2">You’ll approve in the {mdid.label} app and come straight back here. Your name, ID number and date of birth must match what you entered.</p>}
+            {error && <Alert>{error}</Alert>}
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={onBack}>Back</Button>
+              {confirmed ? <Button className="flex-1" onClick={onDone}>Continue</Button> : <Button className="flex-1" disabled={busy !== null} onClick={() => void startMdid()}>{busy ? 'Opening…' : `Continue with ${mdid.label}`}</Button>}
+            </div>
+          </div>
+        ) : <>
         <p className="text-subhead text-label2">Take a photo of your ID and a selfie with your camera. Fit the whole ID in the frame, flat, with the text readable. Photos from your gallery can’t be used. They are encrypted and only used to verify who you are.</p>
         <ul className="space-y-3">
           {need.map((n) => (
@@ -225,6 +255,7 @@ function Documents({ view, onChange, onBack, onDone }: { view: View; onChange: (
         {busy && <p className="text-footnote text-label2" role="status">Saving the photo…</p>}
         {error && <Alert>{error}</Alert>}
         <div className="flex gap-2"><Button variant="secondary" onClick={onBack}>Back</Button><Button className="flex-1" disabled={!done || busy !== null} onClick={onDone}>Continue</Button></div>
+        </>}
       </div>
     </Card>
   );

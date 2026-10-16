@@ -17,7 +17,7 @@ The browser never sees the API key, the CRM address or the application token. Pr
 1. **Browse** SIM-only plans, SIM + device plans, add-ons and goods (`GET /store/catalog`). Only active offers that are sold through the *Self-serve* channel (or have no channel restriction) and whose whole hierarchy is active are shown.
 2. **Build a basket.** Prerequisites configured in the catalog (for example *Device Care requires any Device*) are enforced: the basket is totalled by `POST /store/quote`, which reports unmet prerequisites and conflicts.
 3. **Sign up**: details → ID photos (front, back, selfie) → delivery address (only if something ships) → review, accept terms and privacy notice → **submit for verification**.
-4. **KYC.** Automatic rules reject the obvious (under the minimum age, expired ID) and flag the doubtful (an ID already registered to another customer). A compliance officer then approves, rejects or sends it back for corrections (*manual* mode), or clean applications are approved by the rules alone (*automatic* mode, meant for use with an eKYC provider). The page updates by itself.
+4. **KYC.** Automatic rules reject the obvious (under the minimum age, expired ID) and flag the doubtful (an ID already registered to another customer). A compliance officer then approves, rejects or sends it back for corrections (*manual* mode), or clean applications are approved by the rules alone (*automatic* mode, or an ID check service / MyDigital ID connected under Integration; see KYC.md). The page updates by itself.
 5. **Pay** through the gateway the CRM selects (Stripe Payment Element). The order is confirmed **only** by the gateway’s signed webhook, never by the browser.
 6. The CRM creates the customer (verified), account and order (`SELF_SERVE` channel) and runs the normal order flow: stock, shipping, activation, billing. The shopper sees the order state, tracking number and new phone number.
 
@@ -75,7 +75,7 @@ Application statuses: `DRAFT` → `KYC_REVIEW` → `KYC_APPROVED` | `KYC_REJECTE
 - **What is stored.** The ID number and every image are encrypted (AES-256-GCM, key derived from `MERIDIAN_DATA_KEY`, falling back to `MERIDIAN_ID_PEPPER`); a keyed hash is kept for duplicate detection and a masked form for display. Opening a case or a document is written to the audit log. The customer record keeps only `kyc_status` and `kyc_verified_at`.
 - **Reviewers** (`kyc:review`) see the full ID number and images in **KYC reviews**. Someone who attested a case in store cannot also approve it.
 - **Enforcing KYC everywhere.** Settings → *Require verified identity before selling any service* makes every channel, including staff orders in the CRM, refuse services for unverified customers. Turn it on once existing customers are verified.
-- **Plugging in an eKYC vendor.** Set mode to *automatic* and have the vendor’s result decide before `POST …/kyc` (or extend `submitRemote` in `packages/core/src/kyc.ts`, which is the single place that turns evidence into a decision).
+- **Plugging in an eKYC vendor.** Connect it under Integration → Identity verification (a generic REST service, configured by response map; see KYC.md). `judgeCase` in `packages/core/src/kyc.ts` is the single place that turns the rules and the vendor's verdict into a decision. MyDigital ID is offered next to the photographs once its redirect address for the store-front is set.
 
 ## 5. Payments
 
