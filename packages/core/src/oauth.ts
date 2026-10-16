@@ -11,14 +11,14 @@ import { sha256Hex } from './field-crypto.js';
  */
 export const NORTHBOUND_SCOPES = [
   'subscriber:read', 'subscriber:write', 'sim:swap', 'msisdn:change', 'ownership:transfer', 'subscriber:status', 'subscription:change', 'vas:manage',
-  'order:create', 'order:read', 'order:cancel', 'billing:read', 'payment:create', 'event:subscribe',
+  'order:create', 'order:read', 'order:cancel', 'billing:read', 'payment:create', 'event:subscribe', 'document:read',
 ] as const;
 export type NorthboundScope = (typeof NORTHBOUND_SCOPES)[number];
 export const SCOPE_LABEL: Record<NorthboundScope, string> = {
   'subscriber:read': 'Read subscribers, services and balances', 'subscriber:write': 'Change subscriber details', 'sim:swap': 'Swap a SIM or eSIM', 'msisdn:change': 'Change a mobile number',
   'ownership:transfer': 'Transfer ownership of a service', 'subscriber:status': 'Suspend, resume, bar or terminate a service', 'subscription:change': 'Change a subscription or plan',
   'vas:manage': 'Add or remove value-added services and passes', 'order:create': 'Create sales orders', 'order:read': 'Read and track orders', 'order:cancel': 'Cancel orders',
-  'billing:read': 'Read accounts, invoices and usage', 'payment:create': 'Submit payments and top-ups', 'event:subscribe': 'Subscribe to event notifications (TMF 688)',
+  'billing:read': 'Read accounts, invoices and usage', 'payment:create': 'Submit payments and top-ups', 'event:subscribe': 'Subscribe to event notifications (TMF 688)', 'document:read': 'Read a customer\'s signed agreements',
 };
 
 const ISSUER = 'meridian';

@@ -23,6 +23,7 @@ const KEYS: Record<string, string> = {
   'dealer:read': 'dealer:partner:read', 'dealer:manage': 'dealer:partner:manage', 'store:manage': 'store:outlet:manage', 'store:assist': 'store:counter:assist',
   'store:report': 'store:sales:read', 'store:cashdrawer': 'store:cash_drawer:reconcile', 'fraud:read': 'fraud:alert:read', 'fraud:manage': 'fraud:alert:manage', 'fraud:bar': 'fraud:service:hard_bar',
   'kyc:attest': 'kyc:document:attest', 'kyc:review': 'kyc:case:review',
+  'document:read': 'document:agreement:read', 'document:kyc': 'document:kyc:read', 'document:manage': 'document:vault:manage', 'document:template': 'document:template:author',
   'audit:read': 'audit:log:read', 'migration:export': 'migration:data:export', 'migration:import': 'migration:data:import', 'user:manage': 'iam:user:manage', 'settings:manage': 'system:settings:manage',
 };
 for (const c of CHANNELS) KEYS[`order:create:${c}`] = `order:${c.toLowerCase()}:create`;

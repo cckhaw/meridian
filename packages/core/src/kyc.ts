@@ -1,3 +1,4 @@
+import { mirrorLegacyDocument, settleLegacyDocuments } from './documents.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './audit.js';
 import { hashIdDocument, maskIdDocument } from './customers.js';
@@ -103,6 +104,7 @@ export async function addDocument(q: Queryable, appId: string, kind: DocKind, by
   const id = randomUUID();
   await q.query(`INSERT INTO kyc_documents (id, case_id, application_id, kind, content_type, size_bytes, sha256, data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [id, c.id, appId, kind, info.contentType, bytes.length, sha256Hex(bytes), encryptBytes(bytes)]);
+  await mirrorLegacyDocument(q, id, { customerId: c.customerId ?? null, category: ({ ID_FRONT: 'NATIONAL_ID_FRONT', ID_BACK: 'NATIONAL_ID_BACK', PROOF_OF_ADDRESS: 'PROOF_OF_ADDRESS', SELFIE: 'SELFIE', SIGNATURE: 'CUSTOMER_SIGNATURE' } as Record<string, string>)[kind]!, kind, contentType: info.contentType, sizeBytes: bytes.length, sha256: sha256Hex(bytes), applicationId: appId });
   return { id, kind, sizeBytes: bytes.length };
 }
 
@@ -117,6 +119,7 @@ async function setOutcome(q: Queryable, app: Row, c: Row, o: { case: 'PENDING' |
     [c.id, o.case, o.by, decided, o.reason ?? null, o.flags ?? null, o.checks ? JSON.stringify(o.checks) : null, o.attestation ? JSON.stringify(o.attestation) : null]);
   await q.query(`UPDATE applications SET status=$2, updated_at=now() WHERE id=$1`, [app.id, o.app]);
   if (o.case === 'APPROVED' && app.customerId) await markVerified(q, app.customerId);
+  if (decided) await settleLegacyDocuments(q, app.id, o.case === 'APPROVED' ? 'APPROVED' : 'REJECTED', app.customerId ?? null, o.by);
 }
 
 export async function markVerified(q: Queryable, customerId: string) {

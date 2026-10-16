@@ -1412,7 +1412,7 @@ get('/billing/print/jobs', printing, ({ db, query }) => core.listPrintJobs(db, n
 /** The plain "bill this date" call skips review and approval, so it is refused while governance is on (the default). */
 post('/billing/run', 'billing:run', async ({ db, user, body }) => { if ((await core.getBillRunSettings(db)).enforceGovernance) throw new DomainError('REJECTED', 'Bill cycles are run from Billing → Bill runs, with a mock, a review and an approval. (A super user can switch this off in the bill-run settings.)'); const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
 /** Housekeeping for the store-front: closes stale sign-ups and releases orders whose online payment never arrived. Safe to run often (hourly is plenty). */
-post('/jobs/sweep-orders', 'billing:run', async ({ db, user }) => { const r = await core.sweepOrders(db, new Date(), user.username); await core.audit(db, user.username, 'order', 'sweep', 'SWEEP_ORDERS', { ...r }); return r; });
+post('/jobs/sweep-orders', 'billing:run', async ({ db, user }) => { const r = { ...(await core.sweepOrders(db, new Date(), user.username)), documents: await core.sweepDocuments(db, new Date(), user.username) }; await core.audit(db, user.username, 'order', 'sweep', 'SWEEP_ORDERS', { ...r }); return r; });
 post('/jobs/expire-applications', 'billing:run', async ({ db, user }) => { const r = await core.expireApplications(db); await core.audit(db, user.username, 'store', 'expire', 'EXPIRE_APPLICATIONS', { ...r }); return r; });
 post('/billing/dunning', 'billing:run', ({ db, user, body }) => core.runDunning(db, z.object({ asOf: date.optional() }).parse(body ?? {}).asOf).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'DUNNING_RUN', { ...r }); return r; }));
 
@@ -1750,6 +1750,72 @@ post('/inventory/import', 'inventory:write', ({ db, user, body }) => {
   const b = z.object({ csv: z.string().min(1).max(2_000_000), apply: z.boolean().default(false), confirmRepeat: z.boolean().optional() }).parse(body);
   return core.importStock(db, b.csv, { apply: b.apply, actor: user.username, storeId: user.scope.storeId, confirmRepeat: b.confirmRepeat });
 }, { maxBody: 2_500_000 });
+
+
+// ───────────────────────── documents: vault, agreement templates, signed agreements ─────────────────────────
+const docWho = (user: SessionUser | null, req: Request): core.DocWho => ({ username: user?.username ?? 'link', ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
+const hasPerm = (u: SessionUser, p: Permission) => u.permissions.has(p);
+/** What a person may open: signed agreements need `document:read`, identity documents and signatures need `document:kyc`. */
+const docKindsFor = (u: SessionUser): string[] => [...(hasPerm(u, 'document:read') ? ['CONTRACT'] : []), ...(hasPerm(u, 'document:kyc') ? ['KYC', 'SIGNATURE'] : [])];
+const needKind = (u: SessionUser, kind: string) => { if (!docKindsFor(u).includes(kind)) throw forbidden(kind === 'CONTRACT' ? 'You may not open signed agreements.' : 'You may not open identity documents.'); };
+const fileResponse = (f: { contentType: string; bytes: Buffer; name: string }, download: boolean) => new Response(new Uint8Array(f.bytes), { headers: { 'content-type': f.contentType, 'content-disposition': `${download ? 'attachment' : 'inline'}; filename="${f.name.replace(/[^\w.\- ]/g, '_').slice(0, 80)}${f.contentType === 'application/pdf' ? '.pdf' : ''}"`, 'content-security-policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox", 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' } });
+const tplMeta = { name: z.string().min(1).max(80), description: z.string().max(300).optional(), category: z.enum(core.TEMPLATE_CATEGORIES), contexts: z.array(z.enum(core.TEMPLATE_CONTEXTS)).min(1).optional(), offerKinds: z.array(z.string().max(40)).max(40).optional() };
+
+get('/documents/tokens', 'document:template', async ({ db }) => ({ tokens: core.TOKENS, categories: core.TEMPLATE_CATEGORIES, contexts: core.TEMPLATE_CONTEXTS, offerTypes: (await core.listOfferTypes(db)).map((t) => ({ id: t.id, name: t.name })), sample: core.sampleValues() }));
+get('/documents/templates', 'document:template', ({ db }) => core.listAgreementTemplates(db).then((items) => ({ items })));
+post('/documents/templates', 'document:template', ({ db, user, req, body }) => core.createAgreementTemplate(db, docWho(user, req), z.object({ ...tplMeta, code: z.string().max(40).optional(), html: z.string().max(400_000).optional() }).parse(body)));
+post('/documents/templates/starter', 'document:template', async ({ db, user, req }) => ({ added: await db.tx((q) => core.ensureStarterTemplates(q, docWho(user, req))) }));
+post('/documents/templates/preview', 'document:template', ({ body }) => {
+  const b = z.object({ html: z.string().max(400_000) }).parse(body), clean = core.sanitizeHtml(b.html), p = core.templateProblems(clean);
+  return { html: core.fillTokens(clean, core.sampleValues()).html.replace(/\u0001SIGNATURE\u0001/g, '<strong>[ customer signature ]</strong>'), clean, ...p };
+});
+get('/documents/templates/compare', 'document:template', ({ db, query }) => core.compareVersions(db, str(query, 'from') ?? '', str(query, 'to') ?? ''));
+get('/documents/templates/:id', 'document:template', ({ db, params }) => core.getAgreementTemplate(db, params.id!));
+route('PATCH', '/documents/templates/:id', 'document:template', ({ db, user, req, params, body }) => core.updateAgreementTemplate(db, docWho(user, req), params.id!, z.object({ name: tplMeta.name.optional(), description: tplMeta.description, category: tplMeta.category.optional(), contexts: tplMeta.contexts, offerKinds: tplMeta.offerKinds, status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
+post('/documents/templates/:id/draft', 'document:template', ({ db, user, req, params, body }) => core.saveAgreementDraft(db, docWho(user, req), params.id!, z.object({ html: z.string().max(400_000), note: z.string().max(300).optional() }).parse(body)));
+post('/documents/templates/:id/discard-draft', 'document:template', ({ db, user, req, params }) => core.discardAgreementDraft(db, docWho(user, req), params.id!));
+post('/documents/templates/:id/publish', 'document:template', ({ db, user, req, params, body }) => core.publishAgreementTemplate(db, docWho(user, req), params.id!, z.object({ bump: z.enum(['minor', 'major']).optional(), note: z.string().max(300).optional() }).parse(body ?? {})));
+get('/settings/documents', ['document:manage', 'document:template', 'settings:manage'], async ({ db }) => ({ ...(await core.getDocumentSettings(db)), storage: core.s3Config() ? 'S3' : 'DB' }));
+post('/settings/documents', ['document:manage', 'settings:manage'], ({ db, user, body }) => core.setDocumentSettings(db, user.username, z.object({ tempUploadHours: z.number().int().optional(), kycRetentionYears: z.number().int().optional(), contractRetentionYears: z.number().int().optional(), requireAtOrder: z.boolean().optional(), requireAtPlanChange: z.boolean().optional(), deliverContracts: z.boolean().optional() }).parse(body)));
+
+get('/documents/summary', ['document:read', 'document:kyc'], ({ db }) => core.documentSummary(db));
+get('/documents/log', ['document:read', 'document:kyc', 'audit:read'], ({ db, user, query }) => {
+  if (!hasPerm(user, 'audit:read') && !hasPerm(user, 'document:kyc')) throw forbidden('The access log is for compliance and audit.');
+  return core.documentLog(db, { documentId: str(query, 'documentId'), customerId: str(query, 'customerId'), actor: str(query, 'actor'), limit: num(query, 'limit') }).then((items) => ({ items }));
+});
+get('/documents', ['document:read', 'document:kyc'], ({ db, user, query }) => core.listVaultDocuments(db, { kinds: docKindsFor(user), customerId: str(query, 'customerId'), orderId: str(query, 'orderId'), kind: str(query, 'kind'), category: str(query, 'category'), status: str(query, 'status'), q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/documents/kyc', 'document:kyc', async ({ db, user, req, body }) => {
+  const b = z.object({ customerId: z.string().uuid(), category: z.string().max(40), name: z.string().max(120).optional(), expiresAt: blank(z.string().max(20)), content: z.string().max(5_000_000) }).parse(body);
+  return db.tx((q) => core.uploadKyc(q, { customerId: b.customerId, category: b.category, name: b.name, expiresAt: b.expiresAt ?? null, bytes: Buffer.from(b.content, 'base64') }, docWho(user, req)));
+});
+post('/documents/sweep', 'document:manage', async ({ db, user }) => { const r = await core.sweepDocuments(db, new Date(), user.username); await core.audit(db, user.username, 'document', 'sweep', 'SWEEP_DOCUMENTS', { ...r }); return r; });
+open('GET', '/documents/file/:token', async ({ db, params, req }) => {
+  const f = await db.tx((q) => core.fileByLink(q, params.token!, { username: 'link', ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined }));
+  return fileResponse(f, f.download);
+});
+get('/documents/:id', ['document:read', 'document:kyc'], async ({ db, user, params }) => {
+  const d = await core.getVaultDocument(db, params.id!); needKind(user, d.kind);
+  const sig = (await db.query('SELECT signer_name, signed_at, ip, geo, agent, method, content_seal, template_version_id FROM document_signatures WHERE document_id=$1', [d.id])).rows[0] ?? null;
+  return { ...d, signature: sig };
+});
+get('/documents/:id/file', ['document:read', 'document:kyc'], async ({ db, user, req, params, query }) => {
+  const meta = await core.getVaultDocument(db, params.id!); needKind(user, meta.kind);
+  const f = await db.tx((q) => core.openDocument(q, params.id!, docWho(user, req), query.get('mode') === 'download' ? 'DOWNLOAD' : 'VIEW'));
+  return fileResponse(f, query.get('mode') === 'download');
+});
+get('/documents/:id/link', ['document:read', 'document:kyc'], async ({ db, user, req, params, query }) => {
+  const meta = await core.getVaultDocument(db, params.id!); needKind(user, meta.kind);
+  return db.tx((q) => core.documentLink(q, params.id!, docWho(user, req), { download: query.get('mode') === 'download' }));
+});
+post('/documents/:id/decision', 'document:kyc', ({ db, user, req, params, body }) => db.tx((q) => core.decideDocument(q, params.id!, docWho(user, req), z.object({ decision: z.enum(['VERIFY', 'REJECT']), reason: z.string().max(300).optional() }).parse(body))));
+post('/documents/:id/verify-seal', 'document:read', async ({ db, user, req, params }) => { const meta = await core.getVaultDocument(db, params.id!); needKind(user, meta.kind); return db.tx((q) => core.verifyContract(q, params.id!, docWho(user, req))); });
+post('/documents/:id/purge', 'document:manage', ({ db, user, req, params, body }) => db.tx(async (q) => { await core.purgeDocument(q, params.id!, docWho(user, req), z.object({ reason: z.string().min(3).max(300) }).parse(body).reason); return { ok: true }; }));
+// A customer's own signed agreements (self-care portal): only their own, each with a 15-minute link.
+get('/me/documents', null, async ({ db, user, req }) => {
+  const customerId = user.scope.customerId; if (!customerId) throw forbidden('This is for customers.');
+  return { items: await db.tx((q) => core.customerAgreements(q, customerId, docWho(user, req))) };
+});
+north('GET', '/v1/customers/:id/documents', 'document:read', ({ db, params, req, principal }) => db.tx(async (q) => ({ items: await core.customerAgreements(q, params.id!, { username: `api:${principal.ref}`, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined }) })));
 
 // ───────────────────────── dispatcher ─────────────────────────
 function fail(status: number, code: string, message: string, extra: Record<string, string> = {}) {
