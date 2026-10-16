@@ -10,4 +10,4 @@ export function middleware(req: NextRequest) {
   url.search = pathname === '/' ? '' : `?next=${encodeURIComponent(pathname + search)}`;
   return NextResponse.redirect(url);
 }
-export const config = { matcher: ['/((?!api/|tmf-api/|_next/|favicon.ico|icon.svg).*)'] };
+export const config = { matcher: ['/((?!api/|tmf-api/|_next/|brand/|favicon.ico|icon.svg).*)'] };

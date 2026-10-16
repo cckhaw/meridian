@@ -80,3 +80,7 @@ Map tiles come from OpenStreetMap; to use another tile provider change `TILES` i
 ## Not included
 
 PostGIS (geometry is GeoJSON with bounding-box indexes so it runs on the embedded database; swap in PostGIS if a national network outgrows it), Redis (the partner cache is a table with a TTL), a bundled geocoder (`setGeocoder` takes one), live port reservation on a partner's side (partner holds are recorded here only), and a drawn fibre-line trace layer (cabinets, DPs and their reach are drawn).
+
+
+## Appearance
+The service looks like the CRM and the shop: it reads the brand name, theme (colours), logo and favicon from the same record as **Settings → Appearance** in the CRM (it shares the CRM database), so there is nothing to configure twice. A change in the CRM shows here within a few minutes (images are cached for 5 minutes). Light and dark follow the person's own toggle, exactly as in the CRM. If the database cannot be read the built-in Meridian look is used.
