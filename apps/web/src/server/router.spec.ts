@@ -2196,7 +2196,7 @@ describe('documents: agreements at order and plan change, the vault and who may 
     expect(docs[0]).not.toHaveProperty('data');
     const file = await call('GET', `/documents/${docs[0].id}/file`, { cookie: su, headers: { 'x-forwarded-for': '198.51.100.20' } });
     expect(file.status).toBe(200); expect(file.headers.get('content-type')).toBe('application/pdf'); expect(file.text.startsWith('%PDF-')).toBe(true);
-    expect(file.headers.get('content-security-policy')).toContain('sandbox');
+    expect(file.headers.get('content-security-policy')).toBe("frame-ancestors 'self'");   // the browser's PDF viewer does not run inside a sandbox
     const link = (await call('GET', `/documents/${docs[0].id}/link`, { cookie: su })).json;
     expect(link.ttlSeconds).toBe(900);
     const viaLink = await call('GET', link.url.replace('/api', ''), { origin: null });                 // no session: the signed link is the credential
