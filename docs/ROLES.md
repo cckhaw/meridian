@@ -26,7 +26,7 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | **Customer Service** (`customer-service`) | `ROLE_CUSTOMER_SERVICE` | All records | `/cases` | 200.00 | Resolves escalated cases: refunds (up to the credit limit), termination, ownership transfer, number porting, order cancellation. |
 | **Call Center Supervisor** (`team-lead`) | `ROLE_CALL_CENTER_SUPERVISOR` | All records | `/cases` | 1000.00 | Leads a support team: watches SLAs and escalations, groups cases into network incidents, approves refunds above an agent’s limit. |
 | **Finance** (`finance`) | `ROLE_FINANCE_OFFICER` | All records | `/finance` | unlimited | Owns the ledger: reconciliation, SAP journal export, large credit notes, receivables, and approval of bill runs. |
-| **Fraud Analyst** (`fraud`) | `ROLE_FRAUD_ANALYST` | All records | `/orders` | none | Reviews orders and accounts: can suspend a service and cancel an order before it ships. |
+| **Fraud Analyst** (`fraud`) | `ROLE_FRAUD_ANALYST` | All records | `/fraud` | none | Watches for fraud: SIM-swap anomalies and usage spikes, hard-bars a service, keeps the blacklist, and can cancel an order before it ships. |
 | **Revenue Assurance** (`revenue-assurance`) | `ROLE_REVENUE_ASSURANCE` | All records | `/finance` | none | Checks that billing, payments and the ledger agree, and approves a bill run once its mock has been reviewed (otherwise read-only). |
 | **KYC Compliance Officer** (`compliance`) | `ROLE_KYC_COMPLIANCE` | All records | `/kyc` | none | Reviews identity verification for online sign-ups and referred cases: approves, rejects, or sends back for corrections. Sees identity evidence; cannot sell or change billing. |
 | **Operations Support** (`inventory-ops`) | `ROLE_OPERATIONS_SUPPORT` | All records | `/inventory` | none | Looks after stock: keeps warehouse locations, loads stock in batches or one SKU at a time, and writes stock off with a reason. Sees the stock history; cannot sell or change billing. |
@@ -43,6 +43,8 @@ The **Code** is the stable name the role goes by outside the database (documents
 | Orders | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  | ✓ |
 | Billing | ✓ |  | ✓ |  | ✓ | ✓ |  | ✓ | ✓ |  |  | ✓ | ✓ | ✓ |  | ✓ |  |  |
 | Cases | ✓ |  | ✓ |  | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  | ✓ |  | ✓ |  |
+| Fraud desk |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| Store desk |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |
 | KYC reviews |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
 | Number porting |  |  |  |  |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |
 | Catalog | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  | ✓ |
@@ -119,6 +121,11 @@ The **Code** is the stable name the role goes by outside the database (documents
 | `store:assist` |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
 | `kyc:attest` |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
 | `kyc:review` |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  | ✓ |  |
+| `store:report` |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |
+| `store:cashdrawer` |  |  |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |
+| `fraud:read` |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `fraud:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `fraud:bar` |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
 | `settings:manage` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `order:create:SELF_SERVE` |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `order:create:RETAIL_ASSISTED` |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  |

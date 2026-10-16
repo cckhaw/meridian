@@ -71,6 +71,16 @@ Pool management needs `numbering:manage`; sellers hold only `numbering:select`. 
 - Money is integer minor units. Every financial event posts a balanced journal; reconciliation checks it.
 - Encryption at rest and in transit is the database and hosting platform’s job (TLS to the database is required in production).
 
+## Fraud desk and blacklist
+
+- **Alerts** (`/fraud`, permission `fraud:read`/`fraud:manage`): the SIM-swap scan raises a HIGH alert for a service swapped twice or more in 30 days, or swapped soon after its number or owner changed. A usage feed (or an analyst) raises `USAGE_SPIKE` alerts through `POST /fraud/alerts`. One open alert per dedupe key, so re-running the scan never duplicates. Confirm or dismiss records who, when and a note, and is audited.
+- **Hard bar** (`fraud:bar`): `POST /fraud/services/:id/bar` suspends the service with the FRAUD restriction (hard bar, calls/SMS/data both ways). Only `POST …/release` with a reason lifts it; dunning and customer self-service cannot. Both are audited as security events.
+- **Blacklist**: ID documents, mobile numbers, SIMs, devices and e-mail addresses. Only a keyed hash (same pepper as the ID hash, `MERIDIAN_ID_PEPPER`) and a 3-character hint are stored, so entries cannot be read back. A match refuses customer creation, orders and SIM swaps with a neutral message that does not say which value matched.
+
+## Store desk
+
+A retail manager (`store:report`, `store:cashdrawer`, bound to one store) sees that store's sales by day, salesperson and payment method with the commission earned, and closes the cash drawer each day: counted cash against captured cash payments less refunds. A day closes once, and any difference needs a note and is audited.
+
 ## Not covered yet (plan for these before regulated go-live)
 - **Multi-factor authentication and single sign-on** (SAML/OIDC). Strongly recommended for staff before handling real customer data.
 - **Self-service password reset and portal sign-up** (needs email/SMS delivery and identity verification).

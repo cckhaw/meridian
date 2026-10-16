@@ -1,4 +1,5 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { assertNotBlacklisted } from './fraud.js';
 import { behaviourOf, type OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { issueInvoice, type DraftLine } from './billing.js';
@@ -149,6 +150,7 @@ export async function changeSimNorth(db: Db, ref: string, i: SimSwapInput, actor
         await auditIdentifier(q, { type: 'IMSI', id: oldImsi.imsi, from: oldImsi.state, to: 'QUARANTINED', actor, reason: `SIM swap: ${i.reason}` });
       }
     }
+    await assertNotBlacklisted(q, { iccid: sim.iccid });
     if (sim.state !== 'RESERVED') { assertIccidTransition(sim.iccid, sim.state, 'RESERVED'); await q.query(`UPDATE iccid_inventory SET state='RESERVED', previous_state=$2, updated_at=now() WHERE iccid=$1`, [sim.iccid, sim.state]); }
     assertIccidTransition(sim.iccid, 'RESERVED', 'ACTIVE');
     await q.query(`UPDATE iccid_inventory SET state='ACTIVE', service_id=$2, reserved_until=NULL, previous_state=NULL, updated_at=now() WHERE iccid=$1`, [sim.iccid, s.id]);
