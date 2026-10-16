@@ -2086,6 +2086,10 @@ describe('offer type switches and service types', () => {
     const mgr = await staff(['retail-manager'], { storeId: 'STORE-SG-001' });
     expect((await call('GET', '/store/sales', { cookie: agent.cookie })).status).toBe(403);
     expect((await call('GET', '/store/sales', { cookie: mgr.cookie })).json).toMatchObject({ storeId: 'STORE-SG-001' });
+    // head office is not bound to a store, so it names one
+    expect((await call('GET', '/store/sales', { cookie: su })).status).toBe(400);
+    expect((await call('GET', '/store/sales?storeId=STORE-SG-002', { cookie: su })).json).toMatchObject({ storeId: 'STORE-SG-002' });
+    expect((await call('GET', '/stores?limit=3', { cookie: mgr.cookie })).status).toBe(200);   // the picker can list stores for a store-desk user
     const day = new Date().toISOString().slice(0, 10);
     const st = (await call('GET', `/store/cash-drawer?date=${day}`, { cookie: mgr.cookie })).json;
     const closed = await call('POST', '/store/cash-drawer/close', { cookie: mgr.cookie, body: { date: day, countedMinor: st.expectedMinor } });

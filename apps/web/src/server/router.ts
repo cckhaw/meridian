@@ -250,7 +250,7 @@ post('/stores/import', 'store:manage', ({ db, user, body }) => { const b = impor
 // ───────────────────────── retail stores (master data kept in the CRM) ─────────────────────────
 const storeBody = z.object({ name: z.string().min(1).max(120), address: blank(z.string().max(300)), phone: blank(z.string().max(40)), marketCode: blank(z.string().length(2)) });
 // Whoever sets up staff or sells over a counter needs to find a store; only store:manage may change one.
-get('/stores', ['store:manage', 'user:manage', 'order:create:RETAIL_ASSISTED', 'order:create:QUICK_SALE'], ({ db, query }) => core.listStores(db, { q: str(query, 'q'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/stores', ['store:manage', 'user:manage', 'store:report', 'order:create:RETAIL_ASSISTED', 'order:create:QUICK_SALE'], ({ db, query }) => core.listStores(db, { q: str(query, 'q'), status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/stores', 'store:manage', ({ db, user, body }) => core.createStore(db, user.username, storeBody.parse(body)));
 patch('/stores/:id', 'store:manage', ({ db, user, params, body }) => core.updateStore(db, user.username, params.id!, storeBody.partial().extend({ status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));
 route('DELETE', '/stores/:id', 'store:manage', async ({ db, user, params }) => { await core.deleteStore(db, user.username, params.id!); return { ok: true }; });
