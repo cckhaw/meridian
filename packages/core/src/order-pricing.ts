@@ -1,4 +1,5 @@
 import { getFinancing, usableCheck } from './device-financing.js';
+import { hiddenFixedKinds } from './fiber-client.js';
 import { behaviourOf, type DeviceDeal, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
 import { listBundleRules, matches, ruleSatisfied, type BundleRule } from './bundles.js';
 import { checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
@@ -138,6 +139,7 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
   const mk = await marketFor(q, marketCode);
 
   const offers = new Map<string, OfferNode>();
+  const hiddenKinds = await hiddenFixedKinds(q);
   for (const l of input.lines) {
     const qty = l.quantity ?? 1;
     if (!Number.isInteger(qty) || qty < 1 || qty > MAX_BULK) throw invalid(`quantity must be 1-${MAX_BULK}`);
@@ -145,6 +147,7 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
     if (!offers.has(l.offerId)) {
       const of = await getOffer(q, l.offerId);
       if (of.status !== 'ACTIVE') throw rejected(`offer ${of.name} is not active`);
+      if (hiddenKinds.includes(of.kind as string)) throw rejected(`${of.name} is not on sale right now.`);
       if (mode.multiple && of.markets.length && !of.markets.includes(marketCode)) throw rejected(`offer ${of.name} is not sold in ${marketCode}`);
       if (of.prices.some((p) => p.amount.currency !== mk.currency)) throw rejected(`offer ${of.name} is not priced in ${mk.currency}`);
       offers.set(of.id, of);

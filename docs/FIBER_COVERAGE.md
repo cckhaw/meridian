@@ -45,9 +45,20 @@ Import: points become distribution points, areas become polygons (properties `pr
 
 Partner adapter settings are data: `paths` say where in the partner's JSON (or SOAP body) to read `serviceable`, `portStatus`, `speedsMbps`, `leadDays`, `reference`; REST also takes `method`, `query`, `body` (placeholders `{{lat}} {{lng}} {{postalCode}} {{address}} {{speedMbps}}`) and `authHeader`; SOAP takes `soapAction` and a `body` template.
 
+## How Meridian uses it
+
+The CRM and the store-front never import the module; they call the service over HTTP (`MERIDIAN_FIBER_URL`, `MERIDIAN_FIBER_API_KEY`) and carry on if it is slow, down or switched off.
+
+* **Order screen (CRM)**: when a fibre plan is in the basket, the *Delivery and installation* step shows the **coverage check** under the installation address. It asks the service, shows the answer, and (when a port is free) holds one for the customer. Placing the order checks the hold is still there (a lock that ran out sends the agent back to check again, and no order is created) and then confirms the port for the order; if that confirmation fails the order still stands and a `FIBER_CONFIRM_FAILED` audit entry tells Fibre Ops. The port's reservation id is kept on the order (`fulfilment.fiber`).
+* **Store-front**: a basket with a fibre plan now asks for the **installation address** (it used to ask only for delivery of goods), shows the same coverage check, holds the port on the application, and checkout verifies and confirms it the same way.
+* **When the service is down or the answer is `UNKNOWN`**: the check says so, the order can go ahead, and the address is confirmed afterwards.
+* **Waitlist**: when every port is taken the shopper or agent can leave a phone number or e-mail and joins the waitlist.
+
 ## Switching it on and off
 
-`FEATURE_FIBER_COVERAGE_MODULE_ENABLED` (`on`/`off`) is the starting value; once an administrator uses the switch, the stored choice (settings key `modules`) wins. Both the hub and the CRM read the same setting.
+`FEATURE_FIBER_COVERAGE_MODULE_ENABLED` (`on`/`off`; **unset means on**, so a deployment that sold fibre before this module existed keeps selling it) is the starting value. Once an administrator uses the switch (Meridian **Settings → Modules**, or the hub's Overview; both write the same setting, `modules`), the stored choice wins.
+
+**Off** means: the coverage check is hidden, fibre installation scheduling is not offered, and fixed-broadband offers (every offer type that creates a FIBER service) are not for sale: they disappear from the order screen, the store-front and any list used for selling, and a basket that still contains one is refused ("… is not on sale right now"). The Catalog pages still show them so they can be maintained, orders already placed are untouched, and switching on restores everything. Client calls to the coverage service answer `503 MODULE_DISABLED`.
 
 ## Deploying (separate Vercel project, like the store-front)
 
@@ -58,7 +69,9 @@ Create a Vercel project from this repository with **root directory `apps/fiber-c
 | `DATABASE_URL` | The CRM's Postgres. The hub signs in with Meridian staff accounts and shares its settings and audit log, and the tables are created by the same migrations. |
 | `MERIDIAN_DATA_KEY` / `MERIDIAN_ID_PEPPER` | **Must equal the CRM's**: they encrypt the partner adapter credentials and sign-in secrets. |
 | `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD` | As in the CRM, if the super user will sign in here. |
-| `FEATURE_FIBER_COVERAGE_MODULE_ENABLED` | Optional starting value. |
+| `FEATURE_FIBER_COVERAGE_MODULE_ENABLED` | Optional starting value (unset means on). |
+
+On the **CRM** deployment set `MERIDIAN_FIBER_URL` (the service's address) and `MERIDIAN_FIBER_API_KEY` (a key issued in the hub's Overview → Access keys). The store-front needs nothing: it reaches the service through the CRM.
 
 Map tiles come from OpenStreetMap; to use another tile provider change `TILES` in `src/components/map.tsx` and `img-src` in `next.config.mjs`. Schedule `POST /api/admin/sweep` is not needed for correctness (expired locks already count as free); it only tidies the table.
 

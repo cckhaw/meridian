@@ -19,7 +19,7 @@ export interface FiberSettings {
 }
 export const DEFAULT_FIBER_SETTINGS: FiberSettings = { lockMinutes: 30, cacheHours: 24, partnerTimeoutMs: 2500, lowPortsAbsolute: 2, lowPortsPercent: 15, adapters: {} };
 
-const envFlag = (): boolean => /^(1|true|on|yes)$/i.test((process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '').trim());
+const envFlag = (): boolean => { const v = (process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '').trim(); return v === '' || /^(1|true|on|yes)$/i.test(v); };   // unset keeps fibre on sale, as before the module existed
 
 export async function moduleEnabled(q: Queryable): Promise<boolean> {
   const r = (await q.query(`SELECT value FROM settings WHERE key='modules'`)).rows[0];

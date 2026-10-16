@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { fiberConfigured, fiberConfirmLock, fiberModuleEnabled, fiberVerifyLock } from './fiber-client.js';
 import type { LineItemNode, OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { ancestorsFor, checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
@@ -107,7 +108,7 @@ const collectOnly = (o: OfferNode) => !!o.fulfilment?.requiresCollection && !o.f
 export interface Quote {
   currency: string; taxName: string;
   lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; retailMinor: number; instalmentMinor?: number } }>;
-  upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; violations: string[];
+  upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; requiresInstallation: boolean; violations: string[];
   /** A device paid over its contract. `estimate`: the upfront share is settled by a credit check at checkout, so the figures may change. */
   financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean };
 }
@@ -121,7 +122,7 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
   const seen = new Set<string>();
   const lines: Quote['lines'] = [];
   const offers: OfferNode[] = [];
-  let shipping = false;
+  let shipping = false, installing = false;
   for (const l of o.lines) {
     const qty = l.quantity ?? 1;
     if (!Number.isInteger(qty) || qty < 1 || qty > MAX_LINE_QTY) throw invalid(`Quantity must be 1–${MAX_LINE_QTY}.`);
@@ -137,6 +138,7 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
     const fee = monthlyFee(off);
     lines.push({ offerId: off.id, name: off.name, quantity: qty, upfrontMinor: up, monthlyMinor: fee ? taxSplit(fee.amount.amountMinor * qty, mk.taxBps, fee.taxInclusive).gross : 0 });
     if (off.fulfilment?.requiresShipping) shipping = true;
+    if (off.fulfilment?.requiresInstallation) installing = true;
     offers.push(off);
   }
   // A device bought on a contract with a plan is priced by the same code the order uses, so the shopper is quoted exactly what is charged.
@@ -155,7 +157,7 @@ export async function quoteBasket(q: Queryable, o: { lines: CartLine[]; channel:
   const violations = await checkDependencies(q, o.customerId ?? null, offers.map((x) => x.id));
   return {
     currency: mk.currency, taxName: mk.taxName, lines, upfrontMinor: lines.reduce((s, l) => s + l.upfrontMinor, 0), monthlyMinor: lines.reduce((s, l) => s + l.monthlyMinor, 0),
-    requiresShipping: shipping, violations, financing,
+    requiresShipping: shipping, requiresInstallation: installing, violations, financing,
   };
 }
 
@@ -196,7 +198,7 @@ export async function createApplication(q: Queryable, o: { channel: StoreChannel
   return { application, token };
 }
 
-export interface AppPatch { lines?: CartLine[]; personal?: Partial<Personal>; address?: Address; consent?: Partial<Consent> }
+export interface AppPatch { lines?: CartLine[]; personal?: Partial<Personal>; address?: Address; consent?: Partial<Consent>; /** The fibre port held for this application (null releases the choice). */ fiber?: { reservationId: string } | null }
 
 export async function updateApplication(q: Queryable, id: string, access: AppAccess, p: AppPatch): Promise<Row> {
   const a = await load(q, id, access);
@@ -226,6 +228,7 @@ export async function updateApplication(q: Queryable, id: string, access: AppAcc
     const c = p.consent;
     add('consent', JSON.stringify({ ...(a.consent ?? {}), ...c, termsVersion: st.termsVersion, at: new Date().toISOString(), by: access.staff?.username ?? 'applicant' }));
   }
+  if (p.fiber !== undefined) add('fiber', p.fiber ? JSON.stringify({ reservationId: String(p.fiber.reservationId).slice(0, 64) }) : null);
   if (sets.length) await q.query(`UPDATE applications SET ${sets.join(', ')}, updated_at=now() WHERE id=$1`, vals);
   // Keep the KYC case in step with the details so reviewers always see what the applicant last entered.
   if (p.personal) await syncCase(q, id, access.channel === 'SELF_SERVE' ? 'DOCUMENT_REMOTE' : 'IN_PERSON');
@@ -269,6 +272,9 @@ const addressLine = (a: Address | null) => (a ? [a.line1, a.line2, a.city, a.sta
  * client sent about money is used. Self-serve orders then wait for the payment gateway; assisted orders take the cashier's payment.
  */
 export async function checkout(db: Db, id: string, access: AppAccess, o: { gateway?: string; returnUrl?: string; assistedPayment?: OrderInput['payment']; deliveryNote?: string } = {}): Promise<CheckoutResult> {
+  // A held fibre port must still be held; the check is a call to another service, so it happens before the transaction.
+  const held = ((await db.query('SELECT fiber, status FROM applications WHERE id=$1', [id])).rows[0] as { fiber?: { reservationId?: string } | null; status?: string } | undefined);
+  if (held?.fiber?.reservationId && held.status !== 'ORDERED') await fiberVerifyLock(db, held.fiber.reservationId);
   const { order, appId } = await db.tx(async (q) => {
     await q.query('SELECT 1 FROM applications WHERE id=$1 FOR UPDATE', [id]);
     const a = await load(q, id, access);
@@ -282,7 +288,7 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     const quote = await quoteBasket(q, { lines: a.lines, channel: access.channel, customerId: a.customerId });
     if (quote.violations.length) throw rejected(quote.violations.join(' '));
     if (quote.financing?.creditCheck && !consent.creditCheck) throw rejected('The customer must agree to a credit check to pay for the device over the contract.');
-    if (quote.requiresShipping && access.channel === 'SELF_SERVE' && !a.address) throw rejected('A delivery address is required for this order.');
+    if ((quote.requiresShipping || quote.requiresInstallation) && access.channel === 'SELF_SERVE' && !a.address) throw rejected(quote.requiresShipping ? 'A delivery address is required for this order.' : 'The installation address is required for this order.');
 
     // customer: existing (assisted) or created now from the verified identity
     let customerId = a.customerId as string | null;
@@ -307,6 +313,7 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
 
     const staff = access.staff;
     const input: OrderInput = {
+      fiberReservationId: (a.fiber as { reservationId?: string } | null)?.reservationId,
       customerId, channel: access.channel, lines: orderLines(a.lines as CartLine[]),
       payment: access.channel === 'SELF_SERVE' ? { method: 'CREDIT_CARD', deferred: true } : o.assistedPayment ?? { method: 'CASH', deferred: true },
       attribution: staff ? { storeId: staff.storeId ?? undefined, salespersonId: staff.username } : undefined,
@@ -328,6 +335,7 @@ export async function checkout(db: Db, id: string, access: AppAccess, o: { gatew
     return { order, appId: id };
   });
   const application = (await db.query('SELECT * FROM applications WHERE id=$1', [appId])).rows[0]!;
+  if (held?.fiber?.reservationId && held.status !== 'ORDERED') await fiberConfirmLock(db, held.fiber.reservationId, String(order.number ?? order.id), access.staff?.username ?? 'store');
   let payment: PaymentStart | null = null;
   if (order.state === 'PAYMENT_PENDING' && access.channel === 'SELF_SERVE') payment = await startPayment(db, id, access, { gateway: o.gateway, returnUrl: o.returnUrl });
   return { application, order: payment ? order : await getOrder(db, order.id), payment };
@@ -434,7 +442,7 @@ export async function applicationView(q: Queryable, id: string, access: AppAcces
     personal: { ...personalSafe, idNumberMasked: case_?.idNumberMasked }, personalProblems: personalProblems(p),
     address: a.address, consent: a.consent, termsVersion: st.termsVersion, termsUrl: st.termsUrl, privacyUrl: st.privacyUrl,
     kyc: case_ ? { status: case_.status, method: case_.method, reason: case_.decisionReason ?? case_.checks?.returnReason ?? null, returned: !!case_.checks?.returnReason && a.status === 'DRAFT', needsReview: a.status === 'KYC_REVIEW' } : null,
-    documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
+    fiber: a.fiber ?? null, documents: docs, order, customerId: a.customerId, customerKyc: a.customerId ? ((await getCustomer(q, a.customerId)).kycStatus ?? 'NOT_VERIFIED') : null,
   };
 }
 
@@ -466,5 +474,6 @@ export async function storeConfig(q: Queryable) {
     regional, kyc: { mode: st.kycMode, minAge: st.minAge, requiresBack: ['NATIONAL_ID', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'], maxDocumentBytes: 2_500_000, idTypes: ['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'RESIDENCE_PERMIT'] },
     terms: { version: st.termsVersion, termsUrl: st.termsUrl || null, privacyUrl: st.privacyUrl || null },
     payment: { gateways: gw.list.map((g) => ({ id: g.id, label: g.label, ...g.publicConfig() })), default: gw.default?.id ?? null },
+    modules: { fiberCoverage: (await fiberModuleEnabled(q)) && fiberConfigured() },
   };
 }

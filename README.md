@@ -13,13 +13,14 @@ Sign-in is required. Staff and customers see only the modules and records their 
 pnpm install
 pnpm --filter @meridian/web dev         # CRM        http://localhost:3000
 pnpm --filter @meridian/storefront dev  # store-front http://localhost:3100 (needs MERIDIAN_API_URL and MERIDIAN_API_KEY, see docs/STOREFRONT.md)
+pnpm --filter @meridian/fiber-coverage dev  # fibre coverage service and hub http://localhost:3200/settings/fiber-coverage (see docs/FIBER_COVERAGE.md)
 ```
 
 Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.development`, development only). With no `DATABASE_URL` it runs an
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 725 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 730 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -58,6 +59,7 @@ Everything about outside systems is under the **Integration** menu (next to Sett
 
 ## Documentation
 
+- [Fibre coverage and serviceability](docs/FIBER_COVERAGE.md): the separately deployed coverage service, port locks, TMF 645/673, the admin hub, and the module switch
 - [Store-front, KYC and online payments](docs/STOREFRONT.md): deploying the store-front, the store API, KYC, Stripe, assisted sales
 - [Product catalog](docs/CATALOG.md): the five-level hierarchy, offer line items, dependencies, bulk offer import, offer type switches and service types, markets
 - [Dunning and collections](docs/DUNNING.md): configurable rule-based ladders per market and customer type, late fees, QR payment links (PromptPay, PayNow, DuitNow, QRIS, QR Ph), exclusions, partial payments, payment arrangements, collection agency placements, Southeast Asia starter rules

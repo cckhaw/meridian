@@ -8,7 +8,7 @@ process.env.MERIDIAN_SUPERUSER_USERNAME = SU.username;
 process.env.MERIDIAN_SUPERUSER_PASSWORD = SU.password;
 process.env.MERIDIAN_SEED = 'none';
 delete process.env.DATABASE_URL;
-delete process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED;
+process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED = 'off';
 const ORIGIN = 'http://fiber.test';
 
 let db: Db; let cookie = ''; let key = '';

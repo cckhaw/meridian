@@ -10,6 +10,7 @@ import { StorePicker } from '@/app/stores/store-picker';
 import { CustomerForm } from '@/app/customers/customer-form';
 import { SellingPanel } from './selling-panel';
 import { FinancingPanel } from './financing-panel';
+import { FiberCoverageCheck, type FiberApi } from '@meridian/ui';
 import { MONTHS, SWATCH, financeable, flatLines, isExclusive, isPlan, newItem, quoteIndex, type Cust, type Item } from './wizard-types';
 import { useOfferTypes } from '@/lib/offer-types';
 
@@ -32,9 +33,14 @@ export interface Wizard {
   consent: boolean; setConsent: (b: boolean) => void;
   jumpTo: (id: string, opts?: { kind?: string }) => void; kindHint: string | null; clearKindHint: () => void;
   can: (...p: string[]) => boolean;
+  /** Fibre coverage module: on or off, the port held at checkout, and the speed of the fibre plan chosen. */
+  fiber: { enabled: boolean; lock: string | null; setLock: (id: string | null) => void; speedMbps?: number };
   /** Device financing: pay a device on a contract in full, and the credit check that sets the upfront share. */
   financing: { payInFull: boolean; setPayInFull: (b: boolean) => void; check: { id: string; score: number | null; band: string | null; fallback: boolean } | null; setCheck: (c: { id: string; score: number | null; band: string | null; fallback: boolean } | null) => void };
 }
+
+/** The coverage service, asked through the CRM's own API (the browser never calls it directly). */
+const fiberApi: FiberApi = { qualify: (p) => post('/fiber/qualify', p), reserve: (p) => post('/fiber/reserve', p), release: (id) => post(`/fiber/reservations/${id}/release`), waitlist: (p) => post('/fiber/waitlist', p) };
 
 const priceLine = (o: any) => {
   const rec = o.prices?.find((p: any) => p.type === 'RECURRING'), once = o.prices?.find((p: any) => p.type === 'ONE_TIME');
@@ -60,7 +66,7 @@ function OfferPicker({ w, kind, step, outright, placeholder, noteFor }: { w: Wiz
   const multi = useMultiMarket();
   const [q, setQ] = useState('');
   const term = useDebounced(q.trim());
-  const scope = `${kind ? `&kind=${kind}` : ''}${step ? `&step=${step}` : ''}${outright ? '&outright=1' : ''}`;
+  const scope = `&forSale=1${kind ? `&kind=${kind}` : ''}${step ? `&step=${step}` : ''}${outright ? '&outright=1' : ''}`;
   const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}${scope}&q=${encodeURIComponent(term)}`);
   // An order carries one mobile plan (a family plan brings its other lines as members), so once a plan is chosen the other plans wait until it is removed.
   const planChosen = w.items.find((i) => isExclusive(i.offer));
@@ -370,6 +376,7 @@ export function DeliveryStep({ w }: { w: Wizard }) {
             <Input type="datetime-local" min={min} value={w.slot} onChange={(e) => w.setSlot(e.target.value)} />
           </Field>
           {(!needs.delivery || w.method === 'COLLECT') && <div className="mt-3"><Field label="Installation address"><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} /></Field></div>}
+          {w.fiber.enabled && <div className="mt-3"><FiberCoverageCheck address={w.address} speedMbps={w.fiber.speedMbps} lock={w.fiber.lock} onLock={w.fiber.setLock} api={fiberApi} /></div>}
         </Card>
       )}
       <div className="rounded-card bg-surface p-4 shadow-card">

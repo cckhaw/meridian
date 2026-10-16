@@ -301,8 +301,18 @@ post('/store/cash-drawer/close', 'store:cashdrawer', ({ db, user, query, body })
   const b = z.object({ date: z.string().max(10), countedMinor: z.number().int().min(0).max(1e12), note: z.string().max(300).optional() }).parse(body);
   return core.closeDrawer(db, deskStore(user, query), b, user.username);
 });
+// ───────────────────────── fibre coverage module (a separate service; see docs/FIBER_COVERAGE.md) ─────────────────────────
+const fiberPlace = z.object({ lat: z.number().min(-90).max(90).optional(), lng: z.number().min(-180).max(180).optional(), address: z.string().max(300).optional(), postalCode: z.string().max(12).optional(), speedMbps: z.number().int().min(1).max(100000).optional() });
+const fiberReserve = z.object({ providerId: z.string().uuid(), dpId: z.string().uuid().optional(), speedMbps: z.number().int().min(1).optional(), lat: z.number().optional(), lng: z.number().optional(), address: z.string().max(300).optional() });
+const fiberWait = z.object({ providerId: z.string().uuid(), dpId: z.string().uuid().optional(), contact: z.string().max(200).optional(), lat: z.number().optional(), lng: z.number().optional(), address: z.string().max(300).optional(), speedMbps: z.number().int().optional() });
+get('/settings/modules', 'settings:manage', async ({ db }) => ({ fiberCoverage: await core.fiberStatus(db) }));
+post('/settings/modules', 'settings:manage', async ({ db, user, body }) => { await core.setFiberModuleEnabled(db, user.username, z.object({ fiberCoverage: z.object({ enabled: z.boolean() }) }).parse(body).fiberCoverage.enabled); return { fiberCoverage: await core.fiberStatus(db) }; });
+post('/fiber/qualify', null, ({ db, body }) => core.fiberQualify(db, fiberPlace.parse(body)));
+post('/fiber/reserve', null, ({ db, user, body }) => core.fiberReserve(db, { ...fiberReserve.parse(body), customerRef: `staff:${user.username}` }));
+post('/fiber/reservations/:id/release', null, ({ db, params }) => core.fiberRelease(db, params.id!));
+post('/fiber/waitlist', null, ({ db, user, body }) => core.fiberWaitlist(db, { ...fiberWait.parse(body), customerRef: `staff:${user.username}` }));
 get('/commissions', 'commission:read', ({ db, user }) => core.commissionReport(db, { storeId: user.scope.storeId, dealerId: user.scope.dealerId }));
-get('/meta', null, async ({ db, user }) => ({ ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), cardLink: (await core.activeGateways(db, process.env, 'CRM')).list.some((g) => !!g.createPaymentLink), customers: await core.getCustomerSettings(db), billCycles: await (async () => { const c = await core.getBillCycles(db); return { ...c, defaultDay: core.defaultCycleDay(c) }; })() }));
+get('/meta', null, async ({ db, user }) => ({ modules: { fiberCoverage: await core.fiberModuleEnabled(db) }, ...await (async () => { const m = await core.getMarketSettings(db); return { markets: Object.fromEntries(m.markets.map((x) => [x.code, x])), multiMarket: m.multiple, defaultMarket: m.defaultMarket }; })(), glNames: core.GL_NAMES, marketCode: user.marketCode, paymentMode: core.paymentMode(), cardLink: (await core.activeGateways(db, process.env, 'CRM')).list.some((g) => !!g.createPaymentLink), customers: await core.getCustomerSettings(db), billCycles: await (async () => { const c = await core.getBillCycles(db); return { ...c, defaultDay: core.defaultCycleDay(c) }; })() }));
 
 // ───────────────────────── users and roles ─────────────────────────
 get('/roles', 'user:manage', ({ db }) => core.listRoles(db));
@@ -383,7 +393,7 @@ const nodePatch = z.object({
 
 /** Sales-only roles see only live nodes; editors see everything. */
 const liveOnly = (user: { permissions: Set<string> }) => !user.permissions.has('catalog:write');
-get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { status: liveOnly(user) ? 'ACTIVE' : str(query, 'status'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), step: str(query, 'step'), outright: query.get('outright') === '1', q: str(query, 'q'), market: str(query, 'market'), channel: str(query, 'channel'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { forSale: query.get('forSale') === '1' || liveOnly(user), status: liveOnly(user) ? 'ACTIVE' : str(query, 'status'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), step: str(query, 'step'), outright: query.get('outright') === '1', q: str(query, 'q'), market: str(query, 'market'), channel: str(query, 'channel'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 // The catalog browser loads one level at a time: children of a node, word search, one node's detail. Nothing returns the whole tree.
 get('/catalog/browse', 'catalog:read', ({ db, user, query }) => core.browseChildren(db, { parentId: str(query, 'parent') || null, activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/search', 'catalog:read', ({ db, user, query }) => core.searchNodes(db, { q: str(query, 'q') ?? '', level: str(query, 'level'), activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
@@ -475,12 +485,17 @@ const personalSchema = z.object({
 }).partial();
 const addressSchema = z.object({ line1: z.string().max(120), line2: z.string().max(120).optional(), city: z.string().max(80), state: z.string().max(80).optional(), postcode: z.string().max(20), country: z.string().length(2) });
 const consentSchema = z.object({ acceptedTerms: z.boolean(), privacyAccepted: z.boolean(), marketingOptIn: z.boolean(), authorisedAssistant: z.boolean().optional(), creditCheck: z.boolean().optional() }).partial();
-const appPatch = z.object({ lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
+const appPatch = z.object({ fiber: z.object({ reservationId: z.string().uuid() }).nullable().optional(), lines: cartSchema.shape.lines.optional(), personal: personalSchema.optional(), address: addressSchema.optional(), consent: consentSchema.optional() });
 const docUpload = z.object({ kind: z.enum(core.DOC_KINDS), dataBase64: z.string().min(1).max(3_700_000).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'not base64') });
 const DOC_BODY = 3_800_000;
 
 clientRoute('GET', '/store/config', async ({ db }) => core.storeConfig(db));
 clientRoute('GET', '/store/catalog', async ({ db, query }) => core.storeCatalog(db, 'SELF_SERVE', { q: str(query, 'q'), kind: str(query, 'kind'), notKind: str(query, 'notKind'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+// Fibre coverage for the store-front: the same service, asked on the shopper's behalf. Off or unreachable answers with a message the shop can show.
+clientRoute('POST', '/store/fiber/qualify', async ({ db, body }) => core.fiberQualify(db, fiberPlace.parse(body)));
+clientRoute('POST', '/store/fiber/reserve', async ({ db, body, req }) => core.fiberReserve(db, { ...fiberReserve.parse(body), customerRef: `shopper:${(req.headers.get('x-shopper-ip') ?? 'unknown').slice(0, 45)}:${String((body as { sessionRef?: string })?.sessionRef ?? '').slice(0, 40)}` }));
+clientRoute('POST', '/store/fiber/reservations/:id/release', async ({ db, params }) => core.fiberRelease(db, params.id!));
+clientRoute('POST', '/store/fiber/waitlist', async ({ db, body }) => core.fiberWaitlist(db, fiberWait.parse(body)));
 clientRoute('POST', '/store/quote', async ({ db, body }) => core.quoteBasket(db, { ...cartSchema.parse(body), channel: 'SELF_SERVE' }));
 clientRoute('POST', '/store/applications', async ({ db, body, req, client }) => {
   const b = cartSchema.parse(body);
@@ -1168,7 +1183,7 @@ const orderBody = z.object({
   lines: z.array(lineBody).min(1).max(50),
   payment: z.object({ method: z.enum(['CREDIT_CARD', 'CASH', 'QR', 'INSTALLMENT']), installmentMonths: z.number().int().optional(), reference: z.string().max(100).optional(), confirmed: z.boolean().optional() }),
   storeId: z.string().max(50).optional(), dealerId: z.string().max(50).optional(), dealerAgentId: z.string().max(60).optional(),
-  deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(),
+  deliveryAddress: z.string().max(500).optional(), installationSlot: z.string().max(40).optional(), fiberReservationId: z.string().uuid().optional(),
   delivery: z.object({ method: z.enum(['SHIP', 'COLLECT']), pickupStoreId: z.string().max(50).optional() }).optional(),
   financing: z.object({ creditCheckId: uuid.optional(), payInFull: z.boolean().optional() }).optional(),
 });
@@ -1241,11 +1256,13 @@ post('/orders', null, async ({ db, user, body, req }) => {
     }
   }
   try {
+    await core.fiberVerifyLock(db, b.fiberReservationId);   // a held fibre port must still be held
     const order = await core.placeOrder(db, {
       customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines,
       payment: { method: b.payment.method, installmentMonths: b.payment.installmentMonths, reference: b.payment.reference, confirmed },
-      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, financing: b.financing, actor: user.username,
+      attribution: portal ? {} : { storeId, dealerId, dealerAgentId: dealerId ? b.dealerAgentId : undefined, salespersonId: user.username }, deliveryAddress: b.deliveryAddress, delivery: b.delivery, installationSlot: b.installationSlot, financing: b.financing, actor: user.username, fiberReservationId: b.fiberReservationId,
     });
+    await core.fiberConfirmLock(db, b.fiberReservationId, String(order.number ?? order.id), user.username);
     if (key) await db.query('UPDATE idempotency_keys SET order_id=$3 WHERE key=$1 AND user_id=$2', [key, user.id, order.id]);
     return order;
   } catch (e) {

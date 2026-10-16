@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Card, Field, Input, Select, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Card, FiberCoverageCheck, Field, Input, Select, Spinner, type FiberApi } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -9,7 +9,8 @@ import { PaymentStep, type PaymentStart } from './payment';
 
 interface View {
   id: string; status: string; expiresAt: string;
-  quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; instalmentMinor?: number } }>; financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean }; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; taxName: string } | null;
+  quote: { lines: Array<{ offerId: string; name: string; quantity: number; upfrontMinor: number; monthlyMinor: number; deal?: { planName: string; termMonths: number; instalmentMinor?: number } }>; financing?: { months: number; upfrontMinor: number; instalmentMinor: number; estimate: boolean; creditCheck: boolean }; upfrontMinor: number; monthlyMinor: number; requiresShipping: boolean; requiresInstallation?: boolean; taxName: string } | null;
+  fiber?: { reservationId: string } | null;
   personal: Record<string, string | undefined>; personalProblems: string[]; address: Record<string, string> | null; consent: Record<string, unknown> | null;
   kyc: { status: string; method: string; reason: string | null; returned: boolean } | null; documents: string[];
   order: { id: string; number?: string | null; state: string; totalMinor: number; trackingNumber: string | null; failureReason: string | null; numbers: string[]; lines: Array<{ name: string; quantity: number }> } | null;
@@ -59,7 +60,7 @@ export function Wizard() {
     if (view.personalProblems.length) return 'details';
     const need = ['ID_FRONT', 'SELFIE', ...(view.personal.idType === 'PASSPORT' ? [] : ['ID_BACK'])];
     if (need.some((k) => !view.documents.includes(k))) return 'documents';
-    if (view.quote?.requiresShipping && !view.address) return 'address';
+    if ((view.quote?.requiresShipping || view.quote?.requiresInstallation) && !view.address) return 'address';
     return 'review';
   }, [view]);
   // Stay on the documents step while photos are added, instead of jumping ahead the moment the last one lands.
@@ -114,7 +115,7 @@ export function Wizard() {
         : current === 'details' ? <Details view={view} onDone={async () => { setStep(null); await refresh(); }} />
         : current === 'documents' ? <Documents view={view} onChange={refresh} onBack={() => setStep('details')} onDone={() => setStep(null)} />
         : current === 'address' ? <AddressForm view={view} onDone={async () => { setStep(null); await refresh(); }} />
-        : <Review view={view} onBack={() => setStep(view.quote?.requiresShipping ? 'address' : 'documents')} onSubmitted={async () => { setStep(null); await refresh(); }} />}
+        : <Review view={view} onBack={() => setStep(view.quote?.requiresShipping || view.quote?.requiresInstallation ? 'address' : 'documents')} onSubmitted={async () => { setStep(null); await refresh(); }} />}
     </div>
   );
 }
@@ -251,16 +252,33 @@ function Documents({ view, onChange, onBack, onDone }: { view: View; onChange: (
   );
 }
 
+/** The coverage service, asked through this shop's own API; the browser never calls the CRM or the service directly. */
+const fiberApi = (applicationId: string): FiberApi => ({
+  qualify: (p) => api('/fiber/qualify', { method: 'POST', json: p }),
+  reserve: (p) => api('/fiber/reserve', { method: 'POST', json: { ...p, sessionRef: applicationId } }),
+  release: (id) => api(`/fiber/release/${id}`, { method: 'POST', json: {} }),
+  waitlist: (p) => api('/fiber/waitlist', { method: 'POST', json: p }),
+});
+/** The speed a fibre plan in the basket names ("Home Fibre 1 Gbps"), so the check can ask for it. */
+const fiberSpeed = (v: View): number | undefined => {
+  for (const l of v.quote?.lines ?? []) { const m = /(\d+(?:\.\d+)?)\s*(g|m)bps/i.exec(l.name); if (m) return Math.round(Number(m[1]) * (m[2]!.toLowerCase() === 'g' ? 1000 : 1)); }
+  return undefined;
+};
+
 function AddressForm({ view, onDone }: { view: View; onDone: () => void | Promise<void> }) {
-  const { regional } = useConfig();
+  const { regional, modules } = useConfig();
+  const installing = !!view.quote?.requiresInstallation;
+  const [lock, setLockRaw] = useState<string | null>(view.fiber?.reservationId ?? null);
   const a = view.address ?? {};
   const [f, setF] = useState({ line1: a.line1 ?? '', line2: a.line2 ?? '', city: a.city ?? '', state: a.state ?? '', postcode: a.postcode ?? '', country: a.country ?? regional.country });
   const { busy, error, run } = useSave(onDone);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  // The held port goes onto the application, so checkout can confirm it for the order.
+  const setLock = (id: string | null) => { setLockRaw(id); void api('/application', { method: 'PATCH', json: { fiber: id ? { reservationId: id } : null } }).catch(() => {}); };
   return (
     <Card>
       <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void run(() => api('/application', { method: 'PATCH', json: { address: { ...f, line2: f.line2 || undefined, state: f.state || undefined } } })); }}>
-        <h2 className="text-title3 font-semibold">Where should we deliver?</h2>
+        <h2 className="text-title3 font-semibold">{installing && !view.quote?.requiresShipping ? 'Where should we install?' : 'Where should we deliver?'}</h2>
         <Field label="Address line 1"><Input autoComplete="address-line1" required value={f.line1} onChange={set('line1')} /></Field>
         <Field label="Address line 2 (optional)"><Input autoComplete="address-line2" value={f.line2} onChange={set('line2')} /></Field>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -269,6 +287,9 @@ function AddressForm({ view, onDone }: { view: View; onDone: () => void | Promis
           <Field label="State / region (optional)"><Input autoComplete="address-level1" value={f.state} onChange={set('state')} /></Field>
           <Field label="Country (2-letter code)"><Input autoComplete="country" required maxLength={2} value={f.country} onChange={(e) => setF({ ...f, country: e.target.value.toUpperCase() })} /></Field>
         </div>
+        {installing && modules?.fiberCoverage && (
+          <FiberCoverageCheck who="you" address={[f.line1, f.line2, f.city, f.postcode].filter(Boolean).join(', ')} speedMbps={fiberSpeed(view)} lock={lock} onLock={setLock} api={fiberApi(view.id)} />
+        )}
         {error && <Alert>{error}</Alert>}
         <Button type="submit" disabled={busy} className="w-full">{busy ? 'Saving…' : 'Continue'}</Button>
       </form>
