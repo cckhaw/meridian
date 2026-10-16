@@ -1,3 +1,4 @@
+import { getTypeConflicts } from './offer-conflicts.js';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fiberConfigured, fiberConfirmLock, fiberModuleEnabled, fiberVerifyLock } from './fiber-client.js';
 import type { LineItemNode, OfferNode } from '@meridian/types';
@@ -475,5 +476,6 @@ export async function storeConfig(q: Queryable) {
     terms: { version: st.termsVersion, termsUrl: st.termsUrl || null, privacyUrl: st.privacyUrl || null },
     payment: { gateways: gw.list.map((g) => ({ id: g.id, label: g.label, ...g.publicConfig() })), default: gw.default?.id ?? null },
     modules: { fiberCoverage: (await fiberModuleEnabled(q)) && fiberConfigured() },
+    typeConflicts: await getTypeConflicts(q),   // pairs of offer types that cannot share an order: the shop greys the second one out
   };
 }

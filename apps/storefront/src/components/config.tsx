@@ -9,6 +9,7 @@ export interface StoreConfig {
   terms: { version: string; termsUrl: string | null; privacyUrl: string | null };
   payment: { gateways: Array<{ id: string; label: string }>; default: string | null };
   modules?: { fiberCoverage?: boolean };
+  typeConflicts?: Array<[string, string]>;
 }
 const Ctx = createContext<StoreConfig | null>(null);
 export const ConfigProvider = ({ value, children }: { value: StoreConfig; children: ReactNode }) => <Ctx.Provider value={value}>{children}</Ctx.Provider>;
