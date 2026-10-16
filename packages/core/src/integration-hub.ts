@@ -3,12 +3,13 @@ import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound } from './errors.js';
 import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
 import { resetEventGate } from './events.js';
+import { authEndpointProblem } from './auth-provider-config.js';
 
 /**
  * Integration hub: the settings behind the northbound API gateway and the outside systems Meridian talks to, in six groups. Secrets entered here are encrypted
  * (MERIDIAN_DATA_KEY) and never sent back to the browser: a view says only whether one is set. Credentials that *we* issue (OAuth clients, API keys) are kept as hashes.
  */
-export const HUB_GROUPS = ['gateway', 'webhooks', 'wfm', 'network', 'finance', 'events'] as const;
+export const HUB_GROUPS = ['gateway', 'webhooks', 'wfm', 'network', 'finance', 'events', 'auth'] as const;
 export type HubGroup = (typeof HUB_GROUPS)[number];
 
 /** The kinds of endpoint each group holds. */
@@ -32,9 +33,15 @@ export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: s
     { kind: 'PAYMENT_GATEWAY', label: 'Payment provider', hint: 'DuitNow, PromptPay, QRIS, SGQR, card processors: credentials and the callback address' },
   ],
   events: [{ kind: 'EVENT_BUS', label: 'Event bus', hint: 'Kafka brokers or another event stream' }],
+  auth: [
+    { kind: 'IDP_OIDC', label: 'Single sign-on (OpenID Connect)', hint: 'Microsoft Entra ID, Okta, Ping Identity, Keycloak: issuer, client id and secret, which group gets which role' },
+    { kind: 'IDP_SAML', label: 'Single sign-on (SAML 2.0)', hint: 'Provider address, entity id and signing certificate. Stored and checked; assertions are not accepted yet' },
+    { kind: 'LDAP', label: 'Active Directory / LDAP', hint: 'Directory address, service account, search base, group-to-role mappings and how often to sync' },
+    { kind: 'OTP_GATEWAY', label: 'SMS / WhatsApp gateway', hint: 'Carries one-time codes for the second factor and password recovery: address, token, sender and template ids' },
+  ],
 };
 
-const URL_SCHEMES = ['https', 'http', 'sftp', 'diameter', 'rfc', 'kafka', 'tls', 'tcp'];
+const URL_SCHEMES = ['https', 'http', 'sftp', 'diameter', 'rfc', 'kafka', 'tls', 'tcp', 'ldap', 'ldaps'];
 const prod = () => process.env.NODE_ENV === 'production';
 
 /** An address as an administrator types it. Plain http is for a machine's own address outside production; the protocols network elements speak are accepted. */
@@ -70,6 +77,8 @@ export async function saveHubEndpoint(q: Queryable, actor: string, i: HubEndpoin
   const name = (i.name ?? '').trim();
   if (!name || name.length > 80) throw invalid('Give it a name of up to 80 characters.');
   for (const [v, what] of [[i.url, 'The address'], [i.fallbackUrl, 'The fallback address']] as const) if (v) { const p = hubUrlProblem(v, what); if (p) throw invalid(p); }
+  const authProblem = i.group === 'auth' ? authEndpointProblem(i.kind, { url: i.url, config: i.config }) : null;
+  if (authProblem) throw invalid(authProblem);
   const timeout = i.timeoutMs ?? 10000;
   if (!Number.isInteger(timeout) || timeout < 100 || timeout > 120000) throw invalid('The timeout is 100 to 120,000 milliseconds.');
   const config = i.config ?? {};

@@ -17,6 +17,7 @@
     "@pdf-lib/fontkit": "^1.1.1",
     "fast-xml-parser": "^5.11.2",
     "fflate": "^0.8.3",
+    "ldapts": "^9.2.0",
     "node-html-parser": "^9.0.4",
     "pdf-lib": "^1.17.1",
     "pg": "^8.13.1",

@@ -25,6 +25,8 @@ export const SECTIONS: IntegrationSection[] = [
     keywords: 'identity ekyc kyc verification id document credit bureau score check device financing upfront collections agency debt write off' },
   { id: 'field', group: 'Systems Meridian connects to', label: 'Field service and logistics', description: 'Technician dispatch, installation, couriers, warehouses', groups: ['Field service and logistics'],
     keywords: 'field service workforce wfm dispatch technician installation appointment slot courier delivery tracking warehouse stock files logistics' },
+  { id: 'signin', group: 'Systems Meridian connects to', label: 'Sign-in and identity', description: 'Single sign-on, the company directory, and the SMS or WhatsApp gateway for one-time codes', groups: ['Sign-in and identity'],
+    keywords: 'sso single sign-on saml oidc openid connect entra azure ad okta ping keycloak ldap active directory identity provider login authentication sms whatsapp otp one-time code 2fa mfa gateway' },
   { id: 'messaging', group: 'Systems Meridian connects to', label: 'Customer messaging', description: 'SMS, email and push notifications', groups: ['Customer messaging'], keywords: 'sms email push notification message whatsapp gateway template' },
 
   { id: 'storefront', group: 'Channels and partners', label: 'Online store-front', description: 'The self-serve shop and its access to Meridian', groups: ['Online store-front'], keywords: 'store front storefront shop online self serve api key kyc stripe checkout' },

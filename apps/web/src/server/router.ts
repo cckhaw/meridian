@@ -53,6 +53,9 @@ const need = (u: SessionUser, p: Permission) => core.requirePermissions(u, p);
 open('GET', '/health', () => ({ status: 'ok' }));
 open('GET', '/ready', async () => { const db = await getDb(); await db.query('SELECT 1'); return { status: 'ready' }; });
 
+/** Hands any waiting sign-in codes to the SMS/WhatsApp gateway, if one is set up. A gateway that is down never fails the request that asked for the code. */
+const kickOtp = (db: Db) => core.deliverOtpMessages(db).catch(() => undefined);
+
 open('POST', '/auth/login', async ({ db, body, req }) => {
   const b = z.object({ username: z.string().min(1).max(100), password: z.string().min(1).max(1024) }).parse(body);
   try {
@@ -60,7 +63,7 @@ open('POST', '/auth/login', async ({ db, body, req }) => {
     return new Response(JSON.stringify({ user: core.publicUser(r.user) }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie(req, r.token, r.expiresAt), 'cache-control': 'no-store' } });
   } catch (e) {
     // Right password, but a second factor is needed: no session yet, only a short-lived challenge for the next step.
-    if (e instanceof core.MfaRequired) return new Response(JSON.stringify({ mfaRequired: true, challenge: e.challenge }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    if (e instanceof core.MfaRequired) { await kickOtp(db); return new Response(JSON.stringify({ mfaRequired: true, challenge: e.challenge }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }); }
     if (e instanceof DomainError && e.code === 'REJECTED') return new Response(JSON.stringify({ error: { code: 'UNAUTHENTICATED', message: e.message } }), { status: 401, headers: { 'content-type': 'application/json' } });
     if (e instanceof core.RateLimited) return new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: e.message } }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': String(e.retryAfterSeconds) } });
     throw e;
@@ -77,6 +80,7 @@ open('GET', '/auth/password-policy', async ({ db }) => {
 open('POST', '/auth/forgot-password', async ({ db, body, req }) => {
   const b = z.object({ identifier: z.string().min(1).max(200) }).parse(body);
   await core.requestPasswordReset(db, { identifier: b.identifier, ip: clientIp(req) });
+  await kickOtp(db);
   return { ok: true, message: 'If that account exists and has a way to reach it, a link or code is on its way.' };
 });
 open('POST', '/auth/reset-password', async ({ db, body, req }) => {
@@ -100,7 +104,17 @@ open('POST', '/auth/verify-2fa', async ({ db, body, req }) => {
 // "Text me instead" while signing in.
 open('POST', '/auth/2fa/send-code', async ({ db, body }) => {
   const b = z.object({ challenge: z.string().min(20).max(200), method: z.enum(['SMS', 'EMAIL']) }).parse(body);
-  try { return await core.sendChallengeCode(db, b.challenge, b.method); } catch (e) { return authFailure(e); }
+  try { const r = await core.sendChallengeCode(db, b.challenge, b.method); await kickOtp(db); return r; } catch (e) { return authFailure(e); }
+});
+// Single sign-on: the buttons on the sign-in page, the redirect to the provider, and the return with a code.
+open('GET', '/auth/sso/providers', async ({ db }) => ({ items: await core.listSignInProviders(db) }));
+open('POST', '/auth/sso/start', async ({ db, body }) => core.oidcBegin(db, z.object({ providerId: uuid }).parse(body).providerId));
+open('POST', '/auth/sso/callback', async ({ db, body, req }) => {
+  const b = z.object({ state: z.string().min(10).max(200), code: z.string().min(1).max(4000) }).parse(body);
+  try {
+    const r = await core.oidcFinish(db, { ...b, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
+    return new Response(JSON.stringify({ user: core.publicUser(r.user) }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie(req, r.token, r.expiresAt), 'cache-control': 'no-store' } });
+  } catch (e) { return authFailure(e); }
 });
 // Swaps the cookie for a fresh one without signing the person out; the session's end time does not move.
 route('POST', '/auth/refresh-token', null, async ({ db, req }) => {
@@ -139,7 +153,9 @@ route('POST', '/profile/mfa/totp/start', null, ({ db, user }) => core.beginTotp(
 route('POST', '/profile/mfa/totp/confirm', null, ({ db, user, body }) => core.confirmTotp(db, { id: me(user).id, username: user.username }, z.object({ code: z.string().max(12) }).parse(body).code), mine);
 route('POST', '/profile/mfa/otp/start', null, async ({ db, user, body }) => {
   const r = (await db.query('SELECT email, phone FROM users WHERE id=$1', [me(user).id])).rows[0]!;
-  return core.beginOtpMethod(db, { id: user.id, name: user.displayName, email: r.email, phone: r.phone }, otpKindBody.parse(body).kind);
+  const out = await core.beginOtpMethod(db, { id: user.id, name: user.displayName, email: r.email, phone: r.phone }, otpKindBody.parse(body).kind);
+  await kickOtp(db);
+  return out;
 }, mine);
 route('POST', '/profile/mfa/otp/confirm', null, ({ db, user, body }) => { const b = otpKindBody.extend({ code: z.string().max(12) }).parse(body); return core.confirmOtpMethod(db, { id: me(user).id, username: user.username }, b.kind, b.code); }, mine);
 route('POST', '/profile/mfa/disable', null, async ({ db, user, body }) => {
@@ -819,6 +835,10 @@ open('GET', '/v1/invoices/:id/pdf', async ({ db, params, query }) => {
 north('POST', '/v1/payments', 'payment:create', async ({ db, body, principal }) => created(await core.createPaymentNorth(db, z.object({ accountId: uuid.optional(), invoiceId: uuid.optional(), orderId: uuid.optional(), amountMinor: z.number().int().positive(), method: z.enum(['CASH', 'CREDIT_CARD', 'QR']), reference: z.string().min(3).max(100), topUp: z.boolean().optional() }).parse(body), northActor(principal))), { idempotent: true });
 
 // ── Event delivery: dispatch now, recent deliveries, retry ──
+post('/settings/integration-hub/auth/directory/:id/sync', 'settings:manage', ({ db, params, user }) => core.syncDirectory(db, params.id!, user.username));
+get('/settings/integration-hub/auth/directory/runs', 'settings:manage', ({ db, query }) => core.listSyncRuns(db, str(query, 'endpointId')).then((items) => ({ items })));
+post('/jobs/directory-sync', 'settings:manage', ({ db }) => core.runDueDirectorySyncs(db));
+post('/jobs/deliver-otp', 'settings:manage', ({ db }) => core.deliverOtpMessages(db));
 post('/settings/integration-hub/events/dispatch', 'settings:manage', ({ db }) => core.dispatchEvents(db));
 get('/settings/integration-hub/deliveries', 'settings:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
 post('/settings/integration-hub/deliveries/:id/retry', 'settings:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));

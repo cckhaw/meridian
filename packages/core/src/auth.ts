@@ -6,6 +6,7 @@ import { assertStoreUsable } from './stores.js';
 import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
+import { verifyDirectoryPassword } from './auth-providers.js';
 import { checkChallenge, confirmedKinds, openLoginChallenge, type LoginChallenge } from './mfa.js';
 import { checkPassword, getSecurityPolicy, idleMinutesFor, isReusedPassword, mfaRequiredFor, rememberPassword } from './security-policy.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
@@ -166,7 +167,8 @@ export async function login(db: Db, i: { username: string; password: string; ip?
 
   // ── database users ──
   const row = (await db.query('SELECT * FROM users WHERE lower(username)=lower($1) AND NOT is_superuser', [username])).rows[0];
-  const ok = await verifyPassword(i.password, row?.passwordHash ?? (await dummyHash()));   // always one hash verification
+  const ok = row?.authSource === 'LDAP' ? await verifyDirectoryPassword(db, row, i.password)   // directory users prove themselves to the directory
+    : await verifyPassword(i.password, row?.passwordHash ?? (await dummyHash()));   // always one hash verification
   if (!row || !ok || row.status !== 'ACTIVE') {
     await recordFailure(db, ikey, ukey);
     if (row && row.status === 'ACTIVE') await registerFailure(db, row, policy);
@@ -192,6 +194,20 @@ export async function login(db: Db, i: { username: string; password: string; ip?
     await audit(q, row.username, 'auth', row.id, expired ? 'LOGIN_PASSWORD_EXPIRED' : 'LOGIN', { ip: i.ip });
     const user = toUser({ ...row, mustChangePassword: row.mustChangePassword || expired }, await getRoleOverrides(q));
     user.mfaEnrollRequired = mfaRequiredFor(policy, user.roles);
+    return { token, user, expiresAt };
+  });
+}
+
+/** Opens a session for someone the identity provider has already authenticated. The provider is the authority (and its own second factor), so no local one is asked for. */
+export async function openFederatedSession(db: Db, userId: string, via: string, i: { ip?: string; userAgent?: string } = {}): Promise<LoginResult> {
+  const row = (await db.query('SELECT * FROM users WHERE id=$1', [userId])).rows[0];
+  if (!row || row.status !== 'ACTIVE' || row.isSuperuser) throw rejected(BAD_LOGIN);
+  return db.tx(async (q) => {
+    await q.query('UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1', [row.id]);
+    const { token, expiresAt } = await openSession(q, row.id, '', i.ip, i.userAgent);
+    await audit(q, row.username, 'auth', row.id, 'LOGIN_SSO', { ip: i.ip, via });
+    const user = toUser({ ...row, mustChangePassword: false }, await getRoleOverrides(q));
+    user.mfaEnrollRequired = false;
     return { token, user, expiresAt };
   });
 }
@@ -276,7 +292,7 @@ function parseRoles(roles: string[], book: RoleBook): RoleId[] {
 const adminView = (r: Row) => ({
   id: r.id, username: r.username, displayName: r.displayName, email: r.email, phone: r.phone ?? null, roles: r.roles, status: r.status, isSuperuser: r.isSuperuser,
   mustChangePassword: r.mustChangePassword, locked: !!r.lockedUntil && new Date(r.lockedUntil) > new Date(), lastLoginAt: r.lastLoginAt,
-  storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: r.marketCode?.trim(), createdAt: r.createdAt, createdBy: r.createdBy,
+  storeId: r.storeId, dealerId: r.dealerId, customerId: r.customerId, marketCode: r.marketCode?.trim(), createdAt: r.createdAt, createdBy: r.createdBy, authSource: r.authSource ?? 'LOCAL',
 });
 
 /** A login's market decides which offers it can sell: the one given, else the deployment's own country (Settings → Regional), else Singapore. */
@@ -350,6 +366,7 @@ export async function resetPassword(db: Db, actor: string, id: string): Promise<
   return db.tx(async (q) => {
     const u = (await q.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [id])).rows[0];
     if (!u || u.isSuperuser) throw notFound('user', id);
+    if (u.authSource !== 'LOCAL') throw rejected(`This account signs in through ${u.authSource === 'LDAP' ? 'the company directory' : 'single sign-on'}; its password is managed there.`);
     const temp = temporaryPassword();
     await q.query(`UPDATE users SET password_hash=$2, must_change_password=true, failed_attempts=0, locked_until=NULL, updated_at=now() WHERE id=$1`, [id, await hashPassword(temp)]);
     await revokeUserSessions(q, id);
@@ -366,7 +383,8 @@ export async function unlockUser(db: Db, actor: string, id: string) {
 
 export async function changePassword(db: Db, user: SessionUser, current: string, next: string) {
   if (user.isSuperuser) throw rejected('The super user password is set in the environment (MERIDIAN_SUPERUSER_PASSWORD).');
-  const row = (await db.query('SELECT password_hash FROM users WHERE id=$1', [user.id])).rows[0];
+  const row = (await db.query('SELECT password_hash, auth_source FROM users WHERE id=$1', [user.id])).rows[0];
+  if (row && row.authSource !== 'LOCAL') throw rejected('Your password is managed by your company sign-in, not by Meridian.');
   if (!row || !(await verifyPassword(current, row.passwordHash))) throw rejected('The current password is incorrect.');
   const policy = await getSecurityPolicy(db);
   const problem = checkPassword(policy, next, user.username);

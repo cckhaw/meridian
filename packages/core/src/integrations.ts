@@ -14,10 +14,10 @@ import { getStoreSettings } from './store-settings.js';
  * Nothing in this file returns a secret: environment variables are reported as set or not set, never by value.
  */
 export type IntegrationGroup =
-  | 'Network, numbers and charging' | 'Payments and finance' | 'Identity, credit and collections' | 'Field service and logistics' | 'Customer messaging' | 'Online store-front' | 'Events and streaming' | 'Platform';
+  | 'Network, numbers and charging' | 'Payments and finance' | 'Identity, credit and collections' | 'Field service and logistics' | 'Customer messaging' | 'Sign-in and identity' | 'Online store-front' | 'Events and streaming' | 'Platform';
 
 export const INTEGRATION_GROUPS: IntegrationGroup[] = [
-  'Network, numbers and charging', 'Payments and finance', 'Identity, credit and collections', 'Field service and logistics', 'Customer messaging', 'Online store-front', 'Events and streaming', 'Platform',
+  'Network, numbers and charging', 'Payments and finance', 'Identity, credit and collections', 'Field service and logistics', 'Customer messaging', 'Sign-in and identity', 'Online store-front', 'Events and streaming', 'Platform',
 ];
 
 /**
@@ -209,6 +209,41 @@ export const INTEGRATIONS: IntegrationDef[] = [
     configure: { label: 'Inventory', href: '/inventory' }, doc: 'ORDERS.md', keywords: 'warehouse stock inventory wms supplier csv import',
   },
 
+  // ───────────── Sign-in and identity ─────────────
+  {
+    id: 'sso-oidc', group: 'Sign-in and identity', name: 'Single sign-on (OpenID Connect)', with: 'Microsoft Entra ID (Azure AD), Okta, Ping Identity, Keycloak or any OpenID Connect provider',
+    summary: 'Staff sign in with their company account. Meridian sends them to the provider (authorisation code with PKCE), checks the signed id_token, and creates or updates their Meridian account with the role their groups map to. The provider’s own second factor applies, so Meridian does not ask for another. The Administrator role is never granted from a group.',
+    maturity: 'BUILT', direction: 'BOTH',
+    endpoints: [
+      { method: 'GET', path: '/api/auth/sso/providers', purpose: 'The sign-in buttons', auth: 'None' },
+      { method: 'POST', path: '/api/auth/sso/start', purpose: 'Where to send the browser: { providerId }', auth: 'None' },
+      { method: 'POST', path: '/api/auth/sso/callback', purpose: 'The return from the provider: { state, code }', auth: 'None (single-use state and PKCE verifier)' },
+    ],
+    needs: ['Register Meridian with the provider as a web application and give it the redirect address shown below', 'Add the connection below: issuer, client id, client secret, and which group gets which role'],
+    doc: 'SECURITY.md', keywords: 'sso single sign-on oidc openid connect entra azure ad okta ping keycloak idp login',
+  },
+  {
+    id: 'sso-saml', group: 'Sign-in and identity', name: 'Single sign-on (SAML 2.0)', with: 'A SAML 2.0 identity provider',
+    summary: 'The provider’s address, entity id and signing certificate are stored and checked. Meridian does not accept SAML assertions yet, so sign-in through SAML is not available; use OpenID Connect, which every major provider also offers.',
+    maturity: 'STUB', direction: 'IN',
+    needs: ['Prefer OpenID Connect where the provider supports it', 'A SAML assertion consumer needs a vetted SAML library and a security review before it is switched on'],
+    doc: 'SECURITY.md', keywords: 'saml 2.0 assertion idp sso adfs',
+  },
+  {
+    id: 'ldap', group: 'Sign-in and identity', name: 'Active Directory / LDAP', with: 'Microsoft Active Directory or another LDAP directory',
+    summary: 'Meridian reads the people in the directory on a schedule, creates their accounts with the role their groups map to, keeps names, e-mail and phone current, and switches off people who have left. They sign in with their directory password, which Meridian checks with the directory and never stores. Local accounts are never taken over.',
+    maturity: 'BUILT', direction: 'BOTH',
+    needs: ['A read-only service account for the directory and the place to search (base DN)', 'Add the connection below, map directory groups to roles, then press Sync now', 'Call POST /api/jobs/directory-sync from your scheduler every few minutes; each directory syncs when its own interval is due'],
+    doc: 'SECURITY.md', keywords: 'ldap active directory ad sync directory group role mapping ldaps bind',
+  },
+  {
+    id: 'otp-gateway', group: 'Sign-in and identity', name: 'SMS / WhatsApp one-time codes', with: 'An SMS or WhatsApp messaging gateway (Twilio, Infobip, a local aggregator)',
+    summary: 'Carries the sign-in codes for the second factor and the codes for password recovery. Meridian posts each message to the gateway as JSON with a bearer token; the code is wiped from the outbox once the gateway accepts it. Without a gateway, codes wait in the notification outbox for whatever delivers notifications.',
+    maturity: 'BUILT', direction: 'OUT', outbox: { kind: 'NOTIFY', instructions: ['MFA_OTP', 'PASSWORD_RESET'] },
+    needs: ['Add the gateway below: address, token, sender id, SMS or WhatsApp, and approved template ids for WhatsApp', 'Call POST /api/jobs/deliver-otp from your scheduler to retry any code the gateway refused'],
+    doc: 'SECURITY.md', keywords: 'sms whatsapp otp one-time code gateway twilio infobip 2fa mfa password recovery',
+  },
+
   // ───────────── Customer messaging ─────────────
   {
     id: 'notifications', group: 'Customer messaging', name: 'SMS, email and push notifications', with: 'An SMS gateway and an email service',
@@ -391,6 +426,8 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
   const keys = (await q.query(`SELECT count(*)::int AS n FROM api_clients WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const donors = (await q.query(`SELECT count(*)::int AS n FROM donor_operators WHERE status='ACTIVE'`)).rows[0]?.n ?? 0;
   const embedded = !(env.DATABASE_URL ?? '').trim();
+  const authCounts = new Map<string, number>((await q.query(`SELECT kind, count(*)::int AS n FROM integration_endpoints WHERE group_key='auth' AND enabled GROUP BY kind`)).rows.map((r) => [r.kind as string, r.n as number]));
+  const lastSync = ((await q.query(`SELECT max(finished_at) AS at FROM directory_sync_runs WHERE status='OK'`)).rows[0]?.at as string | null) ?? null;
   const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q), wfmSet = await getWfmSettings(q);
 
   const items = INTEGRATIONS.map((def) => {
@@ -404,6 +441,14 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
     let detail = '';
 
     switch (def.id) {
+      case 'sso-oidc': case 'sso-saml': case 'ldap': case 'otp-gateway': {
+        const kind = { 'sso-oidc': 'IDP_OIDC', 'sso-saml': 'IDP_SAML', ldap: 'LDAP', 'otp-gateway': 'OTP_GATEWAY' }[def.id]!;
+        const n = authCounts.get(kind) ?? 0;
+        if (def.id === 'sso-saml') { status = 'STAND_IN'; detail = n ? `${n} provider${n === 1 ? '' : 's'} stored. Sign-in through SAML is not available yet.` : 'Not available yet; use OpenID Connect.'; }
+        else if (!n) { status = 'NEEDS_SETUP'; detail = 'Nothing connected yet.'; }
+        else { status = 'CONNECTED'; detail = def.id === 'ldap' ? `${n} director${n === 1 ? 'y' : 'ies'} connected.${lastSync ? ` Last sync ${lastSync.slice(0, 16).replace('T', ' ')} UTC.` : ' Not synced yet.'}` : `${n} connected.`; }
+        break;
+      }
       case 'storefront':
         if (keys > 0) { status = 'REMOTE'; detail = `${keys} active API key${keys === 1 ? '' : 's'}. The store-front’s own settings are on its deployment.`; }
         else { status = 'NEEDS_SETUP'; detail = 'No API key has been issued.'; }

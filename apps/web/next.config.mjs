@@ -19,7 +19,7 @@ const csp = [
 export default {
   transpilePackages: ['@meridian/ui', '@meridian/types', '@meridian/core'],
   // Native/WASM database drivers must stay external to the server bundle.
-  serverExternalPackages: ['@electric-sql/pglite', 'pg'],
+  serverExternalPackages: ['@electric-sql/pglite', 'pg', 'ldapts'],
   reactStrictMode: true,
   poweredByHeader: false,
   // Workspace packages use NodeNext-style `./x.js` specifiers that point at .ts sources.

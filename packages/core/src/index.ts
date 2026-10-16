@@ -140,3 +140,6 @@ export * from './permission-catalog.js';
 export * from './access-guards.js';
 export * from './fraud.js';
 export * from './store-desk.js';
+export * from './auth-provider-config.js';
+export * from './auth-providers.js';
+export * from './otp-gateway.js';
