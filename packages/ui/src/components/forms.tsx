@@ -117,6 +117,8 @@ export const SectionTitle = ({ children, action }: { children: ReactNode; action
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // Callers pass a fresh function on every render. Reading it through a ref keeps the setup below to once per opening: it moves focus to the first field, and doing that on every keystroke threw the cursor back to the top.
+  const close = useRef(onClose); close.current = onClose;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const first = ref.current?.querySelector<HTMLElement>('input, select, textarea, button:not([data-close])');
@@ -124,7 +126,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') close.current();
       if (e.key !== 'Tab' || !ref.current) return;
       const f = [...ref.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea')];
       if (!f.length) return;
@@ -134,7 +136,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     };
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; previous?.focus(); };
-  }, [onClose]);
+  }, []);
   if (typeof document === 'undefined') return null;
   // Rendered at the end of <body>: inside a page section that is animating (it has a transform) a fixed element is placed against that section, not the
   // screen, and sat under the phone's tab bar with its buttons out of reach.
