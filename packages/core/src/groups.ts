@@ -120,9 +120,12 @@ export async function createGroup(q: Queryable, actor: string, i: { accountId: s
 export async function getGroup(q: Queryable, id: string): Promise<Row> {
   const g = await groupRow(q, id);
   const members = (await q.query(
-    `SELECT m.service_id, m.role, m.added_at, s.identifier, s.type, s.status, s.offer_id, n.name AS offer_name
+    `SELECT m.service_id, m.role, m.added_at, s.identifier, s.type, s.status, s.offer_id, n.name AS offer_name, COALESCE(n.data->'group'->>'isGroupOffer', 'false') = 'true' AS on_group_plan
        FROM service_group_members m JOIN services s ON s.id = m.service_id LEFT JOIN catalog_nodes n ON n.id = s.offer_id
       WHERE m.group_id=$1 ORDER BY (m.role = 'PRINCIPAL') DESC, s.identifier LIMIT 500`, [id])).rows;
+  // A line is tied to the group when its plan only exists with it: the group plan itself, or a plan reserved for the group's member lines.
+  const reserved = (await groupPlanTerms(q, g.offerId as string | null))?.allowed ?? [];
+  for (const m of members) m.onGroupPlan = m.onGroupPlan || reserved.includes(m.offerId as string);
   const used = members.filter((m) => m.role === 'SUPPLEMENTARY').length;
   const slots = g.maxSupplementary == null ? null : { max: g.maxSupplementary as number, used, remaining: Math.max(0, (g.maxSupplementary as number) - used) };
   return { ...g, members, slots };

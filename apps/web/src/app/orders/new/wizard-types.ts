@@ -62,11 +62,13 @@ export const flatLines = (items: Item[]): Array<{ iccid?: string; simType?: stri
   items.flatMap((i) => [i, ...(isGroupPlan(i.offer) ? (i.members ?? []).filter((m) => m.offerId) : [])]);
 
 /** The request the quote and the order are built from. */
-export function lineBody(i: Item, all: Item[] = []) {
+export function lineBody(i: Item, all: Item[] = [], joinGroupId?: string | null) {
   const plan = i.deal ? all.findIndex((x) => x.key === i.deal!.planKey) : -1;
   return {
     ...(i.deal && plan >= 0 ? { attachTo: plan, dealTermMonths: i.deal.term } : {}),
-    offerId: i.offer.id, quantity: i.quantity, msisdn: i.portIn ? undefined : i.msisdn || undefined, portIn: portInBody(i.portIn),
+    // A new line that joins an existing group instead of standing alone (one line at a time).
+    ...(joinGroupId && isPlan(i.offer) && !isGroupPlan(i.offer) ? { joinGroupId } : {}),
+    offerId: i.offer.id, quantity: joinGroupId && isPlan(i.offer) && !isGroupPlan(i.offer) ? 1 : i.quantity, msisdn: i.portIn ? undefined : i.msisdn || undefined, portIn: portInBody(i.portIn),
     members: isGroupPlan(i.offer) ? (i.members ?? []).filter((m) => m.offerId).map((m) => ({ offerId: m.offerId, iccid: m.iccid || undefined, simType: !m.iccid && m.simType ? m.simType : undefined, msisdn: m.portIn ? undefined : m.msisdn || undefined, numberToken: !m.portIn && m.msisdn && m.numberToken ? m.numberToken : undefined, portIn: portInBody(m.portIn) })) : undefined,
     iccid: i.iccid || undefined, simType: !i.iccid && i.simType ? i.simType : undefined, numberToken: i.msisdn && i.numberToken ? i.numberToken : undefined,
     options: i.variantId ? { variantId: i.variantId } : undefined,

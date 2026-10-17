@@ -117,8 +117,9 @@ function Row({ node, selected, showTrail, editable, canUp, canDown, onOpen, onRe
         )}
         {container && <span aria-hidden className="text-label2">›</span>}
       </button>
+      {/* Hidden until hover only where there is a hover (a mouse). On a touch screen the first tap on a row would otherwise count as the "hover" that reveals this, and the row would need a second tap to open. */}
       {editable && (
-        <span className="pr-2 opacity-100 lg:opacity-0 lg:transition-opacity lg:group-focus-within:opacity-100 lg:group-hover:opacity-100">
+        <span className="pr-2 lg:transition-opacity [@media(hover:hover)]:lg:opacity-0 [@media(hover:hover)]:lg:group-focus-within:opacity-100 [@media(hover:hover)]:lg:group-hover:opacity-100">
           <MenuButton label={`Actions for ${node.name}`} items={[
             { label: node.status === 'ACTIVE' ? 'Retire' : 'Make live', onSelect: () => onStatus(node.id, node.status === 'ACTIVE' ? 'RETIRED' : 'ACTIVE') },
             { label: 'Move up', onSelect: () => onReorder(node.id, 'up'), disabled: !canUp, divider: true },

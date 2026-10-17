@@ -1071,7 +1071,10 @@ patch('/groups/:id', 'service:manage', async ({ db, user, params, body }) => {
   await groupScope(user, db, params.id!);
   return db.tx((q) => core.updateGroup(q, user.username, params.id!, z.object({ name: z.string().min(1).max(80).optional(), benefits: benefitsBody.optional() }).parse(body)));
 });
-route('DELETE', '/groups/:id', 'service:manage', async ({ db, user, params }) => { await groupScope(user, db, params.id!); await db.tx((q) => core.dissolveGroup(q, user.username, params.id!)); return { ok: true }; });
+// Dissolving puts every line back on a single-line plan. The family head must be given one (it is on the group plan); the others may keep theirs.
+const dissolveBody = z.object({ plans: z.record(uuid, z.string().max(70)).optional() });
+route('DELETE', '/groups/:id', 'service:manage', async ({ db, user, params }) => { await groupScope(user, db, params.id!); await core.dissolveToSingles(db, user.username, params.id!); return { ok: true }; });
+post('/groups/:id/dissolve', 'service:manage', async ({ db, user, params, body }) => { await groupScope(user, db, params.id!); const r = await core.dissolveToSingles(db, user.username, params.id!, dissolveBody.parse(body ?? {}).plans); return { ok: true, ...r }; });
 post('/groups/:id/members', 'service:manage', async ({ db, user, params, body }) => {
   await groupScope(user, db, params.id!);
   return db.tx((q) => core.addGroupMember(q, user.username, params.id!, z.object({ serviceId: uuid }).parse(body).serviceId));

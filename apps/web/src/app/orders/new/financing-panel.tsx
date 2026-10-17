@@ -17,7 +17,7 @@ export function FinancingPanel({ w }: { w: Wizard }) {
   if (!hasDevice) return null;
   const fin = w.financing;
   const run = async () => {
-    const r = await act.run(() => post('/orders/credit-check', { channel: w.channel, customerId: w.customer?.id, lines: w.items.map((i) => lineBody(i, w.items)), idNumber: id, consent: { given: agreed, how: w.portal ? 'online' : 'in person' } }));
+    const r = await act.run(() => post('/orders/credit-check', { channel: w.channel, customerId: w.customer?.id, lines: w.items.map((i) => lineBody(i, w.items, w.joinGroup)), idNumber: id, consent: { given: agreed, how: w.portal ? 'online' : 'in person' } }));
     if (r) { fin.setCheck(r); setId(''); }
   };
   return (
