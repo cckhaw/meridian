@@ -5,7 +5,7 @@ import { getStoreSettings, setStoreSettings } from './store-settings.js';
 import type { Db } from './db.js';
 import { sweepDocuments } from './documents.js';
 import { blacklistHit } from './fraud.js';
-import { createCustomerWithKyc, customerKycView, decideKycCase, getKycCase, getKycDocument, kycQueueCounts, listKycCases, submitCustomerKyc, type IdentityInput, type Evidence } from './kyc.js';
+import { carriesCameraRollMetadata, createCustomerWithKyc, customerKycView, decideKycCase, getKycCase, getKycDocument, kycQueueCounts, listKycCases, submitCustomerKyc, type IdentityInput, type Evidence } from './kyc.js';
 import { getOrder, placeOrder } from './orders.js';
 import { hashIdDocument } from './customers.js';
 import { freshDb, idPhoto, liveCapture } from './test-helpers.js';
@@ -25,6 +25,16 @@ async function newCustomer(over: { idDocument?: string; displayName?: string; id
 }
 const order = (customerId: string) => ({ customerId, channel: 'RETAIL_ASSISTED' as const, attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CASH' as const, confirmed: true, reference: 'R' }, lines: [{ offerId: 'plan-sim-5g' }] });
 const settings = () => getStoreSettings(db);
+
+describe('what counts as a gallery photo', () => {
+  it('flags camera details and XMP, but not the small Exif block a browser writes when it re-encodes a camera frame', () => {
+    expect(carriesCameraRollMetadata(idPhoto())).toBe(false);
+    expect(carriesCameraRollMetadata(idPhoto({ exif: 'browser' }))).toBe(false);     // Safari canvas output: colour space and pixel size only
+    expect(carriesCameraRollMetadata(idPhoto({ exif: true }))).toBe(true);           // camera make: a library picture
+    const broken = idPhoto(); broken.write('Exif\0\0junk', broken.indexOf(Buffer.from('JFIF')) + 18, 'latin1');
+    expect(typeof carriesCameraRollMetadata(broken)).toBe('boolean');
+  });
+});
 
 describe('a customer made in the CRM cannot exist without an identity check', () => {
   it('creates the customer, keeps the photographs in the vault and opens a review task, all together', async () => {

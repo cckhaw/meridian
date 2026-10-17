@@ -89,7 +89,39 @@ async function loadApp(q: Queryable, id: string): Promise<Row> {
 }
 
 // ───────────────────────── the photos ─────────────────────────
-/** A JPEG that carries camera-roll metadata (EXIF or XMP): what a photo picked from a gallery has and a frame grabbed from the live camera does not. */
+/** A JPEG that carries camera-roll metadata (camera make/model, time taken, GPS, … in Exif, or XMP): what a photo picked from a gallery has and a frame grabbed from the live camera does not. */
+/**
+ * Browsers that re-encode a camera frame on a canvas (Safari does) still write a small Exif block: colour space and pixel size, nothing about a camera.
+ * A picture from a gallery carries camera details: make, model, the moment it was taken, GPS, lens, serial number. Only those count.
+ * An Exif block that cannot be read is treated as a gallery photo.
+ */
+const CAMERA_ROLL_TAGS = new Set([0x010f, 0x0110, 0x0131, 0x9003, 0x9004, 0x8825, 0xa431, 0xa432, 0xa433, 0xa434, 0x927c, 0x9201, 0x829a, 0x8827]);
+const EXIF_SUB_IFD = 0x8769;
+function exifLooksLikeCameraRoll(tiff: Buffer): boolean {
+  try {
+    if (tiff.length < 8) return true;
+    const le = tiff[0] === 0x49 && tiff[1] === 0x49;
+    if (!le && !(tiff[0] === 0x4d && tiff[1] === 0x4d)) return true;
+    const u16 = (o: number) => (le ? tiff.readUInt16LE(o) : tiff.readUInt16BE(o));
+    const u32 = (o: number) => (le ? tiff.readUInt32LE(o) : tiff.readUInt32BE(o));
+    if (u16(2) !== 42) return true;
+    const seen = new Set<number>();
+    const walk = (off: number, depth: number): boolean => {
+      if (depth > 2 || off < 8 || off + 2 > tiff.length || seen.has(off)) return depth === 0 ? true : false;
+      seen.add(off);
+      const n = u16(off);
+      if (n > 256 || off + 2 + n * 12 > tiff.length) return true;
+      for (let k = 0; k < n; k++) {
+        const e = off + 2 + k * 12, tag = u16(e);
+        if (CAMERA_ROLL_TAGS.has(tag)) return true;
+        if (tag === EXIF_SUB_IFD && walk(u32(e + 8), depth + 1)) return true;
+      }
+      return false;
+    };
+    return walk(u32(4), 0);
+  } catch { return true; }
+}
+
 export function carriesCameraRollMetadata(b: Buffer): boolean {
   if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return false;
   let i = 2;
@@ -102,7 +134,8 @@ export function carriesCameraRollMetadata(b: Buffer): boolean {
     const len = b.readUInt16BE(i + 2);
     if (marker === 0xe1) {
       const head = b.subarray(i + 4, i + 4 + 32).toString('latin1');
-      if (head.startsWith('Exif') || head.startsWith('http://ns.adobe.com/xap')) return true;
+      if (head.startsWith('http://ns.adobe.com/xap')) return true;
+      if (head.startsWith('Exif')) { if (exifLooksLikeCameraRoll(b.subarray(i + 10, i + 2 + len))) return true; }
     }
     i += 2 + len;
   }
