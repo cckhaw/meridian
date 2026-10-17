@@ -66,25 +66,26 @@ export function CustomerForm({ submitLabel, busy, error, initial, context, onSub
   };
   return (
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-      <Field label="Segment"><Select value={f.segment} onChange={set('segment')}>{segs.list.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
-      <Field label="Full name / Company name"><Input required value={f.displayName} onChange={set('displayName')} /></Field>
-      <Field label="ID document (NRIC / passport / business registration)" hint="Stored masked; a keyed hash detects duplicates."><Input required minLength={3} value={f.idDocument} onChange={set('idDocument')} /></Field>
-      <Field label="Bill cycle" hint={cycles?.defaultMode === 'NEXT' ? 'The day of the month the bill is raised. Starts at the next bill cycle date after today.' : cycles?.defaultMode === 'PREVIOUS' ? 'The day of the month the bill is raised. Starts at the previous bill cycle date before today.' : 'The day of the month the bill is raised.'}><Select value={cycle} onChange={set('billCycle')}>
+      <p className="text-footnote text-label2 sm:col-span-2"><span className="text-danger">*</span> marks what must be filled in. Everything else is optional.</p>
+      <Field label="Segment" required><Select value={f.segment} onChange={set('segment')}>{segs.list.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
+      <Field label="Full name / Company name" required><Input required value={f.displayName} onChange={set('displayName')} /></Field>
+      <Field label="ID document (NRIC / passport / business registration)" hint="Stored masked; a keyed hash detects duplicates." required><Input required minLength={3} value={f.idDocument} onChange={set('idDocument')} /></Field>
+      <Field label="Bill cycle" required hint={cycles?.defaultMode === 'NEXT' ? 'The day of the month the bill is raised. Starts at the next bill cycle date after today.' : cycles?.defaultMode === 'PREVIOUS' ? 'The day of the month the bill is raised. Starts at the previous bill cycle date before today.' : 'The day of the month the bill is raised.'}><Select value={cycle} onChange={set('billCycle')}>
         {(cycles?.days ?? Array.from({ length: 28 }, (_, i) => i + 1)).map((d) => <option key={d} value={d}>Day {d}</option>)}</Select></Field>
-      {show('email') && <Field label="E-mail"><Input type="email" required={req('email')} value={f.email} onChange={set('email')} /></Field>}
-      {show('phone') && <Field label="Phone"><Input type="tel" required={req('phone')} value={f.phone} onChange={set('phone')} /></Field>}
-      {show('dateOfBirth') && <Field label="Date of birth" hint="Needed for the identity check."><Input type="date" max={today} min="1900-01-01" required value={f.dateOfBirth} onChange={set('dateOfBirth')} /></Field>}
-      {show('gender') && <Field label="Gender"><Select required={req('gender')} value={f.gender} onChange={set('gender')}><option value="">{req('gender') ? 'Choose…' : 'Not stated'}</option>{GENDERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>}
+      {show('email') && <Field label="E-mail" required={req('email')} optional={!req('email')}><Input type="email" required={req('email')} value={f.email} onChange={set('email')} /></Field>}
+      {show('phone') && <Field label="Phone" required={req('phone')} optional={!req('phone')}><Input type="tel" required={req('phone')} value={f.phone} onChange={set('phone')} /></Field>}
+      {show('dateOfBirth') && <Field label="Date of birth" hint="Needed for the identity check." required><Input type="date" max={today} min="1900-01-01" required value={f.dateOfBirth} onChange={set('dateOfBirth')} /></Field>}
+      {show('gender') && <Field label="Gender" required={req('gender')} optional={!req('gender')}><Select required={req('gender')} value={f.gender} onChange={set('gender')}><option value="">{req('gender') ? 'Choose…' : 'Not stated'}</option>{GENDERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>}
       {show('address') && (
         <div className="grid gap-4 sm:col-span-2 sm:grid-cols-2">
-          <Field label="Address"><Input autoComplete="address-line1" required={req('address')} value={f.line1} onChange={set('line1')} /></Field>
-          <Field label="Address line 2"><Input autoComplete="address-line2" value={f.line2} onChange={set('line2')} /></Field>
+          <Field label="Address" required={req('address')} optional={!req('address')}><Input autoComplete="address-line1" required={req('address')} value={f.line1} onChange={set('line1')} /></Field>
+          <Field label="Address line 2" optional><Input autoComplete="address-line2" value={f.line2} onChange={set('line2')} /></Field>
         </div>
       )}
-      {show('postcode') && <Field label="Postcode"><Input autoComplete="postal-code" required={req('postcode')} value={f.postcode} onChange={set('postcode')} /></Field>}
-      {show('city') && <Field label="City"><Input autoComplete="address-level2" required={req('city')} value={f.city} onChange={set('city')} /></Field>}
-      {show('state') && <Field label="State or region"><Input autoComplete="address-level1" required={req('state')} value={f.state} onChange={set('state')} /></Field>}
-      {show('country') && <Field label="Country"><Select required={req('country')} value={country} onChange={set('country')}><option value="">Choose…</option>{[...new Set([...(country && !COUNTRIES.includes(country) ? [country] : []), ...COUNTRIES])].map((c) => <option key={c} value={c}>{countryName(c)}</option>)}</Select></Field>}
+      {show('postcode') && <Field label="Postcode" required={req('postcode')} optional={!req('postcode')}><Input autoComplete="postal-code" required={req('postcode')} value={f.postcode} onChange={set('postcode')} /></Field>}
+      {show('city') && <Field label="City" required={req('city')} optional={!req('city')}><Input autoComplete="address-level2" required={req('city')} value={f.city} onChange={set('city')} /></Field>}
+      {show('state') && <Field label="State or region" required={req('state')} optional={!req('state')}><Input autoComplete="address-level1" required={req('state')} value={f.state} onChange={set('state')} /></Field>}
+      {show('country') && <Field label="Country" required={req('country')} optional={!req('country')}><Select required={req('country')} value={country} onChange={set('country')}><option value="">Choose…</option>{[...new Set([...(country && !COUNTRIES.includes(country) ? [country] : []), ...COUNTRIES])].map((c) => <option key={c} value={c}>{countryName(c)}</option>)}</Select></Field>}
       {mdid.available && individual && onConfirmed && <MethodChoice value={method} onChange={setMethod} label={mdid.label} disabled={busy} />}
       <IdentityFields state={idn} onChange={setIdn} individual={individual} hideDob={dobShown} disabled={busy} hidePhotos={useMdid} />
       {(problem || error) && <div className="sm:col-span-2"><Alert>{problem || error}</Alert></div>}

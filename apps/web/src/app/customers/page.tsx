@@ -22,9 +22,13 @@ export default function Customers() {
   const [q, setQ] = useState('');
   const [segment, setSegment] = useState('');
   const [adding, setAdding] = useState(false);
+  const [browseAll, setBrowseAll] = useState(false);
   const term = useDebounced(q.trim());
   // Always a bounded page: the newest customers, or the best matches for what was typed. Never the whole table.
   const list = usePaged(`/customers?limit=25&q=${encodeURIComponent(term)}&segment=${segment}`);
+  // Search first. With nothing typed and no segment chosen, only the few most recent are shown; the whole list is one tap away.
+  const glance = !term && !segment && !browseAll;
+  const shown = glance ? list.items.slice(0, 5) : list.items;
   return (
     <>
       <LargeTitle subtitle="Find a customer by name, mobile number, e-mail or ID. Results appear as you type.">Customers</LargeTitle>
@@ -39,9 +43,9 @@ export default function Customers() {
       {!list.loading && list.items.length === 0 && !list.error && <Empty>{term ? `No customers match “${term}”.` : 'No customers yet.'}</Empty>}
       {list.items.length > 0 && (
         <>
-          <h2 className="mb-2 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">{term ? 'Best matches' : 'Recently added'}</h2>
+          <h2 className="mb-2 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">{term ? 'Best matches' : glance ? 'Recent' : 'Recently added'}</h2>
           <ul className="divide-y divide-separator overflow-hidden rounded-card bg-surface shadow-card">
-            {list.items.map((c: any) => (
+            {shown.map((c: any) => (
               <li key={c.id}>
                 <Link href={`/customers/${c.id}`} className="flex min-h-[64px] items-center gap-3 px-4 py-2.5 hover:bg-surface2 focus-visible:bg-surface2 focus-visible:outline-none">
                   <span aria-hidden className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-subhead font-semibold ${!segs.individual(c.segment) ? 'bg-accent text-accent-fg' : 'bg-accent/15 text-accent'}`}>{initials(c.displayName)}</span>
@@ -58,7 +62,9 @@ export default function Customers() {
               </li>
             ))}
           </ul>
-          <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="customers" />
+          {glance
+            ? (list.items.length > 5 || list.hasMore) && <button type="button" onClick={() => setBrowseAll(true)} className="mt-3 inline-flex min-h-tap items-center gap-1 rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Browse all customers <span aria-hidden>›</span></button>
+            : <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="customers" />}
         </>
       )}
     </>

@@ -1,5 +1,5 @@
 'use client';
-import { AgreementSigner, Alert, Badge, Button, Card, Empty, Field, Input, LoadMore, SearchField, Select, Spinner, DataList, type AgreementView, type SignedPayload } from '@meridian/ui';
+import { AgreementSigner, Alert, Badge, Button, Empty, Field, Input, LoadMore, Modal, SearchField, Select, Spinner, DataList, type AgreementView, type SignedPayload } from '@meridian/ui';
 import { useEffect, useState } from 'react';
 import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -83,8 +83,8 @@ export function ServicePanel({ service, onClose, onDone }: { service: any; accou
   if (action === 'port-out') { body.recipientOperator = v.operator; body.portingCode = v.code || undefined; }
   const portingOut = service.status === 'PORTING_OUT';
   return (
-    <Card className="mt-3 border border-accent/30">
-      <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold">Manage <span className="font-mono">{service.identifier}</span></h3><Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" onClick={onClose}>Close</Button></div>
+    // A dialog drawn on the page: opening it from a row, it is always in view (it used to open below a long list, out of sight).
+    <Modal title={`Manage ${service.identifier}`} onClose={onClose} wide>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Action"><Select value={action} onChange={(e) => setAction(e.target.value)}>
           {portingOut ? <><option value="complete-port-out">Complete port-out</option><option value="cancel-port-out">Cancel port-out</option></> : avail.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
@@ -112,7 +112,7 @@ export function ServicePanel({ service, onClose, onDone }: { service: any; accou
       {error && <div className="mt-3"><Alert>{error}</Alert></div>}
       {ok && <div className="mt-3"><Alert tone="success">{ok}</Alert></div>}
       <Button className="mt-4" variant={action === 'terminate' ? 'destructive' : 'primary'} disabled={busy || !action || (action === 'move-to-group' && !v.groupOffer) || (action === 'change-plan' && (!cp.offer || (!!agr?.required && !signed)))} onClick={() => run(() => (action === 'change-plan' ? post(`/services/${service.id}/change-plan`, { targetOfferId: cp.offer, effective: cp.effective, acceptContractTerms: cp.acceptContract || undefined, agreement: signed ? { image: signed.image, versionIds: signed.versionIds, geo: signed.geo ?? undefined } : undefined }) : action === 'move-to-group' ? post(`/services/${service.id}/upgrade-to-group`, { offerId: v.groupOffer }) : post(`/services/${service.id}/actions`, body)), 'Done')}>{busy ? 'Working…' : 'Confirm'}</Button>
-    </Card>
+    </Modal>
   );
 }
 
