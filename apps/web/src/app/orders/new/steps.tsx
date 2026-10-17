@@ -24,6 +24,8 @@ export interface Wizard {
   dealer: Party | null; setDealer: (d: Party | null) => void; agent: Party | null; setAgent: (a: Party | null) => void; soldBy: { name: string; username: string };
   quick: boolean; retail: boolean; portal: boolean; cashier: boolean; manual: boolean; marketCode: string; fixedStore?: string | null; fixedDealer?: string | null;
   items: Item[]; setItems: (f: (cur: Item[]) => Item[]) => void;
+  /** The group a new line is being added to (opened from the group on the customer's record). */
+  joinGroup: string | null;
   quote: any | null; quoting: boolean; quoteError: string | null;
   customer: Cust | null; setCustomer: (c: Cust | null) => void; accountId: string; setAccountId: (id: string) => void; canCreateCustomer: boolean;
   address: string; setAddress: (s: string) => void;

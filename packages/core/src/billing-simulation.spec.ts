@@ -139,13 +139,15 @@ describe('termination preview', () => {
 
 describe('plan change', () => {
   it('pro-rates the old plan to the date and the new one from it, and compares with doing nothing', async () => {
-    const { svc } = await contractCustomer(20);
+    // The bill day is kept about ten days ahead of today so the effective date (three days out) always falls inside the current period, whatever day the test runs.
+    const billDay = ((new Date().getUTCDate() + 9) % 28) + 1;
+    const { svc } = await contractCustomer(billDay);
     const eff = (() => { const d = new Date(); d.setUTCDate(d.getUTCDate() + 3); return d.toISOString().slice(0, 10); })();
     const sim = await simulatePlanChange(db, svc.identifier, { newOfferId: 'plan-family-member', effectiveDate: eff });
     expect(sim.from.offerId).toBe('plan-sim-5g');
     expect(sim.to.offerId).toBe('plan-family-member');
     expect(sim.daysBefore + sim.daysAfter).toBeGreaterThanOrEqual(28);
-    expect(dayOf(sim.statementDate)).toBe(20);
+    expect(dayOf(sim.statementDate)).toBe(billDay);
     expect(sim.periodEnd).toBe(addDays(sim.statementDate, -1));
     expect(sim.withChange.lines).toHaveLength(2);
     expect(sim.withChange.lines[0].description).toMatch(/until/);

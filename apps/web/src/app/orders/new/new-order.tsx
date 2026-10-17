@@ -67,6 +67,20 @@ export function NewOrder() {
   const cashier = can('order:payment') && !portal;
 
   // The customer the order is for: given in the address (from their 360), or the portal user themself.
+  const joinGroup = sp.get('joinGroup');
+  const group = useApi<any>(joinGroup ? `/groups/${joinGroup}` : null);
+  useEffect(() => { if (group.data?.accountId) setAccountId((a) => a || group.data.accountId); }, [group.data?.accountId]);
+  // A group plan names the plans its member lines may take: start the basket with the first of them.
+  useEffect(() => {
+    const head = group.data?.offerId as string | undefined; if (!head) return;
+    let live = true;
+    void api(`/catalog/${encodeURIComponent(head)}`).then(async (h) => {
+      const allowed: string[] = h.group?.allowedMemberOfferIds ?? []; if (!allowed.length) return;
+      const o = await api(`/catalog/${encodeURIComponent(allowed[0]!)}`).catch(() => null);
+      if (live && o && o.level === 'OFFER' && o.status === 'ACTIVE') setItemsRaw((cur) => (cur.length ? cur : [newItem(o)]));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [group.data?.offerId]);
   const presetCustomer = portal ? me?.customerId ?? null : sp.get('customerId');
   const preset = useApi<any>(presetCustomer && !customer ? `/customers/${presetCustomer}` : null);
   useEffect(() => { if (preset.data && !customer) setCustomer({ id: preset.data.customer.id, displayName: preset.data.customer.displayName, segment: preset.data.customer.segment, kycStatus: preset.data.customer.kycStatus }); }, [preset.data]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -80,7 +94,7 @@ export function NewOrder() {
   const setChannel = (c: string) => { setChannelRaw(c); setItemsRaw([]); setIndex(0); idemKey.current = crypto.randomUUID(); };
 
   // ── the server's quote, refreshed as the basket changes ──
-  const body = useMemo(() => ({ channel, customerId: quick || portal ? undefined : customer?.id, accountId: accountId || undefined, lines: items.map((i) => lineBody(i, items)), financing: payInFull || check ? { payInFull: payInFull || undefined, creditCheckId: payInFull ? undefined : check?.id } : undefined }), [channel, quick, portal, customer?.id, accountId, items, payInFull, check]);
+  const body = useMemo(() => ({ channel, customerId: quick || portal ? undefined : customer?.id, accountId: accountId || undefined, lines: items.map((i) => lineBody(i, items, joinGroup)), financing: payInFull || check ? { payInFull: payInFull || undefined, creditCheckId: payInFull ? undefined : check?.id } : undefined }), [channel, quick, portal, customer?.id, accountId, items, payInFull, check]);
   const key = useDebounced(JSON.stringify(body), 250);
   const [quote, setQuote] = useState<any>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -159,7 +173,7 @@ export function NewOrder() {
   if (channels.length === 0) return <Alert tone="info">Your role cannot create orders.</Alert>;
   const w: Wizard = {
     channel, channels, setChannel, store, setStore, dealer, setDealer, agent, setAgent, soldBy: { name: me?.displayName ?? '', username: me?.username ?? '' }, quick, retail, portal, cashier, manual: meta.data?.paymentMode === 'manual',
-    marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
+    marketCode, fixedStore: me?.storeId, fixedDealer: me?.dealerId, items, setItems, joinGroup, quote, quoting, quoteError, customer, setCustomer, accountId, setAccountId, canCreateCustomer: can('customer:create'),
     agreements: { data: agr, signed, setSigned }, conflicts: meta.data?.typeConflicts ?? [], address, setAddress: (a: string) => { setAddress(a); setWfmSlot(null); }, booking: { enabled: bookable, slot: wfmSlot, setSlot: setWfmSlot, later: bookLater, setLater: setBookLater }, deliveryMethods: methods, method: how, setMethod, pickupStore, setPickupStore, slot, setSlot, pay, setPay, consent, setConsent, financing: { payInFull, setPayInFull, check, setCheck }, fiber: { enabled: !!meta.data?.modules?.fiberCoverage && needs.installation, lock: fiberLock, setLock: setFiberLock, speedMbps: fiberSpeed(items) }, jumpTo, kindHint, clearKindHint: () => setKindHint(null), can,
   };
   const last = stepId === 'pay';
@@ -167,6 +181,11 @@ export function NewOrder() {
   return (
     <>
       <Stepper steps={steps} index={at} onGo={go} />
+      {joinGroup && (
+        <div className="mb-4">
+          {group.error ? <Alert>{group.error}</Alert> : <Alert tone="info">{group.data ? <>Adding a new line to the group <strong>{group.data.name}</strong>{group.data.slots ? ` (${group.data.slots.remaining} of ${group.data.slots.max} places free)` : ''}. Choose the plan for the new line; it joins the group when the order is placed.</> : 'Loading the group…'}</Alert>}
+        </div>
+      )}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 pb-48 md:pb-28 lg:pb-0">
           <StepFrame id={stepId} direction={dir.current}>

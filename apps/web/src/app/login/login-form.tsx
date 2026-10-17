@@ -2,7 +2,7 @@
 import { Alert, Button, Card, Field, Input } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, post } from '@/lib/api';
 import { useBrand } from '@/components/settings-provider';
 import { useAuth } from '@/lib/auth';
@@ -18,6 +18,7 @@ export function LoginForm() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [sso, setSso] = useState<Array<{ id: string; label: string }>>([]);
   useEffect(() => { api<{ items: Array<{ id: string; label: string }> }>('/auth/sso/providers').then((r) => setSso(r.items)).catch(() => {}); }, []);
@@ -112,11 +113,13 @@ export function LoginForm() {
         </div>
         <Card>
           <form onSubmit={submit} className="space-y-4" autoComplete="on">
-            <Field label="Username"><Input name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required autoFocus value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
+            <Field label="Username"><Input name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next" required autoFocus value={username} onChange={(e) => setUsername(e.target.value)}
+              // Tab (and the keyboard's Next key) always lands on the password, whatever the browser or a password manager does in between.
+              onKeyDown={(e) => { if ((e.key === 'Tab' && !e.shiftKey) || (e.key === 'Enter' && username && !password)) { e.preventDefault(); passwordRef.current?.focus(); } }} /></Field>
             <div>
               <label htmlFor="password" className="mb-1 block text-subhead font-medium text-label">Password</label>
               <div className="relative">
-                <Input id="password" name="password" type={show ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="pr-20" />
+                <Input id="password" ref={passwordRef} name="password" type={show ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="pr-20" />
                 <button type="button" onClick={() => setShow((s) => !s)} aria-pressed={show} aria-label={show ? 'Hide password' : 'Show password'} className="absolute inset-y-0 right-0 min-w-tap px-3 text-subhead text-accent">{show ? 'Hide' : 'Show'}</button>
               </div>
             </div>

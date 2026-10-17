@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createNode, setStatus } from './catalog.js';
 import type { Db } from './db.js';
 import { createDonorOperator, deleteDonorOperator, listDonorOperators, updateDonorOperator } from './donor-operators.js';
 import { getGroup, addGroupMember } from './groups.js';
-import { GroupOrderService } from './group-orders.js';
+import { GroupOrderService, dissolveToSingles } from './group-orders.js';
 import { importImsis, importMsisdns, importSims } from './nrm-pools.js';
 import { getOrder, placeOrder } from './orders.js';
 import { cancelPortIn, completePortIn, decidePortIn, expireStalePortIns, getPortIn, listPortIns } from './port-in.js';
@@ -214,5 +215,31 @@ describe('donor operators', () => {
     const spare = await createDonorOperator(db, 'admin', { name: 'Spare Telco', mnpOperatorId: 'SP-9' });
     expect(await deleteDonorOperator(db, 'admin', spare.id as string)).toEqual({ deleted: true, deactivated: false });
     await updateDonorOperator(db, 'admin', OTHERTEL, { status: 'ACTIVE' });
+  });
+});
+
+describe('dissolving a group puts every line back on a single plan', () => {
+  it('requires a single plan for the family head, lets other lines keep their ordinary plan, and leaves nobody on a plan that needs the group', async () => {
+    const c = await newCustomer(db);
+    const single = await order(c.customer.id, [{ offerId: 'plan-sim-5g' }]);
+    const head = (await servicesOf(single.id))[0]!;
+    const g = await new GroupOrderService(db).upgrade(head.id, 'plan-family-100', 'agent');
+    const added = await order(c.customer.id, [{ offerId: 'plan-family-member', joinGroupId: g.id }, { offerId: 'plan-family-member', joinGroupId: g.id }], single.accountId);
+    const members = await servicesOf(added.id);
+    expect((await getGroup(db, g.id as string)).members).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'PRINCIPAL', onGroupPlan: true })]));
+
+    await expect(dissolveToSingles(db, 'agent', g.id as string)).rejects.toThrow(/Choose a single plan/);                                   // the head has no plan to fall back on
+    await expect(dissolveToSingles(db, 'agent', g.id as string, { [head.id]: 'plan-family-100' })).rejects.toThrow(/only exists with the group/);          // a group plan is not a single plan
+    await expect(dissolveToSingles(db, 'agent', g.id as string, { [head.id]: 'plan-sim-5g', [randomUUID()]: 'plan-sim-5g' })).rejects.toThrow(/not in this group/);
+    expect((await getGroup(db, g.id as string)).status).toBe('ACTIVE');                                                                      // nothing half-done
+
+    await expect(dissolveToSingles(db, 'agent', g.id as string, { [head.id]: 'plan-sim-5g', [members[0]!.id]: 'plan-sim-5g' })).rejects.toThrow(/Choose a single plan/);   // a member-only plan is tied to the group too
+    const r = await dissolveToSingles(db, 'agent', g.id as string, { [head.id]: 'plan-sim-5g', [members[0]!.id]: 'plan-sim-5g', [members[1]!.id]: 'plan-sim-5g' });
+    expect(r.changed.map((x) => x.identifier).sort()).toEqual([head.identifier, members[0]!.identifier, members[1]!.identifier].sort());
+    const offers = (await db.query(`SELECT id, offer_id FROM services WHERE id = ANY($1::uuid[])`, [[head.id, members[0]!.id, members[1]!.id]])).rows;
+    expect(Object.fromEntries(offers.map((o) => [o.id, o.offerId]))).toEqual({ [head.id]: 'plan-sim-5g', [members[0]!.id]: 'plan-sim-5g', [members[1]!.id]: 'plan-sim-5g' });   // nobody is left on a group or member-only plan
+    expect((await db.query(`SELECT count(*)::int AS n FROM service_group_members WHERE group_id=$1`, [g.id])).rows[0]!.n).toBe(0);
+    expect((await db.query(`SELECT status FROM service_groups WHERE id=$1`, [g.id])).rows[0]!.status).toBe('CLOSED');
+    expect((await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE entity_id=$1 AND action='PLAN_CHANGED'`, [head.id])).rows[0]!.n).toBeGreaterThanOrEqual(2);
   });
 });

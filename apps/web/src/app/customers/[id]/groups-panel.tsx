@@ -1,5 +1,6 @@
 'use client';
 import { Alert, Badge, Button, Card, Empty, Field, Input, LoadMore, Modal, Select, Spinner, DataList } from '@meridian/ui';
+import Link from 'next/link';
 import { useState } from 'react';
 import { del, patch, post, useAction, useApi, usePaged } from '@/lib/api';
 import { label, tone } from '@/lib/format';
@@ -110,6 +111,7 @@ function ManageGroup({ id, accountId, canManage, onClose }: { id: string; accoun
   const free = useApi<{ items: any[] }>(canManage ? `/services?accountId=${accountId}&groupable=1&limit=200` : null);
   const [adding, setAdding] = useState('');
   const [edit, setEdit] = useState<{ name: string; b: ReturnType<typeof initial> } | null>(null);
+  const [dissolving, setDissolving] = useState(false);
   const reloadAll = async () => { await g.reload(); await free.reload(); };
   const act = useAction(reloadAll);
   const data = g.data;
@@ -120,6 +122,7 @@ function ManageGroup({ id, accountId, canManage, onClose }: { id: string; accoun
       {data && (
         <div className="space-y-4">
           <p className="text-subhead text-label2">{benefitsText(data.benefits)}</p>
+          {data.slots && <p className="text-subhead"><span className="font-medium">{data.slots.remaining === 0 ? 'The group is full' : `${data.slots.remaining} of ${data.slots.max} places free`}</span><span className="text-label2"> · {data.slots.used} member line{data.slots.used === 1 ? '' : 's'} besides the family head</span></p>}
           <DataList label="Group members" rows={data.members} rowKey={(m: any) => m.serviceId}
             columns={[
               { key: 'id', label: 'Service', primary: true, render: (m: any) => <span className="font-mono">{m.identifier}</span> },
@@ -128,11 +131,18 @@ function ManageGroup({ id, accountId, canManage, onClose }: { id: string; accoun
             ]}
             actions={canManage ? (m: any) => (<>
               {m.role !== 'PRINCIPAL' && <Button variant="secondary" onClick={() => void close(() => post(`/groups/${id}/principal`, { serviceId: m.serviceId }))}>Make principal</Button>}
-              {(m.role !== 'PRINCIPAL' || data.members.length === 1) && <Button variant="plain" onClick={() => void close(async () => { const r = await del(`/groups/${id}/members/${m.serviceId}`); if (r?.closed) onClose(); })}>Remove</Button>}
+              {m.role !== 'PRINCIPAL' && <Button variant="plain" onClick={() => void close(async () => { const r = await del(`/groups/${id}/members/${m.serviceId}`); if (r?.closed) onClose(); })}>Remove</Button>}
             </>) : undefined} />
           {canManage && data.members.length > 1 && <p className="text-footnote text-label2">The principal can leave only after another service takes over, or the group is dissolved: a supplementary service cannot exist without one.</p>}
           {canManage && (
             <>
+              {(data.slots?.remaining ?? 1) > 0 && (
+                <div className="rounded-card bg-surface2 p-4">
+                  <p className="font-medium">Add a new line to this group</p>
+                  <p className="mb-3 text-footnote text-label2">Sell a new SIM and number that joins the group: the order wizard opens for this customer with the group already chosen.</p>
+                  <Link href={`/orders/new?customerId=${data.customerId}&joinGroup=${id}`} className="inline-flex min-h-tap items-center rounded-control bg-accent px-4 font-medium text-accent-fg">Sell a new line</Link>
+                </div>
+              )}
               <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={async (e) => { e.preventDefault(); if (adding && (await act.run(() => post(`/groups/${id}/members`, { serviceId: adding })))) setAdding(''); }}>
                 <div className="flex-1"><Field label="Add a supplementary service"><Select value={adding} onChange={(e) => setAdding(e.target.value)}><option value="">{(free.data?.items.length ?? 0) ? 'Choose…' : 'No other services available'}</option>{(free.data?.items ?? []).map((s) => <option key={s.id} value={s.id}>{s.identifier} · {s.offerName}</option>)}</Select></Field></div>
                 <Button type="submit" disabled={!adding || act.busy}>Add</Button>
@@ -146,14 +156,57 @@ function ManageGroup({ id, accountId, canManage, onClose }: { id: string; accoun
               ) : (
                 <div className="flex flex-wrap gap-3">
                   <Button variant="secondary" onClick={() => setEdit({ name: data.name, b: initial(data.benefits) })}>Edit name and benefits</Button>
-                  <Button variant="destructive" onClick={() => { if (window.confirm(`Dissolve “${data.name}”? The services stay on the account; they just stop sharing.`)) void act.run(async () => { await del(`/groups/${id}`); onClose(); }); }}>Dissolve group</Button>
+                  <Button variant="destructive" onClick={() => setDissolving(true)}>Dissolve group…</Button>
                 </div>
               )}
             </>
           )}
           {act.error && <Alert>{act.error}</Alert>}
+          {dissolving && <DissolveGroup group={data} onClose={() => setDissolving(false)} onDone={onClose} />}
         </div>
       )}
+    </Modal>
+  );
+}
+
+/**
+ * Dissolving ends the sharing, and every line goes back to a single-line plan. The family head is on the group plan, which only exists with the group, so a
+ * single plan has to be chosen for it. The other lines keep their plan unless another is chosen.
+ */
+function DissolveGroup({ group, onClose, onDone }: { group: any; onClose: () => void; onDone: () => void }) {
+  const plans = useApi<{ items: any[] }>('/catalog?limit=50&status=ACTIVE&kind=SIM_ONLY');
+  const singles = (plans.data?.items ?? []).filter((o) => !o.group?.isGroupOffer);
+  const members: any[] = group.members;
+  // A line on the group plan has no single plan to fall back on, so one must be chosen for it; every other line defaults to keeping its own plan.
+  const isHead = (m: any) => !!m.onGroupPlan;
+  const [pick, setPick] = useState<Record<string, string>>({});
+  const { run, busy, error } = useAction();
+  const missing = members.filter((m) => isHead(m) && !pick[m.serviceId]);
+  const submit = async () => {
+    const chosen = Object.fromEntries(Object.entries(pick).filter(([sid, offer]) => offer && offer !== members.find((m) => m.serviceId === sid)?.offerId));
+    if (await run(() => post(`/groups/${group.id}/dissolve`, { plans: chosen }), 'Group dissolved.')) onDone();
+  };
+  return (
+    <Modal title={`Dissolve “${group.name}”`} onClose={onClose} wide>
+      <div className="space-y-4">
+        <p className="text-subhead text-label2">Every line goes back to a single subscription and stops sharing. Numbers, SIMs and history stay. The new plan’s fee applies from the next bill run.</p>
+        {plans.loading && <Spinner />}
+        <ul className="space-y-3">
+          {members.map((m) => (
+            <li key={m.serviceId} className="rounded-card border border-separator p-3">
+              <p className="mb-2 flex flex-wrap items-center gap-2"><span className="font-mono">{m.identifier}</span><Badge tone={m.role === 'PRINCIPAL' ? 'success' : 'neutral'}>{m.role === 'PRINCIPAL' ? 'Family head' : 'Member'}</Badge><span className="text-footnote text-label2">now on {m.offerName}</span></p>
+              <Field label="Single plan" hint={isHead(m) ? 'Required: the family head is on the group plan.' : 'Keep the current plan or choose another.'}>
+                <Select value={pick[m.serviceId] ?? (isHead(m) ? '' : m.offerId)} onChange={(e) => setPick({ ...pick, [m.serviceId]: e.target.value })}>
+                  {isHead(m) ? <option value="">Choose a plan…</option> : <option value={m.offerId}>Keep {m.offerName}</option>}
+                  {singles.filter((o) => o.id !== m.offerId).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </Select>
+              </Field>
+            </li>
+          ))}
+        </ul>
+        {error && <Alert>{error}</Alert>}
+        <div className="flex gap-3"><Button variant="destructive" disabled={busy || plans.loading || missing.length > 0} onClick={() => void submit()}>{busy ? 'Dissolving…' : 'Dissolve the group'}</Button><Button variant="secondary" onClick={onClose}>Cancel</Button></div>
+      </div>
     </Modal>
   );
 }

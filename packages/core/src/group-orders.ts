@@ -4,7 +4,7 @@ import { audit } from './audit.js';
 import { getOffer, monthlyFee } from './catalog.js';
 import type { Db, Queryable, Row } from './db.js';
 import { invalid, notFound, rejected } from './errors.js';
-import { addGroupMember, createGroup, getGroup, groupPlanTerms } from './groups.js';
+import { addGroupMember, createGroup, dissolveGroup, getGroup, groupPlanTerms } from './groups.js';
 import type { LineInput } from './order-pricing.js';
 import { assertPortableNumber, cleanPortIn, type PortInInput } from './port-in.js';
 
@@ -180,6 +180,44 @@ export async function upgradeToGroupOffer(db: Db, actor: string, serviceId: stri
     });
     await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, account_id, instruction, payload) VALUES ('NETWORK', $1, $2, 'PLAN_CHANGE', $3)`, [serviceId, s.accountId, JSON.stringify({ from: prior, to: offer.id, sharedPoolQuotaGb: pool ?? null })]);
     return getGroup(q, g.id as string);
+  });
+}
+
+/**
+ * Dissolves a group and puts every line back on a single-line plan. A line on the group plan, or on a plan reserved for the group's members, means nothing
+ * without the group, so a single plan must be chosen for it; any other line may keep its plan or take another. A plan is chosen as `{ [serviceId]: offerId }`. As when a line moves
+ * to a group plan, the number, SIM and history stay and the new plan's fee applies from the next bill run.
+ */
+export async function dissolveToSingles(db: Db, actor: string, groupId: string, plans: Record<string, string> = {}): Promise<{ changed: Array<{ serviceId: string; identifier: string; from: string; to: string }> }> {
+  return db.tx(async (q) => {
+    const g = await getGroup(q, groupId);
+    if (g.status !== 'ACTIVE') throw rejected('This group is already closed.');
+    const members = g.members as Row[];
+    for (const id of Object.keys(plans)) if (!members.some((m) => m.serviceId === id)) throw invalid('A plan was chosen for a line that is not in this group.');
+    const changed: Array<{ serviceId: string; identifier: string; from: string; to: string }> = [];
+    for (const m of members) {
+      const current = await getOffer(q, m.offerId as string);
+      const target = plans[m.serviceId as string];
+      const tied = !!m.onGroupPlan;
+      if (!target && tied) throw rejected(`Choose a single plan for ${m.identifier}: it is on ${current.name}, a plan that only exists with the group.`);
+      if (!target || (target === current.id && !tied)) continue;
+      const offer = await getOffer(q, target);
+      if (offer.status !== 'ACTIVE') throw rejected(`${offer.name} is not on sale.`);
+      if (isGroupPlan(offer) || (tied && target === current.id)) throw rejected(`${offer.name} only exists with the group. Choose a single-line plan for ${m.identifier}.`);
+      const b = behaviourOf(offer);
+      if (b.role !== 'PLAN' || b.goods || (b.service ?? 'MOBILE') !== String(m.type)) throw rejected(`${offer.name} is not a ${String(m.type).toLowerCase()} plan that ${m.identifier} can move to.`);
+      const s = (await q.query('SELECT customer_id, account_id FROM services WHERE id=$1 FOR UPDATE', [m.serviceId])).rows[0]!;
+      const cust = (await q.query('SELECT market_code FROM customers WHERE id=$1', [s.customerId])).rows[0];
+      if (offer.markets.length && cust?.marketCode && !offer.markets.includes((cust.marketCode as string).trim())) throw rejected(`${offer.name} is not sold in this customer's market.`);
+      const term = offer.contract?.termMonths || null;
+      await q.query(`UPDATE services SET offer_id=$2, contract_term_months = COALESCE(contract_term_months, $3), contract_start = CASE WHEN contract_term_months IS NULL AND $3::int IS NOT NULL THEN COALESCE(contract_start, now()) ELSE contract_start END, updated_at=now() WHERE id=$1`, [m.serviceId, offer.id, term]);
+      await audit(q, actor, 'service', m.serviceId as string, 'PLAN_CHANGED', { from: current.id, to: offer.id, groupDissolved: groupId });
+      await enqueueOcs(q, 'CHANGE_PLAN', m.serviceId as string, { previousOfferId: current.id });
+      await q.query(`INSERT INTO lifecycle_outbox (kind, service_id, account_id, instruction, payload) VALUES ('NETWORK', $1, $2, 'PLAN_CHANGE', $3)`, [m.serviceId, s.accountId, JSON.stringify({ from: current.id, to: offer.id, sharedPoolQuotaGb: null })]);
+      changed.push({ serviceId: m.serviceId as string, identifier: m.identifier as string, from: current.name, to: offer.name });
+    }
+    await dissolveGroup(q, actor, groupId);
+    return { changed };
   });
 }
 
