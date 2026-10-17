@@ -2,7 +2,7 @@
 /**
  * Vercel "Ignored Build Step" for the apps in this repository. Usage (from an app's vercel.json): node ../../scripts/vercel-ignore.mjs <app folder name>
  *
- * Vercel runs this before it builds. Exit 0 = nothing this app is made of has changed, skip the build; exit 1 = build. The Hobby plan allows only a limited
+ * Vercel runs this before it builds. Previews are off: only the production branch (main) builds. Exit 0 = nothing this app is made of has changed, skip the build; exit 1 = build. The Hobby plan allows only a limited
  * number of deployments a day, so a push that touches one app (or only docs) must not rebuild the other two.
  *
  * An app is made of its own folder, the workspace packages it depends on (directly or through another package) and the files that decide the install
@@ -11,6 +11,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+
+// Only the production branch is deployed. Pushes to any other branch (preview deployments) are skipped: the Hobby plan limits deployments a day.
+const branch = process.env.VERCEL_GIT_COMMIT_REF;
+if (branch && branch !== (process.env.DEPLOY_BRANCH || 'main')) { console.log(`[ignore-build] branch "${branch}" is not the production branch: skipping the build`); process.exit(0); }
 
 const app = process.argv[2];
 const root = resolve(new URL('..', import.meta.url).pathname);
