@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
 import { d, dt, label, money } from '@/lib/format';
 import { useAuth } from '@/lib/auth';
+import { ImageViewer } from '@/components/image-viewer';
 import { DOC_LABEL, FLAG_TEXT, ID_TYPE_LABEL, METHOD_LABEL, REASONS, SOURCE_LABEL } from '../flags';
 
 export default function KycCase() {
@@ -16,7 +17,7 @@ export default function KycCase() {
   const [reason, setReason] = useState('');
   const [code, setCode] = useState('');
   const [fraud, setFraud] = useState(false);
-  const [zoom, setZoom] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number | null>(null);   // index into the case's pictures
   const act = useAction(reload);
   if (loading && !c) return <Spinner />;
   if (error || !c) return <Alert>{error ?? 'Not found'}</Alert>;
@@ -24,6 +25,7 @@ export default function KycCase() {
     const r = await act.run(() => post(`/kyc/cases/${id}/decision`, { decision, reason, reasonCode: code || undefined, reportFraud: decision === 'REJECT' && fraud ? true : undefined }), 'Decision recorded.');
     if (r) router.push('/kyc');
   };
+  const pictures = c.documents.filter((x: any) => x.contentType !== 'application/pdf');
   const app = c.application;
   const dup = c.flags.includes('DUPLICATE_IDENTITY') && app?.channel === 'SELF_SERVE';
   const p = app?.personal ?? { email: c.customer?.email, phone: c.customer?.phone };
@@ -97,7 +99,7 @@ export default function KycCase() {
                   {doc.contentType === 'application/pdf'
                     ? <a className="text-accent underline" href={`/api/kyc/documents/${doc.id}`} target="_blank" rel="noreferrer">Open PDF</a>
                     // eslint-disable-next-line @next/next/no-img-element
-                    : <button onClick={() => setZoom(doc.id)} className="block w-full overflow-hidden rounded-control border border-separator focus-visible:ring-2 focus-visible:ring-accent"><img src={`/api/kyc/documents/${doc.id}`} alt={`${(DOC_LABEL[doc.kind] ?? doc.kind)} (click to enlarge)`} className="h-32 w-full object-cover" /></button>}
+                    : <button onClick={() => setZoom(pictures.findIndex((x: any) => x.id === doc.id))} className="block w-full overflow-hidden rounded-control border border-separator focus-visible:ring-2 focus-visible:ring-accent"><img src={`/api/kyc/documents/${doc.id}`} alt={`${(DOC_LABEL[doc.kind] ?? doc.kind)} (click to enlarge)`} className="h-32 w-full object-contain bg-surface2" /></button>}
                 </li>
               ))}
             </ul>
@@ -129,13 +131,7 @@ export default function KycCase() {
           </div>
         </Card>
       )}
-      {zoom && (
-        <div role="dialog" aria-modal="true" aria-label="Document" className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4" onClick={() => setZoom(null)}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/kyc/documents/${zoom}`} alt="Document, enlarged" className="max-h-full max-w-full rounded-card" />
-          <button className="absolute right-4 top-4 min-h-tap min-w-tap rounded-full bg-surface text-title3" aria-label="Close" onClick={() => setZoom(null)}>×</button>
-        </div>
-      )}
+      {zoom !== null && <ImageViewer items={pictures.map((x: any) => ({ src: `/api/kyc/documents/${x.id}`, label: DOC_LABEL[x.kind] ?? x.kind }))} index={zoom} onIndex={setZoom} onClose={() => setZoom(null)} />}
     </>
   );
 }
