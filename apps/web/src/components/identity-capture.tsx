@@ -49,11 +49,11 @@ export function IdentityFields({ state, onChange, individual, hideDob, disabled,
   return (
     <fieldset className="grid gap-4 sm:col-span-2 sm:grid-cols-2" disabled={disabled}>
       <legend className="mb-1 text-headline font-semibold">Identity check</legend>
-      {!hidePhotos && <p className="text-footnote text-label2 sm:col-span-2">The photographs are taken with the camera now; a picture cannot be chosen from the gallery. They go to the secure document store and a compliance officer reviews them.</p>}
-      <Field label={individual ? 'Type of ID' : 'Signatory’s type of ID'}><Select value={state.idType} onChange={(e) => onChange({ ...state, idType: e.target.value, shots: e.target.value === 'PASSPORT' ? { ...state.shots, ID_BACK: undefined } : state.shots })}>{ID_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
-      <Field label="ID expiry date" hint={state.idType === 'PASSPORT' || state.idType === 'RESIDENCE_PERMIT' ? 'Required for this type of ID.' : 'If the ID has one.'}><Input type="date" min={today} value={state.idExpiry} onChange={set('idExpiry')} required={state.idType === 'PASSPORT' || state.idType === 'RESIDENCE_PERMIT'} /></Field>
-      {!hideDob && <Field label="Date of birth" hint="As it is on the ID. Checked against the minimum age."><Input type="date" max={today} min="1900-01-01" value={state.dateOfBirth} onChange={set('dateOfBirth')} required /></Field>}
-      <Field label="Nationality" hint="Optional."><Input value={state.nationality} onChange={set('nationality')} maxLength={60} /></Field>
+      {!hidePhotos && <p className="text-footnote text-label2 sm:col-span-2"><span className="font-medium text-danger">All photographs are required.</span> They are taken with the camera now; a picture cannot be chosen from the gallery. They go to the secure document store and a compliance officer reviews them.</p>}
+      <Field label={individual ? 'Type of ID' : 'Signatory’s type of ID'} required><Select value={state.idType} onChange={(e) => onChange({ ...state, idType: e.target.value, shots: e.target.value === 'PASSPORT' ? { ...state.shots, ID_BACK: undefined } : state.shots })}>{ID_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
+      <Field label="ID expiry date" required={state.idType === 'PASSPORT' || state.idType === 'RESIDENCE_PERMIT'} optional={!(state.idType === 'PASSPORT' || state.idType === 'RESIDENCE_PERMIT')} hint={state.idType === 'PASSPORT' || state.idType === 'RESIDENCE_PERMIT' ? 'Required for this type of ID.' : 'If the ID has one.'}><Input type="date" min={today} value={state.idExpiry} onChange={set('idExpiry')} required={state.idType === 'PASSPORT' || state.idType === 'RESIDENCE_PERMIT'} /></Field>
+      {!hideDob && <Field label="Date of birth" required hint="As it is on the ID. Checked against the minimum age."><Input type="date" max={today} min="1900-01-01" value={state.dateOfBirth} onChange={set('dateOfBirth')} required /></Field>}
+      <Field label="Nationality" optional><Input value={state.nationality} onChange={set('nationality')} maxLength={60} /></Field>
       {!hidePhotos && <div className="grid gap-3 sm:col-span-2">
         {need.map((n) => (
           <div key={n.kind}>
@@ -153,7 +153,7 @@ export function VerifyIdentity({ customerId, individual, dobKnown, context, prev
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       {previous && <div className="sm:col-span-2"><Alert tone="info">Sent back by the reviewer: {previous}</Alert></div>}
-      <Field label="ID number" hint="Must match the ID on the customer record."><Input value={idNumber} onChange={(e) => setIdNumber(e.target.value)} autoComplete="off" /></Field>
+      <Field label="ID number" required hint="Must match the ID on the customer record."><Input value={idNumber} onChange={(e) => setIdNumber(e.target.value)} autoComplete="off" /></Field>
       <span className="hidden sm:block" />
       {mdid.available && individual && <MethodChoice value={method} onChange={setMethod} label={mdid.label} disabled={busy} />}
       <IdentityFields state={s} onChange={setS} individual={individual} hideDob={dobKnown} disabled={busy} onFile={onFile} hidePhotos={useMdid} />

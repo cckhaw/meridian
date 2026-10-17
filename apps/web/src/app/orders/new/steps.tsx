@@ -71,9 +71,38 @@ function OfferCard({ o, chosen, onToggle, note, disabled }: { o: any; chosen: bo
   );
 }
 
+/** One offer as a row of a grouped list: the name and what it is on the left, the price on the right, a tick when chosen. Rows are quicker to scan than cards. */
+function OfferRow({ o, chosen, onToggle, note, disabled }: { o: any; chosen: boolean; onToggle: () => void; note?: string; disabled?: boolean }) {
+  const types = useOfferTypes();
+  const rec = o.prices?.find((p: any) => p.type === 'RECURRING'), once = o.prices?.find((p: any) => p.type === 'ONE_TIME');
+  return (
+    <li>
+      <button type="button" onClick={onToggle} aria-pressed={chosen} disabled={disabled}
+        className={`flex min-h-[60px] w-full items-center gap-3 px-4 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 active:bg-separator/60 hover:bg-surface2 focus-visible:bg-surface2 focus-visible:outline-none ${chosen ? 'bg-accent/8' : ''}`}>
+        <span aria-hidden className={`grid h-6 w-6 shrink-0 place-items-center rounded-full border text-caption ${chosen ? 'border-accent bg-accent text-accent-fg' : 'border-separator text-transparent'}`}>✓</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{o.name}</span>
+          <span className="block truncate text-footnote text-label2">{types.name(o.kind)} · {o.contract?.termMonths > 0 ? `${o.contract.termMonths}-month contract` : o.kind === 'PHYSICAL_GOOD' ? 'Outright purchase' : 'No contract'}{o.variants?.length ? ` · ${new Set(o.variants.map((v: any) => v.colour)).size} colours` : ''}</span>
+          {note && <span className="block truncate text-footnote text-accent">{note}</span>}
+        </span>
+        <span className="shrink-0 text-right tabular-nums">
+          <span className="block text-subhead font-medium">{rec ? <>{money(rec.amount.amountMinor, rec.amount.currency)}<span className="text-footnote font-normal text-label2">/mo</span></> : once ? money(once.amount.amountMinor, once.amount.currency) : '–'}</span>
+          {rec && once && <span className="block text-footnote text-label2">{once.amount.amountMinor ? `${money(once.amount.amountMinor, once.amount.currency)} upfront` : 'nothing upfront'}</span>}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+/** How many offers are shown before “See all”: enough to choose the common ones, few enough to take in at a glance. */
+const GLANCE = 5;
+
 function OfferPicker({ w, kind, step, outright, placeholder, noteFor }: { w: Wizard; kind?: string; step?: 'PLAN' | 'DEVICE'; outright?: boolean; placeholder: string; noteFor?: (o: any) => string | undefined }) {
   const multi = useMultiMarket();
+  const types = useOfferTypes();
   const [q, setQ] = useState('');
+  const [all, setAll] = useState(false);
+  const [type, setType] = useState('');
   const term = useDebounced(q.trim());
   const scope = `&forSale=1${kind ? `&kind=${kind}` : ''}${step ? `&step=${step}` : ''}${outright ? '&outright=1' : ''}`;
   const list = usePaged<any>(`/catalog?limit=24&status=ACTIVE&market=${w.marketCode}${scope}&q=${encodeURIComponent(term)}`);
@@ -94,10 +123,31 @@ function OfferPicker({ w, kind, step, outright, placeholder, noteFor }: { w: Wiz
             : <>No sellable offers here yet.{w.can('catalog:write') ? ' Create and activate offers in the catalog.' : ''}</>}
         </Alert>
       )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {list.items.map((o) => <OfferCard key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} disabled={waits(o)} note={waits(o) ? (clashesWith(o, w.items, w.conflicts) ? `Not available with ${clashesWith(o, w.items, w.conflicts)!.offer.name}: remove it to choose this one` : `One plan per order: remove ${planChosen!.offer.name} to choose this one`) : noteFor?.(o)} />)}
-      </div>
-      {list.items.length > 0 && <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="offers" />}
+      {/* Search first, a short list second, everything on request: the common choices are in view without a long scroll. */}
+      {(() => {
+        const typed = list.items.filter((o) => !type || o.kind === type);
+        const kinds = [...new Set(list.items.map((o) => o.kind as string))];
+        const open = all || !!term || !!type;
+        const shown = open ? typed : typed.slice(0, GLANCE);
+        const more = !open && (typed.length > GLANCE || list.hasMore);
+        return (
+          <>
+            {(open || more) && kinds.length > 1 && (
+              <div role="group" aria-label="Type of offer" className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1">
+                {['', ...kinds].map((k) => (
+                  <button key={k || 'all'} type="button" aria-pressed={type === k} onClick={() => { setType(k); if (k) setAll(true); }}
+                    className={`min-h-[36px] shrink-0 rounded-full px-4 text-subhead font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${type === k ? 'bg-accent text-accent-fg' : 'bg-surface2 text-label hover:bg-separator/60'}`}>{k ? types.name(k) : 'All'}</button>
+                ))}
+              </div>
+            )}
+            {shown.length > 0 && <ul className="divide-y divide-separator overflow-hidden rounded-card bg-surface shadow-card">
+              {shown.map((o) => <OfferRow key={o.id} o={o} chosen={w.items.some((i) => i.offer.id === o.id)} onToggle={() => toggle(o)} disabled={waits(o)} note={waits(o) ? (clashesWith(o, w.items, w.conflicts) ? `Not available with ${clashesWith(o, w.items, w.conflicts)!.offer.name}: remove it to choose this one` : `One plan per order: remove ${planChosen!.offer.name} to choose this one`) : noteFor?.(o)} />)}
+            </ul>}
+            {more && <button type="button" onClick={() => setAll(true)} className="mt-3 inline-flex min-h-tap items-center gap-1 rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">See all {list.hasMore ? '' : `${typed.length} `}offers <span aria-hidden>›</span></button>}
+            {open && list.items.length > 0 && <LoadMore shown={list.items.length} hasMore={list.hasMore} loading={list.loadingMore} onMore={list.loadMore} noun="offers" />}
+          </>
+        );
+      })()}
     </>
   );
 }
