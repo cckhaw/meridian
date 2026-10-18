@@ -204,6 +204,7 @@ function basket(c) {
   else if (goods.length) lines.push({ offerId: pick(goods).id });
   return lines;
 }
+const bad = new Set(), retried = new Map();
 async function placeOrder(c, forcedLines) {
   const lines = forcedLines ?? basket(c); if (!lines.length) return null;
   const channel = pick(channels);
@@ -214,8 +215,14 @@ async function placeOrder(c, forcedLines) {
   if (q?.needs?.delivery) body.deliveryAddress = `${between(1, 99)} Jalan ${pick(LAST)}, ${pick(CITIES)[0]}`;
   if (q?.needs?.installation) body.installationSlot = futureDate(between(3, 20));
   if (q?.deliveryMethods?.includes('SHIP') === false && q?.deliveryMethods?.includes('COLLECT')) body.delivery = { method: 'COLLECT', pickupStoreId: stores[0]?.id };
-  const r = await step('orders placed', () => admin.call('/orders', 'POST', body, { 'idempotency-key': randomUUID() }));
+  let last;
+  const r = await step('orders placed', async () => (last = await admin.call('/orders', 'POST', body, { 'idempotency-key': randomUUID() })));
   if (r) c.orders.push(r.json.id);
+  else if (/requires/.test(JSON.stringify(last?.json ?? ''))) {   // an offer that cannot be sold alone (e.g. a supplementary line): stop picking it
+    for (const l of lines) { bad.add(l.offerId); }
+    for (const pool of [plans, devices, fibre, goods]) for (let i = pool.length - 1; i >= 0; i--) if (bad.has(pool[i].id)) pool.splice(i, 1);
+    if (!forcedLines && (retried.get(c) ?? 0) < 3) { retried.set(c, (retried.get(c) ?? 0) + 1); return placeOrder(c); }
+  }
   return r;
 }
 log('Placing orders…');
