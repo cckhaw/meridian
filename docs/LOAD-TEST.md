@@ -1,0 +1,30 @@
+# Load test data generator
+
+`scripts/load-test/run.mjs` drives the real API (the same calls the screens make) to fill a system with realistic, varied data so every module has something to review.
+
+## Run it
+
+```bash
+BASE=https://meridian.khaw.cc ADMIN_USER=<admin> ADMIN_PASS='<password>' \
+  node scripts/load-test/run.mjs --customers 10      # start small
+BASE=... ADMIN_USER=... ADMIN_PASS=... node scripts/load-test/run.mjs --customers 80
+```
+
+Needs Node 20+. If the admin has a second factor, add `ADMIN_OTP=<code>`. Options: `--customers N` (default 60), `--tag LT`, `--seed N` (repeatable run), `--dry` (read-only: checks sign-in and which offers can be sold), `--keep-users`.
+
+## What it does
+
+1. Reads your catalog and keeps only offers that can be quoted for sale (plans, devices, fibre, goods, group plans).
+2. Creates 3 dealers with 2 agents each, and three temporary staff users (`lt.compliance`, `lt.finance`, `lt.agent`) so approvals use different people. They are disabled at the end unless `--keep-users`.
+3. Creates customers (about 15% companies) with camera-style ID photos, and runs the KYC queue: most approved, some rejected, some sent back, some left waiting.
+4. Places orders on call centre, telesales, assisted retail and dealer channels, some cancelled.
+5. Changes live services: suspend/resume, voluntary suspension, plan change, move to a group plan, termination; builds family groups.
+6. Logs interactions and opens cases (assigned, noted, moved through statuses), including cases made from interactions.
+7. Runs a selective bill run for the load-test accounts (submitted by admin, approved by the finance user), then pays invoices in full or part, issues credit notes, requests and decides refunds.
+8. Runs dunning and collections, a fraud scan, raises fraud alerts, adds blacklist entries.
+
+Failures are counted per step and the first examples printed, so a missing stock item (for example no eSIM profiles) doesn't stop the run. A summary is written to `load-test-report-<TAG>.json`.
+
+## Finding and removing the data
+
+Customer names end in `[LT]`, ID numbers and dealer names contain the tag, and staff users are `lt.*`. Nothing is deleted by the script. It uses real stock (SIMs, devices) and real numbers, and creates dealers and users, so use a test or demo environment where possible.
