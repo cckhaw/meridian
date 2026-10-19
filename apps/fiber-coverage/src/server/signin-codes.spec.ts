@@ -30,9 +30,22 @@ async function person(methods: Array<'TOTP' | 'SMS' | 'EMAIL'>) {
   await db.query('UPDATE users SET must_change_password=false WHERE id=$1', [user.id]);
   const u = { id: user.id, name: `Hub ${n}`, username, email, phone };
   let secret = '';
+  // e-mail can only be set up while e-mail codes are available: borrow a sender and the switch for the set-up, then put things back
+  const before = await core.emailCodesStatus(db), policyBefore = (await core.getSecurityPolicy(db)).email.codesEnabled;
+  if (methods.includes('EMAIL') && !before.available) {
+    await core.setSecurityPolicy(db, 'admin', { email: { codesEnabled: true } as never });
+    if (!before.senderEnabled) await core.saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'EMAIL_GATEWAY', name: 'Temp', config: { mode: 'SIMULATOR', fromName: 'M', fromAddress: 'm@example.com' } });
+  }
+  try {
   for (const m of methods) {
     if (m === 'TOTP') { secret = (await core.beginTotp(db, u)).secret; await core.confirmTotp(db, u, core.hotp(core.base32Decode(secret), core.totpCounter())); }
     else { await core.beginOtpMethod(db, u, m); await core.confirmOtpMethod(db, u, m, (await db.query(`SELECT payload FROM lifecycle_outbox WHERE instruction='MFA_OTP' ORDER BY id DESC LIMIT 1`)).rows[0]!.payload.code); }
+  }
+  } finally {
+    if (methods.includes('EMAIL') && !before.available) {
+      if (!before.senderEnabled) await db.query(`DELETE FROM integration_endpoints WHERE name='Temp' AND kind='EMAIL_GATEWAY'`);
+      await core.setSecurityPolicy(db, 'admin', { email: { codesEnabled: policyBefore } as never });
+    }
   }
   return { ...u, totp: () => core.hotp(core.base32Decode(secret), core.totpCounter()) };
 }
@@ -41,16 +54,25 @@ let sent: any[] = []; let gatewayStatus = 200;
 beforeAll(async () => {
   db = await core.getDb();
   core.setOtpHttp(async (_u, init) => { const b = JSON.parse(String(init!.body)); if (gatewayStatus === 200) sent.push(b); return new Response('{}', { status: gatewayStatus }); });
+  // e-mail goes through the e-mail sender; record it in the same shape as the gateway's messages so the tests read alike
+  core.setEmailHttp(async (_u, init) => { const b = JSON.parse(String(init!.body)); if (gatewayStatus === 200) sent.push({ to: b.to, channel: 'EMAIL', variables: { code: /\b(\d{6})\b/.exec(b.text)?.[1] } }); return new Response('{}', { status: gatewayStatus }); });
 });
-afterAll(async () => { core.setOtpHttp(null); core.setOtpRelayHttp(null); await db.close(); });
+afterAll(async () => { core.setOtpHttp(null); core.setEmailHttp(null); core.setOtpRelayHttp(null); await db.close(); });
 afterEach(async () => { gatewayStatus = 200; sent = []; delete process.env.MERIDIAN_CRM_URL; delete process.env.MERIDIAN_FIBER_API_KEY; core.setOtpRelayHttp(null); await db.query('DELETE FROM auth_attempts'); });
-const gateway = async (config: Record<string, unknown> = { emailCodes: true }) => { await db.query('DELETE FROM integration_endpoints'); return core.saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'OTP_GATEWAY', name: 'GW', url: 'https://sms.example.com/send', secret: 'tok-0123456789', config }); };
-const noGateway = () => db.query('DELETE FROM integration_endpoints');
+/** The SMS gateway, and (unless `email` is false) the e-mail sender plus the policy switch for e-mail codes. */
+const gateway = async (email = true) => {
+  await db.query('DELETE FROM integration_endpoints');
+  await core.setSecurityPolicy(db, 'admin', { email: { codesEnabled: email } as never });
+  if (email) await core.saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'EMAIL_GATEWAY', name: 'Mail', url: 'https://mail.example.com/send', secret: 'mail-token-123', config: { mode: 'API', fromName: 'Meridian', fromAddress: 'noreply@example.com', bodyTemplate: '{"to":"{{to}}","subject":"{{subject}}","text":"{{text}}"}' } });
+  return core.saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'OTP_GATEWAY', name: 'GW', url: 'https://sms.example.com/send', secret: 'tok-0123456789', config: {} });
+};
+const noGateway = async () => { await db.query('DELETE FROM integration_endpoints'); await core.setSecurityPolicy(db, 'admin', { email: { codesEnabled: true } as never }); };
 
 describe('the hub sign-in step', () => {
   it('offers only what the person has: an authenticator-only person gets no code to send and no SMS or e-mail wording to hide behind', async () => {
     await gateway();
     const u = await person(['TOTP']);
+    sent = [];                                                         // the set-up raised a security alert, which goes out by e-mail now
     const r = await signIn(u.username);
     expect(r.json).toMatchObject({ mfaRequired: true, challenge: { methods: ['TOTP'], method: 'TOTP' } });
     expect(r.json.challenge.sentTo).toBeUndefined(); expect(r.json.delivery).toBeUndefined();
@@ -158,13 +180,20 @@ describe('when the hub cannot send the code itself', () => {
     expect(await outbox()).toBe(before);
   });
 
-  it('carries SMS but not e-mail unless the administrator opted in', async () => {
-    await gateway({});
-    const u = await person(['SMS', 'EMAIL']);
-    const r = await signIn(u.username);
-    expect(r.json.canSend).toEqual({ SMS: true, EMAIL: false });
+  it('carries SMS but not e-mail unless e-mail codes are on and an e-mail sender is enabled', async () => {
+    await gateway(false);
+    const early = await person(['SMS']);                                                    // e-mail cannot even be set up while it is off
+    await expect(core.beginOtpMethod(db, { id: early.id, name: 'E', email: early.email, phone: early.phone }, 'EMAIL')).rejects.toThrow(/not available/);
+    await gateway(true);
+    await db.query(`DELETE FROM integration_endpoints WHERE kind='EMAIL_GATEWAY'`);        // switch on, but no sender
+    const u0 = await person(['SMS']);
+    expect((await signIn(u0.username)).json.canSend).toEqual({ SMS: true, EMAIL: false });
+    await gateway(true); await core.setSecurityPolicy(db, 'admin', { email: { codesEnabled: false } as never });
+    expect((await signIn(u0.username)).json.canSend).toEqual({ SMS: true, EMAIL: false });
+    const r = await signIn(u0.username);
     await waited();
-    expect((await sendCode(r.json.challenge.token, 'EMAIL')).json.error.message).toMatch(/no e-mail gateway/);
+    const ask = await sendCode(r.json.challenge.token, 'EMAIL');
+    expect(ask.status).toBe(503); expect(ask.json.error.message).toMatch(/e-mail are not available here.*Security policy.*e-mail sender/);
     expect((await sendCode(r.json.challenge.token, 'SMS')).status).toBe(200);
   });
 

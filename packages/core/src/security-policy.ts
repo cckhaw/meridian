@@ -39,6 +39,15 @@ export interface SecurityPolicy {
     /** How long a sign-in code stays valid. */
     challengeMinutes: number;
   };
+  /**
+   * E-mail codes, and which channel carries a signed agreement copy first. `codesEnabled` only has an effect while an e-mail sender is enabled in the Integration hub
+   * (email-gateway.ts: emailCodesStatus). Codes by e-mail last as long as the SMS ones (mfa.challengeMinutes for sign-in, recovery.tokenMinutes for recovery) and have six digits.
+   */
+  email: {
+    codesEnabled: boolean;
+    /** The channel tried first for a signed copy when the customer has both a mobile number and an e-mail address; the other is the fall-back. */
+    signedCopyFirst: 'GATEWAY' | 'EMAIL';
+  };
 }
 
 const num = (k: string, d: number) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d; };
@@ -48,12 +57,13 @@ export const defaultSecurityPolicy = (): SecurityPolicy => ({
   session: { idleMinutes: num('MERIDIAN_SESSION_IDLE_MINUTES', 30), absoluteHours: num('MERIDIAN_SESSION_MAX_HOURS', 12), strictRoleIds: [], strictIdleMinutes: 15 },
   recovery: { enabled: true, channel: 'EITHER', tokenMinutes: 30, maxRequestsPerHour: 3, publicUrl: '' },
   mfa: { requirement: 'OFF', roleIds: [], methods: ['TOTP', 'SMS', 'EMAIL'], challengeMinutes: 5 },
+  email: { codesEnabled: false, signedCopyFirst: 'GATEWAY' },
 });
 
 export async function getSecurityPolicy(q: Queryable): Promise<SecurityPolicy> {
   const d = defaultSecurityPolicy();
   const v = (await q.query(`SELECT value FROM settings WHERE key='securityPolicy'`)).rows[0]?.value as Partial<SecurityPolicy> | undefined;
-  return { password: { ...d.password, ...(v?.password ?? {}) }, lockout: { ...d.lockout, ...(v?.lockout ?? {}) }, session: { ...d.session, ...(v?.session ?? {}) }, recovery: { ...d.recovery, ...(v?.recovery ?? {}) }, mfa: { ...d.mfa, ...(v?.mfa ?? {}) } };
+  return { password: { ...d.password, ...(v?.password ?? {}) }, lockout: { ...d.lockout, ...(v?.lockout ?? {}) }, session: { ...d.session, ...(v?.session ?? {}) }, recovery: { ...d.recovery, ...(v?.recovery ?? {}) }, mfa: { ...d.mfa, ...(v?.mfa ?? {}) }, email: { ...d.email, ...(v?.email ?? {}) } };
 }
 
 const int = (n: unknown, lo: number, hi: number) => Number.isInteger(n) && (n as number) >= lo && (n as number) <= hi;
@@ -75,6 +85,8 @@ export function securityPolicyProblems(p: SecurityPolicy): string[] {
   if (p.mfa.requirement === 'ROLES' && !p.mfa.roleIds.length) e.push('Choose at least one role that needs a second factor.');
   if (!p.mfa.methods.length || p.mfa.methods.some((m) => !['TOTP', 'SMS', 'EMAIL'].includes(m))) e.push('Allow at least one second-factor method.');
   if (!int(p.mfa.challengeMinutes, 1, 30)) e.push('A sign-in code stays valid for 1 to 30 minutes.');
+  if (typeof p.email.codesEnabled !== 'boolean') e.push('E-mail codes are on or off.');
+  if (!['GATEWAY', 'EMAIL'].includes(p.email.signedCopyFirst)) e.push('A signed copy goes first by the messaging gateway or by e-mail.');
   if (p.recovery.publicUrl && !/^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(p.recovery.publicUrl)) e.push('The public address looks like https://crm.example.com.');
   return e;
 }
@@ -84,6 +96,7 @@ export async function setSecurityPolicy(q: Queryable, actor: string, input: Part
   const next: SecurityPolicy = {
     password: { ...cur.password, ...(input.password ?? {}) }, lockout: { ...cur.lockout, ...(input.lockout ?? {}) },
     session: { ...cur.session, ...(input.session ?? {}) }, recovery: { ...cur.recovery, ...(input.recovery ?? {}) }, mfa: { ...cur.mfa, ...(input.mfa ?? {}) },
+    email: { ...cur.email, ...(input.email ?? {}) },
   };
   next.mfa.roleIds = [...new Set(next.mfa.roleIds)];
   next.mfa.methods = [...new Set(next.mfa.methods)];
@@ -92,7 +105,7 @@ export async function setSecurityPolicy(q: Queryable, actor: string, input: Part
   const problems = securityPolicyProblems(next);
   if (problems.length) throw invalid(problems.slice(0, 4).join(' '), problems);
   await q.query(`INSERT INTO settings (key, value, updated_by) VALUES ('securityPolicy', $1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [JSON.stringify(next), actor]);
-  await audit(q, actor, 'settings', 'securityPolicy', 'update', { password: next.password, lockout: next.lockout, session: { ...next.session, strictRoleIds: next.session.strictRoleIds.length }, recovery: next.recovery, mfa: { ...next.mfa, roleIds: next.mfa.roleIds.length } });
+  await audit(q, actor, 'settings', 'securityPolicy', 'update', { password: next.password, lockout: next.lockout, session: { ...next.session, strictRoleIds: next.session.strictRoleIds.length }, recovery: next.recovery, mfa: { ...next.mfa, roleIds: next.mfa.roleIds.length }, email: next.email });
   return next;
 }
 

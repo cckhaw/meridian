@@ -43,6 +43,7 @@ export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: s
     { kind: 'IDP_SAML', label: 'Single sign-on (SAML 2.0)', hint: 'Provider address, entity id and signing certificate. Stored and checked; assertions are not accepted yet' },
     { kind: 'LDAP', label: 'Active Directory / LDAP', hint: 'Directory address, service account, search base, group-to-role mappings and how often to sync' },
     { kind: 'OTP_GATEWAY', label: 'SMS / WhatsApp gateway', hint: 'Carries one-time codes for the second factor and password recovery, text-message alerts for staff and signed agreement copies for customers: address, token, sender and template ids (MFA, RESET, ALERT, CONTRACT)' },
+    { kind: 'EMAIL_GATEWAY', label: 'E-mail sender', hint: 'Carries e-mail codes (when Settings → Security policy allows them), e-mail alerts for staff and signed agreement copies for customers: sender name and address, and an HTTPS API (address, token, request body), SMTP (host, port, security, user, password) or the simulator' },
   ],
 };
 
@@ -72,6 +73,12 @@ export async function listHubEndpoints(q: Queryable, group?: HubGroup): Promise<
 /** A stored endpoint with its secret in the clear, for the adapters that call out. Never sent to a browser. */
 export async function hubEndpointWithSecret(q: Queryable, group: HubGroup, kind: string, name?: string): Promise<(HubEndpoint & { secret: string | null }) | null> {
   const r = (await q.query(`SELECT * FROM integration_endpoints WHERE group_key=$1 AND kind=$2 AND enabled ${name ? 'AND name=$3' : ''} ORDER BY created_at LIMIT 1`, name ? [group, kind, name] : [group, kind])).rows[0];
+  return r ? { ...endpointOf(r), secret: r.secretEnc ? decryptText(r.secretEnc) : null } : null;
+}
+
+/** One endpoint by id, secret included, enabled or not: for sending a test through exactly what is stored. Never sent to a browser. */
+export async function hubEndpointByIdWithSecret(q: Queryable, id: string): Promise<(HubEndpoint & { secret: string | null }) | null> {
+  const r = (await q.query('SELECT * FROM integration_endpoints WHERE id=$1', [id])).rows[0];
   return r ? { ...endpointOf(r), secret: r.secretEnc ? decryptText(r.secretEnc) : null } : null;
 }
 

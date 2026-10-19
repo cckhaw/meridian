@@ -3,12 +3,13 @@ import { changePassword, createUser, login, validateSession } from './auth.js';
 import type { Db } from './db.js';
 import { requestPasswordReset, resetPasswordWithToken } from './password-recovery.js';
 import { checkPassword, defaultSecurityPolicy, getSecurityPolicy, idleMinutesFor, setSecurityPolicy } from './security-policy.js';
+import { saveHubEndpoint } from './integration-hub.js';
 import { freshDb } from './test-helpers.js';
 
 const SU = { username: 'root-admin', password: 'Correct-Horse-Battery-9' };
 let db: Db;
 let n = 0;
-beforeAll(async () => { db = await freshDb(); });
+beforeAll(async () => { db = await freshDb(); await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'EMAIL_GATEWAY', name: 'Simulated mail', config: { mode: 'SIMULATOR', fromName: 'Meridian', fromAddress: 'noreply@example.com' } }); });
 afterAll(async () => { await db.close(); });
 beforeEach(() => { process.env.MERIDIAN_SUPERUSER_USERNAME = SU.username; process.env.MERIDIAN_SUPERUSER_PASSWORD = SU.password; });
 afterEach(async () => { await db.query('DELETE FROM auth_attempts'); await setSecurityPolicy(db, 'test', defaultSecurityPolicy()); });
@@ -84,6 +85,7 @@ describe('the policy', () => {
 });
 
 describe('forgot password', () => {
+  beforeEach(async () => { await setSecurityPolicy(db, 'a', { email: { codesEnabled: true } as never }); });   // recovery by e-mail needs the switch and a sender
   it('sends a link by e-mail when a public address is set, and a six-digit code otherwise', async () => {
     const u = await person({ email: 'who@example.com' });
     await requestPasswordReset(db, { identifier: u.username });

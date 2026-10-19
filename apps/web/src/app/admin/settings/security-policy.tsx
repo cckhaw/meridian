@@ -1,5 +1,6 @@
 'use client';
 import { Alert, Button, Card, Field, Input, SectionTitle, Select, Spinner } from '@meridian/ui';
+import Link from 'next/link';
 import { useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
 
@@ -9,8 +10,10 @@ interface Policy {
   session: { idleMinutes: number; absoluteHours: number; strictRoleIds: string[]; strictIdleMinutes: number };
   recovery: { enabled: boolean; channel: 'EMAIL' | 'SMS' | 'EITHER'; tokenMinutes: number; maxRequestsPerHour: number; publicUrl: string };
   mfa: { requirement: 'OFF' | 'ROLES' | 'ALL'; roleIds: string[]; methods: Array<'TOTP' | 'SMS' | 'EMAIL'>; challengeMinutes: number };
+  email: { codesEnabled: boolean; signedCopyFirst: 'GATEWAY' | 'EMAIL' };
 }
-interface View { policy: Policy; defaults: Policy }
+interface Sender { enabled: boolean; mode: 'API' | 'SMTP' | 'SIMULATOR' | null; name: string | null; from: string | null; lastTest: { ok: boolean; at: string; error: string | null } | null }
+interface View { policy: Policy; defaults: Policy; emailSender: Sender }
 const Check = ({ checked, onChange, children, hint }: { checked: boolean; onChange: (v: boolean) => void; children: React.ReactNode; hint?: string }) => (
   <label className="flex items-start gap-2 text-subhead"><input type="checkbox" className="mt-1" checked={checked} onChange={(e) => onChange(e.target.checked)} /> <span>{children}{hint && <span className="block text-footnote text-label2">{hint}</span>}</span></label>
 );
@@ -27,7 +30,7 @@ export function SecurityPolicySettings() {
   const p = draft ?? view.data.policy;
   const set = (patch: Partial<Policy>) => setDraft({ ...p, ...patch });
   const save = async () => { if (await act.run(() => post('/settings/security-policy', p), 'Saved. It applies from the next request.')) setDraft(null); };
-  const pw = p.password, lo = p.lockout, se = p.session, re = p.recovery, mf = p.mfa;
+  const pw = p.password, lo = p.lockout, se = p.session, re = p.recovery, mf = p.mfa, em = p.email, snd = view.data.emailSender;
   const toggleMfaRole = (id: string, on: boolean) => set({ mfa: { ...mf, roleIds: on ? [...mf.roleIds, id] : mf.roleIds.filter((x) => x !== id) } });
   const toggleMethod = (m: 'TOTP' | 'SMS' | 'EMAIL', on: boolean) => set({ mfa: { ...mf, methods: on ? [...mf.methods, m] : mf.methods.filter((x) => x !== m) } });
   const toggleRole = (id: string, on: boolean) => set({ session: { ...se, strictRoleIds: on ? [...se.strictRoleIds, id] : se.strictRoleIds.filter((x) => x !== id) } });
@@ -94,9 +97,25 @@ export function SecurityPolicySettings() {
             <div className="grid gap-1 sm:grid-cols-3">
               <Check checked={mf.methods.includes('TOTP')} onChange={(v) => toggleMethod('TOTP', v)}>Authenticator app</Check>
               <Check checked={mf.methods.includes('SMS')} onChange={(v) => toggleMethod('SMS', v)}>SMS code</Check>
-              <Check checked={mf.methods.includes('EMAIL')} onChange={(v) => toggleMethod('EMAIL', v)}>E-mail code</Check>
+              <Check checked={mf.methods.includes('EMAIL')} onChange={(v) => toggleMethod('EMAIL', v)} hint={em.codesEnabled ? undefined : 'Not offered while e-mail codes are off (see E-mail codes below).'}>E-mail code</Check>
             </div></fieldset>
           <p className="text-footnote text-label2">People who are required to use it and have not set it up can only reach My profile until they do. SMS and e-mail codes go through the notification outbox; the SMS gateway is set under Integration. The super user’s credentials live in the environment, so a second step does not apply to that account; an administrator can clear a lost second step from Users &amp; roles.</p>
+        </Card>
+      </section>
+
+      <section aria-label="E-mail codes" className="space-y-3">
+        <SectionTitle>E-mail codes</SectionTitle>
+        <Card className="space-y-4">
+          <Check checked={em.codesEnabled} onChange={(v) => set({ email: { ...em, codesEnabled: v } })} hint="When off, the e-mail second step is not offered at sign-in, in My profile or on the fibre hub, and a forgotten password is not recovered by e-mail. When on, it still needs an enabled e-mail sender in Integration.">Allow sign-in and recovery codes by e-mail</Check>
+          <div className="text-subhead" role="status">
+            E-mail sender: {!snd.enabled ? <strong className={em.codesEnabled ? 'text-danger' : ''}>none is switched on</strong> : snd.mode === 'SIMULATOR' ? <strong className="text-warning">{snd.name} (simulator: nothing is delivered)</strong> : <strong>{snd.name}, sending as {snd.from} through {snd.mode === 'SMTP' ? 'SMTP' : 'an HTTPS API'}</strong>}.{' '}
+            <Link className="text-accent" href="/admin/integrations?item=email-gateway">Open Integration → Messaging → E-mail sender ›</Link>
+            {em.codesEnabled && !snd.enabled && <p className="mt-1 text-danger">The switch is on, but no e-mail sender is enabled, so no code is sent by e-mail and e-mail is not offered anywhere until one is.</p>}
+            {em.codesEnabled && snd.enabled && snd.mode === 'SIMULATOR' && <p className="mt-1 text-warning">The sender only simulates, so nobody receives the codes.</p>}
+            {!em.codesEnabled && snd.enabled && <p className="mt-1 text-label2">A sender is ready, but e-mail codes are off.</p>}
+          </div>
+          <p className="text-footnote text-label2">E-mail codes have six digits and last as long as the SMS ones: {mf.challengeMinutes} minutes for a sign-in code (A sign-in code stays valid, above) and {re.tokenMinutes} minutes for a recovery link or code (Works for, below).</p>
+          <Field label="Signed agreement copies go first by" hint="Used when a customer has both a mobile number and an e-mail address; the other channel is the fall-back if the first fails. A customer with only one is sent that one. Needs the SMS / WhatsApp gateway or the e-mail sender in Integration, whichever you choose."><Select value={em.signedCopyFirst} onChange={(e) => set({ email: { ...em, signedCopyFirst: e.target.value as Policy['email']['signedCopyFirst'] } })}><option value="GATEWAY">SMS / WhatsApp gateway, then e-mail</option><option value="EMAIL">E-mail, then SMS / WhatsApp gateway</option></Select></Field>
         </Card>
       </section>
 
@@ -111,7 +130,7 @@ export function SecurityPolicySettings() {
               <Field label="Requests per person per hour" hint="1 to 20"><Input type="number" min={1} max={20} value={re.maxRequestsPerHour} onChange={(e) => set({ recovery: { ...re, maxRequestsPerHour: n(e.target.value) } })} /></Field>
               <Field label="Public address of this site" hint="https://crm.example.com. Reset links are built from it so they cannot be forged. Leave empty and e-mail carries a six-digit code instead of a link."><Input value={re.publicUrl} placeholder="https://" onChange={(e) => set({ recovery: { ...re, publicUrl: e.target.value } })} /></Field>
             </div>)}
-          <p className="text-footnote text-label2">The message is queued in the notification outbox; the e-mail or SMS connector (Integration → Customer messaging) delivers it. People need an e-mail address or mobile number on their account.</p>
+          <p className="text-footnote text-label2">A link or code by e-mail goes out through the e-mail sender (only while e-mail codes are allowed below); a code by SMS goes through the SMS / WhatsApp gateway. Both are set up under Integration → Messaging. People need an e-mail address or mobile number on their account.</p>
         </Card>
       </section>
 

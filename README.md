@@ -20,7 +20,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 871 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 896 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -91,5 +91,5 @@ Everything about outside systems is under the **Integration** menu (next to Sett
 ## Status
 
 Production-oriented, not feature-complete. **Not included in this release:** payment gateways other than Stripe, usage rating and charging (the Go gateway is a skeleton; the charging system reports unbilled usage through the credit-check and closing-bill APIs), MFA/SSO, customer login to the store-front (existing customers buying online), a
-visual order-workflow designer (the Temporal service holds the order and dunning workflows but is not wired to the app), delivery of notifications and network instructions (they are queued in an outbox for adapters; nothing sends SMS/e-mail or talks to PCRF/HLR yet), screens for the lifecycle settings, GraphQL. See
+visual order-workflow designer (the Temporal service holds the order and dunning workflows but is not wired to the app), delivery of notifications and network instructions (account notices and network instructions are queued in an outbox for adapters and nothing talks to PCRF/HLR yet; sign-in codes, staff alerts and signed agreement copies are sent by Meridian itself through the SMS / WhatsApp gateway and the e-mail sender of the Integration hub), screens for the lifecycle settings, GraphQL. See
 [Security](docs/SECURITY.md#not-covered-yet-plan-for-these-before-regulated-go-live) before handling real customer data.

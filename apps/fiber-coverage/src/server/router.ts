@@ -96,7 +96,7 @@ login('POST', '/admin/2fa/send-code', async ({ db, body, req }) => {
   const b = z.object({ challenge: z.string().min(20).max(200), method: z.enum(['SMS', 'EMAIL']) }).parse(body);
   try {
     await throttleSends(db, clientIp(req));
-    if (!(await sendable(db))[b.method]) return fail(503, 'CODE_DELIVERY_UNAVAILABLE', `Codes by ${b.method === 'SMS' ? 'SMS' : 'e-mail'} cannot be sent from here because no ${b.method === 'SMS' ? 'SMS' : 'e-mail'} gateway is set up. Use your authenticator app or a recovery code, or ask an administrator.`);
+    if (!(await sendable(db))[b.method]) return fail(503, 'CODE_DELIVERY_UNAVAILABLE', `${b.method === 'SMS' ? 'Codes by SMS cannot be sent from here because no SMS gateway is set up.' : 'Codes by e-mail are not available here: they need “Allow sign-in and recovery codes by e-mail” in Settings, Security policy, and an e-mail sender in Integration.'} Use your authenticator app or a recovery code, or ask an administrator.`);
     const r = await core.sendChallengeCode(db, b.challenge, b.method);
     return { ...r, method: b.method, delivery: await deliverLoginCode(db, b.challenge) };
   } catch (e) {

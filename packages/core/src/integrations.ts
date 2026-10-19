@@ -1,4 +1,5 @@
 import type { Queryable } from './db.js';
+import { emailCodesStatus, emailSenderStatus } from './email-gateway.js';
 import { fiberStatus } from './fiber-client.js';
 import { GATEWAYS } from './gateways.js';
 import { getOcsSettings, ocsStats } from './ocs.js';
@@ -15,10 +16,10 @@ import { getStoreSettings } from './store-settings.js';
  * Nothing in this file returns a secret: environment variables are reported as set or not set, never by value.
  */
 export type IntegrationGroup =
-  | 'Network, numbers and charging' | 'Payments and finance' | 'Identity, credit and collections' | 'Field service and logistics' | 'Customer messaging' | 'Sign-in and identity' | 'Online store-front' | 'Events and streaming' | 'Platform';
+  | 'Network, numbers and charging' | 'Payments and finance' | 'Identity, credit and collections' | 'Field service and logistics' | 'Messaging' | 'Sign-in and identity' | 'Online store-front' | 'Events and streaming' | 'Platform';
 
 export const INTEGRATION_GROUPS: IntegrationGroup[] = [
-  'Network, numbers and charging', 'Payments and finance', 'Identity, credit and collections', 'Field service and logistics', 'Customer messaging', 'Sign-in and identity', 'Online store-front', 'Events and streaming', 'Platform',
+  'Network, numbers and charging', 'Payments and finance', 'Identity, credit and collections', 'Field service and logistics', 'Messaging', 'Sign-in and identity', 'Online store-front', 'Events and streaming', 'Platform',
 ];
 
 /**
@@ -238,14 +239,6 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'SECURITY.md', keywords: 'ldap active directory ad sync directory group role mapping ldaps bind',
   },
   {
-    id: 'otp-gateway', group: 'Sign-in and identity', name: 'SMS / WhatsApp messaging gateway', with: 'An SMS or WhatsApp messaging gateway (Twilio, Infobip, a local aggregator)',
-    summary: 'The one messaging gateway Meridian posts to. It carries the sign-in codes for the second factor and for password recovery, the text-message alerts staff switch on in My profile (security alerts, case alerts, system alerts), and the signed agreement copies sent to customers (one message per copy with a secure 15-minute link; nothing is attached). Each message is posted as JSON with a bearer token. A code is wiped from the outbox once the gateway accepts it. Alerts and signed copies that the gateway refuses are retried after 1, 5, 15, 60 and 240 minutes and then marked failed. Without an enabled gateway nothing is sent by text message: codes wait in the notification outbox, staff SMS alerts are not queued, and signed copies stay queued until one is set up. E-mail is not carried by this gateway.',
-    maturity: 'BUILT', direction: 'OUT', outbox: { kind: 'NOTIFY', instructions: ['MFA_OTP', 'PASSWORD_RESET', 'USER_ALERT', 'CONTRACT_SIGNED'] },
-    needs: ['Add the gateway below: address, token, sender id, SMS or WhatsApp, and approved template ids for WhatsApp (MFA, RESET, ALERT, CONTRACT)', 'Signed copies also need the public address of this site (Settings, Security, Password recovery) to build their links', 'Call POST /api/jobs/deliver-otp and POST /api/jobs/deliver-notifications from your scheduler to retry codes, alerts and signed copies the gateway refused'],
-    doc: 'SECURITY.md', keywords: 'sms whatsapp otp one-time code gateway twilio infobip 2fa mfa password recovery',
-  },
-
-  {
     id: 'fiber-coverage', group: 'Field service and logistics', name: 'Fibre coverage and serviceability', with: 'The fibre coverage service (apps/fiber-coverage), which in turn asks wholesale fibre partners',
     summary: 'A separately deployed service answers “can this address be served, by whom, at what speed, is there a free port?” (own network plus wholesale partners, with a 24-hour partner cache) and holds a port while the customer checks out. The order screen and the store-front call it when a fibre plan is chosen. Switch it off in Settings → Modules and the coverage check, fibre installation steps and fixed-broadband plans are hidden. TM Forum 645 and 673 are offered for partners.',
     maturity: 'BUILT', direction: 'BOTH',
@@ -261,14 +254,28 @@ export const INTEGRATIONS: IntegrationDef[] = [
     needs: ['Deploy apps/fiber-coverage as its own project (see docs/FIBER_COVERAGE.md) and sign in to its hub to add providers, distribution points and coverage', 'Issue a key in the hub and set MERIDIAN_FIBER_URL and MERIDIAN_FIBER_API_KEY on this deployment', 'Switch the module on in Settings → Modules'],
     configure: { label: 'Settings → Modules', href: '/admin/settings?section=modules' }, doc: 'FIBER_COVERAGE.md', keywords: 'fibre fiber ftth coverage serviceability broadband port reservation address qualification tmf 645 673 wholesale partner dp splitter',
   },
-  // ───────────── Customer messaging ─────────────
+  // ───────────── Messaging ─────────────
   {
-    id: 'notifications', group: 'Customer messaging', name: 'SMS, email and push notifications', with: 'An SMS gateway and an email service',
-    summary: 'Payment reminders, credit warnings, bar and restore notices, suspension and termination confirmations are queued as NOTIFY instructions with the account and the facts. A connector turns them into messages with your templates.',
+    id: 'otp-gateway', group: 'Messaging', name: 'SMS / WhatsApp gateway', with: 'An SMS or WhatsApp messaging gateway (Twilio, Infobip, a local aggregator)',
+    summary: 'Meridian’s endpoint for text messages. It carries the sign-in codes for the second factor and for password recovery, the text-message alerts staff switch on in My profile (security alerts, case alerts, system alerts), and the signed agreement copies sent to customers (one message per copy with a secure 15-minute link; nothing is attached). Each message is posted as JSON with a bearer token. A code is wiped from the outbox once the gateway accepts it. Alerts and signed copies that the gateway refuses are retried after 1, 5, 15, 60 and 240 minutes and then marked failed. Without an enabled gateway nothing is sent by text message: codes wait in the notification outbox, staff SMS alerts are not queued, and signed copies go by e-mail if an e-mail sender is set up and otherwise stay queued. E-mail has its own sender, next to this one.',
+    maturity: 'BUILT', direction: 'OUT', outbox: { kind: 'NOTIFY', instructions: ['MFA_OTP', 'PASSWORD_RESET', 'USER_ALERT', 'CONTRACT_SIGNED'] },
+    needs: ['Add the gateway below: address, token, sender id, SMS or WhatsApp, and approved template ids for WhatsApp (MFA, RESET, ALERT, CONTRACT)', 'Signed copies also need the public address of this site (Settings, Security, Password recovery) to build their links', 'Call POST /api/jobs/deliver-otp and POST /api/jobs/deliver-notifications from your scheduler to retry codes, alerts and signed copies the gateway refused'],
+    doc: 'INTEGRATIONS.md', keywords: 'sms whatsapp otp one-time code gateway twilio infobip 2fa mfa password recovery',
+  },
+  {
+    id: 'email-gateway', group: 'Messaging', name: 'E-mail sender', with: 'An e-mail provider with an HTTPS API, an SMTP server, or the built-in simulator',
+    summary: 'Meridian’s endpoint for e-mail. It sends the e-mail alerts staff switch on in My profile, the signed agreement copies for customers who have an e-mail address (a secure 15-minute link, nothing attached), and, when Settings → Security policy → E-mail codes is switched on, sign-in codes for the second factor and the link or code for password recovery. Choose how it sends: an HTTPS API (address, token, and the request body your provider expects, with placeholders; one-click presets for a generic JSON provider), SMTP (host, port, STARTTLS, TLS or none, user and password), or the simulator, which records the message and sends nothing. Failed alerts and signed copies are retried after 1, 5, 15, 60 and 240 minutes and then marked failed; a code is wiped from the outbox once it has been sent. Without an enabled sender, e-mail alerts stay queued in the notification outbox and e-mail codes are not offered anywhere.',
+    maturity: 'BUILT', direction: 'OUT',
+    needs: ['Add the sender below: sender name and from address (and a reply-to if you want one), then the mode: HTTPS API or SMTP with the details your provider gave you', 'Press “Send a test e-mail” and check that it arrives', 'To use it for sign-in and recovery codes, switch on “Allow sign-in and recovery codes by e-mail” in Settings → Security policy', 'Signed copies also need the public address of this site (Settings, Security, Password recovery) to build their links', 'Call POST /api/jobs/deliver-otp and POST /api/jobs/deliver-notifications from your scheduler to retry what the sender refused'],
+    configure: { label: 'Settings → Security policy (E-mail codes)', href: '/admin/settings?section=security-policy' }, doc: 'INTEGRATIONS.md', keywords: 'email e-mail smtp mail sender https api provider sendgrid mailgun ses postmark simulator codes alerts signed copies from reply-to',
+  },
+  {
+    id: 'notifications', group: 'Messaging', name: 'Account notices (reminders, bar and restore)', with: 'Your own connector, reading the notification outbox',
+    summary: 'Payment reminders, credit warnings, bar and restore notices, suspension and termination confirmations are queued as NOTIFY instructions with the account and the facts. Meridian does not send these itself: a connector you build turns them into messages with your templates. (Sign-in codes, staff alerts and signed agreement copies are different: Meridian sends those itself through the SMS / WhatsApp gateway and the e-mail sender above.)',
     maturity: 'OUTBOX', direction: 'OUT',
     outbox: { kind: 'NOTIFY', instructions: ['PAYMENT_REMINDER', 'PAYMENT_THANKS', 'CREDIT_WARNING', 'CREDIT_LIMIT_REACHED', 'SERVICE_SOFT_BARRED', 'SERVICE_HARD_BARRED', 'FINAL_NOTICE', 'SUSPENSION_CONFIRMED', 'SERVICE_RESTORED', 'TERMINATION_CONFIRMED'] }, endpoints: POLL,
-    needs: ['Pick an SMS gateway and an email service', 'Build the connector: read NOTIFY instructions, look up the customer’s contact, send, acknowledge', 'Write the message templates in each language you serve'],
-    doc: 'LIFECYCLE.md', keywords: 'sms email notification message reminder push template whatsapp',
+    needs: ['Build the connector: read NOTIFY instructions, look up the customer’s contact, send, acknowledge (it can use your SMS provider and e-mail service directly)', 'Write the message templates in each language you serve'],
+    doc: 'LIFECYCLE.md', keywords: 'sms email notification message reminder push template whatsapp account notice',
   },
 
   // ───────────── Finance and SAP ─────────────
@@ -455,6 +462,7 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
   const authCounts = new Map<string, number>((await q.query(`SELECT kind, count(*)::int AS n FROM integration_endpoints WHERE group_key='auth' AND enabled GROUP BY kind`)).rows.map((r) => [r.kind as string, r.n as number]));
   const identityCounts = new Map<string, number>((await q.query(`SELECT kind, count(*)::int AS n FROM integration_endpoints WHERE group_key='identity' AND enabled GROUP BY kind`)).rows.map((r) => [r.kind as string, r.n as number]));
   const lastSync = ((await q.query(`SELECT max(finished_at) AS at FROM directory_sync_runs WHERE status='OK'`)).rows[0]?.at as string | null) ?? null;
+  const emailStatus = await emailSenderStatus(q), emailCodes = await emailCodesStatus(q);
   const ocsStats4 = await ocsStats(q), ocsSet = await getOcsSettings(q), wfmSet = await getWfmSettings(q);
 
   const items = INTEGRATIONS.map((def) => {
@@ -473,6 +481,16 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
         if (!fs.enabled) { status = 'MANUAL'; detail = 'Switched off in Settings → Modules. Fibre plans and the coverage check are hidden.'; }
         else if (!fs.configured) { status = 'NEEDS_SETUP'; detail = 'Switched on, but MERIDIAN_FIBER_URL and MERIDIAN_FIBER_API_KEY are not set, so the coverage check is unavailable.'; }
         else { status = 'CONNECTED'; detail = `Switched on and connected to ${fs.host}.`; }
+        break;
+      }
+      case 'email-gateway': {
+        const es = emailStatus;
+        if (!es.enabled) { status = 'NEEDS_SETUP'; detail = 'No e-mail sender is enabled. E-mail alerts wait in the outbox and e-mail codes are not offered.'; }
+        else if (es.mode === 'SIMULATOR') { status = 'STAND_IN'; detail = `${es.name}: the simulator records messages and sends nothing.${es.lastTest ? ` Last test ${es.lastTest.ok ? 'recorded' : 'failed'} ${es.lastTest.at.slice(0, 16).replace('T', ' ')} UTC.` : ''}`; }
+        else {
+          status = es.lastTest && !es.lastTest.ok ? 'NEEDS_SETUP' : 'CONNECTED';
+          detail = `${es.name}: sending as ${es.from} through ${es.mode === 'SMTP' ? 'SMTP' : 'the HTTPS API'}${es.target ? ` at ${es.target}` : ''}. ${es.lastTest ? (es.lastTest.ok ? `Last test e-mail sent ${es.lastTest.at.slice(0, 16).replace('T', ' ')} UTC.` : `The last test e-mail failed: ${es.lastTest.error ?? 'no reason given'}`) : 'No test e-mail sent yet.'}${emailCodes.switchedOn ? ' E-mail codes are on.' : ' E-mail codes are off.'}`;
+        }
         break;
       }
       case 'sso-oidc': case 'sso-saml': case 'ldap': case 'otp-gateway': {

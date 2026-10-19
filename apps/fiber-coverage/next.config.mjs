@@ -18,7 +18,7 @@ const csp = [
 export default {
   transpilePackages: ['@meridian/ui', '@meridian/types', '@meridian/core', '@meridian/fiber'],
   // Native/WASM database drivers must stay external to the server bundle.
-  serverExternalPackages: ['@electric-sql/pglite', 'pg', 'ldapts'],
+  serverExternalPackages: ['@electric-sql/pglite', 'pg', 'ldapts', 'nodemailer'],
   reactStrictMode: true,
   poweredByHeader: false,
   webpack: (config) => {
