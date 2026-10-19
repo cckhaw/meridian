@@ -304,7 +304,7 @@ for (const c of customers.filter(() => chance(0.8))) {
   }
 }
 const cases = [];
-for (let i = 0; i < Math.max(12, Math.round(N * 0.7)); i++) {
+for (let i = 0; i < Math.max(12, Math.round((N || customers.length) * 0.7)); i++) {
   const c = pick(caseCustomers.length ? caseCustomers : customers); if (!c) break;
   const type = pick(['GENERAL', 'GENERAL', 'BILLING_REFUND', 'FIBER_ASSURANCE', 'MNP_PORT_OUT']);
   const it = issueTypes.length ? pick(issueTypes) : null;

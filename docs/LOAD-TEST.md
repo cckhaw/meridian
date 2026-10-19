@@ -32,3 +32,5 @@ Failures are counted per step and the first examples printed, so a missing stock
 ## Finding and removing the data
 
 Customer names end in `[LT]`, ID numbers and dealer names contain the tag, and staff users are `lt.*`. Nothing is deleted by the script. It uses real stock (SIMs, devices) and real numbers, and creates dealers and users, so use a test or demo environment where possible.
+
+`--resume --tag <TAG>` finishes an interrupted run: it adopts the customers already tagged, skips creating and ordering, and runs interactions, cases, billing, payments, collections and fraud. Interactions and cases may repeat for customers the first run had reached.
