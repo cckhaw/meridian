@@ -479,6 +479,46 @@ export async function ancestorsFor(q: Queryable, ids: string[]): Promise<Map<str
   return out;
 }
 
+// ───────────────────────── sellable now ─────────────────────────
+// An offer can be sold only if it is ACTIVE and every node above it (group, category, network type) is ACTIVE too: draft, scheduled and retired parents hide
+// everything beneath them. (A node scheduled for a future date has status SCHEDULED until `activateDueNodes` flips it, so "scheduled" is "not live yet".)
+// Only offers being SOLD are checked; services, billing and orders that already exist never look at the catalog tree.
+
+/** SQL predicate (for a WHERE clause over `catalog_nodes` aliased `alias`): true when no ancestor is outside ACTIVE. Follows `parent_id`, which is indexed, so it costs one primary-key probe per level per candidate row. */
+export const allAncestorsLiveSql = (alias = 'catalog_nodes') => `NOT EXISTS (
+    WITH RECURSIVE up(id, parent_id, status) AS (
+      SELECT a.id, a.parent_id, a.status FROM catalog_nodes a WHERE a.id = ${alias}.parent_id
+      UNION ALL SELECT a.id, a.parent_id, a.status FROM catalog_nodes a JOIN up ON a.id = up.parent_id)
+    SELECT 1 FROM up WHERE status <> 'ACTIVE')`;
+
+const LEVEL_WORD: Record<string, string> = { NETWORK_TYPE: 'network type', CATEGORY: 'category', GROUP: 'group' };
+const STATUS_WORD: Record<string, string> = { RETIRED: 'retired', DRAFT: 'still a draft', SCHEDULED: 'scheduled and not live yet' };
+
+/** For each offer, why it is hidden by a parent ("X is not on sale: its group Y is retired"); offers whose whole chain is live are absent. One query for any number of offers. Reports the node nearest the root. */
+export async function ancestorBlocks(q: Queryable, offers: Array<{ id: string; name: string }>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!offers.length) return out;
+  const chains = await ancestorsFor(q, offers.map((o) => o.id));
+  for (const o of offers) {
+    const bad = (chains.get(o.id) ?? []).find((a) => a.status !== 'ACTIVE');
+    if (bad) out.set(o.id, `${o.name} is not on sale: its ${LEVEL_WORD[bad.level] ?? bad.level.toLowerCase()} ${bad.name} is ${STATUS_WORD[bad.status] ?? bad.status.toLowerCase()}.`);
+  }
+  return out;
+}
+
+/** Throws (a business rejection) when any of these offers sits under a node that is not live. The offer's own status is checked by the caller, with its own wording. */
+export async function assertAncestorsLive(q: Queryable, offers: Array<{ id: string; name: string }>): Promise<void> {
+  const blocks = await ancestorBlocks(q, offers);
+  const first = blocks.values().next();
+  if (!first.done) throw rejected(first.value);
+}
+
+/** The one answer to "can this offer be sold right now": it is ACTIVE and so is everything above it. */
+export async function isSellableNow(q: Queryable, offerId: string): Promise<boolean> {
+  const r = (await q.query(`SELECT 1 FROM catalog_nodes WHERE id=$1 AND level='OFFER' AND status='ACTIVE' AND ${allAncestorsLiveSql()}`, [offerId])).rows;
+  return r.length > 0;
+}
+
 async function trailsFor(q: Queryable, nodes: Array<{ id: string }>): Promise<Map<string, TrailStep[]>> {
   const a = await ancestorsFor(q, nodes.map((n) => n.id));
   return new Map([...a].map(([k, v]) => [k, v.map(({ status: _s, ...t }) => t)]));
@@ -495,11 +535,7 @@ export async function searchNodes(q: Queryable, f: { q: string; level?: string; 
   if (words.length) where.push(`(to_tsvector('simple', name || ' ' || code) @@ to_tsquery('simple', ${p(words.map((w) => `${w}:*`).join(' & '))}) OR id = ${p(f.q.trim().toLowerCase())})`);
   if (levels.length) where.push(`level = ANY(${p(levels)})`); // with no words this lists that level in path order, for pickers
   // Sales-only users never see anything that sits under a node which is not live.
-  if (f.activeOnly) where.push(`status = 'ACTIVE' AND NOT EXISTS (
-    WITH RECURSIVE up(id, parent_id, status) AS (
-      SELECT a.id, a.parent_id, a.status FROM catalog_nodes a WHERE a.id = catalog_nodes.parent_id
-      UNION ALL SELECT a.id, a.parent_id, a.status FROM catalog_nodes a JOIN up ON a.id = up.parent_id)
-    SELECT 1 FROM up WHERE status <> 'ACTIVE')`);
+  if (f.activeOnly) where.push(`status = 'ACTIVE' AND ${allAncestorsLiveSql()}`);
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(path, id) > (${p(cur[0])}::text, ${p(cur[1])}::text)`);
   const rows = (await q.query(`SELECT * FROM catalog_nodes WHERE ${where.join(' AND ')} ORDER BY path, id LIMIT ${p(limit + 1)}`, params)).rows.map(toNode);
@@ -514,11 +550,15 @@ export async function pageOffers(q: Queryable, f: { forSale?: boolean; q?: strin
   const { params, p } = sqlBuilder();
   const where = [`level = 'OFFER'`];
   if (f.status) where.push(`status = ${p(f.status)}`);
+  // A list used for selling (forSale, a channel, an order step, outright sale) shows only what can be sold now: the offer and every node above it live.
+  // Catalogue browsing (no such filter) still lists everything, whatever its status, so staff can manage retired parts.
+  const selling = !!(f.forSale || f.channel || f.step || f.outright);
+  if (selling) where.push(`status = 'ACTIVE'`, allAncestorsLiveSql());
   // Comma-separated, and each may be a type id or a behaviour template ("every SIM + device type").
   if (f.kind) where.push(`kind = ANY(${p(await expandKinds(q, f.kind.split(',').filter(Boolean)))})`);
   if (f.notKind) where.push(`kind <> ALL(${p(await expandKinds(q, f.notKind.split(',').filter(Boolean)))})`);
   // Lists used for selling (a channel, an order step, outright sale) leave out fixed broadband while the fibre module is off; the catalogue pages still show it.
-  if (f.channel || f.step || f.outright || f.forSale) { const hidden = await hiddenFixedKinds(q); if (hidden.length) where.push(`kind <> ALL(${p(hidden)})`); }
+  if (selling) { const hidden = await hiddenFixedKinds(q); if (hidden.length) where.push(`kind <> ALL(${p(hidden)})`); }
   // Offers of the types that can be picked in a step of the order wizard (1 PLAN, 2 DEVICE, 3 ADDON), as the types' switches say.
   if (f.outright) where.push(`kind = ANY(${p(await kindsWhere(q, (b) => !!b.outright))})`);
   if (f.step) where.push(`kind = ANY(${p(await kindsForStep(q, f.step))})`);

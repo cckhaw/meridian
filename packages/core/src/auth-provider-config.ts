@@ -42,6 +42,7 @@ export function authEndpointProblem(kind: string, i: { url?: string | null; conf
     case 'OTP_GATEWAY': {
       if (!i.url) return 'Enter the gateway address that accepts messages.';
       if (c.deliver !== undefined && c.deliver !== 'SMS' && c.deliver !== 'WHATSAPP') return 'Deliver codes by SMS or WHATSAPP.';
+      if (c.emailCodes !== undefined && typeof c.emailCodes !== 'boolean') return 'emailCodes is true or false.';
       return null;
     }
     default: return null;

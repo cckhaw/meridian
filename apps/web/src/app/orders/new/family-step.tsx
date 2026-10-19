@@ -17,7 +17,7 @@ function useMemberOffers(head: any, market: string): { offers: any[]; loading: b
     void Promise.all(allowed.map((id) => api(`/catalog/${encodeURIComponent(id)}`).catch(() => null))).then((r) => { if (live) setNamed(r.filter((o) => o && o.level === 'OFFER' && o.status === 'ACTIVE')); });
     return () => { live = false; };
   }, [allowed.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const any = useApi<{ items: any[] }>(allowed.length ? null : `/catalog?limit=50&status=ACTIVE&market=${market}&kind=SIM_ONLY`);
+  const any = useApi<{ items: any[] }>(allowed.length ? null : `/catalog?limit=50&status=ACTIVE&forSale=1&market=${market}&kind=SIM_ONLY`);
   if (allowed.length) return { offers: named ?? [], loading: named === null };
   return { offers: (any.data?.items ?? []).filter((o) => !isGroupPlan(o)), loading: !any.data };
 }

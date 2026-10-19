@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '@meridian/core';
 import {
-  CoverageService, DEFAULT_FIBER_SETTINGS, Tmf645Adapter, activateReservation, boxOf, cancelWaitlist, circleRing, confirmReservation, distanceM, exhaustionReport, getFiberSettings, importCoverage, joinWaitlist, listPorts, mapFeatures,
+  CoverageService, DEFAULT_FIBER_SETTINGS, Tmf645Adapter, activateReservation, boxOf, cancelWaitlist, circleRing, classifyPorts, confirmReservation, distanceM, exhaustionReport, getFiberSettings, importCoverage, joinWaitlist, listPorts, mapFeatures,
   moduleEnabled, normalizeAddress, notifyWaitlist, parseAddressLine, parseGeoJson, parseKml, pointInArea, providerView, qualifyAddress, releaseReservation, requestExpansion, reservePort, saveCabinet, saveDp, savePolygon, saveProvider,
   setFiberHttp, setFiberSettings, setModuleEnabled, setPortState, sweepExpiredLocks, updateExpansion, upsertAddress, type AreaGeometry,
 } from './index.js';
@@ -227,6 +227,52 @@ describe('bulk import', () => {
     const fc: any = await mapFeatures(db);
     const layers = new Set(fc.features.map((f: any) => f.properties.layer));
     expect([...layers].sort()).toEqual(['area', 'cabinet', 'dp', 'reach']);
+  });
+});
+
+describe('low-port classification', () => {
+  const set = { lowPortsAbsolute: 2, lowPortsPercent: 15 };
+  const c = (available: number, total = 32, faulty = 0) => ({ available, total, faulty });
+  it('is exhausted only when nothing is free, whatever the thresholds', () => {
+    expect(classifyPorts(c(0), set)).toBe('EXHAUSTED');
+    expect(classifyPorts(c(0, 0), { lowPortsAbsolute: 0, lowPortsPercent: 0 })).toBe('EXHAUSTED');
+    expect(classifyPorts(c(1), { lowPortsAbsolute: 0, lowPortsPercent: 0 })).toBe('OK');
+  });
+  it('is low at or under the count threshold, even when the share is large', () => {
+    expect(classifyPorts(c(2, 4), set)).toBe('LOW');                                   // 50% free but only 2
+    expect(classifyPorts(c(3, 100), { lowPortsAbsolute: 3, lowPortsPercent: 0 })).toBe('LOW');
+    expect(classifyPorts(c(4, 100), { lowPortsAbsolute: 3, lowPortsPercent: 0 })).toBe('OK');
+  });
+  it('is low at or under the share threshold, even when the count is large', () => {
+    expect(classifyPorts(c(15, 100), { lowPortsAbsolute: 0, lowPortsPercent: 15 })).toBe('LOW');   // exactly 15%
+    expect(classifyPorts(c(16, 100), { lowPortsAbsolute: 0, lowPortsPercent: 15 })).toBe('OK');
+    expect(classifyPorts(c(40, 400), set)).toBe('LOW');                                 // 10% of 400 is 40 ports
+  });
+  it('treats either threshold as enough, and needs both to be missed for OK', () => {
+    expect(classifyPorts(c(3, 20), set)).toBe('LOW');                                   // 15% exactly, 3 > 2
+    expect(classifyPorts(c(3, 19), set)).toBe('OK');                                    // 15.8% and 3 > 2
+    expect(classifyPorts(c(2, 100), { lowPortsAbsolute: 1, lowPortsPercent: 1 })).toBe('OK');
+  });
+  it('leaves faulty ports out of the share, and never divides by zero', () => {
+    expect(classifyPorts(c(3, 20, 5), { lowPortsAbsolute: 0, lowPortsPercent: 20 })).toBe('LOW');   // 3 of 15 usable = 20%
+    expect(classifyPorts(c(3, 20, 0), { lowPortsAbsolute: 0, lowPortsPercent: 20 })).toBe('LOW');   // 15%
+    expect(classifyPorts(c(4, 20, 5), { lowPortsAbsolute: 0, lowPortsPercent: 20 })).toBe('OK');    // 4 of 15 = 26.7% (would be 20% with no faults)
+    expect(classifyPorts(c(1, 5, 5), { lowPortsAbsolute: 0, lowPortsPercent: 50 })).toBe('OK');     // all faulty: usable floors at 1, so 100%
+  });
+  it('colours the map and the Ports and waitlist page from the same settings, and tells the map which', async () => {
+    const dp = (await db.query(`SELECT d.id, d.code FROM fiber_dps d WHERE (SELECT count(*) FROM fiber_ports p WHERE p.dp_id=d.id) >= 4 LIMIT 1`)).rows[0]!;
+    const before = await getFiberSettings(db);
+    try {
+      for (const s of [{ lowPortsAbsolute: 0, lowPortsPercent: 0 }, { lowPortsAbsolute: 64, lowPortsPercent: 0 }, { lowPortsAbsolute: 0, lowPortsPercent: 100 }, { lowPortsAbsolute: 2, lowPortsPercent: 15 }]) {
+        await setFiberSettings(db, 'planner', s);
+        const fc: any = await mapFeatures(db);
+        expect(fc.settings).toEqual(s);
+        const onMap = new Map<string, string>(fc.features.filter((f: any) => f.properties.layer === 'dp').map((f: any) => [f.properties.id, f.properties.level]));
+        const report = await exhaustionReport(db);
+        for (const r of report.items) if (onMap.has(r.dpId)) expect(onMap.get(r.dpId)).toBe(r.level);
+        expect(onMap.has(dp.id)).toBe(true);
+      }
+    } finally { await setFiberSettings(db, 'planner', { lowPortsAbsolute: before.lowPortsAbsolute, lowPortsPercent: before.lowPortsPercent }); }
   });
 });
 

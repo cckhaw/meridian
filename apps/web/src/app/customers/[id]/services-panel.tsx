@@ -55,14 +55,14 @@ export function ServicePanel({ service, onClose, onDone }: { service: any; accou
     && (service.type === 'MOBILE' || !['change-sim', 'change-msisdn', 'port-out', 'move-to-group'].includes(a.value)) && (a.value !== 'move-to-group' || service.status === 'ACTIVE') && (a.value !== 'change-plan' || (service.status === 'ACTIVE' && service.type !== 'SUBSCRIPTION')));
   const [action, setAction] = useState<string>(service.status === 'PORTING_OUT' ? 'complete-port-out' : avail[0]?.value ?? '');
   const [v, setV] = useState({ iccid: '', msisdn: '', toCustomerId: '', operator: '', code: '', reason: '', groupOffer: '' });
-  const plans = useApi<{ items: any[] }>(action === 'move-to-group' ? '/catalog?limit=50&status=ACTIVE&kind=SIM_ONLY' : null);
+  const plans = useApi<{ items: any[] }>(action === 'move-to-group' ? '/catalog?limit=50&status=ACTIVE&forSale=1&kind=SIM_ONLY' : null);
   const groupPlans = (plans.data?.items ?? []).filter((o) => o.group?.isGroupOffer && o.id !== service.offerId);
   // Changing plan: pick the new plan and when, read and sign the plan change agreement, then it is made.
   const [cp, setCp] = useState({ offer: '', effective: 'NEXT_BILL_CYCLE', acceptContract: false });
   const [agr, setAgr] = useState<{ required: boolean; agreements: AgreementView[] } | null>(null);
   const [signed, setSigned] = useState<SignedPayload | null>(null);
   const KIND_OF: Record<string, string> = { MOBILE: 'SIM_ONLY', FIBER: 'FIBER', IOT: 'IOT_CONNECTIVITY' };
-  const planList = useApi<{ items: any[] }>(action === 'change-plan' ? `/catalog?limit=50&status=ACTIVE${KIND_OF[service.type] ? `&kind=${KIND_OF[service.type]}` : '&step=PLAN'}` : null);
+  const planList = useApi<{ items: any[] }>(action === 'change-plan' ? `/catalog?limit=50&status=ACTIVE&forSale=1${KIND_OF[service.type] ? `&kind=${KIND_OF[service.type]}` : '&step=PLAN'}` : null);
   const newPlans = (planList.data?.items ?? []).filter((o) => o.id !== service.offerId);
   useEffect(() => {
     setAgr(null); setSigned(null);

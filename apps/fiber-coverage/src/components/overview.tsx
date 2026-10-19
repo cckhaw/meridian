@@ -71,8 +71,8 @@ export function Overview({ onModule }: { onModule?: () => void }) {
               <Field label="Checkout port lock (minutes)" hint="How long a port is held while a customer checks out."><Input type="number" min={1} max={240} value={f.lockMinutes} onChange={(e) => setF({ ...f, lockMinutes: Number(e.target.value) })} /></Field>
               <Field label="Partner answer cache (hours)" hint="0 asks the partner every time."><Input type="number" min={0} max={168} value={f.cacheHours} onChange={(e) => setF({ ...f, cacheHours: Number(e.target.value) })} /></Field>
               <Field label="Partner timeout (ms)" hint="A slower partner is left out of the answer."><Input type="number" min={200} max={30000} step={100} value={f.partnerTimeoutMs} onChange={(e) => setF({ ...f, partnerTimeoutMs: Number(e.target.value) })} /></Field>
-              <Field label="“Low” when this few ports are free"><Input type="number" min={0} max={64} value={f.lowPortsAbsolute} onChange={(e) => setF({ ...f, lowPortsAbsolute: Number(e.target.value) })} /></Field>
-              <Field label="…or this share is free (%)"><Input type="number" min={0} max={100} value={f.lowPortsPercent} onChange={(e) => setF({ ...f, lowPortsPercent: Number(e.target.value) })} /></Field>
+              <Field label="“Low” when this few ports are free" hint="Colours the Map and sets “Low” on Ports and waitlist."><Input type="number" min={0} max={64} value={f.lowPortsAbsolute} onChange={(e) => setF({ ...f, lowPortsAbsolute: Number(e.target.value) })} /></Field>
+              <Field label="…or this share is free (%)" hint="Either one is enough. Faulty ports are not counted."><Input type="number" min={0} max={100} value={f.lowPortsPercent} onChange={(e) => setF({ ...f, lowPortsPercent: Number(e.target.value) })} /></Field>
               <div className="flex items-end"><Button disabled={!dirty || act.busy} onClick={() => void act.run(() => patch('/admin/settings', { lockMinutes: f.lockMinutes, cacheHours: f.cacheHours, partnerTimeoutMs: f.partnerTimeoutMs, lowPortsAbsolute: f.lowPortsAbsolute, lowPortsPercent: f.lowPortsPercent }), 'Saved')}>Save</Button></div>
             </div>
           )}

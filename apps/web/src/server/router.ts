@@ -106,6 +106,8 @@ open('POST', '/auth/2fa/send-code', async ({ db, body }) => {
   const b = z.object({ challenge: z.string().min(20).max(200), method: z.enum(['SMS', 'EMAIL']) }).parse(body);
   try { const r = await core.sendChallengeCode(db, b.challenge, b.method); await kickOtp(db); return r; } catch (e) { return authFailure(e); }
 });
+// The fibre hub, when it cannot reach the SMS gateway itself, asks for a waiting sign-in code to be handed over. Signed (docs/FIBER_COVERAGE.md); delivers only what is already queued.
+open('POST', '/internal/fiber/deliver-otp', ({ db, raw, req }) => core.handleOtpRelay(db, raw, req.headers.get('x-meridian-signature')), { noCsrf: true });
 // Single sign-on: the buttons on the sign-in page, the redirect to the provider, and the return with a code.
 open('GET', '/auth/sso/providers', async ({ db }) => ({ items: await core.listSignInProviders(db) }));
 open('POST', '/auth/sso/start', async ({ db, body }) => core.oidcBegin(db, z.object({ providerId: uuid }).parse(body).providerId));
@@ -144,6 +146,11 @@ route('PATCH', '/profile', null, ({ db, user, body }) => core.updateProfile(db, 
   currentPassword: z.string().max(1024).optional(),
   notificationPrefs: z.object({ channels: z.object({ email: z.boolean(), sms: z.boolean(), push: z.boolean() }).partial(), events: z.object({ caseAssigned: z.boolean(), caseUpdates: z.boolean(), systemAlerts: z.boolean(), securityAlerts: z.boolean() }).partial() }).partial().optional(),
 }).parse(body) as core.ProfileUpdate), mine);
+route('GET', '/notifications', null, ({ db, user, query }) => core.listMyNotifications(db, user.id, { limit: num(query, 'limit'), unreadOnly: query.get('unread') === '1' }), mine);
+route('POST', '/notifications/read-all', null, ({ db, user }) => core.markAllNotificationsRead(db, user.id), mine);
+route('POST', '/notifications/:id/read', null, async ({ db, user, params }) => { await core.markNotificationRead(db, user.id, params.id!); return { ok: true }; }, mine);
+route('GET', '/profile/notification-channels', null, ({ db }) => core.notificationChannelStatus(db), mine);
+post('/notifications/system-alert', 'settings:manage', ({ db, user, body }) => core.broadcastSystemAlert(db, user.username, z.object({ title: z.string().min(3).max(120), body: z.string().min(3).max(400) }).parse(body)));
 route('GET', '/profile/security', null, async ({ db, user }) => {
   const policy = await core.getSecurityPolicy(db);
   return { mfa: await core.mfaStatus(db, user.id), allowedMethods: policy.mfa.methods, required: core.mfaRequiredFor(policy, user.roles), canUseMfa: !user.isSuperuser, hasPhone: !!(await db.query('SELECT phone FROM users WHERE id=$1', [user.id])).rows[0]?.phone, hasEmail: !!user.email };
@@ -268,6 +275,7 @@ get('/dashboard', 'dashboard:read', async ({ db, user }) => {
     ...(has('catalog:read') ? { mrrMinor: d.mrrMinor, topOffers: d.topOffers } : {}),
   };
 });
+get('/audit/entities', 'audit:read', async ({ db }) => ({ items: await core.auditEntityTypes(db) }));
 get('/audit', 'audit:read', ({ db, query }) => core.auditLog(db, { entity: str(query, 'entity'), entityId: str(query, 'entityId'), actor: str(query, 'actor'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 // ───────────────────────── fraud desk and store desk ─────────────────────────
 const alertBody = z.object({ kind: z.enum(core.ALERT_KINDS), severity: z.enum(core.FRAUD_SEVERITIES).optional(), summary: z.string().min(1).max(500), serviceId: uuid.optional(), identifier: z.string().max(60).optional() });
@@ -738,20 +746,23 @@ post('/settings/cancellation/simulate', 'settings:manage', async ({ db, body }) 
 
 // ── Settings → Dunning rules: who is chased, when, and how; late fees; QR payment details; collections ──
 const dunStep = z.object({
-  id: uuid.optional(), position: z.number().int().optional(), name: z.string().min(1).max(80), enabled: z.boolean().default(true),
+  id: uuid.optional(), position: z.number().int().optional(), name: z.string().min(1).max(core.DUNNING_LIMITS.stepNameMax), enabled: z.boolean().default(true),
   trigger: z.discriminatedUnion('kind', [z.object({ kind: z.literal('DAYS_PAST_DUE'), days: z.number().int() }), z.object({ kind: z.literal('BALANCE'), balanceMinor: z.number().int(), minDays: z.number().int().default(0) })]),
   action: z.enum(core.DUNNING_STEP_ACTIONS as unknown as [string, ...string[]]),
   params: z.record(z.unknown()).default({}), exclusions: z.object({ dispute: z.boolean().optional(), vip: z.boolean().optional(), arrangement: z.boolean().optional() }).default({}),
 });
 const dunRule = z.object({
-  code: z.string().max(60).optional(), name: z.string().min(1).max(80), description: z.string().max(400).default(''), active: z.boolean().default(true), priority: z.number().int().min(0).max(10000).default(100),
+  code: z.string().max(60).optional(), name: z.string().min(1).max(core.DUNNING_LIMITS.nameMax), description: z.string().max(core.DUNNING_LIMITS.descriptionMax).default(''), active: z.boolean().default(true), priority: z.number().int().default(100),
   market: z.string().max(8).nullable().default(null), customerKind: z.enum(['ANY', 'INDIVIDUAL', 'BUSINESS']).default('ANY'), segments: z.array(z.string().max(60)).max(50).default([]),
   vip: z.enum(['ANY', 'YES', 'NO']).default('ANY'), creditRisk: z.enum(['ANY', 'HIGH', 'NORMAL']).default('ANY'),
-  partial: z.object({ thresholdPercent: z.number().min(1).max(100), action: z.enum(['RESET_TO_SOFT_BAR', 'PAUSE']), pauseDays: z.number().int().min(1).max(60) }).nullable().default(null),
-  steps: z.array(dunStep).max(40),
+  partial: z.object({ thresholdPercent: z.number(), action: z.enum(['RESET_TO_SOFT_BAR', 'PAUSE']), pauseDays: z.number().int() }).nullable().default(null),
+  // Shape only. The priority range and the number of steps are the operator's settings (core DUNNING_LIMIT_BOUNDS / getDunningLimits), checked by core; the cap here is only the largest the setting can ever be.
+  steps: z.array(dunStep).max(core.DUNNING_LIMIT_BOUNDS.maxSteps.max),
 });
-const dunningView = async (db: core.Db) => ({ rules: await core.listDunningRules(db), lateFees: await core.listLateFees(db), payments: await core.getDunningPayments(db), templates: core.DUNNING_TEMPLATES, actions: core.DUNNING_STEP_ACTIONS, channels: core.DUNNING_CHANNELS, qrSchemes: core.QR_SCHEMES.map((k) => ({ id: k, label: core.QR_SCHEME_LABEL[k] })), seaMarkets: core.SEA_MARKETS });
+const dunningView = async (db: core.Db) => ({ qrTags: { min: core.QR_MERCHANT_TAG_MIN, max: core.QR_MERCHANT_TAG_MAX }, limits: await core.getDunningLimits(db), rulesOverLimit: await core.dunningRulesOverLimits(db), rules: await core.listDunningRules(db), lateFees: await core.listLateFees(db), payments: await core.getDunningPayments(db), templates: core.DUNNING_TEMPLATES, actions: core.DUNNING_STEP_ACTIONS, channels: core.DUNNING_CHANNELS, qrSchemes: core.QR_SCHEMES.map((k) => ({ id: k, label: core.QR_SCHEME_LABEL[k] })), seaMarkets: core.SEA_MARKETS });
 get('/settings/dunning-rules', 'settings:manage', ({ db }) => dunningView(db));
+post('/settings/dunning-rules/limits', 'settings:manage', ({ db, user, body }) => core.setDunningLimits(db, user.username, z.object({ maxSteps: z.number().optional(), maxPriority: z.number().optional() }).parse(body ?? {})));
+post('/settings/dunning-rules/:id/active', 'settings:manage', ({ db, user, params, body }) => core.setDunningRuleActive(db, user.username, params.id!, z.object({ active: z.boolean() }).parse(body).active));
 post('/settings/dunning-rules', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveDunningRule(db, user.username, dunRule.parse(body) as core.DunningRuleInput), { status: 201 }));
 post('/settings/dunning-rules/seed', 'settings:manage', async ({ db, user, body }) => { await core.seedDunningRules(db, { market: z.object({ market: z.string().max(4).optional() }).parse(body ?? {}).market, actor: user.username }); return dunningView(db); });
 post('/settings/dunning-rules/late-fees', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveLateFee(db, user.username, z.object({ code: z.string().max(60).optional(), name: z.string().min(1).max(80), mode: z.enum(['FLAT', 'PERCENT']), flatMinor: z.number().int().min(0).optional(), percentBps: z.number().int().min(0).max(10000).optional(), minMinor: z.number().int().min(0).optional(), maxMinor: z.number().int().min(0).nullable().optional(), taxable: z.boolean().optional(), active: z.boolean().optional() }).parse(body)), { status: 201 }));
@@ -869,6 +880,8 @@ post('/settings/integration-hub/auth/directory/:id/sync', 'settings:manage', ({ 
 get('/settings/integration-hub/auth/directory/runs', 'settings:manage', ({ db, query }) => core.listSyncRuns(db, str(query, 'endpointId')).then((items) => ({ items })));
 post('/jobs/directory-sync', 'settings:manage', ({ db }) => core.runDueDirectorySyncs(db));
 post('/jobs/deliver-otp', 'settings:manage', ({ db }) => core.deliverOtpMessages(db));
+/** Retries what waits for the SMS / WhatsApp gateway besides one-time codes: staff alerts and signed agreement copies. Also runs on the 15-second heartbeat below. */
+post('/jobs/deliver-notifications', 'settings:manage', async ({ db }) => ({ alerts: await core.deliverUserAlerts(db), signedCopies: await core.deliverSignedCopies(db) }));
 post('/settings/integration-hub/events/dispatch', 'settings:manage', ({ db }) => core.dispatchEvents(db));
 get('/settings/integration-hub/deliveries', 'settings:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
 post('/settings/integration-hub/deliveries/:id/retry', 'settings:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));
@@ -1497,7 +1510,7 @@ get('/billing/print/jobs', printing, ({ db, query }) => core.listPrintJobs(db, n
 /** The plain "bill this date" call skips review and approval, so it is refused while governance is on (the default). */
 post('/billing/run', 'billing:run', async ({ db, user, body }) => { if ((await core.getBillRunSettings(db)).enforceGovernance) throw new DomainError('REJECTED', 'Bill cycles are run from Billing → Bill runs, with a mock, a review and an approval. (A super user can switch this off in the bill-run settings.)'); const b = z.object({ asOf: date.optional(), accountId: uuid.optional() }).parse(body ?? {}); return core.runBillCycle(db, b.asOf, { accountId: b.accountId }).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'BILL_RUN', { invoices: r.invoices }); return r; }); });
 /** Housekeeping for the store-front: closes stale sign-ups and releases orders whose online payment never arrived. Safe to run often (hourly is plenty). */
-post('/jobs/sweep-orders', 'billing:run', async ({ db, user }) => { const r = { ...(await core.sweepOrders(db, new Date(), user.username)), documents: await core.sweepDocuments(db, new Date(), user.username) }; await core.audit(db, user.username, 'order', 'sweep', 'SWEEP_ORDERS', { ...r }); return r; });
+post('/jobs/sweep-orders', 'billing:run', async ({ db, user }) => { const r = { ...(await core.sweepOrders(db, new Date(), user.username)), documents: await core.sweepDocuments(db, new Date(), user.username), signedCopies: await core.deliverSignedCopies(db) }; await core.audit(db, user.username, 'order', 'sweep', 'SWEEP_ORDERS', { ...r }); return r; });
 post('/jobs/expire-applications', 'billing:run', async ({ db, user }) => { const r = await core.expireApplications(db); await core.audit(db, user.username, 'store', 'expire', 'EXPIRE_APPLICATIONS', { ...r }); return r; });
 post('/billing/dunning', 'billing:run', ({ db, user, body }) => core.runDunning(db, z.object({ asOf: date.optional() }).parse(body ?? {}).asOf).then(async (r) => { await core.audit(db, user.username, 'billing', r.asOf, 'DUNNING_RUN', { ...r }); return r; }));
 
@@ -1516,13 +1529,15 @@ post('/gl/export', 'finance:export', async ({ db, user }) => {
 });
 
 // ───────────────────────── sub-ledger, SAP posting rules, journal batches, reconciliation ─────────────────────────
+// Only the shape is checked here; every limit (lengths, priority range, the note being shortened) is core's COA_LIMITS, applied by cleanRule, so the messages and the warnings come from one place.
+const coaText = z.string().max(core.COA_LIMITS.inputMax);
 const coaRuleBody = z.object({
-  name: z.string().min(1).max(120), priority: z.number().int().min(0).max(100000).optional(),
-  matchAccount: z.string().max(40).nullish(), matchStream: z.string().max(40).nullish(), matchEvent: z.string().max(40).nullish(), matchSource: z.string().max(40).nullish(),
-  sapAccount: z.string().min(1).max(40), costCenter: z.string().max(40).nullish(), profitCenter: z.string().max(40).nullish(), taxCode: z.string().max(20).nullish(),
-  status: z.enum(['ACTIVE', 'INACTIVE']).optional(), validFrom: date.nullish(), validTo: date.nullish(), note: z.string().max(500).nullish(),
+  name: coaText, priority: z.number().int().optional(),
+  matchAccount: coaText.nullish(), matchStream: coaText.nullish(), matchEvent: coaText.nullish(), matchSource: coaText.nullish(),
+  sapAccount: coaText, costCenter: coaText.nullish(), profitCenter: coaText.nullish(), taxCode: coaText.nullish(),
+  status: z.enum(['ACTIVE', 'INACTIVE']).optional(), validFrom: date.nullish(), validTo: date.nullish(), note: coaText.nullish(),
 });
-get('/finance/meta', 'finance:read', () => ({ streams: core.REVENUE_STREAMS, eventTypes: core.LEDGER_EVENT_TYPES, formats: core.SAP_FORMATS, transports: core.SAP_TRANSPORTS, glNames: core.GL_NAMES }));
+get('/finance/meta', 'finance:read', () => ({ streams: core.REVENUE_STREAMS, eventTypes: core.LEDGER_EVENT_TYPES, formats: core.SAP_FORMATS, transports: core.SAP_TRANSPORTS, glNames: core.GL_NAMES, limits: core.COA_LIMITS }));
 get('/finance/coa', 'finance:read', async ({ db }) => ({ items: await core.listCoaRules(db), unmapped: await core.unmappedLines(db) }));
 post('/finance/coa', 'finance:configure', ({ db, user, body }) => core.createCoaRule(db, user.username, coaRuleBody.parse(body)));
 post('/finance/coa/preview', 'finance:read', ({ db, body }) => core.previewCoaRule(db, z.object({ accountCode: z.string().min(1), stream: z.string().nullish(), eventType: z.string().nullish(), sourceType: z.string().optional(), entryDate: date.optional() }).parse(body)).then((resolved) => ({ resolved })));
@@ -1873,6 +1888,9 @@ post('/documents/kyc', 'document:kyc', async ({ db, user, req, body }) => {
   const b = z.object({ customerId: z.string().uuid(), category: z.string().max(40), name: z.string().max(120).optional(), expiresAt: blank(z.string().max(20)), content: z.string().max(5_000_000) }).parse(body);
   return db.tx((q) => core.uploadKyc(q, { customerId: b.customerId, category: b.category, name: b.name, expiresAt: b.expiresAt ?? null, bytes: Buffer.from(b.content, 'base64') }, docWho(user, req)));
 });
+get('/documents/delivery', 'document:manage', ({ db }) => core.signedCopyStatus(db));
+post('/documents/delivery/run', 'document:manage', ({ db }) => core.deliverSignedCopies(db));
+post('/documents/delivery/retry', 'document:manage', async ({ db, user }) => ({ ...(await core.retryFailedSignedCopies(db, user.username)), ...(await core.deliverSignedCopies(db)) }));
 post('/documents/sweep', 'document:manage', async ({ db, user }) => { const r = await core.sweepDocuments(db, new Date(), user.username); await core.audit(db, user.username, 'document', 'sweep', 'SWEEP_DOCUMENTS', { ...r }); return r; });
 open('GET', '/documents/file/:token', async ({ db, params, req }) => {
   const f = await db.tx((q) => core.fileByLink(q, params.token!, { username: 'link', ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined }));
@@ -1913,6 +1931,7 @@ let lastSweep = 0;
 async function sweepScheduled(db: Db) {
   if (Date.now() - lastSweep < 15_000) return;
   lastSweep = Date.now();
+  void Promise.all([core.deliverUserAlerts(db), core.deliverSignedCopies(db)]).catch((e) => console.error('[notify] delivery sweep failed', (e as Error).message));
   try { await core.activateDueNodes(db); } catch (e) { console.error('[catalog] scheduled activation failed', (e as Error).message); }
 }
 

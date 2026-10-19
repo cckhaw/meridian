@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { isPublicPath } from '@/lib/public-paths';
 
 /**
  * First line of defence only: page requests without a session cookie are sent to the login screen before anything renders.
@@ -6,7 +7,7 @@ import { NextResponse, type NextRequest } from 'next/server';
  */
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
-  if (['/login', '/login/sso', '/pay/done', '/forgot-password', '/reset-password'].includes(pathname)) return NextResponse.next();
+  if (isPublicPath(pathname)) return NextResponse.next();
   const has = req.cookies.has('meridian_session') || req.cookies.has('__Host-meridian_session');
   if (has) return NextResponse.next();
   const url = req.nextUrl.clone();

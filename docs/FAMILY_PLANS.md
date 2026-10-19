@@ -1,4 +1,4 @@
-# Group plans, family lines and number portability (port-in)
+# Group plans, family lines and number porting (port-in)
 
 ## Group plans in the catalog
 
@@ -25,13 +25,13 @@ A group normally comes from one of two moments (A and B below). Staff can also m
 
 In the data model: `service_groups` is the customer group (linked to the account, with the plan, limit and origin `CHECKOUT` / `PLAN_CHANGE` / `MANUAL`), `service_group_members` maps services to it, and the **Principal** member is the family head.
 
-## Number portability into the operator (port-in)
+## Number porting into the operator (port-in)
 
 Any line, on a single plan or a family plan, can bring a number from another operator. The line carries `portIn { donorOperatorId, donorMsisdn, holderName, holderIdType, holderIdNumber, temporaryNumber }`. The donor number starts with the country code and needs no `+`. The donor operator is chosen from a **drop-down**, not typed: the list, with each operator's **operator ID** (its identifier in mobile number portability, MNP), is kept by the super user in **Settings → Back office → Donor operators** (`GET/POST/PATCH/DELETE /api/settings/donor-operators`; sellers read the active ones). A request keeps the operator's name and operator ID as they were when it was raised, and both go to the clearinghouse with it. An operator that was used is switched off rather than deleted. The demo data has five sample operators with placeholder operator IDs: replace them with the real MNP operator IDs of your market.
 
 - **With a temporary number** (the usual choice): the NRM gives the line a Standard number from the pool at once, so it works while the port is processed. The member and the group link to that number first.
 - **Without one**: the service waits `PENDING` (it is already in the group) and starts when the number arrives.
-- A request is raised for the line (Number portability → **Port-in**). It goes to the national clearinghouse. When the donor **approves**, the switch-over runs: the service takes the ported number, the network is told to swap it (`MSISDN_SWAP`, or `ACTIVATE_PORTED_IN` for a line that waited), and the temporary number goes to rest. The service id never changes, so the plan, the group, its shared quota, discounts, contract and billing carry on untouched.
+- A request is raised for the line (Number porting → **Port-in**). It goes to the national clearinghouse. When the donor **approves**, the switch-over runs: the service takes the ported number, the network is told to swap it (`MSISDN_SWAP`, or `ACTIVATE_PORTED_IN` for a line that waited), and the temporary number goes to rest. The service id never changes, so the plan, the group, its shared quota, discounts, contract and billing carry on untouched.
 - **Refused**: a line with a temporary number keeps it as its own number; a waiting line stays pending for staff to decide. **No answer** within the days set in Settings → Numbers & SIMs (default 14): the request expires the same way. A request can also be cancelled.
 - A number can have only one live request, and a number that is one of ours or already in service cannot be ported in.
 

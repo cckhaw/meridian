@@ -20,10 +20,10 @@ function Finish() {
     if (q.get('error')) { setError(q.get('error_description') || 'The sign-in provider refused the sign-in.'); return; }
     if (!code || !state) { setError('This page is only for returning from your company sign-in.'); return; }
     post('/auth/sso/callback', { code, state })
-      .then(async () => {
+      .then(async (r) => {
         await refresh();
-        let next = '/';
-        try { next = sessionStorage.getItem('sso-next') || '/'; sessionStorage.removeItem('sso-next'); } catch { /* private mode */ }
+        let next = r?.user?.home ?? '/';
+        try { next = sessionStorage.getItem('sso-next') || next; sessionStorage.removeItem('sso-next'); } catch { /* private mode */ }
         router.replace(next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/');
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : 'Sign-in failed. Please try again.'));

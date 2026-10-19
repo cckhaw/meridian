@@ -85,7 +85,7 @@ Accounts that sign in through a provider or a directory cannot use "forgot passw
 ## Fraud desk and blacklist
 
 - **Alerts** (`/fraud`, permission `fraud:read`/`fraud:manage`): the SIM-swap scan raises a HIGH alert for a service swapped twice or more in 30 days, or swapped soon after its number or owner changed. A usage feed (or an analyst) raises `USAGE_SPIKE` alerts through `POST /fraud/alerts`. One open alert per dedupe key, so re-running the scan never duplicates. Confirm or dismiss records who, when and a note, and is audited.
-- **Hard bar** (`fraud:bar`): `POST /fraud/services/:id/bar` suspends the service with the FRAUD restriction (hard bar, calls/SMS/data both ways). Only `POST …/release` with a reason lifts it; dunning and customer self-service cannot. Both are audited as security events.
+- **Hard bar** (`fraud:bar`): `POST /fraud/services/:id/bar` suspends the service with the FRAUD restriction (hard bar, calls/SMS/data both ways). It is lifted by `POST …/release` with a reason (the fraud analyst, `fraud:bar`), or by the generic Resume action on the service, which any staff role with `service:manage` can use (the call-centre agent and supervisor, customer service, and the retail assistant and manager roles by default); dunning and customer self-service cannot. Both are audited as security events.
 - **Blacklist**: ID documents, mobile numbers, SIMs, devices and e-mail addresses. Only a keyed hash (same pepper as the ID hash, `MERIDIAN_ID_PEPPER`) and a 3-character hint are stored, so entries cannot be read back. A match refuses customer creation, orders and SIM swaps with a neutral message that does not say which value matched.
 
 ## Store desk

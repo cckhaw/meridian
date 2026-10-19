@@ -174,7 +174,7 @@ function ManageGroup({ id, accountId, canManage, onClose }: { id: string; accoun
  * single plan has to be chosen for it. The other lines keep their plan unless another is chosen.
  */
 function DissolveGroup({ group, onClose, onDone }: { group: any; onClose: () => void; onDone: () => void }) {
-  const plans = useApi<{ items: any[] }>('/catalog?limit=50&status=ACTIVE&kind=SIM_ONLY');
+  const plans = useApi<{ items: any[] }>('/catalog?limit=50&status=ACTIVE&forSale=1&kind=SIM_ONLY');
   const singles = (plans.data?.items ?? []).filter((o) => !o.group?.isGroupOffer);
   const members: any[] = group.members;
   // A line on the group plan has no single plan to fall back on, so one must be chosen for it; every other line defaults to keeping its own plan.

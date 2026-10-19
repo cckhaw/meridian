@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { isPublicPath } from '@/lib/public-paths';
 import { SettingsProvider, useBrand, type ClientPresentation } from './settings-provider';
 
-const PUBLIC = ['/login', '/pay/done', '/forgot-password', '/reset-password'];
 
 export function Providers({ children, presentation }: { children: ReactNode; presentation: ClientPresentation }) {
   return <SettingsProvider value={presentation}><ThemeProvider><AuthProvider><Gate>{children}</Gate></AuthProvider></ThemeProvider></SettingsProvider>;
@@ -18,7 +18,7 @@ function Gate({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { me, loading, signOut } = useAuth();
   const brand = useBrand();
-  const isPublic = PUBLIC.includes(pathname);
+  const isPublic = isPublicPath(pathname);
 
   useEffect(() => {
     if (loading || isPublic) return;

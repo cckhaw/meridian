@@ -1,7 +1,7 @@
 import { enqueueOcs } from './ocs.js';
 import { behaviourOf, type OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
-import { getOffer, monthlyFee } from './catalog.js';
+import { assertAncestorsLive, getOffer, monthlyFee } from './catalog.js';
 import type { Db, Queryable, Row } from './db.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { addGroupMember, createGroup, dissolveGroup, getGroup, groupPlanTerms } from './groups.js';
@@ -164,6 +164,7 @@ export async function upgradeToGroupOffer(db: Db, actor: string, serviceId: stri
     if (await (async () => (await q.query('SELECT 1 FROM service_group_members WHERE service_id=$1', [serviceId])).rows.length > 0)()) throw rejected('This line is already in a group.');
     const offer = await getOffer(q, offerId);
     if (offer.status !== 'ACTIVE') throw rejected(`${offer.name} is not on sale.`);
+    await assertAncestorsLive(q, [offer]);
     if (!isGroupPlan(offer)) throw rejected(`${offer.name} is not a group plan.`);
     if (offer.id === s.offerId) throw rejected('This line is already on that plan.');
     const cust = (await q.query('SELECT display_name, market_code FROM customers WHERE id=$1', [s.customerId])).rows[0];
@@ -203,6 +204,7 @@ export async function dissolveToSingles(db: Db, actor: string, groupId: string, 
       if (!target || (target === current.id && !tied)) continue;
       const offer = await getOffer(q, target);
       if (offer.status !== 'ACTIVE') throw rejected(`${offer.name} is not on sale.`);
+      await assertAncestorsLive(q, [offer]);
       if (isGroupPlan(offer) || (tied && target === current.id)) throw rejected(`${offer.name} only exists with the group. Choose a single-line plan for ${m.identifier}.`);
       const b = behaviourOf(offer);
       if (b.role !== 'PLAN' || b.goods || (b.service ?? 'MOBILE') !== String(m.type)) throw rejected(`${offer.name} is not a ${String(m.type).toLowerCase()} plan that ${m.identifier} can move to.`);

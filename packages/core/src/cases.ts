@@ -1,4 +1,5 @@
 import { audit } from './audit.js';
+import { notifyUser } from './user-notifications.js';
 import { maybeLinkToIncident, resolveIncidentChildren } from './case-incidents.js';
 import { pendingRefundCount } from './case-refunds.js';
 import { cancelVisitsOfCases } from './workforce.js';
@@ -181,6 +182,7 @@ export async function transitionCase(q: Queryable, id: string, to: CaseStatus, o
   if (text && to !== 'RESOLVED') await q.query(`UPDATE cases SET notes = notes || $2::jsonb WHERE id=$1`, [id, JSON.stringify([{ at: now.toISOString(), by: actor, text }])]);
   await caseLog(q, id, actor, 'STATUS', { from, to, detail: { ...(o.resolution ? { resolution: o.resolution } : {}), ...(text ? { note: text } : {}), ...(o.system ? { system: true } : {}) } });
   await audit(q, actor, 'case', id, 'STATUS', { from, to });
+  if (c.assignee && c.assignee !== actor && !o.system) await notifyUser(q, { username: c.assignee }, 'caseUpdates', { title: `Case ${c.number} is now ${to.replace(/_/g, ' ').toLowerCase()}`, body: `${c.subject ?? 'A case'} was moved from ${from.replace(/_/g, ' ').toLowerCase()} to ${to.replace(/_/g, ' ').toLowerCase()} by ${actor}.`, link: `/cases/${id}` });
   if (to === 'RESOLVED' && c.isMaster) {
     const kids = await resolveIncidentChildren(q, c, (o.resolution ?? o.note ?? '').trim(), settings.autoCloseHours);
     if (kids.length) {
@@ -200,6 +202,7 @@ export async function assignCase(q: Queryable, id: string, a: { assignee: string
   if (a.assignee && a.assignee !== actor && !(await q.query('SELECT 1 FROM users WHERE username=$1', [a.assignee])).rows.length) throw invalid(`There is no user ${a.assignee}.`);
   await q.query(`UPDATE cases SET assignee=$2, team=COALESCE($3, team), updated_at=now() WHERE id=$1`, [id, a.assignee, a.team ?? null]);
   await caseLog(q, id, actor, 'ASSIGNED', { detail: { from: c.assignee, to: a.assignee, team: a.team ?? c.team } });
+  if (a.assignee && a.assignee !== actor && a.assignee !== c.assignee) await notifyUser(q, { username: a.assignee }, 'caseAssigned', { title: `Case ${c.number} assigned to you`, body: `${c.subject ?? 'A case'} (${actor} assigned it to you).`, link: `/cases/${id}` });
   return getCase(q, id);
 }
 

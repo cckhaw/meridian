@@ -150,4 +150,14 @@ export async function auditLog(q: Queryable, f: { entity?: string; entityId?: st
   const rows = (await q.query(`SELECT * FROM audit_log ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${p(limit + 1)}`, params)).rows;
   return toPage(rows, limit, (r) => [r.id as number]);
 }
+/** The record types that have at least one audit entry, for the filter on the audit screen. Walks the (entity, …) index one type at a time instead of reading the whole log. */
+export async function auditEntityTypes(q: Queryable): Promise<string[]> {
+  const rows = (await q.query(
+    `WITH RECURSIVE t AS (
+       (SELECT entity FROM audit_log ORDER BY entity LIMIT 1)
+       UNION ALL
+       SELECT (SELECT entity FROM audit_log WHERE entity > t.entity ORDER BY entity LIMIT 1) FROM t WHERE t.entity IS NOT NULL
+     ) SELECT entity FROM t WHERE entity IS NOT NULL`)).rows;
+  return rows.map((r) => r.entity as string);
+}
 export { today };

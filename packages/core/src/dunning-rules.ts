@@ -1,6 +1,7 @@
 import { audit } from './audit.js';
 import type { Queryable, Row } from './db.js';
 import { conflict, invalid, notFound } from './errors.js';
+import { DUNNING_LIMITS, getDunningLimitSettings } from './dunning-limits.js';
 import { QR_SCHEMES, type QrScheme } from './emv-qr.js';
 
 /**
@@ -120,10 +121,13 @@ export function lateFeeAmount(f: Pick<LateFeeConfig, 'mode' | 'flatMinor' | 'per
 }
 
 // ───────────────────────── validating and saving a rule ─────────────────────────
-export async function dunningRuleProblems(q: Queryable, r: Pick<DunningRuleInput, 'name' | 'market' | 'segments' | 'partial' | 'steps' | 'priority' | 'customerKind' | 'vip' | 'creditRisk'> & { code?: string }): Promise<string[]> {
+export async function dunningRuleProblems(q: Queryable, r: Pick<DunningRuleInput, 'name' | 'market' | 'segments' | 'partial' | 'steps' | 'priority' | 'customerKind' | 'vip' | 'creditRisk'> & { code?: string; description?: string }): Promise<string[]> {
   const p: string[] = [];
-  if (!r.name?.trim() || r.name.length > 80) p.push('Give the rule a name of 1–80 characters.');
-  if (!Number.isInteger(r.priority) || r.priority < 0 || r.priority > 1000) p.push('Priority is a whole number from 0 to 1000.');
+  // Limits: the fixed ones and the two the operator sets (dunning-limits.ts). A rule saved earlier may be over a limit lowered since; it loads and shows as before, and saving it asks for the fix.
+  const L = DUNNING_LIMITS, { maxSteps, maxPriority } = await getDunningLimitSettings(q);
+  if (!r.name?.trim() || r.name.length > L.nameMax) p.push(`Give the rule a name of 1–${L.nameMax} characters.`);
+  if ((r.description ?? '').length > L.descriptionMax) p.push(`The description is at most ${L.descriptionMax} characters.`);
+  if (!Number.isInteger(r.priority) || r.priority < L.priorityMin || r.priority > maxPriority) p.push(`Priority is a whole number from ${L.priorityMin} to ${maxPriority}${Number.isInteger(r.priority) && r.priority > maxPriority ? ` (this rule has ${r.priority}; the highest allowed is set in Settings → Dunning rules → Limits)` : ''}.`);
   if (r.market !== null && !/^[A-Z]{2}$/.test(r.market)) p.push('The market is a 2-letter country code, or left empty for every market.');
   if (!['ANY', 'INDIVIDUAL', 'BUSINESS'].includes(r.customerKind)) p.push('Customer kind is any, individual or business.');
   if (!['ANY', 'YES', 'NO'].includes(r.vip)) p.push('VIP is any, yes or no.');
@@ -134,39 +138,40 @@ export async function dunningRuleProblems(q: Queryable, r: Pick<DunningRuleInput
   }
   if (r.partial) {
     const x = r.partial;
-    if (!(x.thresholdPercent >= 1 && x.thresholdPercent <= 100)) p.push('The partial-payment threshold is a percentage from 1 to 100.');
+    if (!(x.thresholdPercent >= L.partialThresholdMin && x.thresholdPercent <= L.partialThresholdMax)) p.push(`The partial-payment threshold is a percentage from ${L.partialThresholdMin} to ${L.partialThresholdMax}.`);
     if (!['RESET_TO_SOFT_BAR', 'PAUSE'].includes(x.action)) p.push('A partial payment resets to a soft bar, or pauses the ladder.');
-    if (!Number.isInteger(x.pauseDays) || x.pauseDays < 1 || x.pauseDays > 60) p.push('The pause is 1 to 60 days.');
+    if (!Number.isInteger(x.pauseDays) || x.pauseDays < L.pauseDaysMin || x.pauseDays > L.pauseDaysMax) p.push(`The pause is ${L.pauseDaysMin} to ${L.pauseDaysMax} days.`);
   }
   const steps = r.steps;
   if (!steps.length) p.push('The ladder needs at least one step.');
-  if (steps.length > 30) p.push('A ladder has at most 30 steps.');
+  if (steps.length > maxSteps) p.push(`A ladder has at most ${maxSteps} steps; this one has ${steps.length}. Remove ${steps.length - maxSteps}, or raise the limit in Settings → Dunning rules → Limits.`);
   const fees = new Map((await listLateFees(q)).map((f) => [f.id, f]));
   const ids = new Set<string>();
   let lastDays = -1, topBar = 0;
   const live = steps.filter((s) => s.enabled);
   steps.forEach((s, i) => {
     const at = `Step ${i + 1} (${s.name?.trim() || s.action})`;
-    if (!s.name?.trim() || s.name.length > 80) p.push(`${at}: give it a name of up to 80 characters.`);
+    if (!s.name?.trim() || s.name.length > L.stepNameMax) p.push(`${at}: give it a name of up to ${L.stepNameMax} characters.`);
     if (!(DUNNING_STEP_ACTIONS as readonly string[]).includes(s.action)) { p.push(`${at}: unknown action ${s.action}.`); return; }
     if (s.id) { if (ids.has(s.id)) p.push(`${at}: appears twice.`); ids.add(s.id); }
     const t = s.trigger;
-    if (t.kind === 'DAYS_PAST_DUE') { if (!Number.isInteger(t.days) || t.days < 0 || t.days > 365) p.push(`${at}: the day is a whole number from 0 to 365.`); }
+    if (t.kind === 'DAYS_PAST_DUE') { if (!Number.isInteger(t.days) || t.days < 0 || t.days > L.dayMax) p.push(`${at}: the day is a whole number from 0 to ${L.dayMax}.`); }
     else if (t.kind === 'BALANCE') {
       if (!Number.isInteger(t.balanceMinor) || t.balanceMinor <= 0) p.push(`${at}: the balance threshold is a positive amount.`);
-      if (!Number.isInteger(t.minDays) || t.minDays < 0 || t.minDays > 365) p.push(`${at}: the minimum days past due is 0 to 365.`);
+      if (!Number.isInteger(t.minDays) || t.minDays < 0 || t.minDays > L.dayMax) p.push(`${at}: the minimum days past due is 0 to ${L.dayMax}.`);
     } else p.push(`${at}: the trigger is days past due, or an overdue balance.`);
     if (s.action === 'NOTIFY') {
       if (!s.params.channels?.length || s.params.channels.some((c) => !(DUNNING_CHANNELS as readonly string[]).includes(c))) p.push(`${at}: choose at least one channel (${DUNNING_CHANNELS.join(', ')}).`);
       if (s.params.template && !(DUNNING_TEMPLATE_KEYS as readonly string[]).includes(s.params.template)) p.push(`${at}: unknown message template.`);
       if (!s.params.template && !(s.params.message ?? '').trim()) p.push(`${at}: choose a message template or write the message.`);
-      if ((s.params.message ?? '').length > 1000) p.push(`${at}: the message is at most 1,000 characters.`);
+      if ((s.params.message ?? '').length > L.messageMax) p.push(`${at}: the message is at most ${L.messageMax.toLocaleString('en-US')} characters.`);
       if (s.params.qrScheme && !(QR_SCHEMES as readonly string[]).includes(s.params.qrScheme)) p.push(`${at}: unknown QR scheme.`);
     }
     if (s.action === 'LATE_FEE') { const f = s.params.lateFeeId ? fees.get(s.params.lateFeeId) : null; if (!f) p.push(`${at}: choose a late fee.`); else if (!f.active) p.push(`${at}: the late fee “${f.name}” is switched off.`); }
     if (s.action === 'CASE_TASK') {
-      if (s.params.dueHours !== undefined && (!Number.isInteger(s.params.dueHours) || s.params.dueHours < 1 || s.params.dueHours > 24 * 60)) p.push(`${at}: the task is due in 1 to 1,440 hours.`);
-      if (s.params.waitDays !== undefined && (!Number.isInteger(s.params.waitDays) || s.params.waitDays < 1 || s.params.waitDays > 90)) p.push(`${at}: wait 1 to 90 days for the task.`);
+      if ((s.params.team ?? '').length > L.teamMax) p.push(`${at}: the team name is at most ${L.teamMax} characters.`);
+      if (s.params.dueHours !== undefined && (!Number.isInteger(s.params.dueHours) || s.params.dueHours < 1 || s.params.dueHours > L.dueHoursMax)) p.push(`${at}: the task is due in 1 to ${L.dueHoursMax.toLocaleString('en-US')} hours.`);
+      if (s.params.waitDays !== undefined && (!Number.isInteger(s.params.waitDays) || s.params.waitDays < 1 || s.params.waitDays > L.waitDaysMax)) p.push(`${at}: wait 1 to ${L.waitDaysMax} days for the task.`);
     }
     if (s.action === 'TERMINATE' && s.params.debt && !['WRITE_OFF', 'COLLECTIONS', 'BOTH'].includes(s.params.debt)) p.push(`${at}: the debt is written off, placed with collections, or both.`);
   });
@@ -211,6 +216,17 @@ export async function saveDunningRule(q: Queryable, actor: string, input: Dunnin
   }
   await audit(q, actor, 'dunning_rule', ruleId, id ? 'UPDATE' : 'CREATE', { name: rule.name, steps: rule.steps.length });
   return getDunningRule(q, ruleId);
+}
+
+/**
+ * Switch a rule on or off. Deliberately does not re-check the rule against the limits: a rule that is over a limit lowered since must still be possible to
+ * switch off. (Its version goes up like any other change.)
+ */
+export async function setDunningRuleActive(q: Queryable, actor: string, id: string, active: boolean): Promise<DunningRule> {
+  const r = await getDunningRule(q, id);
+  await q.query('UPDATE dunning_rules SET active=$2, version=version+1, updated_by=$3, updated_at=now() WHERE id=$1', [id, active, actor]);
+  await audit(q, actor, 'dunning_rule', id, 'UPDATE', { name: r.name, active });
+  return getDunningRule(q, id);
 }
 
 export async function deleteDunningRule(q: Queryable, actor: string, id: string) {

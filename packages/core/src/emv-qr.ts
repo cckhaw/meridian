@@ -4,9 +4,22 @@ import { invalid } from './errors.js';
  * Merchant-presented QR payment codes (EMVCo "MPM"), the format under the instant-payment QR schemes of Southeast Asia: SGQR / PayNow (Singapore), PromptPay
  * (Thailand), QRIS (Indonesia), DuitNow QR (Malaysia) and QR Ph (Philippines). A payload is a list of tag-length-value fields ending in a CRC-16. Meridian
  * writes the amount, the currency, the country, the merchant's name and city, the bill reference and the checksum; the part that says WHICH scheme and WHICH
- * merchant account (tags 02–51) is either built here (PromptPay, PayNow) or given by the operator exactly as their acquirer issued it (the other schemes),
+ * merchant account (tags 26–51, see QR_MERCHANT_TAG_MIN) is either built here (PromptPay, PayNow) or given by the operator exactly as their acquirer issued it (the other schemes),
  * because that part is the acquirer's to define. Always scan a sample with the scheme's own app before going live.
  */
+/**
+ * Which tags may carry the merchant account. DECISION: 26 to 51, which is what the label on the Dunning rules screen says.
+ * EMV QR Code Specification for Payment Systems (Merchant-Presented Mode), data objects: 00 payload format indicator, 01 initiation method, 02 to 25 "merchant
+ * account information" reserved for the card networks' own templates (Visa, Mastercard, Discover, Amex, JCB, UnionPay, ...), 26 to 51 "merchant account
+ * information" templates for everything else (domestic and instant-payment schemes), 52 onwards fixed fields (category code, currency, amount, country, name,
+ * city, postal code, additional data, CRC). The code writes 26 (SGQR / PayNow) and 29 (PromptPay) itself, and DuitNow, QRIS and QR Ph use 26 to 51 too; an
+ * acquirer-issued account for these schemes is never below 26. The code used to accept 02 to 51 while the screen said 26 to 51; a tag in 02 to 25 would have
+ * been written into a code the scheme's apps may read as a card-network template, so the server now accepts only 26 to 51, as the screen says.
+ * Tag 52 and above must stay refused: they are the fields written below, and a duplicate would corrupt the code.
+ */
+export const QR_MERCHANT_TAG_MIN = 26;
+export const QR_MERCHANT_TAG_MAX = 51;
+export const isQrMerchantTag = (t: string) => /^\d{2}$/.test(t) && Number(t) >= QR_MERCHANT_TAG_MIN && Number(t) <= QR_MERCHANT_TAG_MAX;
 export const QR_SCHEMES = ['PAYNOW', 'PROMPTPAY', 'QRIS', 'DUITNOW', 'QRPH'] as const;
 export type QrScheme = (typeof QR_SCHEMES)[number];
 export const QR_SCHEME_LABEL: Record<QrScheme, string> = { PAYNOW: 'SGQR / PayNow', PROMPTPAY: 'PromptPay', QRIS: 'QRIS', DUITNOW: 'DuitNow QR', QRPH: 'QR Ph' };
@@ -44,7 +57,7 @@ export function qrMerchantProblem(scheme: QrScheme, m: Partial<QrMerchant> | und
   if (!m) return `${QR_SCHEME_LABEL[scheme]} is not set up.`;
   if (!ascii(m.name ?? '', 25) || !ascii(m.city ?? '', 15)) return 'The merchant name and city are needed.';
   if (m.accounts && Object.keys(m.accounts).length) {
-    for (const [t, v] of Object.entries(m.accounts)) if (!/^(0[2-9]|[1-4]\d|5[01])$/.test(t) || !v || v.length > 99) return `Merchant account field ${t} is not valid (tags 02 to 51, up to 99 characters).`;
+    for (const [t, v] of Object.entries(m.accounts)) if (!isQrMerchantTag(t) || !v || v.length > 99) return `Merchant account field ${t} is not valid (tags ${QR_MERCHANT_TAG_MIN} to ${QR_MERCHANT_TAG_MAX}, up to 99 characters).`;
     return null;
   }
   if (scheme === 'PAYNOW') return /^[A-Z0-9]{9,10}$/i.test(m.uen ?? '') ? null : 'PayNow needs the company’s UEN.';
