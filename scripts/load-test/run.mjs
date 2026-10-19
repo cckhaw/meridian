@@ -20,6 +20,9 @@ const N = Number(args.customers ?? 60);
 const TAG = String(args.tag ?? 'LT');
 const DRY = !!args.dry;
 const KEEP_USERS = !!args['keep-users'];
+const COUNT = (k, d) => Math.max(0, Number(args[k] ?? d));
+const DEALERS = COUNT('dealers', 3), NEW_STORES = COUNT('stores', 0), CALLCENTRE = COUNT('callcentre', 0), TELESALES = COUNT('telesales', 0), BACKOFFICE = COUNT('backoffice', 0);
+const CONC = Math.max(1, COUNT('concurrency', 4));
 
 // ─────────────────────────── small helpers ───────────────────────────
 let seed = Number(args.seed ?? Date.now() % 100000);
@@ -144,14 +147,33 @@ const agent = await staffUser('lt.agent', ['customer-service']);
 
 // ── dealers (for the dealer channel and commissions) ──
 const dealers = [];
-for (const name of [`Metro Mobile Sdn Bhd [${TAG}]`, `Kedai Telefon Maju [${TAG}]`, `Northern Connect [${TAG}]`]) {
+const dealerNames = Array.from({ length: DEALERS }, (_, i) => i < 3 ? [`Metro Mobile Sdn Bhd [${TAG}]`, `Kedai Telefon Maju [${TAG}]`, `Northern Connect [${TAG}]`][i] : `${pick(COMPANIES)} Dealer ${i + 1} [${TAG}]`);
+await pool(dealerNames, CONC, async (name) => {
   const d = await step('dealers', () => admin.call('/dealers', 'POST', { name, contactName: pick(FIRST), email: `${name.split(' ')[0].toLowerCase()}@example.com`.replace(/[^a-z0-9@.]/g, ''), phone: `+6012${between(1000000, 9999999)}` }));
-  if (!d) continue;
+  if (!d) return;
   const agents = [];
   for (let k = 0; k < 2; k++) { const a = await step('dealer agents', () => admin.call(`/dealers/${d.json.id}/agents`, 'POST', { name: `${pick(FIRST)} ${pick(LAST)}`, email: `agent${k}.${d.json.id.slice(0, 4)}@example.com`.toLowerCase() })); if (a) agents.push(a.json.id); }
   dealers.push({ id: d.json.id, agents });
-}
+});
 const stores = ((await admin.call('/stores?limit=20')).json.items ?? []).filter((s) => !s.status || s.status === 'ACTIVE');
+const stocked = stores.map((x) => x.id);   // stores that already hold SIM stock; new stores sell what needs none
+const newStores = [];
+await pool(Array.from({ length: NEW_STORES }, (_, i) => i), CONC, async (i) => {
+  const [city] = pick(CITIES);
+  const st = await step('stores created', () => admin.call('/stores', 'POST', { name: `${pick(['Mall', 'Plaza', 'Central', 'Point', 'Kiosk', 'Hub'])} ${city} ${i + 1} [${TAG}]`, address: `${between(1, 200)} Jalan ${pick(LAST)}, ${city}`, phone: `+603${between(10000000, 99999999)}` }));
+  if (st) { newStores.push(st.json); stores.push(st.json); }
+});
+// staff who work the channels: real accounts with passwords nobody knows (an admin can reset any of them), left active so the lists look lived in
+const bulkStaff = [
+  ...Array.from({ length: CALLCENTRE }, (_, i) => ['lt.cc', i, ['call-center']]),
+  ...Array.from({ length: TELESALES }, (_, i) => ['lt.ts', i, ['telesales']]),
+  ...Array.from({ length: BACKOFFICE }, (_, i) => ['lt.bo', i, [['billing-ops'], ['inventory-ops'], ['customer-service'], ['revenue-assurance']][i % 4]]),
+  ...newStores.map((st, i) => ['lt.st', i, ['retail-store'], st.id]),
+];
+await pool(bulkStaff, CONC, async ([pre, i, roles, storeId]) => {
+  const username = `${pre}${TAG.toLowerCase()}${String(i + 1).padStart(4, '0')}`;
+  await step(`staff: ${roles[0]}`, () => admin.call('/users', 'POST', { username, displayName: `${pick(FIRST)} ${pick(LAST)} [${TAG}]`, roles, password: pw(), ...(storeId ? { storeId } : {}) }));
+});
 
 // ─────────────────────────── customers ───────────────────────────
 const customers = [];
@@ -177,7 +199,7 @@ async function newCustomer(i) {
   customers.push({ id: r.json.customer.id, name, company, kycCase: r.json.kyc?.caseId, kyc: r.json.kyc?.status, accountId: r.json.account?.id ?? null, orders: [], services: [] });
 }
 log(`Creating ${N} customers…`);
-await pool(Array.from({ length: N }, (_, i) => i), 4, newCustomer);
+await pool(Array.from({ length: N }, (_, i) => i), CONC, newCustomer);
 
 // ── identity reviews ──
 log('Reviewing identity checks…');
@@ -205,11 +227,11 @@ function basket(c) {
   return lines;
 }
 const bad = new Set(), retried = new Map();
-async function placeOrder(c, forcedLines) {
+async function placeOrder(c, forcedLines, atStock) {
   const lines = forcedLines ?? basket(c); if (!lines.length) return null;
   const channel = pick(channels);
   const body = { customerId: c.id, ...(c.accountId ? { accountId: c.accountId } : {}), channel, lines, payment: { method: pick(['CASH', 'CASH', 'QR', 'CREDIT_CARD']), reference: `${TAG}-${randomBytes(3).toString('hex')}`, confirmed: true } };
-  if (channel === 'RETAIL_ASSISTED') body.storeId = pick(stores).id;
+  if (channel === 'RETAIL_ASSISTED') body.storeId = atStock ? pick(stocked) : pick(stores).id;
   if (channel === 'DEALER') { const d = pick(dealers); body.dealerId = d.id; if (d.agents.length) body.dealerAgentId = pick(d.agents); }
   const q = (await admin.call('/orders/quote', 'POST', { channel, customerId: c.id, ...(body.accountId ? { accountId: body.accountId } : {}), lines })).json;
   if (q?.needs?.delivery) body.deliveryAddress = `${between(1, 99)} Jalan ${pick(LAST)}, ${pick(CITIES)[0]}`;
@@ -218,6 +240,7 @@ async function placeOrder(c, forcedLines) {
   let last;
   const r = await step('orders placed', async () => (last = await admin.call('/orders', 'POST', body, { 'idempotency-key': randomUUID() })));
   if (r) c.orders.push(r.json.id);
+  else if (!atStock && stocked.length && channel === 'RETAIL_ASSISTED' && /free SIM cards at your store/.test(JSON.stringify(last?.json ?? ''))) return placeOrder(c, lines, true);   // a new store has no SIM cards yet: sell it from a store that does
   else if (/requires/.test(JSON.stringify(last?.json ?? ''))) {   // an offer that cannot be sold alone (e.g. a supplementary line): stop picking it
     for (const l of lines) { bad.add(l.offerId); }
     for (const pool of [plans, devices, fibre, goods]) for (let i = pool.length - 1; i >= 0; i--) if (bad.has(pool[i].id)) pool.splice(i, 1);
@@ -229,7 +252,7 @@ log('Placing orders…');
 const buyers = [...approved, ...waiting.slice(0, Math.ceil(waiting.length / 2))];   // some customers order while their identity is still being reviewed: the order waits
 const jobs = [];
 for (const c of buyers) { const n = c.verified ? between(1, 3) : 1; for (let k = 0; k < n; k++) jobs.push(c); }
-await pool(jobs, 4, (c) => placeOrder(c));
+await pool(jobs, CONC, (c) => placeOrder(c));
 
 // order lifecycle: some cancelled, returns left alone
 const orderIds = customers.flatMap((c) => c.orders.map((id) => ({ id, c })));

@@ -12,10 +12,14 @@ BASE=... ADMIN_USER=... ADMIN_PASS=... node scripts/load-test/run.mjs --customer
 
 Needs Node 20+. If the admin has a second factor, add `ADMIN_OTP=<code>`. Options: `--customers N` (default 60), `--tag LT`, `--seed N` (repeatable run), `--dry` (read-only: checks sign-in and which offers can be sold), `--keep-users`.
 
+Scale options: `--dealers N` (default 3, each with 2 agents), `--stores N` (new stores, each with a store user), `--callcentre N`, `--telesales N`, `--backoffice N` (staff accounts with passwords nobody knows, left active; an admin can reset any), `--concurrency N` (default 4). New stores hold no SIM cards, so retail orders that need a SIM are sold from a store that has stock. Example: `--customers 2000 --dealers 300 --stores 150 --callcentre 100 --telesales 30 --backoffice 15 --concurrency 6` (about an hour). The script drives the live API, so it cannot backdate orders or build months of history.
+
 ## What it does
 
 1. Reads your catalog and keeps only offers that can be quoted for sale (plans, devices, fibre, goods, group plans).
 2. Creates 3 dealers with 2 agents each, and three temporary staff users (`lt.compliance`, `lt.finance`, `lt.agent`) so approvals use different people. They are disabled at the end unless `--keep-users`.
+
+Scale options: `--dealers N` (default 3, each with 2 agents), `--stores N` (new stores, each with a store user), `--callcentre N`, `--telesales N`, `--backoffice N` (staff accounts with passwords nobody knows, left active; an admin can reset any), `--concurrency N` (default 4). New stores hold no SIM cards, so retail orders that need a SIM are sold from a store that has stock. Example: `--customers 2000 --dealers 300 --stores 150 --callcentre 100 --telesales 30 --backoffice 15 --concurrency 6` (about an hour). The script drives the live API, so it cannot backdate orders or build months of history.
 3. Creates customers (about 15% companies) with camera-style ID photos, and runs the KYC queue: most approved, some rejected, some sent back, some left waiting.
 4. Places orders on call centre, telesales, assisted retail and dealer channels, some cancelled.
 5. Changes live services: suspend/resume, voluntary suspension, plan change, move to a group plan, termination; builds family groups.
