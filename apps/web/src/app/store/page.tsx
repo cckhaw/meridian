@@ -19,7 +19,7 @@ export default function StoreDesk() {
       {me && !mine && <div className="mb-4 max-w-xl"><Field label="Store"><StorePicker value={chosen} onChange={setChosen} /></Field></div>}
       {me && !mine && !chosen ? <p className="rounded-card bg-surface px-4 py-8 text-center text-subhead text-label2">Choose a store to see its sales and cash drawer.</p> : (
         <>
-          <div className="mb-4"><Segmented label="Store desk" value={tab} options={[{ value: 'sales', label: 'Sales' }, { value: 'drawer', label: 'Cash drawer' }]} onChange={setTab} /></div>
+          <div className="mb-4 [&>div]:flex [&>div]:w-full [&_button]:flex-1 sm:[&>div]:inline-flex sm:[&>div]:w-auto sm:[&_button]:flex-none"><Segmented label="Store desk" value={tab} options={[{ value: 'sales', label: 'Sales' }, { value: 'drawer', label: 'Cash drawer' }]} onChange={setTab} /></div>
           {tab === 'sales' ? <Sales key={store} store={store} /> : <Drawer key={store} store={store} />}
         </>
       )}
@@ -75,22 +75,24 @@ function Drawer({ store }: { store: string }) {
   return (
     <div className="grid max-w-3xl gap-4">
       {(st.error || act.error) && <Alert>{st.error || act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
-      <div className="max-w-xs"><Field label="Business day"><Input type="date" value={date} max={iso(new Date())} onChange={(e) => setDate(e.target.value)} /></Field></div>
+      <div className="sm:max-w-xs"><Field label="Business day"><Input type="date" value={date} max={iso(new Date())} onChange={(e) => setDate(e.target.value)} /></Field></div>
       {st.loading && !d && <Spinner />}
       {d && (
-        <Card>
-          <div className="grid grid-cols-2 gap-3"><Stat label="Expected in the drawer" value={money(d.expectedMinor, d.currency)} sub="Cash taken less cash refunded" />
+        <>
+          <div className="grid gap-3 sm:grid-cols-2"><Stat label="Expected in the drawer" value={money(d.expectedMinor, d.currency)} sub="Cash taken less cash refunded" />
             {d.closing && <Stat label="Counted" value={money(d.closing.countedMinor, d.currency)} sub={`Closed by ${d.closing.closedBy}, ${dt(d.closing.closedAt)}`} tone={d.closing.varianceMinor === 0 ? 'success' : 'danger'} />}</div>
-          {d.closing ? (
-            <p className="mt-3 text-subhead">{d.closing.varianceMinor === 0 ? 'The count matched.' : <>Difference <b>{money(d.closing.varianceMinor, d.currency)}</b>{d.closing.note ? `: ${d.closing.note}` : ''}</>}</p>
-          ) : (
-            <div className="mt-4 grid gap-3">
-              <Field label="Cash counted"><Input inputMode="decimal" value={counted} onChange={(e) => setCounted(e.target.value)} placeholder={toInput(d.expectedMinor)} /></Field>
-              {variance !== null && variance !== 0 && <><Alert tone="info">{variance < 0 ? 'Short' : 'Over'} by {money(Math.abs(variance), d.currency)}. Add a note to close.</Alert><Field label="Note"><Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} /></Field></>}
-              <div><Button disabled={act.busy || counted === '' || (variance !== 0 && !note.trim())} onClick={async () => { await act.run(() => post(withStore('/store/cash-drawer/close', store), { date, countedMinor: toMinor(counted), note: note || undefined }), 'Day closed'); setCounted(''); setNote(''); }}>Close the day</Button></div>
-            </div>
-          )}
-        </Card>
+          <Card>
+            {d.closing ? (
+              <p className="text-subhead">{d.closing.varianceMinor === 0 ? 'The count matched.' : <>Difference <b>{money(d.closing.varianceMinor, d.currency)}</b>{d.closing.note ? `: ${d.closing.note}` : ''}</>}</p>
+            ) : (
+              <div className="grid gap-3">
+                <Field label="Cash counted"><Input inputMode="decimal" value={counted} onChange={(e) => setCounted(e.target.value)} placeholder={toInput(d.expectedMinor)} /></Field>
+                {variance !== null && variance !== 0 && <><Alert tone="info">{variance < 0 ? 'Short' : 'Over'} by {money(Math.abs(variance), d.currency)}. Add a note to close.</Alert><Field label="Note"><Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} /></Field></>}
+                <div><Button className="w-full sm:w-auto" disabled={act.busy || counted === '' || (variance !== 0 && !note.trim())} onClick={async () => { await act.run(() => post(withStore('/store/cash-drawer/close', store), { date, countedMinor: toMinor(counted), note: note || undefined }), 'Day closed'); setCounted(''); setNote(''); }}>Close the day</Button></div>
+              </div>
+            )}
+          </Card>
+        </>
       )}
       {d?.history?.length > 0 && (
         <TableWrap><thead><tr><Th>Day</Th><Th right>Expected</Th><Th right>Counted</Th><Th right>Difference</Th><Th>Closed by</Th></tr></thead>
