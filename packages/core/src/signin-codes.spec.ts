@@ -77,8 +77,8 @@ describe('resending a sign-in code', () => {
     await expect(sendChallengeCode(db, ch.token, 'SMS')).rejects.toThrow(/locked/);
     await db.query(`UPDATE users SET locked_until = NULL WHERE id=$1`, [u.id]);
     await db.query(`UPDATE mfa_challenges SET expires_at = now() - interval '1 minute' WHERE user_id=$1`, [u.id]);
-    const expired = await sendChallengeCode(db, ch.token, 'SMS').catch((e) => e as Error);
-    const unknown = await sendChallengeCode(db, 'x'.repeat(43), 'SMS').catch((e) => e as Error);
+    const expired = (await sendChallengeCode(db, ch.token, 'SMS').catch((e) => e)) as Error;
+    const unknown = (await sendChallengeCode(db, 'x'.repeat(43), 'SMS').catch((e) => e)) as Error;
     expect(expired.message).toBe('This sign-in has expired. Sign in again.');
     expect(unknown.message).toBe(expired.message);
   });
