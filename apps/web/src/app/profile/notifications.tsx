@@ -6,7 +6,7 @@ import { api, post, useAction, useApi } from '@/lib/api';
 import type { Profile } from './page';
 
 type Channel = keyof Profile['notificationPrefs']['channels'];
-interface ChannelStatus { sms: { available: boolean; via: 'SMS' | 'WHATSAPP' | null }; email: { available: boolean; note: string } }
+interface ChannelStatus { sms: { available: boolean; via: 'SMS' | 'WHATSAPP' | null }; email: { available: boolean; via: string | null; note: string } }
 const EVENTS: Array<[keyof Profile['notificationPrefs']['events'], string, string]> = [
   ['caseAssigned', 'A case is assigned to me', 'When someone else gives you a case. Not sent when you take a case yourself.'],
   ['caseUpdates', 'Updates on my cases', 'When someone else moves a case that is assigned to you to another status. Replies and SLA warnings are not sent here.'],
@@ -18,7 +18,7 @@ function channelRows(p: Profile, st: ChannelStatus | null): Array<[Channel, stri
   const sms = !st ? 'Checking whether an SMS gateway is set up…' : st.sms.available
     ? `Short text to your mobile number, through the ${st.sms.via === 'WHATSAPP' ? 'WhatsApp' : 'SMS'} gateway your administrator set up.`
     : 'Not available: no SMS or WhatsApp gateway is set up, so nothing is sent by SMS. Ask your administrator to add one under Settings, Integration hub.';
-  const email = !st ? 'Checking…' : 'Placed in the notification outbox for your address. Meridian does not send e-mail itself: it goes out only if your administrator has connected an e-mail sender to the outbox.';
+  const email = !st ? 'Checking whether an e-mail sender is set up…' : st.email.note;
   return [
     ['email', 'E-mail', email, p.email ? null : 'You have no e-mail address on your profile, so nothing can be sent.'],
     ['sms', 'SMS', sms, st?.sms.available && !p.phone ? 'You have no mobile number on your profile, so nothing can be sent.' : null],

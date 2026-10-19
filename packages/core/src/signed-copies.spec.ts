@@ -5,7 +5,7 @@ import { saveHubEndpoint } from './integration-hub.js';
 import { placeOrder } from './orders.js';
 import { setOtpHttp } from './otp-gateway.js';
 import { setSecurityPolicy, getSecurityPolicy } from './security-policy.js';
-import { deliverSignedCopies, NO_GATEWAY, retryFailedSignedCopies, signedCopyStatus } from './signed-copies.js';
+import { deliverSignedCopies, NO_SENDER, retryFailedSignedCopies, signedCopyStatus } from './signed-copies.js';
 import { freshDb, newCustomer, signatureDataUrl } from './test-helpers.js';
 
 let db: Db;
@@ -26,11 +26,11 @@ describe('signed agreement delivery through the messaging gateway', () => {
   it('stays queued, untouched, while no gateway is configured, and the status says so', async () => {
     const { o } = await signedOrder();
     const r = await deliverSignedCopies(db);
-    expect(r).toMatchObject({ sent: 0, failed: 0, reason: NO_GATEWAY });
+    expect(r).toMatchObject({ sent: 0, failed: 0, reason: NO_SENDER });
     expect(r.waiting).toBeGreaterThan(0);
     expect(await row(o.id)).toMatchObject({ attempts: 0, deliveredAt: null, failedAt: null });
     expect(calls).toHaveLength(0);
-    expect(await signedCopyStatus(db)).toMatchObject({ gateway: { configured: false }, blocked: NO_GATEWAY });
+    expect(await signedCopyStatus(db)).toMatchObject({ gateway: { configured: false }, blocked: NO_SENDER });
   });
   it('waits for the public address when a link cannot be built, then sends one message per copy with a time-limited link', async () => {
     await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'OTP_GATEWAY', name: 'WA', url: 'https://sms.example.com/send', secret: 'tok', config: { deliver: 'WHATSAPP', templateIds: { CONTRACT: 'tpl_contract' } } });
@@ -71,7 +71,7 @@ describe('signed agreement delivery through the messaging gateway', () => {
     expect((await deliverSignedCopies(db)).sent).toBeGreaterThanOrEqual(1);
     expect((await row(o.id)).deliveredAt).not.toBeNull();
   });
-  it('marks the row failed at once when the customer has no mobile number', async () => {
+  it('marks the row failed at once when the customer has no mobile number and no e-mail sender can reach them', async () => {
     const { o } = await signedOrder(null);
     await deliverSignedCopies(db);
     expect(await row(o.id)).toMatchObject({ failedAt: expect.anything(), lastError: expect.stringMatching(/no mobile number/) });

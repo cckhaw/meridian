@@ -5,7 +5,7 @@
 | Group | Sections | Think of it as |
 |---|---|---|
 | Start here | Overview | What works, what needs setup, what is failing |
-| Systems Meridian connects to | Network, numbers and charging · Payments and finance · Identity, credit and collections · Field service and logistics · Customer messaging | Meridian calls them. Each system is one card: status, what it is for, what to provide, and its address and credentials (*Connection details*) together |
+| Systems Meridian connects to | Network, numbers and charging · Payments and finance · Identity, credit and collections · Field service and logistics · Sign-in and identity · Messaging | Meridian calls them. Each system is one card: status, what it is for, what to provide, and its address and credentials (*Connection details*) together |
 | Channels and partners | Online store-front · API access · Inbound callbacks | They call Meridian: the shop, apps and partners with OAuth clients or API keys, and callbacks from payment providers and couriers |
 | Events Meridian shares | Webhooks · Event streams and subscriptions · Delivery queue | Meridian tells others what happened |
 | Platform | Platform and keys | The database, workflow engine, scheduler, outbox and the keys that protect data |
@@ -45,9 +45,13 @@ Charging-system (OCS) provisioning has its own guide: [OCS.md](OCS.md).
 
 “Connected” for an outbox integration is inferred, not proven: it means at least one instruction was acknowledged. Delivery health beyond that is the connector's to report.
 
-## The messaging gateway
+## Messaging: the SMS / WhatsApp gateway and the e-mail sender
 
-There is one messaging endpoint: *Sign-in and identity → SMS / WhatsApp gateway* (kind `OTP_GATEWAY`). Meridian posts JSON to it (`to`, `channel`, `text`, `templateId`, `senderId`, `variables`, `reference`; bearer token) for:
+Integration → **Messaging** holds Meridian's two sending endpoints. Both live in the hub's `auth` group, are saved through the same endpoint API, keep their secret encrypted and write-only (the screen shows *Secret set*, never the value), and are never exported by the migration module. Neither is a vendor integration: you give each one the address and credentials of whatever provider you use.
+
+### SMS / WhatsApp gateway (kind `OTP_GATEWAY`)
+
+Meridian posts JSON to it (`to`, `channel`, `text`, `templateId`, `senderId`, `variables`, `reference`; bearer token) for:
 
 | What | Template id | When it is sent |
 | --- | --- | --- |
@@ -55,7 +59,29 @@ There is one messaging endpoint: *Sign-in and identity → SMS / WhatsApp gatewa
 | Staff alerts that the person ticked SMS for in My profile → Notifications | `ALERT` | At once, waiting a few seconds at most; otherwise by the heartbeat |
 | Signed agreement copies for customers (one message per copy, with a secure 15-minute link) | `CONTRACT` | By the heartbeat, the hourly sweep or `POST /api/jobs/deliver-notifications` |
 
-Alerts and signed copies are retried after 1, 5, 15, 60 and 240 minutes, then marked failed with the reason (`lifecycle_outbox.attempts`, `last_error`, `failed_at`). With no enabled gateway nothing is sent by text message: staff SMS alerts are not queued (the Notifications tab says so), and signed copies stay queued until a gateway is set up (Settings → Documents says so). The gateway carries text only, so documents are never attached, and it does not carry e-mail: e-mail alerts are written to the notification outbox for the connector that sends e-mail at your site.
+With no enabled gateway nothing is sent by text message: staff SMS alerts are not queued (the Notifications tab says so), and signed copies go by e-mail if the customer has an address and a sender is set up, otherwise stay queued (Settings → Documents says so). The gateway carries text only, so documents are never attached. It does not carry e-mail; that is the sender below.
+
+### E-mail sender (kind `EMAIL_GATEWAY`)
+
+Set up in Integration → Messaging → *E-mail sender*, entirely from fields (no JSON): a name, the **sender name** and **from address**, an optional **reply-to**, a **time limit**, an on/off switch, and a **mode**:
+
+* **HTTPS API**: the provider's address, how the token is sent (a bearer token, a header with a name you choose, or none), the token (the endpoint's secret) and the **request body** as JSON with placeholders `{{to}}`, `{{subject}}`, `{{text}}`, `{{html}}`, `{{from}}`, `{{fromName}}`, `{{replyTo}}`. Presets fill in a generic JSON provider (token as bearer, token in a header, flat JSON); no vendor and no credential is built in, so adjust the field names to your provider's documentation. Values are put into the parsed JSON, never spliced into text, so nothing in a message can add a field; a field whose whole value is one placeholder with nothing to fill (no reply-to, no HTML) is left out.
+* **SMTP**: host, port, security (STARTTLS required, TLS from the start, or none) and user; the password is the endpoint's secret. Sent with nodemailer. Without encryption is only accepted to this machine itself in production. STARTTLS fails rather than send in the clear.
+* **Simulator**: records the message (last 50, a week at most; shown on the screen) and sends nothing. Messages that carry sign-in codes are recorded in clear, so use it only to try things out.
+
+**Send a test e-mail** (per sender, to an address you type or your own) sends through exactly what is saved, even if the sender is switched off, and shows success or the provider's error; the result also shows in the Integration overview status line. One helper, `sendEmail(db, {to, subject, text, html?})` in `packages/core/src/email-gateway.ts`, is the only code that talks to a provider. It returns `{ ok, error?, retryable }`. Every call has the time limit; redirects are never followed; at most a few kilobytes of the provider's answer are read; the recipient, subject and sender fields must be one line and the recipient a single address (a line break or a second recipient is refused before anything is sent); the token and password are never in an error or a log. Timeouts, connection failures, 408, 425, 429, 5xx and SMTP 4xx are retryable; everything else is permanent. Tests replace the HTTP call with `setEmailHttp`.
+
+What goes through it:
+
+| What | When it is sent |
+| --- | --- |
+| Staff e-mail alerts (My profile → Notifications → E-mail). Short plain text, never codes, links or passwords | At once, waiting a few seconds at most; otherwise by the heartbeat. Retried after 1, 5, 15, 60 and 240 minutes, then marked failed; a bad address fails at once. With no enabled sender the row stays queued untouched and goes out once one is set up |
+| Signed agreement copies (a secure 15-minute link, nothing attached) | When the customer has an address and a sender is on. A customer with both a mobile number and an address is tried on the channel set in Settings → Security policy → E-mail codes (*Signed agreement copies go first by*; default the gateway, then e-mail) and on the other if the first fails; the row records the channel that carried each copy |
+| Sign-in codes by e-mail, and the link or code for password recovery | Only while Settings → Security policy → *Allow sign-in and recovery codes by e-mail* is on **and** a sender is enabled (see SECURITY.md). Sent at once with the sign-in or request; wiped from the outbox once sent |
+
+Without an enabled sender: e-mail alerts wait in the notification outbox, signed copies use the gateway or wait, and e-mail codes are not offered anywhere. The old `"emailCodes": true` setting of the SMS gateway no longer exists; migration 0059 turned a stored `true` into the policy switch (you still have to add the sender).
+
+Alerts and signed copies refused by a channel are retried after 1, 5, 15, 60 and 240 minutes, then marked failed with the reason (`lifecycle_outbox.attempts`, `last_error`, `failed_at`).
 
 ## What is covered
 
@@ -72,7 +98,9 @@ Alerts and signed copies are retried after 1, 5, 15, 60 and 240 minutes, then ma
 | Field service and logistics | Courier and delivery tracking | Courier or last-mile delivery partner | By hand; no connector yet |
 | Field service and logistics | Installation and field service | Field-service or technician scheduling system | By hand; no connector yet |
 | Field service and logistics | Warehouse and stock files | Warehouse management system or supplier stock files | By hand; no connector yet |
-| Customer messaging | SMS, email and push notifications | An SMS gateway and an email service | Outbox: a connector you deploy delivers it |
+| Messaging | SMS / WhatsApp gateway | An SMS or WhatsApp gateway | Built in: Meridian posts to it |
+| Messaging | E-mail sender | An e-mail API, an SMTP server or the simulator | Built in: Meridian sends through it |
+| Messaging | Account notices (reminders, bar and restore) | Your own connector | Outbox: a connector you deploy delivers it |
 | Payments and finance | SAP general ledger export | SAP S/4HANA or ECC (through Integration Suite, an API gateway, or file load) | Built in; needs configuring |
 | Payments and finance | Billing and charging events into the ledger | Rating, charging and billing systems, or an event bus | API: the other system calls Meridian |
 | Payments and finance | Dealer and agent payout files | Your bank (dealer transfers) and payroll (staff) | By hand; no connector yet |

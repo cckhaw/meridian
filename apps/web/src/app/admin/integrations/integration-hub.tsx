@@ -8,7 +8,7 @@ type Tab = 'gateway' | 'webhooks' | 'wfm' | 'network' | 'finance' | 'events' | '
 
 export interface Hub {
   groups: Tab[]; endpointKinds: Record<string, Array<{ kind: string; label: string; hint: string }>>; endpoints: any[]; oauthClients: any[]; apiKeys: any[]; rateLimits: Array<{ channel: string; perMinute: number; enabled: boolean; isDefault: boolean }>;
-  webhooks: any[]; topics: any[]; eventTypes: string[]; channels: string[]; scopes: Array<{ id: string; label: string }>;
+  webhooks: any[]; topics: any[]; emailPresets: Array<{ id: string; label: string; auth: 'BEARER' | 'HEADER'; authHeader: string; bodyTemplate: string }>; eventTypes: string[]; channels: string[]; scopes: Array<{ id: string; label: string }>;
 }
 
 /** The hub's data (credentials, endpoints, webhooks, topics) shared by the Integration sections. */

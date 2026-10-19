@@ -8,7 +8,7 @@ import { useBrand } from '@/components/settings-provider';
 /** Step one of recovery: say who you are. The answer is the same whoever you name, so this cannot be used to find out who has an account. */
 export default function ForgotPassword() {
   const brand = useBrand();
-  const pol = useApi<{ recovery: { enabled: boolean; channel: string } }>('/auth/password-policy');
+  const pol = useApi<{ recovery: { enabled: boolean; channel: string; via?: string[] } }>('/auth/password-policy');
   const [id, setId] = useState('');
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
@@ -31,7 +31,7 @@ export default function ForgotPassword() {
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-4">
-              <Field label="Username or e-mail" hint="We will send a link or a six-digit code to the e-mail or mobile number on your account."><Input autoComplete="username" autoCapitalize="none" required autoFocus value={id} onChange={(e) => setId(e.target.value)} /></Field>
+              <Field label="Username or e-mail" hint={pol.data?.recovery.via && !pol.data.recovery.via.includes('EMAIL') ? 'We will send a six-digit code by text message to the mobile number on your account.' : pol.data?.recovery.via && !pol.data.recovery.via.includes('SMS') ? 'We will send a link or a six-digit code to the e-mail address on your account.' : 'We will send a link or a six-digit code to the e-mail or mobile number on your account.'}><Input autoComplete="username" autoCapitalize="none" required autoFocus value={id} onChange={(e) => setId(e.target.value)} /></Field>
               {error && <Alert>{error}</Alert>}
               <Button type="submit" className="w-full" disabled={busy || !id.trim()}>{busy ? 'Sending…' : 'Send link or code'}</Button>
             </form>

@@ -5,13 +5,14 @@ import { base32Decode, base32Encode, beginOtpMethod, beginTotp, confirmOtpMethod
 import { describeAgent, getProfile, listMySessions, refreshSession, revokeMySession, revokeOtherSessions, updateProfile } from './profile.js';
 import { defaultSecurityPolicy, setSecurityPolicy } from './security-policy.js';
 import { decryptText } from './field-crypto.js';
+import { saveHubEndpoint } from './integration-hub.js';
 import { freshDb } from './test-helpers.js';
 
 const SU = { username: 'root-admin', password: 'Correct-Horse-Battery-9' };
 const PW = 'Sturdy-Pass-Word-1';
 let db: Db;
 let n = 0;
-beforeAll(async () => { db = await freshDb(); });
+beforeAll(async () => { db = await freshDb(); await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'EMAIL_GATEWAY', name: 'Simulated mail', config: { mode: 'SIMULATOR', fromName: 'Meridian', fromAddress: 'noreply@example.com' } }); });
 afterAll(async () => { await db.close(); });
 beforeEach(() => { process.env.MERIDIAN_SUPERUSER_USERNAME = SU.username; process.env.MERIDIAN_SUPERUSER_PASSWORD = SU.password; });
 afterEach(async () => { await db.query('DELETE FROM auth_attempts'); await setSecurityPolicy(db, 't', defaultSecurityPolicy()); });
@@ -74,6 +75,7 @@ describe('setting up and signing in with a second factor', () => {
   });
 
   it('works with a code by SMS or e-mail, sent when asked for', async () => {
+    await setSecurityPolicy(db, 't', { email: { codesEnabled: true } as never });   // e-mail codes need the switch and a sender (the simulator, here)
     const u = await person({ phone: '+6591234567', email: 'p@example.com' });
     await expect(beginOtpMethod(db, { id: u.id, name: 'P', email: null, phone: null }, 'SMS')).rejects.toThrow(/mobile number/);
     const sent = await beginOtpMethod(db, { id: u.id, name: 'P', email: 'p@example.com', phone: '+6591234567' }, 'SMS');

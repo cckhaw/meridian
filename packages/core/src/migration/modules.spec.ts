@@ -12,6 +12,7 @@ beforeAll(async () => {
   // Secrets the archive must never carry, planted where each module keeps them.
   await db.query(`INSERT INTO webhook_subscriptions (id, kind, name, target_url, auth_kind, secret_enc, events, created_by) VALUES (gen_random_uuid(), 'OUTBOUND', 'hook', 'https://example.com/h', 'HMAC', 'ENC-SECRET-WEBHOOK', '{}', 'root')`);
   await db.query(`INSERT INTO integration_endpoints (id, group_key, kind, name, url, config, secret_enc) VALUES (gen_random_uuid(), 'network', 'OCS', 'ocs-1', 'https://ocs.example.com', '{"apiKey":"CONFIG-API-KEY","mode":"live"}', 'ENC-SECRET-ENDPOINT')`);
+  await db.query(`INSERT INTO integration_endpoints (id, group_key, kind, name, url, config, secret_enc) VALUES (gen_random_uuid(), 'auth', 'EMAIL_GATEWAY', 'mail-1', 'https://mail.example.com/send', '{"mode":"SMTP","smtpHost":"smtp.example.com","smtpUser":"SMTP-USER-NAME","fromAddress":"a@example.com"}', 'ENC-SECRET-EMAIL')`);
   await db.query(`INSERT INTO settings (key, value, updated_by) VALUES ('probe', '{"clientSecret":"SETTINGS-SECRET","region":"sg"}', 'root')`);
 });
 afterAll(async () => { await db.close(); });
@@ -27,7 +28,7 @@ const LEFT_OUT: Record<string, string> = {
   sessions: 'live sessions', auth_attempts: 'sign-in throttling', password_history: 'password hashes', password_reset_tokens: 'reset tokens', mfa_challenges: 'one-time challenges', mfa_methods: 'MFA secrets', mfa_recovery_codes: 'recovery code hashes', sso_states: 'in-flight sign-ins', kyc_provider_sessions: 'in-flight MyDigital ID attempts (short-lived, hold encrypted form data)', subscriber_otps: 'one-time codes', directory_sync_runs: 'directory sync log',
   // queues, caches and counters that rebuild themselves
   idempotency_keys: 'request de-duplication', gateway_idempotency_keys: 'request de-duplication', rate_limit_buckets: 'live counters', webhook_events: 'delivery queue', webhook_event_log: 'delivery log', event_deliveries: 'delivery queue', integration_audit_log: 'API call log (very large; ship it to a log store)',
-  user_notifications: 'in-app alerts, short-lived and personal',
+  user_notifications: 'in-app alerts, short-lived and personal', simulated_emails: 'messages the e-mail simulator recorded for trying it out, trimmed after a week; they can carry sign-in codes',
   lifecycle_outbox: 'outbound queue', ocs_jobs: 'provisioning queue', print_jobs: 'print-house queue', ledger_events: 'posting de-duplication', ledger_dead_letters: 'posting failures', order_counters: 'number counters', shard_map: 'deployment topology',
   number_reservation_locks: 'live holds', inventory_reservations: 'live holds', msisdn_quarantine: 'rebuilt from the number pool', identifier_registry: 'rebuilt from services', simulation_ledger: 'scratch what-if data', simulation_runs: 'scratch what-if data',
   bill_run_items: 'per-account results of a run (the invoices are exported)', bill_run_exclusions: 'part of a run', dunning_steps: 'step history of past runs', journal_batch_files: 'journal file contents (checksums are in the batches)', legacy_group_memberships: 'retired table',
@@ -133,7 +134,7 @@ describe('the migration module covers every module', () => {
       const dir = mkdtempSync(join(tmpdir(), 'mod-'));
       writeFileSync(join(dir, 'x.zip'), Buffer.concat(chunks));
       const text = execFileSync('python3', ['-c', 'import zipfile,sys\nz=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None\nprint("\\n".join(z.read(n).decode("utf-8") for n in z.namelist()))', join(dir, 'x.zip')], { maxBuffer: 400 * 1024 * 1024 }).toString();
-      for (const secret of ['ENC-SECRET-WEBHOOK', 'ENC-SECRET-ENDPOINT', 'CONFIG-API-KEY', 'SETTINGS-SECRET']) expect(text, `${format} export leaks ${secret}`).not.toContain(secret);
+      for (const secret of ['ENC-SECRET-WEBHOOK', 'ENC-SECRET-ENDPOINT', 'ENC-SECRET-EMAIL', 'SMTP-USER-NAME', 'CONFIG-API-KEY', 'SETTINGS-SECRET']) expect(text, `${format} export leaks ${secret}`).not.toContain(secret);
       const hashes = (await db.query(`SELECT password_hash AS h FROM users WHERE password_hash IS NOT NULL LIMIT 3`)).rows.map((r) => r.h as string);
       for (const h of hashes) expect(text, 'a password hash is in the export').not.toContain(h);
       expect(text).toContain('(not exported)'); // the secret-looking keys inside settings and endpoint config are replaced, the rest stays

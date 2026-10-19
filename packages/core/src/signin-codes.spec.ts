@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createUser, login, MfaRequired, verifyMfaLogin } from './auth.js';
-import { authEndpointProblem } from './auth-provider-config.js';
+import { setEmailHttp } from './email-gateway.js';
 import type { Db } from './db.js';
 import { saveHubEndpoint } from './integration-hub.js';
 import { beginOtpMethod, challengeRecipient, CODE_RESEND_SECONDS, CODES_PER_SIGN_IN, CodeThrottled, confirmOtpMethod, sendChallengeCode } from './mfa.js';
@@ -14,13 +14,20 @@ const SU = { username: 'root-admin', password: 'Correct-Horse-Battery-9' };
 const PW = 'Sturdy-Pass-Word-1';
 let db: Db; let n = 0;
 beforeAll(async () => { db = await freshDb(); });
-afterAll(async () => { await db.close(); setOtpHttp(null); setOtpRelayHttp(null); });
+afterAll(async () => { await db.close(); setOtpHttp(null); setEmailHttp(null); setOtpRelayHttp(null); });
 beforeEach(() => { process.env.MERIDIAN_SUPERUSER_USERNAME = SU.username; process.env.MERIDIAN_SUPERUSER_PASSWORD = SU.password; });
-afterEach(async () => { await db.query('DELETE FROM auth_attempts'); await setSecurityPolicy(db, 't', defaultSecurityPolicy()); });
+afterEach(async () => { await db.query('DELETE FROM auth_attempts'); await db.query(`DELETE FROM integration_endpoints WHERE kind='EMAIL_GATEWAY'`); await setSecurityPolicy(db, 't', defaultSecurityPolicy()); });
 
+/** An e-mail sender (HTTPS API) and the policy switch, which together make e-mail codes available. */
+const emailOn = async (switchOn = true) => {
+  await db.query(`DELETE FROM integration_endpoints WHERE kind='EMAIL_GATEWAY'`);
+  await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'EMAIL_GATEWAY', name: 'Mail', url: 'https://mail.example.com/send', secret: 'mail-token-123', config: { mode: 'API', fromName: 'Meridian', fromAddress: 'noreply@example.com', auth: 'BEARER', bodyTemplate: '{"to":"{{to}}","subject":"{{subject}}","text":"{{text}}"}' } });
+  await setSecurityPolicy(db, 't', { email: { codesEnabled: switchOn } as never });
+};
 const lastOtp = async () => (await db.query(`SELECT payload FROM lifecycle_outbox WHERE instruction='MFA_OTP' ORDER BY id DESC LIMIT 1`)).rows[0]?.payload;
 /** A person with SMS and e-mail codes set up. */
 async function smsAndEmail() {
+  await emailOn();
   const username = `codes.user${++n}`, phone = '+6591234567', email = `c${n}@example.com`;
   const { user } = await createUser(db, 'admin', { username, displayName: `Codes ${n}`, roles: ['call-center'], email, phone, password: PW });
   await db.query('UPDATE users SET must_change_password=false WHERE id=$1', [user.id]);
@@ -96,23 +103,27 @@ describe('the gateway and sign-in codes', () => {
   let calls: any[] = [];
   beforeEach(() => { calls = []; setOtpHttp(async (_url, init) => { calls.push(JSON.parse(String(init!.body))); return new Response('{}'); }); });
 
-  it('says what the gateway can carry, and carries e-mail codes only when the administrator opted in', async () => {
+  it('carries SMS through the gateway and e-mail through the e-mail sender, and e-mail only while the policy allows it and a sender is on', async () => {
+    const mails: any[] = [];
+    setEmailHttp(async (_url, init) => { mails.push(JSON.parse(String(init!.body))); return new Response('{}'); });
     expect(await otpGatewayStatus(db)).toEqual({ configured: false, sms: false, email: false });
-    expect(authEndpointProblem('OTP_GATEWAY', { url: 'https://g.example.com', config: { emailCodes: 'yes' } })).toMatch(/true or false/);
-    const ep = await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'OTP_GATEWAY', name: 'GW', url: 'https://g.example.com/send', secret: 'tok-123456' });
+    await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'OTP_GATEWAY', name: 'GW', url: 'https://g.example.com/send', secret: 'tok-123456' });
     expect(await otpGatewayStatus(db)).toEqual({ configured: true, sms: true, email: false });
-    const u = await smsAndEmail();
+    const u = await smsAndEmail();                                                            // switches e-mail codes on and adds the sender
+    expect(await otpGatewayStatus(db)).toEqual({ configured: true, sms: true, email: true });
     await db.query(`DELETE FROM lifecycle_outbox WHERE instruction='MFA_OTP'`);              // leftovers of the set-up and of earlier tests
     const ch = await challengeOf(u.username);                                                // an e-mail code is waiting
-    expect(await deliverOtpMessages(db)).toMatchObject({ sent: 0 });
-    expect(calls).toHaveLength(0);
-    await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'OTP_GATEWAY', name: 'GW', url: 'https://g.example.com/send', config: { emailCodes: true } }, ep.id);
-    expect(await otpGatewayStatus(db)).toEqual({ configured: true, sms: true, email: true });
+    expect(ch.method).toBe('EMAIL');
     expect(await deliverOtpMessages(db, 25, { to: 'someone.else@example.com' })).toMatchObject({ sent: 0 });   // only the recipient asked for
     expect(await deliverOtpMessages(db, 25, { to: u.email })).toMatchObject({ sent: 1, failed: 0 });
-    expect(calls[0]).toMatchObject({ to: u.email, channel: 'EMAIL', subject: expect.any(String), variables: { code: expect.stringMatching(/^\d{6}$/) } });
+    expect(calls).toHaveLength(0);                                                           // not through the SMS gateway
+    expect(mails.find((m) => m.subject === 'Your Meridian sign-in code')).toMatchObject({ to: u.email, subject: 'Your Meridian sign-in code', text: expect.stringMatching(/sign-in code is \d{6}/) });
     expect((await lastOtp()).code).toBeUndefined();                                            // not kept once sent
-    expect(ch.method).toBe('EMAIL');
+    await setSecurityPolicy(db, 't', { email: { codesEnabled: false } as never });             // switched off: not offered, not sent
+    expect(await otpGatewayStatus(db)).toMatchObject({ email: false });
+    await expect(sendChallengeCode(db, ch.token, 'EMAIL')).rejects.toThrow(/not set up/);
+    await expect(beginOtpMethod(db, { id: u.id, name: u.name, email: u.email, phone: u.phone }, 'EMAIL')).rejects.toThrow(/not available/);
+    expect((await challengeOf(u.username)).methods).toEqual(['SMS']);
     await db.query(`DELETE FROM integration_endpoints`);
   });
 });

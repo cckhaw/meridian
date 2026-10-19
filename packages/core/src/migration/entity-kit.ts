@@ -34,7 +34,7 @@ const TYPES: Record<string, FieldDef['type']> = { t: 'text', i: 'int', m: 'money
 const camel = (s: string) => s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 const human = (s: string) => { const w = s.replace(/_/g, ' ').replace(/\bid\b/, 'key').replace(/\bminor\b/, '(minor units)').replace(/\bbps\b/, '(basis points)'); return w.charAt(0).toUpperCase() + w.slice(1); };
 /** Keys whose value must never leave the system in a file, wherever they sit in a JSON document. */
-const SECRET_KEY = /secret|password|passphrase|token|credential|private|api_?key|authorization|bearer/i;
+const SECRET_KEY = /secret|password|passphrase|token|credential|private|api_?key|authorization|bearer|smtp_?user/i;
 export function redact(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(redact);
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Rec).map(([k, x]) => [k, SECRET_KEY.test(k) ? (x ? '(not exported)' : x) : redact(x)]));
