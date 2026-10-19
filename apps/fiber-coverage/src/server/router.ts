@@ -2,6 +2,7 @@ import * as core from '@meridian/core';
 import { DomainError, type Db, type SessionUser } from '@meridian/core';
 import * as fiber from '@meridian/fiber';
 import { z, ZodError } from 'zod';
+import { deliverLoginCode, sendable, throttleSends } from './codes';
 import { clearCookie, clientIp, fail, readToken, sameOrigin, sessionCookie, tmfFail } from './http';
 
 /**
@@ -72,7 +73,11 @@ login('POST', '/admin/login', async ({ db, body, req }) => {
     if (!r.user.permissions.has('settings:manage')) { await core.logout(db, r.token); throw new DomainError('FORBIDDEN', 'Your role may not manage fibre coverage.'); }
     return answer(req, r);
   } catch (e) {
-    if (e instanceof core.MfaRequired) return Response.json({ mfaRequired: true, challenge: e.challenge });
+    if (e instanceof core.MfaRequired) {
+      // a code by SMS or e-mail was queued with the challenge: hand it to the gateway now
+      const delivery = e.challenge.sentTo ? await deliverLoginCode(db, e.challenge.token) : undefined;
+      return Response.json({ mfaRequired: true, challenge: e.challenge, canSend: await sendable(db), delivery });
+    }
     if (e instanceof DomainError && e.code === 'REJECTED') return fail(401, 'UNAUTHENTICATED', e.message);
     if (e instanceof core.RateLimited) return fail(429, 'RATE_LIMITED', e.message, { 'retry-after': String(e.retryAfterSeconds) });
     throw e;
@@ -84,7 +89,21 @@ login('POST', '/admin/verify-2fa', async ({ db, body, req }) => {
     const r = await core.verifyMfaLogin(db, { ...b, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
     if (!r.user.permissions.has('settings:manage')) { await core.logout(db, r.token); throw new DomainError('FORBIDDEN', 'Your role may not manage fibre coverage.'); }
     return answer(req, r);
-  } catch (e) { if (e instanceof DomainError && (e.code === 'REJECTED' || e.code === 'UNAUTHENTICATED')) return fail(401, 'UNAUTHENTICATED', e.message); if (e instanceof core.RateLimited) return fail(429, 'RATE_LIMITED', e.message); throw e; }
+  } catch (e) { if (e instanceof DomainError && (e.code === 'REJECTED' || e.code === 'UNAUTHENTICATED')) return fail(401, 'UNAUTHENTICATED', e.message); if (e instanceof core.RateLimited) return fail(429, 'RATE_LIMITED', e.message, { 'retry-after': String(e.retryAfterSeconds) }); throw e; }
+});
+/** "Send me a code" / "send it another way" on the sign-in step: the same throttling as the CRM (30 s per method, 5 per sign-in, 10 per account per hour) plus a limit per address. Answers the same for a challenge that never existed and one that ran out. */
+login('POST', '/admin/2fa/send-code', async ({ db, body, req }) => {
+  const b = z.object({ challenge: z.string().min(20).max(200), method: z.enum(['SMS', 'EMAIL']) }).parse(body);
+  try {
+    await throttleSends(db, clientIp(req));
+    if (!(await sendable(db))[b.method]) return fail(503, 'CODE_DELIVERY_UNAVAILABLE', `Codes by ${b.method === 'SMS' ? 'SMS' : 'e-mail'} cannot be sent from here because no ${b.method === 'SMS' ? 'SMS' : 'e-mail'} gateway is set up. Use your authenticator app or a recovery code, or ask an administrator.`);
+    const r = await core.sendChallengeCode(db, b.challenge, b.method);
+    return { ...r, method: b.method, delivery: await deliverLoginCode(db, b.challenge) };
+  } catch (e) {
+    if (e instanceof core.CodeThrottled) return fail(429, 'RATE_LIMITED', e.message, { 'retry-after': String(e.retryAfterSeconds) });
+    if (e instanceof DomainError && (e.code === 'REJECTED' || e.code === 'UNAUTHENTICATED')) return fail(401, 'UNAUTHENTICATED', e.message);
+    throw e;
+  }
 });
 admin('POST', '/admin/logout', async ({ db, req }) => new Response(JSON.stringify({ ok: true }), (await core.logout(db, readToken(req)), { headers: { 'content-type': 'application/json', 'set-cookie': clearCookie(req) } })));
 admin('GET', '/admin/me', ({ user }) => ({ username: user!.username, displayName: user!.displayName }));

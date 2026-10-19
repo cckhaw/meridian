@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) { super(message); }
+  constructor(public status: number, public code: string, message: string, public retryAfter?: number) { super(message); }
 }
 
 let redirecting = false;
@@ -17,8 +17,8 @@ export async function api<T = any>(path: string, init?: RequestInit & { json?: u
   if (!res.ok) {
     const e = await res.json().catch(() => null);
     const code = e?.error?.code ?? 'ERROR';
-    if (res.status === 401 && code === 'UNAUTHENTICATED' && !path.startsWith('/admin/login') && !path.startsWith('/admin/verify')) toLogin();
-    throw new ApiError(res.status, code, e?.error?.message ?? `Request failed (${res.status})`);
+    if (res.status === 401 && code === 'UNAUTHENTICATED' && !path.startsWith('/admin/login') && !path.startsWith('/admin/verify') && !path.startsWith('/admin/2fa')) toLogin();
+    throw new ApiError(res.status, code, e?.error?.message ?? `Request failed (${res.status})`, Number(res.headers.get('retry-after')) || undefined);
   }
   return res.json();
 }

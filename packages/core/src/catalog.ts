@@ -495,19 +495,19 @@ const LEVEL_WORD: Record<string, string> = { NETWORK_TYPE: 'network type', CATEG
 const STATUS_WORD: Record<string, string> = { RETIRED: 'retired', DRAFT: 'still a draft', SCHEDULED: 'scheduled and not live yet' };
 
 /** For each offer, why it is hidden by a parent ("X is not on sale: its group Y is retired"); offers whose whole chain is live are absent. One query for any number of offers. Reports the node nearest the root. */
-export async function ancestorBlocks(q: Queryable, offers: Array<{ id: string; name: string }>): Promise<Map<string, string>> {
+export async function ancestorBlocks(q: Queryable, offers: ReadonlyArray<{ id: unknown; name: unknown }>): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (!offers.length) return out;
-  const chains = await ancestorsFor(q, offers.map((o) => o.id));
+  const chains = await ancestorsFor(q, offers.map((o) => String(o.id)));
   for (const o of offers) {
-    const bad = (chains.get(o.id) ?? []).find((a) => a.status !== 'ACTIVE');
-    if (bad) out.set(o.id, `${o.name} is not on sale: its ${LEVEL_WORD[bad.level] ?? bad.level.toLowerCase()} ${bad.name} is ${STATUS_WORD[bad.status] ?? bad.status.toLowerCase()}.`);
+    const bad = (chains.get(String(o.id)) ?? []).find((a) => a.status !== 'ACTIVE');
+    if (bad) out.set(String(o.id), `${o.name} is not on sale: its ${LEVEL_WORD[bad.level] ?? bad.level.toLowerCase()} ${bad.name} is ${STATUS_WORD[bad.status] ?? bad.status.toLowerCase()}.`);
   }
   return out;
 }
 
 /** Throws (a business rejection) when any of these offers sits under a node that is not live. The offer's own status is checked by the caller, with its own wording. */
-export async function assertAncestorsLive(q: Queryable, offers: Array<{ id: string; name: string }>): Promise<void> {
+export async function assertAncestorsLive(q: Queryable, offers: ReadonlyArray<{ id: unknown; name: unknown }>): Promise<void> {
   const blocks = await ancestorBlocks(q, offers);
   const first = blocks.values().next();
   if (!first.done) throw rejected(first.value);
