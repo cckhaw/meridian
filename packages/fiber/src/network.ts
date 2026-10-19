@@ -1,5 +1,7 @@
 import { audit, conflict, invalid, notFound, rejected, type Queryable, type Row } from '@meridian/core';
 import { boxOf, circleRing, ll, type AreaGeometry } from './geo.js';
+import { classifyPorts } from './port-level.js';
+import { getFiberSettings } from './settings.js';
 
 export const PORT_STATES = ['AVAILABLE', 'RESERVED_CHECKOUT', 'RESERVED_ORDER', 'IN_USE', 'FAULTY'] as const;
 export type PortState = (typeof PORT_STATES)[number];
@@ -113,9 +115,13 @@ export async function deletePolygon(q: Queryable, actor: string, id: string): Pr
   await audit(q, actor, 'fiber_polygon', id, 'DELETE');
 }
 
-/** Everything the map draws, as one GeoJSON FeatureCollection: DP points (with their port counts), cabinet points, coverage areas, and each DP's reach as a circle. */
+/**
+ * Everything the map draws, as one GeoJSON FeatureCollection: DP points (with their port counts and `level`, by the same rule as the Ports and waitlist page), cabinet points,
+ * coverage areas, and each DP's reach as a circle. `settings` carries the low-port thresholds used, so the map's legend states exactly what coloured the dots.
+ */
 export async function mapFeatures(q: Queryable, f: { providerId?: string; bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number } } = {}) {
   const pv = f.providerId ? [f.providerId] : [];
+  const { lowPortsAbsolute, lowPortsPercent } = await getFiberSettings(q);
   const where = (a: string, extra = '') => `${f.providerId ? `${a}provider_id=$1` : 'TRUE'}${extra}`;
   const dps = (await q.query(`SELECT d.id, d.code, d.name, d.lat, d.lng, d.radius_m, d.splitter_ratio, d.status, pr.code AS provider_code, ${COUNTS}
     FROM fiber_dps d JOIN fiber_providers pr ON pr.id=d.provider_id LEFT JOIN fiber_ports p ON p.dp_id=d.id WHERE ${where('d.')} GROUP BY d.id, pr.code LIMIT 5000`, pv)).rows;
@@ -125,10 +131,10 @@ export async function mapFeatures(q: Queryable, f: { providerId?: string; bbox?:
   for (const g of polys) features.push({ type: 'Feature', geometry: g.geometry, properties: { layer: 'area', id: g.id, name: g.name, kind: g.kind, provider: g.providerCode, capacityStatus: g.capacityStatus, speedTiersMbps: g.speedTiersMbps } });
   for (const d of dps) {
     features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [circleRing(ll(d), d.radiusM)] }, properties: { layer: 'reach', id: d.id, provider: d.providerCode } });
-    features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [d.lng, d.lat] }, properties: { layer: 'dp', id: d.id, code: d.code, name: d.name, provider: d.providerCode, status: d.status, splitter: d.splitterRatio, available: d.available, reserved: d.reservedCheckout + d.reservedOrder, inUse: d.inUse, faulty: d.faulty, total: d.total } });
+    features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [d.lng, d.lat] }, properties: { layer: 'dp', id: d.id, code: d.code, name: d.name, provider: d.providerCode, status: d.status, splitter: d.splitterRatio, available: d.available, reserved: d.reservedCheckout + d.reservedOrder, inUse: d.inUse, faulty: d.faulty, total: d.total, level: classifyPorts({ available: d.available, total: d.total, faulty: d.faulty }, { lowPortsAbsolute, lowPortsPercent }) } });
   }
   for (const c of cabs) features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] }, properties: { layer: 'cabinet', id: c.id, code: c.code, name: c.name, provider: c.providerCode, status: c.status } });
-  return { type: 'FeatureCollection', features };
+  return { type: 'FeatureCollection', features, settings: { lowPortsAbsolute, lowPortsPercent } };
 }
 
 export async function listPolygons(q: Queryable, providerId?: string): Promise<Row[]> {

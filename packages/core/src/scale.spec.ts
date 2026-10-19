@@ -4,7 +4,7 @@ import { createAccount, createCustomer, customerLineage, getAccount, listAccount
 import { customer360 } from './reports.js';
 import { listServices } from './lifecycle.js';
 import { listStock, listStockLocations } from './inventory.js';
-import { auditLog } from './reports.js';
+import { auditEntityTypes, auditLog } from './reports.js';
 import { audit } from './audit.js';
 import { MAX_PAGE } from './paging.js';
 import type { Db } from './db.js';
@@ -117,6 +117,13 @@ describe('services, stock and audit at scale', () => {
     expect(p2.nextCursor).toBeNull();
     expect(new Set([...p1.items, ...p2.items].map((a: any) => a.id)).size).toBe(60);
     expect(p1.items.every((a: any) => a.actor === 'alice')).toBe(true);
+  });
+
+  it('lists each audited record type once, sorted', async () => {
+    await db.query(`INSERT INTO audit_log (actor, entity, entity_id, action) VALUES ('t','kyc_case','x','A'),('t','kyc_case','y','A'),('t','authz','z','A')`);
+    const types = await auditEntityTypes(db);
+    expect(types).toEqual([...new Set(types)].sort());
+    expect(types).toEqual(expect.arrayContaining(['kyc_case', 'authz']));
   });
 });
 

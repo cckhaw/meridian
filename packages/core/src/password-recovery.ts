@@ -5,6 +5,7 @@ import type { Db } from './db.js';
 import { invalid, rejected } from './errors.js';
 import { queueOutbox } from './lifecycle-state.js';
 import { hashPassword, verifyPassword } from './passwords.js';
+import { raiseUserAlert } from './user-notifications.js';
 import { checkPassword, getSecurityPolicy, isReusedPassword, rememberPassword } from './security-policy.js';
 
 /**
@@ -89,5 +90,6 @@ export async function resetPasswordWithToken(db: Db, i: { token?: string; identi
     await revokeUserSessions(q, row!.userId);
     await audit(q, row!.username, 'auth', row!.userId, 'PASSWORD_RESET_DONE', { ip: i.ip });
   });
+  await raiseUserAlert(db, { id: row.userId }, 'securityAlerts', { title: 'Password changed', body: 'Your Meridian password was reset with the recovery link or code and your devices were signed out. If this was not you, contact your administrator at once.', link: '/profile?tab=security' });
   return { ok: true };
 }

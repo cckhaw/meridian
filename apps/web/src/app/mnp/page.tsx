@@ -9,7 +9,7 @@ export default function NumberPortability() {
   const [tab, setTab] = useState<'in' | 'out'>('in');
   return (
     <>
-      <LargeTitle subtitle="Numbers coming in from other operators (port-in) and going out (port-out).">Number portability</LargeTitle>
+      <LargeTitle subtitle="Numbers coming in from other operators (port-in) and going out (port-out).">Number porting</LargeTitle>
       <div className="mb-4"><Segmented label="Direction" value={tab} onChange={setTab} options={[{ value: 'in' as const, label: 'Port-in' }, { value: 'out' as const, label: 'Port-out' }]} /></div>
       {tab === 'in' ? <PortIn /> : <Mnp />}
     </>

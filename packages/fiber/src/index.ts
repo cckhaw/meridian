@@ -6,6 +6,7 @@ export * from './gazetteer.js';
 export * from './adapters.js';
 export * from './serviceability.js';
 export * from './reservations.js';
+export * from './port-level.js';
 export * from './dashboard.js';
 export * from './import.js';
 export * from './tmf645-adapter.js';

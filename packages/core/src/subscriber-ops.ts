@@ -5,7 +5,7 @@ import { behaviourOf, type OfferNode } from '@meridian/types';
 import { audit } from './audit.js';
 import { issueInvoice, type DraftLine } from './billing.js';
 import { resolveService, simulatePlanChange } from './billing-simulation.js';
-import { monthlyFee } from './catalog.js';
+import { assertAncestorsLive, monthlyFee } from './catalog.js';
 import { GL } from './config.js';
 import { addDays, today } from './dates.js';
 import type { Db, Queryable, Row } from './db.js';
@@ -323,6 +323,7 @@ export async function changePlanNorth(db: Db, ref: string, i: NorthPlanChange, a
     const [oldRow, newRow] = await Promise.all([q.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [s.offerId]), q.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [i.targetOfferId])]).then((r) => r.map((x) => x.rows[0]));
     if (!newRow) throw notFound('plan', i.targetOfferId);
     if (newRow.status !== 'ACTIVE') throw rejected(`${newRow.name} is not on sale.`);
+    await assertAncestorsLive(q, [{ id: newRow.id, name: newRow.name }]);
     const oldO = offerNode(oldRow!), newO = offerNode(newRow);
     // compatibility: a plan replaces a plan of the same kind of service, with no device or goods of its own
     const nb = behaviourOf(newO), ob = behaviourOf(oldO);
@@ -336,6 +337,7 @@ export async function changePlanNorth(db: Db, ref: string, i: NorthPlanChange, a
       const ao = (await q.query(`SELECT kind, status, name FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [a])).rows[0];
       if (!ao || ao.kind !== 'VAS') throw invalid(`${a} is not a value-added service.`);
       if (ao.status !== 'ACTIVE') throw rejected(`${ao.name} is not on sale.`);
+      await assertAncestorsLive(q, [{ id: a, name: ao.name }]);
     }
     const sim = await simulatePlanChange(q, s.id, { newOfferId: i.targetOfferId });
     const adjustMinor = i.effective === 'IMMEDIATE' ? (sim.withChange as Row).netMinor - (sim.followingStatement as Row).netMinor : 0;
@@ -365,6 +367,7 @@ export async function previewPlanChangeAgreements(db: Db, ref: string, i: { targ
   const s = (await db.query('SELECT * FROM services WHERE id=$1', [found.id])).rows[0]!;
   const [oldRow, newRow] = await Promise.all([db.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [s.offerId]), db.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [i.targetOfferId])]).then((r) => r.map((x) => x.rows[0] as Row | undefined));
   if (!newRow) throw notFound('plan', i.targetOfferId);
+  await assertAncestorsLive(db, [{ id: newRow.id, name: newRow.name }]);
   const fee = monthlyFee(offerNode(newRow));
   const sim = await simulatePlanChange(db, s.id, { newOfferId: i.targetOfferId });
   const values = await planChangeValues(db, s.customerId as string, { from: (oldRow?.name as string) ?? String(s.offerId), to: newRow.name as string, effectiveDate: i.effective === 'NEXT_BILL_CYCLE' ? (sim.statementDate as string) : today(), monthlyMinor: fee?.amount.amountMinor ?? 0, msisdn: s.identifier as string });
@@ -396,6 +399,7 @@ export async function applyDuePlanChanges(db: Db, asOf: string = today(), actor 
         const s = await lock(q, p.serviceId);
         const newRow = (await q.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [p.offerId])).rows[0];
         if (!newRow || newRow.status !== 'ACTIVE' || s.status === 'TERMINATED' || s.offerId !== p.fromOfferId) throw new Error('the service or the plan changed since it was scheduled');
+        await assertAncestorsLive(q, [{ id: newRow.id, name: newRow.name }]);
         const cfg = await getNorthSettings(q);
         await applyPlanChange(q, s, newRow, p.addOns ?? [], p.createdBy, { prorationMinor: 0, feeMinor: cfg.planChangeFeeMinor, effective: p.effectiveOn.toString().slice(0, 10) });
         await q.query(`UPDATE pending_plan_changes SET status='APPLIED', applied_at=now() WHERE id=$1`, [p.id]);
@@ -423,6 +427,7 @@ async function addVasTx(q: Queryable, parent: Row, vasOfferId: string, actor: st
   const o = (await q.query(`SELECT * FROM catalog_nodes WHERE id=$1 AND level='OFFER'`, [vasOfferId])).rows[0];
   if (!o || o.kind !== 'VAS') throw invalid(`${vasOfferId} is not a value-added service.`);
   if (o.status !== 'ACTIVE') throw rejected(`${o.name} is not on sale.`);
+  await assertAncestorsLive(q, [{ id: o.id, name: o.name }]);
   const dup = (await q.query(`SELECT 1 FROM services WHERE parent_service_id=$1 AND offer_id=$2 AND status <> 'TERMINATED'`, [parent.id, vasOfferId])).rows.length;
   if (dup) throw conflict(`${o.name} is already on this service.`);
   const requires = (o.data?.requires ?? []) as string[];

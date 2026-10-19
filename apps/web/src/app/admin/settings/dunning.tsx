@@ -11,7 +11,11 @@ interface Step { key: string; id?: string; name: string; enabled: boolean; trigg
 interface Partial_ { thresholdPercent: number; action: 'RESET_TO_SOFT_BAR' | 'PAUSE'; pauseDays: number }
 interface Rule { id?: string; code?: string; name: string; description: string; active: boolean; priority: number; market: string | null; customerKind: 'ANY' | 'INDIVIDUAL' | 'BUSINESS'; segments: string[]; vip: 'ANY' | 'YES' | 'NO'; creditRisk: 'ANY' | 'HIGH' | 'NORMAL'; partial: Partial_ | null; version?: number; steps: any[] }
 interface LateFee { id: string; code: string; name: string; mode: 'FLAT' | 'PERCENT'; flatMinor: number; percentBps: number; minMinor: number; maxMinor: number | null; taxable: boolean; active: boolean }
+/** The limits of a rule, sent with the rules (core DUNNING_LIMITS plus the two the operator sets). Every input and hint on this page reads them; none is written here. */
+interface Limits { priorityMin: number; maxPriority: number; maxSteps: number; nameMax: number; descriptionMax: number; stepNameMax: number; messageMax: number; teamMax: number; dayMax: number; dueHoursMax: number; waitDaysMax: number; partialThresholdMin: number; partialThresholdMax: number; pauseDaysMin: number; pauseDaysMax: number; bounds: { maxSteps: { min: number; max: number }; maxPriority: { min: number; max: number } }; defaults: { maxSteps: number; maxPriority: number } }
+interface OverLimit { id: string; name: string; reasons: string[] }
 interface View {
+  limits: Limits; rulesOverLimit: OverLimit[]; qrTags: { min: number; max: number };
   rules: Rule[]; lateFees: LateFee[]; payments: { baseUrl: string; bureau: string; merchants: Record<string, any> };
   templates: Record<string, { label: string; text: string }>; channels: string[]; qrSchemes: Array<{ id: string; label: string }>; seaMarkets: string[];
 }
@@ -95,7 +99,7 @@ export function DunningSettings() {
               <Card className={r.active ? '' : 'opacity-70'}>
                 <div className="flex flex-wrap items-start gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{r.name}</h3><Badge tone={r.active ? 'success' : 'neutral'}>{r.active ? 'On' : 'Off'}</Badge><span className="text-footnote text-label2">Priority {r.priority} · v{r.version}</span></div>
+                    <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{r.name}</h3><Badge tone={r.active ? 'success' : 'neutral'}>{r.active ? 'On' : 'Off'}</Badge><span className="text-footnote text-label2">Priority {r.priority} · v{r.version}</span>{(r.priority > v.limits.maxPriority || r.steps.length > v.limits.maxSteps) && <Badge tone="warning">Over the limits: fix before saving</Badge>}</div>
                     {r.description && <p className="mt-1 text-subhead text-label2">{r.description}</p>}
                     <div className="mt-2 flex flex-wrap gap-1.5">{conditionBadges(r, segs.name).map((c) => <Badge key={c}>{c}</Badge>)}</div>
                     <ol className="mt-3 flex flex-wrap items-center gap-1.5 text-footnote">
@@ -104,7 +108,7 @@ export function DunningSettings() {
                   </div>
                   <div className="flex gap-2">
                     <Button variant="secondary" onClick={() => setEditing({ ...r })}>Edit</Button>
-                    <Button variant="secondary" disabled={act.busy} onClick={() => void act.run(() => patch(`/settings/dunning-rules/${r.id}`, { ...r, active: !r.active }))}>{r.active ? 'Switch off' : 'Switch on'}</Button>
+                    <Button variant="secondary" disabled={act.busy} onClick={() => void act.run(() => post(`/settings/dunning-rules/${r.id}/active`, { active: !r.active }))}>{r.active ? 'Switch off' : 'Switch on'}</Button>
                   </div>
                 </div>
               </Card>
@@ -114,8 +118,9 @@ export function DunningSettings() {
         {rules.length > 0 && <p className="mt-2 text-footnote text-label2">Add any missing starter rules for the regional market: <button type="button" className="text-accent" onClick={() => void act.run(() => post('/settings/dunning-rules/seed', {}), 'Loaded the starter rules for the regional market')}>load them</button>. Rules you have already loaded or changed are kept.</p>}
       </section>
 
+      <LimitsSettings limits={v.limits} over={v.rulesOverLimit} reload={view.reload} />
       <LateFees fees={v.lateFees} reload={view.reload} currency={currency} />
-      <PaymentSettings payments={v.payments} schemes={v.qrSchemes} reload={view.reload} />
+      <PaymentSettings payments={v.payments} schemes={v.qrSchemes} tags={v.qrTags} reload={view.reload} />
       <Preview />
       {editing && <RuleEditor key={editing.id ?? 'new'} initial={editing} view={v} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await view.reload(); }} />}
     </div>
@@ -132,9 +137,12 @@ function RuleEditor({ initial, view, onClose, onSaved }: { initial: Rule; view: 
   const [drag, setDrag] = useState<{ from: number } | { palette: Action } | null>(null);
   const [over, setOver] = useState<number | null>(null);
   const isNew = !initial.id;
+  const lim = view.limits;
+  const full = steps.length >= lim.maxSteps;
   const upd = (patch_: Partial<Rule>) => setR((x) => ({ ...x, ...patch_ }));
   const move = (from: number, to: number) => setSteps((s) => { if (from === to || to < 0 || to >= s.length) return s; const n = [...s]; n.splice(to, 0, n.splice(from, 1)[0]!); return n; });
   const insert = (action: Action, at: number) => {
+    if (steps.length >= lim.maxSteps) return;
     const last = steps.length ? Math.max(0, ...steps.map(dayOf)) : 1;
     const s = defaults(action, last);
     setSteps((x) => { const n = [...x]; n.splice(Math.min(at, n.length), 0, s); return n; });
@@ -155,7 +163,7 @@ function RuleEditor({ initial, view, onClose, onSaved }: { initial: Rule; view: 
     const ok = await act.run(() => (isNew ? post('/settings/dunning-rules', body) : patch(`/settings/dunning-rules/${r.id}`, body)));
     if (ok) await onSaved();
   };
-  const remove = async () => { if (confirm(`Remove “${r.name}”? A rule in use by accounts cannot be removed; switch it off instead.`) && (await act.run(() => del(`/settings/dunning-rules/${r.id}`)))) await onSaved(); };
+  const remove = async () => { if (confirm(`Remove “${r.name}” for good? Removal is refused only while accounts are still being chased under it (a ladder they have started and not finished); then switch the rule off instead and they finish that ladder. Accounts that have finished keep their history.`) && (await act.run(() => del(`/settings/dunning-rules/${r.id}`)))) await onSaved(); };
 
   return (
     <Modal title={isNew ? 'New dunning rule' : `Edit: ${initial.name}`} onClose={onClose} wide>
@@ -163,9 +171,9 @@ function RuleEditor({ initial, view, onClose, onSaved }: { initial: Rule; view: 
         {act.error && <Alert>{act.error}</Alert>}
         <fieldset className="grid gap-3 sm:grid-cols-2">
           <legend className="mb-2 text-subhead font-semibold">Who it applies to</legend>
-          <Field label="Name"><Input value={r.name} maxLength={80} onChange={(e) => upd({ name: e.target.value })} /></Field>
-          <Field label="Priority" hint="Higher wins when several rules fit."><Input type="number" min={0} max={10000} value={r.priority} onChange={(e) => upd({ priority: Number(e.target.value) })} /></Field>
-          <Field label="Description"><Input value={r.description} maxLength={400} onChange={(e) => upd({ description: e.target.value })} /></Field>
+          <Field label="Name"><Input value={r.name} maxLength={lim.nameMax} onChange={(e) => upd({ name: e.target.value })} /></Field>
+          <Field label="Priority" hint={`Higher wins when several rules fit. ${lim.priorityMin} to ${lim.maxPriority.toLocaleString('en-US')}.`} error={r.priority > lim.maxPriority ? `The highest priority allowed is now ${lim.maxPriority.toLocaleString('en-US')}. Lower this rule's priority to save it.` : undefined}><Input type="number" min={lim.priorityMin} max={lim.maxPriority} value={r.priority} onChange={(e) => upd({ priority: Number(e.target.value) })} /></Field>
+          <Field label="Description"><Input value={r.description} maxLength={lim.descriptionMax} onChange={(e) => upd({ description: e.target.value })} /></Field>
           <Field label="Market"><Select value={r.market ?? ''} onChange={(e) => upd({ market: e.target.value || null })}><option value="">Every market</option>{view.seaMarkets.map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
           <Field label="Customer type"><Select value={r.customerKind} onChange={(e) => upd({ customerKind: e.target.value as Rule['customerKind'] })}>{Object.entries(KIND).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
           <Field label="VIP"><Select value={r.vip} onChange={(e) => upd({ vip: e.target.value as Rule['vip'] })}><option value="ANY">Either</option><option value="YES">VIP only</option><option value="NO">Not VIP</option></Select></Field>
@@ -179,20 +187,20 @@ function RuleEditor({ initial, view, onClose, onSaved }: { initial: Rule; view: 
 
         <section aria-label="Ladder">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-subhead font-semibold">The ladder</h3>
+            <h3 className="text-subhead font-semibold">The ladder <span className={`font-normal ${steps.length > lim.maxSteps ? 'text-danger' : 'text-label2'}`}>· {steps.length} of {lim.maxSteps} steps{steps.length > lim.maxSteps ? `: remove ${steps.length - lim.maxSteps} to save` : full ? ': full' : ''}</span></h3>
             {!sorted && <button type="button" className="text-footnote text-accent" onClick={sortByDay}>Steps are out of day order: sort by day</button>}
           </div>
           <div className="grid gap-4 md:grid-cols-[200px_minmax(0,1fr)]">
             <div>
-              <p className="mb-1 text-footnote text-label2">Drag a step into the ladder, or tap to add at the end.</p>
+              <p className="mb-1 text-footnote text-label2">{full ? `The ladder is full (at most ${lim.maxSteps} steps). Remove a step to add another.` : 'Drag a step into the ladder, or tap to add at the end.'}</p>
               <ul className="grid grid-cols-2 gap-1.5 md:grid-cols-1">
                 {ACTIONS.map((a) => (
                   <li key={a.id}>
-                    <button type="button" draggable title={a.hint}
+                    <button type="button" draggable={!full} disabled={full} title={a.hint}
                       onDragStart={(e) => { e.dataTransfer.setData('text/plain', a.id); e.dataTransfer.effectAllowed = 'copy'; setDrag({ palette: a.id }); }}
                       onDragEnd={() => { setDrag(null); setOver(null); }}
                       onClick={() => insert(a.id, steps.length)}
-                      className="flex min-h-tap w-full cursor-grab items-center gap-2 rounded-control border border-separator bg-surface px-3 py-2 text-left text-subhead active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                      className="flex min-h-tap w-full cursor-grab items-center gap-2 rounded-control border border-separator bg-surface px-3 py-2 text-left text-subhead active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                       <span aria-hidden className="text-label2">⠿</span>{a.label}
                     </button>
                   </li>))}
@@ -236,9 +244,9 @@ function RuleEditor({ initial, view, onClose, onSaved }: { initial: Rule; view: 
           <legend className="mb-2 text-subhead font-semibold">Partial payments</legend>
           <label className="flex min-h-tap items-center gap-2 text-subhead sm:col-span-3"><input type="checkbox" checked={!!r.partial} onChange={(e) => upd({ partial: e.target.checked ? { thresholdPercent: 80, action: 'RESET_TO_SOFT_BAR', pauseDays: 7 } : null })} /> React to a payment that leaves something overdue</label>
           {r.partial && <>
-            <Field label="When it covers at least (%)"><Input type="number" min={1} max={100} value={r.partial.thresholdPercent} onChange={(e) => upd({ partial: { ...r.partial!, thresholdPercent: Number(e.target.value) } })} /></Field>
+            <Field label="When it covers at least (%)"><Input type="number" min={lim.partialThresholdMin} max={lim.partialThresholdMax} value={r.partial.thresholdPercent} onChange={(e) => upd({ partial: { ...r.partial!, thresholdPercent: Number(e.target.value) } })} /></Field>
             <Field label="Then"><Select value={r.partial.action} onChange={(e) => upd({ partial: { ...r.partial!, action: e.target.value as Partial_['action'] } })}><option value="RESET_TO_SOFT_BAR">Lift a hard bar to a soft bar and pause</option><option value="PAUSE">Pause the ladder</option></Select></Field>
-            <Field label="Pause for (days)"><Input type="number" min={1} max={60} value={r.partial.pauseDays} onChange={(e) => upd({ partial: { ...r.partial!, pauseDays: Number(e.target.value) } })} /></Field></>}
+            <Field label="Pause for (days)"><Input type="number" min={lim.pauseDaysMin} max={lim.pauseDaysMax} value={r.partial.pauseDays} onChange={(e) => upd({ partial: { ...r.partial!, pauseDays: Number(e.target.value) } })} /></Field></>}
         </fieldset>
 
         <div className="flex flex-wrap gap-2">
@@ -255,17 +263,18 @@ function StepEditor({ s, set, view }: { s: Step; set: (p: Partial<Step>) => void
   const p = s.params;
   const setP = (x: Record<string, any>) => set({ params: { ...p, ...x } });
   const t = s.trigger;
+  const lim = view.limits;
   const text = p.template ? view.templates[p.template]?.text : undefined;
   return (
     <div className="grid gap-3 border-t border-separator px-3 py-3 sm:grid-cols-2">
-      <Field label="Name"><Input value={s.name} maxLength={80} onChange={(e) => set({ name: e.target.value })} /></Field>
+      <Field label="Name"><Input value={s.name} maxLength={lim.stepNameMax} onChange={(e) => set({ name: e.target.value })} /></Field>
       <label className="flex min-h-tap items-center gap-2 text-subhead"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Step is on</label>
       <Field label="Triggered by"><Select value={t.kind} onChange={(e) => set({ trigger: e.target.value === 'BALANCE' ? { kind: 'BALANCE', balanceMinor: 10000, minDays: 1 } : { kind: 'DAYS_PAST_DUE', days: t.kind === 'BALANCE' ? t.minDays : 1 } })}><option value="DAYS_PAST_DUE">Days past due (D+X)</option><option value="BALANCE">Overdue balance reaches an amount</option></Select></Field>
       {t.kind === 'DAYS_PAST_DUE'
-        ? <Field label="Day past due"><Input type="number" min={0} max={365} value={t.days} onChange={(e) => set({ trigger: { kind: 'DAYS_PAST_DUE', days: Number(e.target.value) } })} /></Field>
+        ? <Field label="Day past due"><Input type="number" min={0} max={lim.dayMax} value={t.days} onChange={(e) => set({ trigger: { kind: 'DAYS_PAST_DUE', days: Number(e.target.value) } })} /></Field>
         : <div className="grid grid-cols-2 gap-3">
             <Field label="Overdue balance of at least"><Input type="number" min={0} step={moneyStep()} defaultValue={toInput(t.balanceMinor)} onBlur={(e) => set({ trigger: { ...t, balanceMinor: toMinor(e.target.value) } })} /></Field>
-            <Field label="And at least (days past due)"><Input type="number" min={0} max={365} value={t.minDays} onChange={(e) => set({ trigger: { ...t, minDays: Number(e.target.value) } })} /></Field></div>}
+            <Field label="And at least (days past due)"><Input type="number" min={0} max={lim.dayMax} value={t.minDays} onChange={(e) => set({ trigger: { ...t, minDays: Number(e.target.value) } })} /></Field></div>}
 
       {s.action === 'NOTIFY' && <>
         <div className="sm:col-span-2"><p className="mb-1 text-footnote font-medium text-label2">Channels</p>
@@ -277,16 +286,16 @@ function StepEditor({ s, set, view }: { s: Step; set: (p: Partial<Step>) => void
           <label className="flex min-h-tap items-center gap-2 text-subhead"><input type="checkbox" checked={!!p.final} onChange={(e) => setP({ final: e.target.checked })} /> Final demand (states the early-termination charge and date)</label></div>
         <div className="sm:col-span-2">
           {p.template ? <p className="rounded-control bg-surface2 px-3 py-2 text-footnote text-label2">{text}</p>
-            : <Field label="Your message" hint="Use {{name}}, {{balance}}, {{dueDate}}, {{daysPastDue}}, {{qr}}, {{payUrl}}. Up to 1,000 characters."><Textarea rows={3} maxLength={1000} value={p.message ?? ''} onChange={(e) => setP({ message: e.target.value })} /></Field>}</div></>}
+            : <Field label="Your message" hint={`Use {{name}}, {{balance}}, {{dueDate}}, {{daysPastDue}}, {{qr}}, {{payUrl}}. Up to ${lim.messageMax.toLocaleString('en-US')} characters.`}><Textarea rows={3} maxLength={lim.messageMax} value={p.message ?? ''} onChange={(e) => setP({ message: e.target.value })} /></Field>}</div></>}
 
       {s.action === 'LATE_FEE' && (
         <Field label="Late fee"><Select value={p.lateFeeId ?? ''} onChange={(e) => setP({ lateFeeId: e.target.value })}><option value="">Choose…</option>{view.lateFees.filter((f) => f.active).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select></Field>)}
 
       {s.action === 'CASE_TASK' && <>
-        <Field label="Team"><Input value={p.team ?? ''} maxLength={60} onChange={(e) => setP({ team: e.target.value })} /></Field>
-        <Field label="Task is due in (hours)"><Input type="number" min={1} max={1440} value={p.dueHours ?? 72} onChange={(e) => setP({ dueHours: Number(e.target.value) })} /></Field>
-        <label className="flex min-h-tap items-center gap-2 text-subhead"><input type="checkbox" checked={!!p.holdsLaterBars} onChange={(e) => setP({ holdsLaterBars: e.target.checked })} /> Hold later bars and termination while the task is open</label>
-        {p.holdsLaterBars && <Field label="Wait for the task (days)"><Input type="number" min={1} max={90} value={p.waitDays ?? 7} onChange={(e) => setP({ waitDays: Number(e.target.value) })} /></Field>}</>}
+        <Field label="Team"><Input value={p.team ?? ''} maxLength={lim.teamMax} onChange={(e) => setP({ team: e.target.value })} /></Field>
+        <Field label="Task is due in (hours)"><Input type="number" min={1} max={lim.dueHoursMax} value={p.dueHours ?? 72} onChange={(e) => setP({ dueHours: Number(e.target.value) })} /></Field>
+        <label className="flex min-h-tap items-center gap-2 text-subhead"><input type="checkbox" checked={!!p.holdsLaterBars} onChange={(e) => setP({ holdsLaterBars: e.target.checked })} /> Hold later bars, termination and the transfer to debt collection while the task is open</label>
+        {p.holdsLaterBars && <Field label="Wait for the task (days)"><Input type="number" min={1} max={lim.waitDaysMax} value={p.waitDays ?? 7} onChange={(e) => setP({ waitDays: Number(e.target.value) })} /></Field>}</>}
 
       {s.action === 'TERMINATE' && (
         <Field label="The debt is"><Select value={p.debt ?? 'BOTH'} onChange={(e) => setP({ debt: e.target.value })}><option value="WRITE_OFF">Written off</option><option value="COLLECTIONS">Placed with the collection agency</option><option value="BOTH">Written off and placed with the agency</option></Select></Field>)}
@@ -342,12 +351,40 @@ function LateFees({ fees, reload, currency }: { fees: LateFee[]; reload: () => v
   );
 }
 
+// ───────────────────────── limits ─────────────────────────
+/** The two limits the operator sets. Lowering one never touches existing rules: the ones now over it are listed, still load and can be viewed, and ask for a fix when saved. */
+function LimitsSettings({ limits, over, reload }: { limits: Limits; over: OverLimit[]; reload: () => void | Promise<void> }) {
+  const act = useAction(reload);
+  const [steps, setSteps] = useState(String(limits.maxSteps));
+  const [prio, setPrio] = useState(String(limits.maxPriority));
+  const b = limits.bounds;
+  const stepsN = Number(steps), prioN = Number(prio);
+  const okSteps = Number.isInteger(stepsN) && stepsN >= b.maxSteps.min && stepsN <= b.maxSteps.max;
+  const okPrio = Number.isInteger(prioN) && prioN >= b.maxPriority.min && prioN <= b.maxPriority.max;
+  const changed = stepsN !== limits.maxSteps || prioN !== limits.maxPriority;
+  return (
+    <section aria-label="Limits">
+      <SectionTitle>Limits</SectionTitle>
+      <Card>
+        <p className="mb-3 text-subhead text-label2">How big a rule may be. Lowering a limit never changes the rules you already have: any that are over it keep working and can be viewed, and you are asked to fix them the next time you save them (switching them on or off is always possible).</p>
+        {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+        {over.length > 0 && <Alert>Over the limits now: {over.map((o) => `${o.name} (${o.reasons.join(', ')})`).join('; ')}.</Alert>}
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field label="Most steps in a ladder" hint={`${b.maxSteps.min} to ${b.maxSteps.max}. Standard: ${limits.defaults.maxSteps}.`} error={steps !== '' && !okSteps ? `Enter a whole number from ${b.maxSteps.min} to ${b.maxSteps.max}.` : undefined}><Input type="number" min={b.maxSteps.min} max={b.maxSteps.max} step={1} value={steps} onChange={(e) => setSteps(e.target.value)} /></Field>
+          <Field label="Highest priority a rule may have" hint={`${b.maxPriority.min} to ${b.maxPriority.max.toLocaleString('en-US')}. Standard: ${limits.defaults.maxPriority.toLocaleString('en-US')}. Rules start at 0.`} error={prio !== '' && !okPrio ? `Enter a whole number from ${b.maxPriority.min} to ${b.maxPriority.max.toLocaleString('en-US')}.` : undefined}><Input type="number" min={b.maxPriority.min} max={b.maxPriority.max} step={1} value={prio} onChange={(e) => setPrio(e.target.value)} /></Field>
+        </div>
+        <div className="mt-3"><Button disabled={act.busy || !okSteps || !okPrio || !changed} onClick={() => void act.run(() => post('/settings/dunning-rules/limits', { maxSteps: stepsN, maxPriority: prioN }), 'Saved')}>Save limits</Button></div>
+      </Card>
+    </section>
+  );
+}
+
 // ───────────────────────── pay page and QR merchants ─────────────────────────
 const SCHEME_FIELDS: Record<string, { proxy?: string; uen?: string; tag?: string }> = {
   PROMPTPAY: { proxy: 'Biller phone number or tax ID' }, PAYNOW: { uen: 'Company UEN' },
-  DUITNOW: { tag: 'Merchant account tag (26–51)' }, QRIS: { tag: 'Merchant account tag (26–51)' }, QRPH: { tag: 'Merchant account tag (26–51)' },
+  DUITNOW: { tag: 'Merchant account tag' }, QRIS: { tag: 'Merchant account tag' }, QRPH: { tag: 'Merchant account tag' },
 };
-function PaymentSettings({ payments, schemes, reload }: { payments: View['payments']; schemes: View['qrSchemes']; reload: () => void | Promise<void> }) {
+function PaymentSettings({ payments, schemes, tags, reload }: { payments: View['payments']; schemes: View['qrSchemes']; tags: View['qrTags']; reload: () => void | Promise<void> }) {
   const act = useAction(reload);
   const [base, setBase] = useState(payments.baseUrl);
   const [bureau, setBureau] = useState(payments.bureau);
@@ -383,7 +420,7 @@ function PaymentSettings({ payments, schemes, reload }: { payments: View['paymen
           <Field label="City" hint="Up to 15 characters"><Input value={m.city} maxLength={15} onChange={(e) => setM({ ...m, city: e.target.value })} /></Field>
           {fields.proxy && <Field label={fields.proxy}><Input value={m.proxy} onChange={(e) => setM({ ...m, proxy: e.target.value })} /></Field>}
           {fields.uen && <Field label={fields.uen}><Input value={m.uen} onChange={(e) => setM({ ...m, uen: e.target.value })} /></Field>}
-          {fields.tag && <><Field label={fields.tag}><Input value={m.tag} maxLength={2} onChange={(e) => setM({ ...m, tag: e.target.value })} className="font-mono" /></Field>
+          {fields.tag && <><Field label={`${fields.tag} (${tags.min}–${tags.max})`} hint={`The EMV QR field number your acquirer gave you for the merchant account: ${tags.min} to ${tags.max}.`}><Input value={m.tag} maxLength={2} inputMode="numeric" onChange={(e) => setM({ ...m, tag: e.target.value })} className="font-mono" /></Field>
             <Field label="Merchant account value" hint="As supplied by your acquirer."><Input value={m.value} onChange={(e) => setM({ ...m, value: e.target.value })} className="font-mono" /></Field></>}
         </div>
         <div className="mt-3"><Button disabled={act.busy} onClick={() => void saveAll()}>Save</Button></div>

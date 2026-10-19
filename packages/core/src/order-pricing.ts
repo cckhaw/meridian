@@ -3,7 +3,7 @@ import { getFinancing, usableCheck } from './device-financing.js';
 import { hiddenFixedKinds } from './fiber-client.js';
 import { behaviourOf, type DeviceDeal, type DeviceVariant, type OfferNode, type OrderChannel, type PaymentMethod } from '@meridian/types';
 import { listBundleRules, matches, ruleSatisfied, type BundleRule } from './bundles.js';
-import { checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
+import { assertAncestorsLive, checkDependencies, getOffer, monthlyFee, pageOffers } from './catalog.js';
 import { autoCancelDays, termsFor } from './cancellation.js';
 import { getCustomer } from './customers.js';
 import type { Queryable, Row } from './db.js';
@@ -154,6 +154,7 @@ export async function priceBasket(q: Queryable, raw: PricingInput, o: { soft?: b
       offers.set(of.id, of);
     }
   }
+  await assertAncestorsLive(q, [...offers.values()]); // retired, draft or scheduled parents hide the offers beneath them from every sale
   const clash = await typeConflictIn(q, [...offers.values()]);
   if (clash) fail(clash);
   const violations = await checkDependencies(q, input.customerId ?? null, [...offers.keys()]);
@@ -291,7 +292,7 @@ export const cancellationTerms = (q: Queryable, kinds: GroupKind[], currency: st
 
 /** Add-ons this customer can actually buy with this basket: prerequisites met (by the basket or what they own), no conflicts, sold on this channel. */
 export async function eligibleAddons(q: Queryable, o: { customerId?: string | null; offerIds: string[]; channel: OrderChannel; marketCode: string; q?: string; limit?: number; cursor?: string }) {
-  const page = await pageOffers(q, { status: 'ACTIVE', market: o.marketCode, channel: o.channel, step: 'ADDON', q: o.q, limit: o.limit ?? 24, cursor: o.cursor });
+  const page = await pageOffers(q, { forSale: true, status: 'ACTIVE', market: o.marketCode, channel: o.channel, step: 'ADDON', q: o.q, limit: o.limit ?? 24, cursor: o.cursor });
   const items: Array<{ offer: OfferNode; reason?: string }> = [];
   for (const offer of page.items as OfferNode[]) {
     if (o.offerIds.includes(offer.id)) continue;

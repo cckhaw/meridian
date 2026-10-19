@@ -16,6 +16,7 @@ import { Result } from './check';
  */
 const TILES = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors' };
 type Tool = 'inspect' | 'check' | 'draw';
+const LEVEL_COLOUR = { EXHAUSTED: '#ff3b30', LOW: '#ff9f0a', OK: '#34c759' } as const;
 const COLOURS = ['#0a84ff', '#bf5af2', '#ff9f0a', '#30b0c7', '#ff375f', '#64d2ff', '#a2845e'];
 
 export function MapView() {
@@ -28,6 +29,7 @@ export function MapView() {
   const [error, setError] = useState<string | null>(null);
   const [save, setSave] = useState<null | { name: string; providerId: string; tiers: string; capacity: string }>(null);
   const [version, setVersion] = useState(0);
+  const [low, setLow] = useState<{ lowPortsAbsolute: number; lowPortsPercent: number } | null>(null);   // the thresholds that coloured the dots, from the same response
   const el = useRef<HTMLDivElement>(null);
   const state = useRef<{ map?: L.Map; layer?: L.LayerGroup; draft?: L.LayerGroup; lib?: typeof L; fitted?: boolean }>({});
   const toolRef = useRef<Tool>('inspect'); toolRef.current = tool;
@@ -62,6 +64,7 @@ export function MapView() {
     api<any>(`/admin/map${provider ? `?providerId=${provider}` : ''}`).then((fc) => {
       if (dead) return;
       layer.clearLayers();
+      setLow(fc.settings ?? null);
       const colour = new Map<string, string>(); const colourOf = (p: string) => { if (!colour.has(p)) colour.set(p, COLOURS[colour.size % COLOURS.length]!); return colour.get(p)!; };
       const bounds = lib.latLngBounds([]);
       const order: Record<string, number> = { area: 0, reach: 1, cabinet: 2, dp: 3 };
@@ -78,8 +81,8 @@ export function MapView() {
           bounds.extend([lat, lng]);
         } else {
           const [lng, lat] = f.geometry.coordinates;
-          const free = p.available, level = free === 0 ? '#ff3b30' : free <= 2 || free / Math.max(1, p.total - p.faulty) <= 0.15 ? '#ff9f0a' : '#34c759';
-          lib.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: level, fillOpacity: 1 })
+          const free = p.available;
+          lib.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: LEVEL_COLOUR[p.level as keyof typeof LEVEL_COLOUR] ?? LEVEL_COLOUR.OK, fillOpacity: 1 })
             .bindPopup(`<b>${esc(p.code)}</b> · ${esc(p.name)}<br>${esc(p.provider)} · 1:${p.splitter}<br><b>${free}</b> free of ${p.total} · ${p.reserved} reserved · ${p.inUse} in use · ${p.faulty} faulty`).addTo(layer);
           bounds.extend([lat, lng]);
         }
@@ -121,12 +124,19 @@ export function MapView() {
         {tool === 'draw' && <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={!corners.length} onClick={() => setCorners((c) => c.slice(0, -1))}>Undo corner</Button><Button disabled={corners.length < 3} onClick={finish}>Finish area ({corners.length})</Button></div>}
       </div>
       <p className="text-footnote text-label2">
-        {tool === 'inspect' && 'Green, amber and red dots are distribution points by free ports; circles show each one’s reach; outlined areas are coverage polygons (dashed: no capacity); squares are cabinets.'}
+        {tool === 'inspect' && 'Dots are distribution points coloured by free ports (see the key below); circles show each one’s reach; outlined areas are coverage polygons (dashed: no capacity); squares are cabinets.'}
         {tool === 'check' && 'Click anywhere on the map to see what a customer at that spot would be told.'}
         {tool === 'draw' && 'Click to place the corners of the area (at least three), then Finish area.'}
       </p>
       {error && <Alert>{error}</Alert>}
       <div ref={el} className="h-[min(65dvh,640px)] min-h-[320px] w-full overflow-hidden rounded-card border border-separator bg-surface2" role="application" aria-label="Coverage map" />
+      {low && (
+        <ul aria-label="Colour key" className="flex flex-wrap gap-x-4 gap-y-1 text-footnote text-label2">
+          <li className="flex items-center gap-1.5"><Swatch colour={LEVEL_COLOUR.OK} />Healthy</li>
+          <li className="flex items-center gap-1.5"><Swatch colour={LEVEL_COLOUR.LOW} />Low: {low.lowPortsAbsolute} or fewer ports free, or {low.lowPortsPercent}% or less of the usable ports free</li>
+          <li className="flex items-center gap-1.5"><Swatch colour={LEVEL_COLOUR.EXHAUSTED} />Exhausted: no port free</li>
+          <li>Set under Overview → Behaviour</li>
+        </ul>)}
       {busy && tool === 'check' && <p className="text-subhead text-label2">Checking…</p>}
       {result && tool === 'check' && <Result r={result} />}
       {save && (
@@ -143,4 +153,5 @@ export function MapView() {
     </div>
   );
 }
+const Swatch = ({ colour }: { colour: string }) => <span aria-hidden className="inline-block h-3 w-3 shrink-0 rounded-full border border-white shadow-sm" style={{ background: colour }} />;
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

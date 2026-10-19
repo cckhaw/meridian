@@ -24,7 +24,7 @@ export function LoginForm() {
   useEffect(() => { api<{ items: Array<{ id: string; label: string }> }>('/auth/sso/providers').then((r) => setSso(r.items)).catch(() => {}); }, []);
   const startSso = async (id: string) => {
     setBusy(true); setError(null);
-    try { try { sessionStorage.setItem('sso-next', next ?? '/'); } catch { /* private mode */ } const r = await post<{ url: string }>('/auth/sso/start', { providerId: id }); window.location.href = r.url; }
+    try { try { if (next) sessionStorage.setItem('sso-next', next); else sessionStorage.removeItem('sso-next'); } catch { /* private mode */ } const r = await post<{ url: string }>('/auth/sso/start', { providerId: id }); window.location.href = r.url; }
     catch (e) { setError(e instanceof ApiError ? e.message : 'Single sign-on is not available right now.'); setBusy(false); }
   };
   const [error, setError] = useState<string | null>(null);

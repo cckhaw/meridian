@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { post, useAction, useApi, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { dt, label } from '@/lib/format';
+import { parseSimList } from './sim-list';
 
 const TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = { REQUESTED: 'neutral', IN_TRANSIT: 'warning', RECEIVED: 'success', CANCELLED: 'danger', RETURNED: 'danger' };
 interface Place { id: string; name: string; kind: string }
@@ -51,7 +52,7 @@ function NewTransfer({ places, fixed, onClose, onDone }: { places: Place[]; fixe
   const [sims, setSims] = useState('');
   const [note, setNote] = useState('');
   const submit = async () => {
-    const iccids = sims.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+    const iccids = parseSimList(sims);
     const count = !iccids.length && /^\d+$/.test(sims.trim()) ? Number(sims.trim()) : undefined;
     const body = { from, to, note: note || undefined, lines: lines.filter((l) => l.sku.trim()).map((l) => ({ sku: l.sku.trim(), quantity: Number(l.quantity) })), sims: iccids.length > 1 || (iccids.length === 1 && !count) ? { iccids } : count ? { count } : undefined };
     if (await act.run(() => post('/inventory/transfers', body))) await onDone();
@@ -72,7 +73,7 @@ function NewTransfer({ places, fixed, onClose, onDone }: { places: Place[]; fixe
             </div>))}
           <button type="button" className="text-footnote text-accent" onClick={() => setLines([...lines, { sku: '', quantity: '1' }])}>＋ Add a product</button>
         </div>
-        <div className="sm:col-span-2"><Field label="SIM cards" hint="A number to take that many free cards from the sender, or paste the card numbers (ICCIDs), one per line. Leave empty for none."><Textarea rows={3} value={sims} onChange={(e) => setSims(e.target.value)} className="font-mono" /></Field></div>
+        <div className="sm:col-span-2"><Field label="SIM cards" hint="A number to take that many free cards from the sender, or paste the card numbers (ICCIDs), one per line or separated by commas or spaces. Leave empty for none."><Textarea rows={3} value={sims} onChange={(e) => setSims(e.target.value)} className="font-mono" /></Field></div>
         <div className="sm:col-span-2"><Field label="Note"><Input value={note} maxLength={300} onChange={(e) => setNote(e.target.value)} /></Field></div>
         <div className="flex gap-2 sm:col-span-2"><Button disabled={act.busy || !from || !to} onClick={() => void submit()}>Request transfer</Button><Button variant="secondary" onClick={onClose}>Cancel</Button></div>
       </div>
@@ -91,7 +92,7 @@ function TransferDetail({ id, name, canTransfer, onClose, onChanged }: { id: str
   const mineFrom = !me?.storeId || me.storeId === x.fromLocation, mineTo = !me?.storeId || me.storeId === x.toLocation;
   const receive = async () => {
     const received = Object.fromEntries(x.lines.map((l: any) => [l.sku, got[l.sku] === undefined ? l.quantity : Number(got[l.sku])]));
-    const absent = missing.split(/[\\s,;]+/).filter(Boolean);
+    const absent = parseSimList(missing);
     const iccids = absent.length ? x.sims.map((s: any) => s.iccid).filter((i: string) => !absent.includes(i)) : undefined;
     await act.run(() => post(`/inventory/transfers/${id}/receive`, { received, iccids }), 'Received');
   };
@@ -111,7 +112,7 @@ function TransferDetail({ id, name, canTransfer, onClose, onChanged }: { id: str
           <div>
             <p className="text-subhead font-medium">{x.simCount} SIM cards</p>
             <p className="mt-1 max-h-24 overflow-auto font-mono text-footnote text-label2">{x.sims.map((s: any) => s.iccid + (s.received === false ? ' (lost)' : '')).join(', ')}{x.simCount > x.sims.length ? ' …' : ''}</p>
-            {x.status === 'IN_TRANSIT' && canTransfer && mineTo && <Field label="Cards that did not arrive" hint="Paste their numbers. They are written off as lost in transit."><Textarea rows={2} value={missing} onChange={(e) => setMissing(e.target.value)} className="font-mono" /></Field>}
+            {x.status === 'IN_TRANSIT' && canTransfer && mineTo && <Field label="Cards that did not arrive" hint="Paste their numbers, one per line or separated by commas or spaces. They are written off as lost in transit."><Textarea rows={2} value={missing} onChange={(e) => setMissing(e.target.value)} className="font-mono" /></Field>}
           </div>)}
         {canTransfer && (
           <div className="flex flex-wrap gap-2">

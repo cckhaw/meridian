@@ -238,10 +238,10 @@ export const INTEGRATIONS: IntegrationDef[] = [
     doc: 'SECURITY.md', keywords: 'ldap active directory ad sync directory group role mapping ldaps bind',
   },
   {
-    id: 'otp-gateway', group: 'Sign-in and identity', name: 'SMS / WhatsApp one-time codes', with: 'An SMS or WhatsApp messaging gateway (Twilio, Infobip, a local aggregator)',
-    summary: 'Carries the sign-in codes for the second factor and the codes for password recovery. Meridian posts each message to the gateway as JSON with a bearer token; the code is wiped from the outbox once the gateway accepts it. Without a gateway, codes wait in the notification outbox for whatever delivers notifications.',
-    maturity: 'BUILT', direction: 'OUT', outbox: { kind: 'NOTIFY', instructions: ['MFA_OTP', 'PASSWORD_RESET'] },
-    needs: ['Add the gateway below: address, token, sender id, SMS or WhatsApp, and approved template ids for WhatsApp', 'Call POST /api/jobs/deliver-otp from your scheduler to retry any code the gateway refused'],
+    id: 'otp-gateway', group: 'Sign-in and identity', name: 'SMS / WhatsApp messaging gateway', with: 'An SMS or WhatsApp messaging gateway (Twilio, Infobip, a local aggregator)',
+    summary: 'The one messaging gateway Meridian posts to. It carries the sign-in codes for the second factor and for password recovery, the text-message alerts staff switch on in My profile (security alerts, case alerts, system alerts), and the signed agreement copies sent to customers (one message per copy with a secure 15-minute link; nothing is attached). Each message is posted as JSON with a bearer token. A code is wiped from the outbox once the gateway accepts it. Alerts and signed copies that the gateway refuses are retried after 1, 5, 15, 60 and 240 minutes and then marked failed. Without an enabled gateway nothing is sent by text message: codes wait in the notification outbox, staff SMS alerts are not queued, and signed copies stay queued until one is set up. E-mail is not carried by this gateway.',
+    maturity: 'BUILT', direction: 'OUT', outbox: { kind: 'NOTIFY', instructions: ['MFA_OTP', 'PASSWORD_RESET', 'USER_ALERT', 'CONTRACT_SIGNED'] },
+    needs: ['Add the gateway below: address, token, sender id, SMS or WhatsApp, and approved template ids for WhatsApp (MFA, RESET, ALERT, CONTRACT)', 'Signed copies also need the public address of this site (Settings, Security, Password recovery) to build their links', 'Call POST /api/jobs/deliver-otp and POST /api/jobs/deliver-notifications from your scheduler to retry codes, alerts and signed copies the gateway refused'],
     doc: 'SECURITY.md', keywords: 'sms whatsapp otp one-time code gateway twilio infobip 2fa mfa password recovery',
   },
 

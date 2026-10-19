@@ -2,10 +2,11 @@ import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 
 import QRCode from 'qrcode';
 import { audit } from './audit.js';
 import type { Queryable } from './db.js';
-import { invalid, rejected } from './errors.js';
+import { DomainError, invalid, rejected } from './errors.js';
 import { decryptText, encryptText } from './field-crypto.js';
 import { queueOutbox } from './lifecycle-state.js';
 import { verifyPassword } from './passwords.js';
+import { raiseUserAlert } from './user-notifications.js';
 import { getSecurityPolicy } from './security-policy.js';
 
 /**
@@ -15,6 +16,11 @@ import { getSecurityPolicy } from './security-policy.js';
 export type MfaKind = 'TOTP' | 'SMS' | 'EMAIL';
 export const MFA_KINDS: MfaKind[] = ['TOTP', 'SMS', 'EMAIL'];
 const MAX_TRIES = 5;
+/** Resending a sign-in code, the same on the CRM and the fibre hub: a code by one method at most every 30 seconds, 5 codes per sign-in, 10 per account per hour. */
+export const CODE_RESEND_SECONDS = 30, CODES_PER_SIGN_IN = 5, CODES_PER_ACCOUNT_HOUR = 10;
+export class CodeThrottled extends DomainError {
+  constructor(public readonly retryAfterSeconds: number, message: string) { super('RATE_LIMITED', message); this.name = 'CodeThrottled'; }
+}
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const eq = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -94,6 +100,7 @@ export async function confirmTotp(q: Queryable, u: { id: string; username: strin
   const first = (await confirmedKinds(q, u.id)).length === 0;
   await q.query(`UPDATE mfa_methods SET confirmed_at = now(), last_counter=$2 WHERE user_id=$1 AND kind='TOTP'`, [u.id, c]);
   await audit(q, u.username, 'user', u.id, 'MFA_ENABLED', { kind: 'TOTP' });
+  await raiseUserAlert(q, { id: u.id }, 'securityAlerts', { title: 'Second factor changed', body: 'An authenticator app was added as a second factor on your account. If this was not you, change your password and contact your administrator.', link: '/profile?tab=security' });
   return first ? { recoveryCodes: await newRecoveryCodes(q, u.id) } : {};
 }
 
@@ -127,6 +134,7 @@ export async function confirmOtpMethod(q: Queryable, u: { id: string; username: 
   await q.query('UPDATE mfa_challenges SET used_at = now() WHERE id=$1', [ch.id]);
   await q.query(`INSERT INTO mfa_methods (user_id, kind, confirmed_at) VALUES ($1,$2,now()) ON CONFLICT (user_id, kind) DO UPDATE SET confirmed_at = now()`, [u.id, kind]);
   await audit(q, u.username, 'user', u.id, 'MFA_ENABLED', { kind });
+  await raiseUserAlert(q, { id: u.id }, 'securityAlerts', { title: 'Second factor changed', body: `A code by ${kind === 'SMS' ? 'SMS' : 'e-mail'} was added as a second factor on your account. If this was not you, change your password and contact your administrator.`, link: '/profile?tab=security' });
   return first ? { recoveryCodes: await newRecoveryCodes(q, u.id) } : {};
 }
 const mask = (s: string) => (s.includes('@') ? s.replace(/^(.).*(@.*)$/, '$1•••$2') : `${s.slice(0, 3)}•••${s.slice(-2)}`);
@@ -144,11 +152,13 @@ export async function disableMethod(q: Queryable, u: { id: string; username: str
   await q.query('DELETE FROM mfa_methods WHERE user_id=$1 AND kind=$2', [u.id, kind]);
   if (!(await confirmedKinds(q, u.id)).length) await q.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [u.id]);
   await audit(q, u.username, 'user', u.id, 'MFA_DISABLED', { kind });
+  await raiseUserAlert(q, { id: u.id }, 'securityAlerts', { title: 'Second factor changed', body: 'A second factor was removed from your account. If this was not you, change your password and contact your administrator.', link: '/profile?tab=security' });
 }
 export async function regenerateRecoveryCodes(q: Queryable, u: { id: string; username: string }, password: string): Promise<string[]> {
   await confirmPassword(q, u.id, password);
   if (!(await confirmedKinds(q, u.id)).length) throw invalid('Turn on a second factor first.');
   await audit(q, u.username, 'user', u.id, 'MFA_RECOVERY_CODES_REISSUED');
+  await raiseUserAlert(q, { id: u.id }, 'securityAlerts', { title: 'Second factor changed', body: 'New recovery codes were issued for your account and the old ones no longer work. If this was not you, change your password and contact your administrator.', link: '/profile?tab=security' });
   return newRecoveryCodes(q, u.id);
 }
 /** An administrator removes a person's second factors (a lost phone with no recovery codes left). */
@@ -156,10 +166,11 @@ export async function resetMfa(q: Queryable, actor: string, userId: string) {
   await q.query('DELETE FROM mfa_methods WHERE user_id=$1', [userId]);
   await q.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [userId]);
   await audit(q, actor, 'user', userId, 'MFA_RESET_BY_ADMIN');
+  await raiseUserAlert(q, { id: userId }, 'securityAlerts', { title: 'Second factor changed', body: 'An administrator removed your second factors. Set one up again from My profile, Security.', link: '/profile?tab=security' });
 }
 
 // ───────────────────────── the sign-in step ─────────────────────────
-export interface LoginChallenge { token: string; methods: MfaKind[]; method: MfaKind; sentTo?: string }
+export interface LoginChallenge { token: string; methods: MfaKind[]; method: MfaKind; sentTo?: string; resendAfterSeconds?: number }
 /** Opens the step between a correct password and a session. If the preferred method is SMS or e-mail, its code is sent now. */
 export async function openLoginChallenge(q: Queryable, u: { id: string; name: string; email: string | null; phone: string | null }, ctx: { ip?: string; userAgent?: string }): Promise<LoginChallenge> {
   const p = await getSecurityPolicy(q);
@@ -172,17 +183,38 @@ export async function openLoginChallenge(q: Queryable, u: { id: string; name: st
   if (method !== 'TOTP') { const sent = JSON.parse(await sendCode(q, u, method, 'LOGIN', p.mfa.challengeMinutes)); codeHash = sent.hash; expires = new Date(sent.expiresAt); sentTo = mask(method === 'SMS' ? u.phone! : u.email!); }
   await q.query(`INSERT INTO mfa_challenges (user_id, purpose, token_hash, code_hash, code_kind, expires_at, ip, user_agent) VALUES ($1,'LOGIN',$2,$3,$4,$5,$6,$7)`,
     [u.id, sha(token), codeHash, codeHash ? method : null, expires.toISOString(), ctx.ip ?? null, ctx.userAgent?.slice(0, 300) ?? null]);
-  return { token, methods, method, sentTo };
+  if (codeHash) await noteSend(q, token, u.id, method);
+  return { token, methods, method, sentTo, ...(codeHash ? { resendAfterSeconds: CODE_RESEND_SECONDS } : {}) };
 }
-/** Sends a code for another method (the person chose "text me instead"). */
-export async function sendChallengeCode(q: Queryable, challengeToken: string, kind: 'SMS' | 'EMAIL'): Promise<{ sentTo: string }> {
-  const ch = (await q.query(`SELECT c.*, u.display_name, u.email, u.phone FROM mfa_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose='LOGIN' AND c.used_at IS NULL`, [sha(challengeToken)])).rows[0];
-  if (!ch || new Date(ch.expiresAt).getTime() < Date.now()) throw rejected('This sign-in has expired. Sign in again.');
-  if (!(await confirmedKinds(q, ch.userId)).includes(kind)) throw invalid('That method is not set up.');
+// Sends are counted in auth_attempts (swept daily with the sign-in failures): per sign-in and method, per sign-in, and per account.
+const sendPrefix = (token: string) => `mfa-send:${sha(token).slice(0, 24)}:`;
+const noteSend = async (q: Queryable, token: string, userId: string, kind: MfaKind) => { for (const k of [`${sendPrefix(token)}${kind}`, `mfa-send:user:${userId}`]) await q.query('INSERT INTO auth_attempts (key) VALUES ($1)', [k]); };
+async function checkSendRules(q: Queryable, token: string, userId: string, kind: MfaKind) {
+  const r = (await q.query(
+    `SELECT (SELECT count(*)::int FROM auth_attempts WHERE key LIKE $1) AS sign_in,
+            (SELECT count(*)::int FROM auth_attempts WHERE key=$3 AND at > now() - interval '1 hour') AS account,
+            (SELECT extract(epoch FROM now() - max(at))::float FROM auth_attempts WHERE key=$2) AS since`, [`${sendPrefix(token)}%`, `${sendPrefix(token)}${kind}`, `mfa-send:user:${userId}`])).rows[0]!;
+  if (r.since !== null && r.since < CODE_RESEND_SECONDS) throw new CodeThrottled(Math.max(1, Math.ceil(CODE_RESEND_SECONDS - r.since)), 'A code was just sent. Wait a moment before asking for another.');
+  if (r.signIn >= CODES_PER_SIGN_IN) throw new CodeThrottled(300, 'Too many codes were sent for this sign-in. Sign in again, or use your authenticator app or a recovery code.');
+  if (r.account >= CODES_PER_ACCOUNT_HOUR) throw new CodeThrottled(600, 'Too many codes were sent to this account lately. Try again later, or use your authenticator app or a recovery code.');
+}
+/** Sends a code for another method (the person chose "text me instead"), or sends the same one again. Throttled (see CODE_RESEND_SECONDS) and refused for a locked or disabled account. */
+export async function sendChallengeCode(q: Queryable, challengeToken: string, kind: 'SMS' | 'EMAIL'): Promise<{ sentTo: string; resendAfterSeconds: number }> {
+  const ch = (await q.query(`SELECT c.*, u.display_name, u.email, u.phone, u.status AS user_status, u.locked_until FROM mfa_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose='LOGIN' AND c.used_at IS NULL`, [sha(challengeToken ?? '')])).rows[0];
+  if (!ch || new Date(ch.expiresAt).getTime() < Date.now() || ch.userStatus !== 'ACTIVE') throw rejected('This sign-in has expired. Sign in again.');
+  if (ch.lockedUntil && new Date(ch.lockedUntil) > new Date()) throw rejected('This account is locked. Try again later or ask an administrator.');
   const p = await getSecurityPolicy(q);
+  if (!(await confirmedKinds(q, ch.userId)).includes(kind) || !p.mfa.methods.includes(kind)) throw invalid('That method is not set up.');
+  await checkSendRules(q, challengeToken, ch.userId, kind);
   const sent = JSON.parse(await sendCode(q, { id: ch.userId, name: ch.displayName, email: ch.email, phone: ch.phone }, kind, 'LOGIN', p.mfa.challengeMinutes));
   await q.query('UPDATE mfa_challenges SET code_hash=$2, code_kind=$3, attempts=0 WHERE id=$1', [ch.id, sent.hash, kind]);
-  return { sentTo: mask(kind === 'SMS' ? ch.phone : ch.email) };
+  await noteSend(q, challengeToken, ch.userId, kind);
+  return { sentTo: mask(kind === 'SMS' ? ch.phone : ch.email), resendAfterSeconds: CODE_RESEND_SECONDS };
+}
+/** The raw number or address the pending sign-in's code went to, for the server that hands it to the gateway. Never send this to a browser (the browser gets the masked `sentTo`). */
+export async function challengeRecipient(q: Queryable, challengeToken: string): Promise<string | null> {
+  const r = (await q.query(`SELECT c.code_kind, u.email, u.phone FROM mfa_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose='LOGIN' AND c.used_at IS NULL AND c.expires_at > now()`, [sha(challengeToken ?? '')])).rows[0];
+  return r?.codeKind === 'SMS' ? r.phone ?? null : r?.codeKind === 'EMAIL' ? r.email ?? null : null;
 }
 /** Checks the second factor for a pending sign-in. Returns the user's id when it is right; the challenge is then spent. */
 export async function checkChallenge(q: Queryable, i: { token: string; code?: string; recoveryCode?: string }): Promise<{ userId: string; ip: string | null; userAgent: string | null; usedRecovery: boolean }> {

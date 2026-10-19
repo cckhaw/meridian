@@ -30,14 +30,14 @@ function BrandImageCard({ title, intro, noun, guidance, url, current, route, pre
     if (file.current) file.current.value = '';
     if (!f) return;
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(f.type)) return setLocalError('Choose a PNG, JPEG or WebP image.');
-    if (f.size > MAX_PICK_BYTES) return setLocalError(`That file is ${(f.size / 1048576).toFixed(1)} MB; pictures up to ${MAX_PICK_BYTES / 1048576} MB can be cropped.`);
+    if (f.size > MAX_PICK_BYTES) return setLocalError(`That file is ${(f.size / 1048576).toFixed(1)} MB; pictures up to ${MAX_PICK_BYTES / 1048576} MB can be opened here.`);
     const r = new FileReader();
     r.onload = () => setPicked(String(r.result));
     r.onerror = () => setLocalError('That file could not be read.');
     r.readAsDataURL(f);
   };
-  const save = async (base64: string) => {
-    if (await up.run(() => post(route, { dataBase64: base64 }), `The ${noun} was updated.`)) { setPicked(null); onSaved(); }
+  const save = async (base64: string, info: { width: number; height: number; reduced: boolean }) => {
+    if (await up.run(() => post(route, { dataBase64: base64 }), `The ${noun} was updated${info.reduced ? ` (saved at ${info.width} × ${info.height} px to keep the file small)` : ''}.`)) { setPicked(null); onSaved(); }
   };
 
   return (
@@ -45,7 +45,7 @@ function BrandImageCard({ title, intro, noun, guidance, url, current, route, pre
       <SectionTitle>{title}</SectionTitle>
       <p className="mb-4 text-subhead text-label2">{intro}</p>
       {picked ? (
-        <ImageCropper src={picked} target={{ width: guidance.width, height: guidance.height }} busy={up.busy} onCancel={() => { setPicked(null); up.clear(); }} onDone={save} />
+        <ImageCropper src={picked} target={{ width: guidance.width, height: guidance.height }} busy={up.busy} onCancel={() => { setPicked(null); up.clear(); }} maxBytes={guidance.maxBytes} onDone={save} />
       ) : (
         <>
           {previews}
@@ -55,7 +55,7 @@ function BrandImageCard({ title, intro, noun, guidance, url, current, route, pre
             <label htmlFor={id} className="inline-flex min-h-tap cursor-pointer items-center rounded-control bg-accent px-5 text-body font-medium text-accent-fg hover:opacity-90 focus-within:ring-2">{url ? `Replace ${noun}` : `Upload ${noun}`}</label>
             {url && <Button variant="secondary" disabled={rm.busy} onClick={async () => { if (await rm.run(() => del(route), `The ${noun} was removed.`)) onSaved(); }}>Remove</Button>}
           </div>
-          <p className="mt-2 text-footnote text-label2">Any picture up to {MAX_PICK_BYTES / 1048576} MB works: you crop it to {guidance.width} × {guidance.height} px next.</p>
+          <p className="mt-2 text-footnote text-label2">Choose a PNG, JPEG or WebP picture up to {MAX_PICK_BYTES / 1048576} MB. You crop it next, and it is saved as a PNG of {guidance.width} × {guidance.height} px. The saved {noun} can be at most {guidance.maxBytes / 1024} KB; if the cropped PNG is bigger, it is made smaller step by step (same shape) until it fits.</p>
         </>
       )}
       {(localError || up.error || rm.error) && <div className="mt-3"><Alert>{localError ?? up.error ?? rm.error}</Alert></div>}

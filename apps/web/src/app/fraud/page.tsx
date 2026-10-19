@@ -62,7 +62,7 @@ function Alerts({ state }: { state: ReturnType<typeof useApi<{ items: any[]; ope
       {state.data?.items.some((a) => a.status === 'OPEN') && <Field label="Note for the next alert you close" hint="Optional: saved with the decision."><Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} /></Field>}
       {bar && (
         <Modal title={`Bar ${bar.identifier ?? 'service'}`} onClose={() => setBar(null)}>
-          <p className="mb-3 text-subhead text-label2">Calls, SMS and data stop in both directions; emergency calls still work. Only a fraud analyst can lift the bar.</p>
+          <p className="mb-3 text-subhead text-label2">Calls, SMS and data stop in both directions; emergency calls still work. The bar is lifted by the fraud analyst here (Lift bar), or by staff with permission to manage services, such as call-centre and retail roles, using Resume on the service. Customers cannot lift it.</p>
           <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} /></Field>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setBar(null)}>Cancel</Button>

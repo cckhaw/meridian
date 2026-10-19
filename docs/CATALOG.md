@@ -32,6 +32,17 @@ Search is on the server and covers the whole catalog by words in the name or cod
 6. **Rules.** Optional prerequisites and exclusions.
 7. **Review.** A summary with Edit links, then choose **Draft** (not sellable), **Scheduled** (goes live on a date) or **Active** (sellable now) and create. A scheduled offer needs a go-live date after today; it is hidden from every sales channel until the start of that day, then becomes Active by itself (the server notices a due offer within about 15 seconds). Moving it back to Draft clears the date. Editing an existing offer uses the same steps and lets you jump to any of them.
 
+## When an offer can be sold
+
+An offer is **sellable now** only when the offer is **Active** and every node above it (group, category, network type) is **Active** too. A draft, scheduled or retired parent hides everything beneath it, whatever the offers' own status; a scheduled node counts as not live until its go-live day. This is one rule (`isSellableNow`, `allAncestorsLiveSql`, `assertAncestorsLive` in `packages/core/src/catalog.ts`) used everywhere a sale can start:
+
+- **Listings used for selling** (`GET /catalog?forSale=1`, any list with a channel, order step or outright filter, the new-order wizard, change-plan, move-to-group and family-plan pickers, add-on suggestions, the online store) leave such offers out. The check is part of the SQL query, so a page costs the same however large the catalog is.
+- **Quote and order placement** (`priceBasket`, so also the northbound, partner and store APIs and group plans) refuse them: *"5G SIM-only 100GB is not on sale: its group Home plans is retired."* The message names the node nearest the root that is not live and its state (retired, still a draft, scheduled and not live yet).
+- **Plan change** (immediate, scheduled and its agreement preview), **adding a value-added service** and **moving lines to a group plan** refuse them with the same message. A plan change scheduled earlier is not applied if the target's parent has been retired since.
+- **Catalogue browsing by staff** (the Catalog screen, `GET /catalog` without a sale filter, with or without a `status` filter) still lists everything, so retired parts can be managed and reactivated. Reactivating the parent makes the offers sellable again at once.
+
+Nothing already sold changes: existing orders, services, billing, invoices and renewals never look at the parent's status, so retiring a group does not stop a customer being billed for a plan they already have. Bulk offer import and export are not affected.
+
 ## What an offer type is
 
 An **offer type** says what kind of thing an offer is. It decides what the flow asks for and what happens when the offer is sold: whether a service is created, whether something ships, whether a contract is offered. The type list is in **Settings → Catalog → Offer types**: add your own, rename them, or switch off the ones you do not use.

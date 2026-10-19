@@ -14,6 +14,7 @@ The older single ladder in **Settings → Lifecycle** ([LIFECYCLE.md](LIFECYCLE.
 | QR payment codes (EMVCo merchant-presented) | `packages/core/src/emv-qr.ts` |
 | Payment arrangements, agency placements, agency file | `packages/core/src/collections.ts`; tables `payment_arrangements`, `collection_placements` |
 | Southeast Asia starter rules | `packages/core/src/seed-dunning-rules.ts` |
+| Limits (one definition, shared by the screen and the server) | `packages/core/src/dunning-limits.ts`: `DUNNING_LIMITS` (fixed), `DUNNING_LIMIT_DEFAULTS` / `DUNNING_LIMIT_BOUNDS` and the settings key `dunningLimits` (configurable) |
 | Settings page | `apps/web/src/app/admin/settings/dunning.tsx` |
 | Temporal workflow | `services/order-service/src/workflows/dunning-ladder.workflow.ts`, `activities/dunning-ladder.ts`, `api/dunning-ladder.controller.ts` |
 | API | `/api/settings/dunning-rules*`, `/api/accounts/:id/collections` (and `/collections/run`), `/api/accounts/:id/arrangements`, `/api/arrangements/:id/cancel`, `/api/collections/*` |
@@ -26,6 +27,33 @@ The older single ladder in **Settings → Lifecycle** ([LIFECYCLE.md](LIFECYCLE.
 * **The ladder builder** (Edit, or New rule) has the conditions at the top (market, customer type, segments, VIP, credit risk, priority) and the ladder below. **Drag a step from the palette into the ladder**, drag steps to reorder them, or use the arrows and the tap-to-add buttons (the same things work with a keyboard or on a phone). Each step opens to set its trigger (day, or overdue balance), its action's settings (channels, message and QR code; late fee; team and hold; how the debt is treated) and what it skips (disputes, VIPs, arrangements). The page warns when steps are out of day order and offers to sort them; the server refuses an order that makes no sense and says why.
 * **Partial payments** sit at the bottom of the rule: the threshold, what to do, and how long to pause.
 * **Late fees**, **Payment links and QR codes** (pay page address, credit bureau, merchant details per QR scheme) and **Where an account stands** (paste an account ID to see the rule that fits it, how many days past due, and each step's state: done, due now, held and why, later) are on the same page.
+
+## Limits
+
+Every number the Dunning rules screen caps and the server checks comes from one definition, `packages/core/src/dunning-limits.ts`. `GET /api/settings/dunning-rules` sends it as `limits`, and the screen's input maxima, character counters, the step counter ("12 of 30 steps") and its hints all read it; the browser never imports core. The router's schema checks only the shape (and a structural cap equal to the largest value the setting can take); `dunningRuleProblems` does the real check against the current values.
+
+| Limit | Value | Set by |
+|---|---|---|
+| Most steps in a ladder | 30 (can be 1 to 100) | operator: **Settings → Dunning rules → Limits** (`POST /api/settings/dunning-rules/limits`, stored in settings key `dunningLimits`) |
+| Highest priority | 1,000 (can be 1 to 100,000); lowest is 0 | operator, same place |
+| Rule and step name | 80 characters | fixed |
+| Rule description | 400 characters | fixed |
+| Own message | 1,000 characters | fixed |
+| Team name | 60 characters | fixed |
+| Day past due, and the "at least N days" of a balance trigger | 0 to 365 | fixed |
+| Case task due in | 1 to 1,440 hours | fixed |
+| Case task holds later steps for | 1 to 90 days | fixed |
+| Partial payment threshold / pause | 1 to 100 % / 1 to 60 days | fixed |
+
+The setting itself is validated on save (whole numbers inside the ranges above; nothing else is changed if one is wrong). **Lowering a limit never breaks existing rules.** Rules over the new limit still load, list and open as before and keep running; the page lists them under Limits and marks them "Over the limits". Saving one is refused with what to fix ("A ladder has at most 10 steps; this one has 35. Remove 25", "Priority is a whole number from 0 to 100 (this rule has 4000...)"). Switching a rule on or off (`POST /api/settings/dunning-rules/:id/active`) does not re-check the limits, so an over-limit rule can always be switched off.
+
+## QR merchant account tags
+
+The merchant account of a QR payment code goes in a tag from **26 to 51**. In the EMV merchant-presented QR specification tags 00 and 01 are the format and initiation method, 02 to 25 are templates reserved for the card networks, 26 to 51 are merchant account information for every other scheme, and 52 onwards are fixed fields (category, currency, amount, country, name, city, additional data, CRC). The code writes 26 (SGQR / PayNow) and 29 (PromptPay) itself and takes an acquirer-issued tag for DuitNow, QRIS and QR Ph. Earlier the server accepted 02 to 51 while the screen said 26 to 51; the server now accepts 26 to 51 only (`QR_MERCHANT_TAG_MIN/MAX` in `emv-qr.ts`), and the label is built from the same two numbers. A merchant saved earlier with a tag from 02 to 25 must be re-entered with the tag the acquirer issued.
+
+## Removing a rule
+
+A rule cannot be removed while accounts are still being chased under it (a dunning run that is `ACTIVE`); switch it off instead and they finish the ladder they started. Nothing else blocks removal: finished runs keep their own frozen copy of the ladder and their history. The confirmation on the screen says exactly this.
 
 ## The Temporal ladder
 
@@ -51,7 +79,7 @@ Each step has a name, a trigger, an action, parameters and exclusions, and can b
 |---|---|
 | `NOTIFY` | SMS, e-mail and/or WhatsApp from a template (or your own text). Can carry a **QR code and pay link**. A step marked *final* also states the early-termination charge, the termination date and the credit-bureau warning. |
 | `LATE_FEE` | Charges a late fee (below) as a separate invoice. |
-| `CASE_TASK` | Opens a case for a team (for example *Account management*) due in N hours. It can **hold later bars and terminations** for a number of days while the task is open. |
+| `CASE_TASK` | Opens a case for a team (for example *Account management*) due in N hours. It can **hold later bars, terminations and the transfer to debt collection** (`COLLECTIONS_TRANSFER`) for a number of days while the task is open. |
 | `SOFT_BAR` | Outgoing blocked; incoming calls and SMS, and the self-service app and payment portal (zero-rated), still work. |
 | `HARD_BAR` | Full service block; emergency calls exempt. |
 | `TERMINATE` | Terminates every service (quarantining the number, charging the ETC) and deals with the debt: write it off (Dr 6100, Cr 1200), place it with the collection agency, or both. |

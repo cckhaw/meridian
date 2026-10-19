@@ -11,6 +11,8 @@ import { checkChallenge, confirmedKinds, openLoginChallenge, type LoginChallenge
 import { checkPassword, getSecurityPolicy, idleMinutesFor, isReusedPassword, mfaRequiredFor, rememberPassword } from './security-policy.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { likePrefix } from './search.js';
+import { describeAgent } from './profile.js';
+import { raiseUserAlert } from './user-notifications.js';
 import { creditLimitOf, homeOf, roleDef, missingBinding, modulesOf, permissionsOf, scopeOf, type NavModule, type RoleBook, type Permission, type RoleId, type Scope } from './rbac.js';
 
 // ───────────────────────── configuration ─────────────────────────
@@ -134,6 +136,17 @@ async function openSession(q: Queryable, userId: string, epoch: string, ip?: str
   return { token, expiresAt };
 }
 
+/** A sign-in from a browser or device this person has not signed in from before (their very first sign-in does not count). */
+async function isNewDevice(q: Queryable, userId: string, ua?: string): Promise<boolean> {
+  try { return await seenBefore(q, userId, ua); } catch { return false; }
+}
+async function seenBefore(q: Queryable, userId: string, ua?: string): Promise<boolean> {
+  const rows = (await q.query('SELECT DISTINCT user_agent FROM sessions WHERE user_id=$1', [userId])).rows;
+  return rows.length > 0 && !rows.some((r) => describeAgent(r.userAgent) === describeAgent(ua ?? null));
+}
+const signInAlert = (db: Db, u: Row, ip?: string, ua?: string) =>
+  raiseUserAlert(db, { id: u.id as string }, 'securityAlerts', { title: 'New sign-in', body: `Your account was signed in from ${describeAgent(ua ?? null)}${ip ? ` (address ${ip})` : ''} on ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. If this was not you, change your password now.`, link: '/profile?tab=security' });
+
 export async function login(db: Db, i: { username: string; password: string; ip?: string; userAgent?: string }): Promise<LoginResult> {
   const cfg = authConfig();
   const policy = await getSecurityPolicy(db);
@@ -188,7 +201,8 @@ export async function login(db: Db, i: { username: string; password: string; ip?
   // A password older than the policy allows must be changed before anything else can be done.
   const age = policy.password.maxAgeDays;
   const expired = age > 0 && Date.now() - new Date(row.passwordChangedAt ?? row.createdAt).getTime() > age * 86_400_000;
-  return db.tx(async (q) => {
+  const fresh = await isNewDevice(db, row.id, i.userAgent);
+  const res = await db.tx(async (q) => {
     await q.query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now(), must_change_password = must_change_password OR $2 WHERE id=$1`, [row.id, expired]);
     const { token, expiresAt } = await openSession(q, row.id, '', i.ip, i.userAgent);
     await audit(q, row.username, 'auth', row.id, expired ? 'LOGIN_PASSWORD_EXPIRED' : 'LOGIN', { ip: i.ip });
@@ -196,13 +210,16 @@ export async function login(db: Db, i: { username: string; password: string; ip?
     user.mfaEnrollRequired = mfaRequiredFor(policy, user.roles);
     return { token, user, expiresAt };
   });
+  if (fresh) await signInAlert(db, row, i.ip, i.userAgent);
+  return res;
 }
 
 /** Opens a session for someone the identity provider has already authenticated. The provider is the authority (and its own second factor), so no local one is asked for. */
 export async function openFederatedSession(db: Db, userId: string, via: string, i: { ip?: string; userAgent?: string } = {}): Promise<LoginResult> {
   const row = (await db.query('SELECT * FROM users WHERE id=$1', [userId])).rows[0];
   if (!row || row.status !== 'ACTIVE' || row.isSuperuser) throw rejected(BAD_LOGIN);
-  return db.tx(async (q) => {
+  const fresh = await isNewDevice(db, row.id, i.userAgent);
+  const res = await db.tx(async (q) => {
     await q.query('UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1', [row.id]);
     const { token, expiresAt } = await openSession(q, row.id, '', i.ip, i.userAgent);
     await audit(q, row.username, 'auth', row.id, 'LOGIN_SSO', { ip: i.ip, via });
@@ -210,6 +227,8 @@ export async function openFederatedSession(db: Db, userId: string, via: string, 
     user.mfaEnrollRequired = false;
     return { token, user, expiresAt };
   });
+  if (fresh) await signInAlert(db, row, i.ip, i.userAgent);
+  return res;
 }
 
 /** Second step of a sign-in: the code (app, SMS or e-mail) or a recovery code, against the challenge the first step returned. */
@@ -226,14 +245,18 @@ export async function verifyMfaLogin(db: Db, i: { challenge: string; code?: stri
   const policy = await getSecurityPolicy(db);
   const age = policy.password.maxAgeDays;
   const expired = age > 0 && Date.now() - new Date(row.passwordChangedAt ?? row.createdAt).getTime() > age * 86_400_000;
-  return db.tx(async (q) => {
+  const ip = i.ip ?? r.ip ?? undefined, ua = i.userAgent ?? r.userAgent ?? undefined;
+  const fresh = await isNewDevice(db, row.id, ua);
+  const res = await db.tx(async (q) => {
     await q.query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now(), must_change_password = must_change_password OR $2 WHERE id=$1`, [row.id, expired]);
-    const { token, expiresAt } = await openSession(q, row.id, '', i.ip ?? r.ip ?? undefined, i.userAgent ?? r.userAgent ?? undefined);
+    const { token, expiresAt } = await openSession(q, row.id, '', ip, ua);
     await audit(q, row.username, 'auth', row.id, r.usedRecovery ? 'LOGIN_MFA_RECOVERY_CODE' : 'LOGIN_MFA', { ip: i.ip });
     const user = toUser({ ...row, mustChangePassword: row.mustChangePassword || expired }, await getRoleOverrides(q));
     user.mfaEnrollRequired = false;
     return { token, user, expiresAt };
   });
+  if (fresh) await signInAlert(db, row, ip, ua);
+  return res;
 }
 
 async function registerFailure(db: Queryable, row: Row, policy: Awaited<ReturnType<typeof getSecurityPolicy>>) {
@@ -372,7 +395,7 @@ export async function resetPassword(db: Db, actor: string, id: string): Promise<
     await revokeUserSessions(q, id);
     await audit(q, actor, 'user', id, 'PASSWORD_RESET');
     return { temporaryPassword: temp };
-  });
+  }).then(async (r) => { await raiseUserAlert(db, { id }, 'securityAlerts', { title: 'Password reset by an administrator', body: 'An administrator gave your account a temporary password and signed you out everywhere. You will be asked to choose a new password at your next sign-in.', link: '/profile?tab=security' }); return r; });
 }
 
 export async function unlockUser(db: Db, actor: string, id: string) {
@@ -398,5 +421,6 @@ export async function changePassword(db: Db, user: SessionUser, current: string,
     await revokeUserSessions(q, user.id); // every other device is signed out; the caller signs in again
     await audit(q, user.username, 'user', user.id, 'PASSWORD_CHANGED');
   });
+  await raiseUserAlert(db, { id: user.id }, 'securityAlerts', { title: 'Password changed', body: 'Your Meridian password was changed and your other devices were signed out. If this was not you, contact your administrator at once.', link: '/profile?tab=security' });
 }
 

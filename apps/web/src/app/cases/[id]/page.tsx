@@ -6,6 +6,7 @@ import { post, useAction, useApi, usePaged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { dt, label, money, step, toMinor } from '@/lib/format';
 import { CaseBadges, SlaPill, sevTone } from '../parts';
+import { canWithdrawRefund, WITHDRAW_BLOCKED } from './refund-rules';
 
 const ESC = ['', 'Escalated', 'Escalated twice'];
 
@@ -120,7 +121,7 @@ export default function CasePage({ params }: { params: Promise<{ id: string }> }
 
 /** Refunds on a billing dispute: ask, and (for someone in a high enough tier) approve or reject what others asked. */
 function Refunds({ c, onChange }: { c: any; onChange: () => Promise<void> }) {
-  const { can } = useAuth();
+  const { me, can } = useAuth();
   const data = useApi(`/cases/${c.id}/refunds`);
   const pending = useApi(can('case:write') ? '/refunds/pending' : null);
   const invoices = useApi(`/invoices?customerId=${c.customerId}&limit=20`);
@@ -147,7 +148,10 @@ function Refunds({ c, onChange }: { c: any; onChange: () => Promise<void> }) {
                 {mine.has(r.id) && <><Input aria-label="Decision note" placeholder="Note (needed to reject)" value={note} onChange={(e) => setNote(e.target.value)} className="!min-h-[36px] max-lg:!min-h-tap max-w-xs" />
                   <Button className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'APPROVE', note }), 'Approved and credited')}>Approve</Button>
                   <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy || note.trim().length < 3} onClick={() => void act.run(() => post(`/refunds/${r.id}/decision`, { decision: 'REJECT', note }), 'Rejected')}>Reject</Button></>}
-                <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/cancel`), 'Withdrawn')}>Withdraw</Button>
+                {canWithdrawRefund(me, r)
+                  ? <Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap" disabled={act.busy} onClick={() => void act.run(() => post(`/refunds/${r.id}/cancel`), 'Withdrawn')}>Withdraw</Button>
+                  : <><Button variant="plain" className="!min-h-[36px] max-lg:!min-h-tap opacity-50" aria-disabled="true" aria-describedby={`withdraw-why-${r.id}`} onClick={(e) => e.preventDefault()}>Withdraw</Button>
+                    <span id={`withdraw-why-${r.id}`} className="text-footnote text-label2">{WITHDRAW_BLOCKED}</span></>}
               </div>)}
           </li>))}</ul>)}
       {can('case:write') && !closed && (
