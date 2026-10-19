@@ -87,7 +87,7 @@ function SlaMatrix() {
   return (
     <Card>
       <SectionTitle>Service levels (SLA)</SectionTitle>
-      <p className="-mt-2 mb-3 text-subhead text-label2">How long a case may wait for a first response and for a resolution, by customer tier and severity. Times are in minutes. When the resolution time passes the warning point, supervisors are alerted; past it, the case is breached. Changes apply to cases opened from now on.</p>
+      <p className="-mt-2 mb-3 text-subhead text-label2">How long a case may wait for a first response and for a resolution, by customer tier and severity. Times are in minutes. When the "Warn at %" share of the resolution time has passed, supervisors are alerted; when all of it has passed, the case is breached and escalated. Changes apply to cases opened from now on.</p>
       <div className="overflow-x-auto"><table className="w-full text-left text-subhead"><thead><tr className="text-label2"><th className="py-2 pr-3 font-medium">Tier</th><th className="py-2 pr-3 font-medium">Severity</th><th className="py-2 pr-3 font-medium">First response (min)</th><th className="py-2 pr-3 font-medium">Resolution (min)</th><th className="py-2 font-medium">Warn at %</th></tr></thead>
         <tbody>{TIERS.flatMap((t) => SEVERITIES.map((s) => data.items.find((r) => r.tier === t && r.severity === s)).filter(Boolean)).map((r: any) => (
           <tr key={key(r)} className="border-t border-separator">

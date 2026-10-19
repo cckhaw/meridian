@@ -51,7 +51,7 @@ export function SecurityPolicySettings() {
             <Check checked={pw.requireDigit} onChange={(v) => set({ password: { ...pw, requireDigit: v } })}>A number</Check>
             <Check checked={pw.requireSymbol} onChange={(v) => set({ password: { ...pw, requireSymbol: v } })}>A symbol</Check>
           </fieldset>
-          <p className="text-footnote text-label2">Always checked, whatever you choose: common passwords are refused, the password must not contain the username, and it cannot be one repeated character.</p>
+          <p className="text-footnote text-label2">Always checked, whatever you choose: common passwords are refused, the password must not contain the username, and it must use at least five different characters.</p>
         </Card>
       </section>
 

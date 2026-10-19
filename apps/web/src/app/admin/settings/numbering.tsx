@@ -31,7 +31,7 @@ function Editor({ numbering, lifecycle, onSaved }: { numbering: any; lifecycle: 
         <SectionTitle>Cooling-off periods</SectionTitle>
         <p className="-mt-2 mb-3 text-subhead text-label2">When a subscriber leaves, their MSISDN and IMSI are not reused straight away. They rest for the period below, then the daily lifecycle job returns them to stock.</p>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="MSISDN rests for (days)" hint="After termination or port-out. 0 = available the next job run. Ported-out numbers stay out until the port is closed."><Input type="number" min={0} max={730} value={s.msisdnCoolingDays} onChange={num('msisdnCoolingDays')} /></Field>
+          <Field label="MSISDN rests for (days)" hint="After termination. 0 = available the next job run. Ported-out numbers stay out until the port is closed."><Input type="number" min={0} max={730} value={s.msisdnCoolingDays} onChange={num('msisdnCoolingDays')} /></Field>
           <Field label="IMSI rests for (days)" hint="The IMSI is detached from the SIM at termination, rests, then returns to the pool to be bound to a new SIM batch or eSIM profile."><Input type="number" min={0} max={730} value={s.imsiQuarantineDays} onChange={num('imsiQuarantineDays')} /></Field>
         </div>
       </Card>

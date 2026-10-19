@@ -36,7 +36,7 @@ export function MarketSettings() {
   return (
     <Card>
       <SectionTitle>Markets</SectionTitle>
-      <p className="-mt-2 mb-4 text-subhead text-label2">A market is a country you sell in. Your own country is set under Regional (currently <strong>{home}</strong>), together with the currency and tax. Prices stay in that one currency either way.</p>
+      <p className="-mt-2 mb-4 text-subhead text-label2">A market is a country you sell in. Your own country is set under Regional format (currently <strong>{home}</strong>), together with the currency and tax. Prices stay in that one currency either way.</p>
       <div className="grid gap-2">
         {choice(false, `One market (${home})`, 'The whole CRM works in your own country. Offers, logins, stores and customers are not tied to a market, nothing asks for one, and every offer is available everywhere you sell.')}
         {choice(true, 'Several markets', 'Each offer says which markets it is sold in, each login and store belongs to a market, and a customer’s market decides which offers they can buy and which tax applies.')}
@@ -56,9 +56,9 @@ export function MarketSettings() {
                       {!isHome && <Button type="button" variant="secondary" aria-label={`Remove ${m.name}`} onClick={() => remove(m.code)}>Remove</Button>}</div>
                     <div className="grid gap-3 sm:grid-cols-4">
                       <Field label="Name"><Input value={m.name} onChange={(e) => edit(m.code, { name: e.target.value })} /></Field>
-                      <Field label="Tax name" hint={isHome ? 'Set in Regional' : undefined}><Input value={isHome ? data.markets.find((x) => x.code === m.code)?.taxName ?? m.taxName : m.taxName} disabled={isHome} onChange={(e) => edit(m.code, { taxName: e.target.value })} /></Field>
-                      <Field label="Tax rate (%)" hint={isHome ? 'Set in Regional' : undefined}><Input type="number" min={0} max={100} step={0.01} value={m.taxBps / 100} disabled={isHome} onChange={(e) => edit(m.code, { taxBps: Math.round(Number(e.target.value) * 100) })} /></Field>
-                      <Field label="Dial code" hint={isHome ? 'Set in Regional' : undefined}><Input value={m.dialCode} disabled={isHome} onChange={(e) => edit(m.code, { dialCode: e.target.value })} /></Field>
+                      <Field label="Tax name" hint={isHome ? 'Set in Regional format' : undefined}><Input value={isHome ? data.markets.find((x) => x.code === m.code)?.taxName ?? m.taxName : m.taxName} disabled={isHome} onChange={(e) => edit(m.code, { taxName: e.target.value })} /></Field>
+                      <Field label="Tax rate (%)" hint={isHome ? 'Set in Regional format' : undefined}><Input type="number" min={0} max={100} step={0.01} value={m.taxBps / 100} disabled={isHome} onChange={(e) => edit(m.code, { taxBps: Math.round(Number(e.target.value) * 100) })} /></Field>
+                      <Field label="Dial code" hint={isHome ? 'Set in Regional format' : undefined}><Input value={m.dialCode} disabled={isHome} onChange={(e) => edit(m.code, { dialCode: e.target.value })} /></Field>
                     </div>
                   </li>
                 );
