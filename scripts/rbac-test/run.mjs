@@ -123,7 +123,7 @@ const tx = [], ctx = {};
 const check = (role, what, r, expect) => {
   const ok = expect === 'allow' ? r && !r.denied && r.status < 500 && r.status !== 401 : r && r.denied;
   const worked = r && r.status < 300;
-  tx.push({ role, what, expect, status: r?.status, ok: !!ok, worked: !!worked, note: ok ? undefined : JSON.stringify(r?.json).slice(0, 140) });
+  tx.push({ role, what, expect, status: r?.status, ok: !!ok, worked: !!worked, note: ok && worked ? undefined : (r?.json?.error?.message ?? JSON.stringify(r?.json)).slice(0, 160) });
   return r;
 };
 if (TX) {
@@ -142,7 +142,7 @@ if (TX) {
   const cat = (await admin.call('/catalog?limit=50&status=ACTIVE&forSale=1')).json.items ?? [];
   let plan;
   for (const o of cat) { if (!o.fulfilment?.requiresSimActivation || o.group?.isGroupOffer || o.variants?.length) continue; const q = await admin.call('/orders/quote', 'POST', { channel: 'CALL_CENTER', lines: [{ offerId: o.id }] }); if (q.status < 300) { plan = o; break; } }
-  const orderBody = (customerId, channel, extra = {}) => ({ customerId, channel, lines: [{ offerId: plan.id, simType: 'ESIM' }], payment: { method: 'CASH', confirmed: true, reference: `${TAG}-${randomBytes(3).toString('hex')}` }, ...extra });
+  const orderBody = (customerId, channel, extra = {}) => ({ customerId, channel, lines: [{ offerId: plan.id }], payment: { method: 'CASH', confirmed: true, reference: `${TAG}-${randomBytes(3).toString('hex')}` }, ...extra });
   const S = (id) => sessions[id];
   const can = (id, perm) => (roles.find((r) => r.id === id)?.permissions ?? []).includes(perm) ? 'allow' : 'deny';
   const has = (id) => !!S(id);
@@ -224,7 +224,7 @@ if (TX) {
 }
 const txRows = tx.filter((x) => x.role);
 log('\nTransactions:');
-for (const t of txRows) log(`  ${t.ok ? 'PASS' : 'FAIL'}  ${t.role.padEnd(20)} ${t.what} → ${t.status}${t.expect === 'deny' ? ' (refused as it should be)' : t.worked ? '' : ' (allowed through the permission check; the request itself was refused)'}${t.ok ? '' : '  ' + t.note}`);
+for (const t of txRows) log(`  ${t.ok ? 'PASS' : 'FAIL'}  ${t.role.padEnd(20)} ${t.what} → ${t.status}${t.expect === 'deny' ? ' (refused as it should be)' : t.worked ? '' : ' (allowed through the permission check; the request itself was refused)'}${t.note ? '  [' + t.note + ']' : ''}`);
 
 if (!KEEP) for (const id of made) await admin.call(`/users/${id}`, 'PATCH', { status: 'DISABLED' });
 const sweepBad = mismatches.length, txBad = txRows.filter((t) => !t.ok).length;
