@@ -9,3 +9,4 @@ coverage
 bin/
 .data
 load-test-report-*.json
+rbac-report-*.json
