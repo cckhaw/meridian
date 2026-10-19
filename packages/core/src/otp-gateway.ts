@@ -42,15 +42,15 @@ export async function otpGatewayStatus(db: Db): Promise<{ configured: boolean; s
   return { configured: ok, sms: ok, email: ok && ep!.config.emailCodes === true };
 }
 
-/** `only.to` limits the run to the codes waiting for that number or address (a sign-in asking for its own code), so one person's request never spends the batch on others. */
+/** `only.to` limits the run to the newest sign-in code waiting for that number or address (a sign-in asking for its own), so one person's request never spends the batch on others and an older, no longer valid code is never sent after it. */
 export async function deliverOtpMessages(db: Db, limit = 25, only?: { to: string }): Promise<{ sent: number; failed: number; waiting: number }> {
   const ep = await messagingGateway(db);
   if (!ep) return { sent: 0, failed: 0, waiting: 0 };
   const kinds = ep.config.emailCodes === true ? ['SMS', 'EMAIL'] : ['SMS'];
   let sent = 0, failed = 0;
   const rows = await db.tx(async (q) => (await q.query(
-    `SELECT id, instruction, payload FROM lifecycle_outbox WHERE kind='NOTIFY' AND delivered_at IS NULL AND instruction IN ('MFA_OTP','PASSWORD_RESET') AND payload->>'channel' = ANY($2::text[]) AND payload->>'code' IS NOT NULL ${only ? `AND payload->>'to'=$3` : ''}
-      ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED`, only ? [limit, kinds, only.to] : [limit, kinds])).rows);
+    `SELECT id, instruction, payload FROM lifecycle_outbox WHERE kind='NOTIFY' AND delivered_at IS NULL AND instruction IN ('MFA_OTP','PASSWORD_RESET') AND payload->>'channel' = ANY($2::text[]) AND payload->>'code' IS NOT NULL ${only ? `AND instruction='MFA_OTP' AND payload->>'purpose'='LOGIN' AND payload->>'to'=$3` : ''}
+      ORDER BY id ${only ? 'DESC' : ''} LIMIT $1 FOR UPDATE SKIP LOCKED`, only ? [1, kinds, only.to] : [limit, kinds])).rows);
   for (const r of rows) {
     const p = r.payload as { to: string; code: string; name?: string; expiresAt?: string; channel?: string };
     const channel = p.channel === 'EMAIL' ? 'EMAIL' : gatewayChannel(ep);

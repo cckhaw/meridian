@@ -45,6 +45,18 @@ Charging-system (OCS) provisioning has its own guide: [OCS.md](OCS.md).
 
 “Connected” for an outbox integration is inferred, not proven: it means at least one instruction was acknowledged. Delivery health beyond that is the connector's to report.
 
+## The messaging gateway
+
+There is one messaging endpoint: *Sign-in and identity → SMS / WhatsApp gateway* (kind `OTP_GATEWAY`). Meridian posts JSON to it (`to`, `channel`, `text`, `templateId`, `senderId`, `variables`, `reference`; bearer token) for:
+
+| What | Template id | When it is sent |
+| --- | --- | --- |
+| One-time codes (second factor, password recovery) | `MFA`, `RESET` | At once; a refused code stays in the outbox (`POST /api/jobs/deliver-otp`) |
+| Staff alerts that the person ticked SMS for in My profile → Notifications | `ALERT` | At once, waiting a few seconds at most; otherwise by the heartbeat |
+| Signed agreement copies for customers (one message per copy, with a secure 15-minute link) | `CONTRACT` | By the heartbeat, the hourly sweep or `POST /api/jobs/deliver-notifications` |
+
+Alerts and signed copies are retried after 1, 5, 15, 60 and 240 minutes, then marked failed with the reason (`lifecycle_outbox.attempts`, `last_error`, `failed_at`). With no enabled gateway nothing is sent by text message: staff SMS alerts are not queued (the Notifications tab says so), and signed copies stay queued until a gateway is set up (Settings → Documents says so). The gateway carries text only, so documents are never attached, and it does not carry e-mail: e-mail alerts are written to the notification outbox for the connector that sends e-mail at your site.
+
 ## What is covered
 
 | Group | Integration | With | How |

@@ -42,7 +42,7 @@ export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: s
     { kind: 'IDP_OIDC', label: 'Single sign-on (OpenID Connect)', hint: 'Microsoft Entra ID, Okta, Ping Identity, Keycloak: issuer, client id and secret, which group gets which role' },
     { kind: 'IDP_SAML', label: 'Single sign-on (SAML 2.0)', hint: 'Provider address, entity id and signing certificate. Stored and checked; assertions are not accepted yet' },
     { kind: 'LDAP', label: 'Active Directory / LDAP', hint: 'Directory address, service account, search base, group-to-role mappings and how often to sync' },
-    { kind: 'OTP_GATEWAY', label: 'SMS / WhatsApp gateway', hint: 'Carries one-time codes for the second factor and password recovery: address, token, sender and template ids' },
+    { kind: 'OTP_GATEWAY', label: 'SMS / WhatsApp gateway', hint: 'Carries one-time codes for the second factor and password recovery, text-message alerts for staff and signed agreement copies for customers: address, token, sender and template ids (MFA, RESET, ALERT, CONTRACT)' },
   ],
 };
 
