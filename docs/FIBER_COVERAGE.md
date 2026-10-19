@@ -27,7 +27,11 @@ Pass `speedMbps` to ask for a speed: options that cannot reach it are not recomm
 
 `POST /api/v1/coverage/reservations {providerId, dpId?, customerRef, speedMbps}` claims a free port in one statement that skips rows another checkout holds, so two customers never get the same port. The lock lasts 30 minutes (Overview → Behaviour). The same customer asking again renews their lock. `…/confirm {orderRef}` turns it into a hold for the order, `…/release` frees it, `…/activate` marks it in use once installed. Expired locks count as free at once and are cleaned up by the sweep (`POST /api/admin/sweep`, or the button on Overview). A partner with no port inventory gets a soft hold recorded without a port.
 
-When no port is free the caller can `POST /api/v1/coverage/waitlist`; the hub's **Ports and waitlist** page shows distribution points by pressure (exhausted, low, healthy), tells waiting customers when a port frees up (a `FIBER_PORT_AVAILABLE` notification through the outbox), and tracks expansion requests for network planning.
+When no port is free the caller can `POST /api/v1/coverage/waitlist`; the hub's **Ports and waitlist** page shows distribution points by pressure (exhausted, low, healthy; see *Low-port settings* below), tells waiting customers when a port frees up (a `FIBER_PORT_AVAILABLE` notification through the outbox), and tracks expansion requests for network planning.
+
+### Low-port settings (map colours and levels)
+
+Overview → Behaviour holds two settings, **“Low” when this few ports are free** (default 2) and **…or this share is free (%)** (default 15). One rule, `classifyPorts` in `packages/fiber/src/port-level.ts`, applies them everywhere: a distribution point is **exhausted** when no port is free, **low** when the free count is at or under the first setting *or* the free share of its usable ports (faulty ports left out) is at or under the second (either one is enough), otherwise **healthy**. The **Ports and waitlist** page and the **Map** both use it: the map's data (`GET /api/admin/map`) carries each point's `level` and the thresholds used (`settings`), so the dots (green, amber, red) and the colour key under the map always match the page, and a change to the settings shows the next time the map loads.
 
 ## Standard interfaces
 
@@ -39,11 +43,24 @@ Callers authenticate with an API key holding the `fiber` scope (issue one under 
 
 ## Admin hub (`/settings/fiber-coverage`)
 
-Sign in with a Meridian staff account that may manage settings (second factor supported). Tabs: **Overview** (master ON/OFF switch, partner adapter switches, lock/cache/timeout, access keys, recent locks), **Providers** (with a *Test* button that sends one real request to a partner and shows how its answer is read), **Network** (DPs with a port grid, cabinets, coverage areas), **Map** (Leaflet: inspect, click-to-check, draw an area), **Import** (CSV / GeoJSON / KML: check, then load all-or-nothing; templates), **Ports and waitlist**, **Try a check**.
+Sign in with a Meridian staff account that may manage settings (second factor supported; see *Sign-in codes* below). Tabs: **Overview** (master ON/OFF switch, partner adapter switches, lock/cache/timeout, access keys, recent locks), **Providers** (with a *Test* button that sends one real request to a partner and shows how its answer is read), **Network** (DPs with a port grid, cabinets, coverage areas), **Map** (Leaflet: inspect, click-to-check, draw an area), **Import** (CSV / GeoJSON / KML: check, then load all-or-nothing; templates), **Ports and waitlist**, **Try a check**.
 
 Import: points become distribution points, areas become polygons (properties `provider`, `name`, `speedTiers`, `capacityStatus`, `dp`), a CSV with `postalCode` and no `code` column loads addresses. Rows are matched by (provider, code) for points and (provider, name) for areas, so re-sending a file updates instead of duplicating.
 
 Partner adapter settings are data: `paths` say where in the partner's JSON (or SOAP body) to read `serviceable`, `portStatus`, `speedsMbps`, `leadDays`, `reference`; REST also takes `method`, `query`, `body` (placeholders `{{lat}} {{lng}} {{postalCode}} {{address}} {{speedMbps}}`) and `authHeader`; SOAP takes `soapAction` and a `body` template.
+
+## Sign-in codes (SMS, e-mail, authenticator)
+
+The hub signs in with the CRM's code, so its second-factor rules are the CRM's: a challenge lasts the policy's 1 to 30 minutes, locks after 5 wrong tries, wrong codes are throttled per address, and a locked or disabled account is refused. The code step shows only what that person has set up (an authenticator-only person sees "Code from your authenticator" and no SMS or e-mail wording or buttons). Recovery codes always work.
+
+* **Authenticator**: checked against the stored secret; nothing is sent.
+* **SMS / e-mail at sign-in**: if the person's method is SMS or e-mail, the code is queued with the challenge and the hub hands it to the gateway at once. The step then says where it went, masked (`+65•••67`, `a•••@example.com`).
+* **Send me a code / Send it another way / Resend code** (`POST /api/admin/2fa/send-code {challenge, method}`): offered for each of the person's SMS or e-mail methods that this site can send. Rules, the same as the CRM's shared code: one code per method every 30 seconds (the button counts down, and the server answers `429` with `Retry-After`), 5 codes per sign-in, 10 per account per hour, plus 30 requests per address per 15 minutes. A new code replaces the old one. It answers the same for a sign-in that never existed and one that has run out ("This sign-in has expired. Sign in again."), and no answer names an account, so it cannot be used to find out who exists.
+* **Who delivers**: the gateway (Integration hub → Sign-in and identity → *SMS / WhatsApp gateway*) and its token are settings in the shared database, so **the hub calls the gateway itself**. If it cannot reach it (or the gateway refuses), it asks the CRM, with a **signed server-to-server call** (`POST {MERIDIAN_CRM_URL}/api/internal/fiber/deliver-otp`, header `X-Meridian-Signature: t=…,v1=<HMAC-SHA256>`, the same scheme as the field-service callback, valid 5 minutes, key derived from the fibre API key). The call carries only the recipient; the CRM delivers the code already waiting for it. A code that goes neither way stays queued for the CRM's `POST /api/jobs/deliver-otp` retry, and the step says "has not gone out yet".
+* **No gateway**: asking for an SMS or e-mail code answers `503 CODE_DELIVERY_UNAVAILABLE` ("… no SMS gateway is set up. Use your authenticator app or a recovery code, or ask an administrator.") and queues nothing; the buttons are not shown.
+* **E-mail codes** are carried by the gateway only when its settings (JSON) contain `"emailCodes": true`; the gateway then receives `channel: "EMAIL"`, `to` (the address) and a `subject` alongside the usual fields. Without it e-mail codes wait in the outbox for the e-mail connector, and the hub does not offer to send them.
+
+Only the environment's super user can manage settings (`settings:manage` cannot be given to a role), and that account has no second factor. So today nobody completes a hub sign-in with a code: the code step is checked, and the hub then declines a person whose role may not manage fibre coverage. The code flow is ready for the day a role may.
 
 ## How Meridian uses it
 
@@ -70,6 +87,7 @@ Create a Vercel project from this repository with **root directory `apps/fiber-c
 | `MERIDIAN_DATA_KEY` / `MERIDIAN_ID_PEPPER` | **Must equal the CRM's**: they encrypt the partner adapter credentials and sign-in secrets. |
 | `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD` | As in the CRM, if the super user will sign in here. |
 | `FEATURE_FIBER_COVERAGE_MODULE_ENABLED` | Optional starting value (unset means on). |
+| `MERIDIAN_CRM_URL`, `MERIDIAN_FIBER_API_KEY` | Optional, only for sign-in codes when the hub cannot reach the SMS gateway itself: the CRM's address, and the same fibre key the CRM uses to call the hub (it only keys the signature; it is never sent). The CRM needs `MERIDIAN_FIBER_API_KEY` too, as it does already. Without them the hub still calls the gateway directly. |
 
 On the **CRM** deployment set `MERIDIAN_FIBER_URL` (the service's address) and `MERIDIAN_FIBER_API_KEY` (a key issued in the hub's Overview → Access keys). The store-front needs nothing: it reaches the service through the CRM.
 
