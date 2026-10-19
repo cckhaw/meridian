@@ -1,4 +1,5 @@
 'use client';
+import { NotificationBell } from './notification-bell';
 import { AppShell, Spinner, ThemeProvider } from '@meridian/ui';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -38,6 +39,7 @@ function Gate({ children }: { children: ReactNode }) {
   return (
     <AppShell nav={me.modules} brand={brand} user={{ name: me.displayName, roles: me.roleLabels }} activeHref={pathname} onSignOut={() => void signOut()} onChangePassword={() => router.push('/change-password')}
       linkComponent={({ href, ...p }) => <Link href={href} {...p} />}>
+      <div className="-mt-2 mb-2 flex justify-end"><NotificationBell /></div>
       {allowed ? children : <NotAllowed home={me.home} />}
     </AppShell>
   );

@@ -20,9 +20,9 @@ export async function exhaustionReport(q: Queryable, f: { level?: PortLevel; pro
             (SELECT e.status FROM fiber_expansion_requests e WHERE e.dp_id=d.id AND e.status IN ('OPEN','IN_PROGRESS')) AS exp_status
        FROM fiber_dps d JOIN fiber_providers pr ON pr.id=d.provider_id LEFT JOIN fiber_ports p ON p.dp_id=d.id WHERE d.status='ACTIVE' ${f.providerId ? 'AND d.provider_id=$1' : ''} GROUP BY d.id, pr.code`, f.providerId ? [f.providerId] : [])).rows;
   const items: DpPressure[] = rows.map((r) => {
-    const usable = usablePorts(r as never);
+    const usable = usablePorts({ available: r.available, total: r.total, faulty: r.faulty });
     const pct = Math.round(((usable - r.available) / usable) * 100);
-    const level = classifyPorts(r as never, s);
+    const level = classifyPorts({ available: r.available, total: r.total, faulty: r.faulty }, s);
     return { dpId: r.id, code: r.code, name: r.name, provider: r.provider, city: r.city, lat: r.lat, lng: r.lng, splitter: r.splitterRatio, total: r.total, available: r.available, reserved: r.reserved, inUse: r.inUse, faulty: r.faulty, utilisationPercent: pct, level, waiting: r.waiting, expansion: r.expId ? { id: r.expId, status: r.expStatus } : null };
   });
   const order: Record<PortLevel, number> = { EXHAUSTED: 0, LOW: 1, OK: 2 };

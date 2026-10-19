@@ -52,6 +52,7 @@ describe('profile notification preferences are honoured', () => {
   });
   it('sends the text message through the gateway to the profile number, with no secrets in it, and retries when the gateway is down', async () => {
     await addGateway();
+    await db.query(`DELETE FROM lifecycle_outbox WHERE instruction='USER_ALERT'`);   // other tests' queued alerts
     const u = await newUser({ channels: { sms: true, email: false, push: false } });
     await notifyUser(db, { id: u.id }, 'securityAlerts', { title: 'Password changed', body: 'Your password was changed.' });
     status = 503;
