@@ -93,7 +93,7 @@ function Connector({ data, reload }: { data: Overview; reload: () => void }) {
             )}
           </>
         )}
-        <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={enabled} disabled={!vendor} onChange={(e) => setEnabled(e.target.checked)} /><span><span className="block font-medium">Send provisioning to this charging system</span><span className="text-footnote text-label2">Plans with an OCS plan code are created, changed, barred and closed there. Services that started earlier are not sent.</span></span></label>
+        <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={enabled} disabled={!vendor} onChange={(e) => setEnabled(e.target.checked)} /><span><span className="block font-medium">Send provisioning to this charging system</span><span className="text-footnote text-label2">Plans with an OCS plan code are created, changed, barred and closed there. Services that started earlier are not sent unless they change plan.</span></span></label>
         {act.error && <Alert>{act.error}</Alert>}
         {act.ok && <Alert tone="success">{act.ok}</Alert>}
         {test && <Alert tone={test.ok ? 'success' : undefined}>{test.detail}</Alert>}

@@ -14,7 +14,7 @@ export default function KycQueue() {
   const summary = useApi<{ waiting: number; overdue: number }>('/kyc/summary');
   return (
     <>
-      <LargeTitle subtitle="Every new customer’s identity photographs arrive here as a task: from the online shop, from the CRM order screen and from the customer record.">KYC reviews</LargeTitle>
+      <LargeTitle subtitle="Identity checks that need a person arrive here as a task: from the online shop, from the CRM order screen and from the customer record.">KYC reviews</LargeTitle>
       <div className="mb-4"><Segmented label="Status" value={status} options={FILTERS} onChange={setStatus} /></div>
       {summary.data && summary.data.waiting > 0 && status === 'PENDING' && <p className="mb-3 text-subhead text-label2">{summary.data.waiting} waiting{summary.data.overdue > 0 ? <>, <strong className="text-danger">{summary.data.overdue} overdue</strong></> : ''}. Oldest first.</p>}
       {list.error && <Alert>{list.error}</Alert>}

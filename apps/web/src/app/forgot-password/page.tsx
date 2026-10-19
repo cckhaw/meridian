@@ -31,7 +31,7 @@ export default function ForgotPassword() {
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-4">
-              <Field label="Username or e-mail" hint="We will send a link to your e-mail or a code to your mobile, whichever is on your account."><Input autoComplete="username" autoCapitalize="none" required autoFocus value={id} onChange={(e) => setId(e.target.value)} /></Field>
+              <Field label="Username or e-mail" hint="We will send a link or a six-digit code to the e-mail or mobile number on your account."><Input autoComplete="username" autoCapitalize="none" required autoFocus value={id} onChange={(e) => setId(e.target.value)} /></Field>
               {error && <Alert>{error}</Alert>}
               <Button type="submit" className="w-full" disabled={busy || !id.trim()}>{busy ? 'Sending…' : 'Send link or code'}</Button>
             </form>

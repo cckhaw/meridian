@@ -24,7 +24,7 @@ export default function Page() {
       <Card>
         <div className="space-y-4" role="status" aria-live="polite">
           {state.status === 'working' && <><h1 className="text-title3 font-semibold">Confirming with MyDigital ID…</h1><Spinner /></>}
-          {state.status === 'done' && <><h1 className="text-title3 font-semibold">You’re verified</h1><p className="text-subhead text-label2">{state.message}</p></>}
+          {state.status === 'done' && <><h1 className="text-title3 font-semibold">Your identity is confirmed</h1><p className="text-subhead text-label2">{state.message}</p></>}
           {state.status === 'failed' && <>
             <h1 className="text-title3 font-semibold">We couldn’t confirm with MyDigital ID</h1>
             <Alert>{state.message}</Alert>

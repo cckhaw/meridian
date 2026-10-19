@@ -74,7 +74,7 @@ export function DunningSettings() {
   return (
     <div className="space-y-6">
       <Card>
-        <p className="text-subhead text-label2">A <strong className="text-label">rule</strong> says who it applies to (market, customer type, segment, VIP, credit risk) and holds a <strong className="text-label">ladder</strong> of steps: on day D+X past due, or when the overdue balance reaches an amount, send a reminder, charge a late fee, bar the service, terminate. For each customer the matching rule with the <strong className="text-label">highest priority</strong> is used. Customers no active rule fits follow the older single ladder in the lifecycle settings. A ladder already under way is not changed by editing a rule; the next one uses the new version.</p>
+        <p className="text-subhead text-label2">A <strong className="text-label">rule</strong> says who it applies to (market, customer type, segment, VIP, credit risk) and holds a <strong className="text-label">ladder</strong> of steps: on day D+X past due, or when the overdue balance reaches an amount, send a reminder, charge a late fee, bar the service, terminate. For each customer the matching rule with the <strong className="text-label">highest priority</strong> is used. Customers no active rule fits follow the older single ladder set in the lifecycle settings (there is no screen for it yet). A ladder already under way is not changed by editing a rule; the next one uses the new version.</p>
       </Card>
       {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
 

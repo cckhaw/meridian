@@ -110,7 +110,7 @@ function Upload({ initialCustomer, onClose, onDone }: { initialCustomer: string;
         <Field label="Customer id" hint="Copy it from the customer's page"><Input value={customerId} onChange={(e) => setCustomerId(e.target.value)} placeholder="00000000-0000-…" /></Field>
         <Field label="Document"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{['NATIONAL_ID_FRONT', 'NATIONAL_ID_BACK', 'PASSPORT', 'UTILITY_BILL', 'CORPORATE_REGISTRATION_SSM', 'PROOF_OF_ADDRESS'].map((c) => <option key={c} value={c}>{categoryText(c)}</option>)}</Select></Field>
         <Field label="Valid until (optional)"><Input type="date" value={expiresAt} onChange={(e) => setExpires(e.target.value)} /></Field>
-        <Field label="File" hint="A JPEG, PNG, WebP or PDF, up to 2 MB. It is encrypted before it is stored."><Input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+        <Field label="File" hint="A JPEG, PNG, WebP or PDF, up to 3 MB. It is encrypted before it is stored."><Input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
         {error && <Alert>{error}</Alert>}
         <div className="flex justify-end gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button disabled={busy || !file || !customerId.trim()} onClick={() => void submit()}>{busy ? 'Adding…' : 'Add'}</Button></div>
       </div>

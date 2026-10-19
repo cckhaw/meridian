@@ -63,7 +63,7 @@ function StorefrontForm({ initial, clients, reload }: { initial: StoreSettings; 
       <Keys clients={clients} onChange={reload} />
       <Card>
         <SectionTitle>Terms and sign-ups</SectionTitle>
-        <p className="mb-3 text-footnote text-label2">Shown to online customers and recorded with their consent. Identity verification and payment have their own panels below.</p>
+        <p className="mb-3 text-footnote text-label2">Shown to online customers and recorded with their consent. Identity verification and payment have their own sections: Identity, credit and collections, and Payments and finance.</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Terms and conditions link"><Input type="url" placeholder="https://…" value={f.termsUrl} onChange={(e) => set('termsUrl', e.target.value)} /></Field>
           <Field label="Privacy notice link"><Input type="url" placeholder="https://…" value={f.privacyUrl} onChange={(e) => set('privacyUrl', e.target.value)} /></Field>
@@ -88,19 +88,19 @@ function KycForm({ initial, reload }: { initial: StoreSettings; reload: () => vo
       <SectionTitle>Identity verification (KYC)</SectionTitle>
       <p className="text-footnote text-label2">One set of rules for both ways of selling. The badge on each line says where it applies.</p>
       <div className="divide-y divide-separator">
-        <Row title="Online sign-ups are approved by" where={<Where store />}
+        <Row title="New customers are approved by" where={<Where store crm />}
           hint="Manual: a compliance officer reviews every application. Automatic: applications that pass every rule are approved without review. An ID check service or MyDigital ID, when connected below, approves a clean pass by its own setting.">
-          <Select aria-label="Online sign-ups are approved by" value={f.kycMode} onChange={(e) => set('kycMode', e.target.value as StoreSettings['kycMode'])}><option value="manual">A compliance officer (recommended)</option><option value="auto">Automatic rules only</option></Select>
+          <Select aria-label="New customers are approved by" value={f.kycMode} onChange={(e) => set('kycMode', e.target.value as StoreSettings['kycMode'])}><option value="manual">A compliance officer (recommended)</option><option value="auto">Automatic rules only</option></Select>
         </Row>
         <Row title="Photographs" where={<Where store crm />}
-          hint="Every new customer, online or in the CRM, must photograph their ID (and a selfie). The photos are taken live with the device camera; choosing a picture from the gallery is not possible. They are kept encrypted in the document store, and a review task opens in KYC reviews.">
+          hint="Every new customer, online or in the CRM, must photograph their ID (and a selfie), unless they use MyDigital ID. The photos are taken live with the device camera; choosing a picture from the gallery is not possible. They are kept encrypted in the document store, and unless the check is approved automatically a review task opens in KYC reviews.">
           <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className={checkbox} checked={f.kycRequireLiveCapture} onChange={(e) => set('kycRequireLiveCapture', e.target.checked)} /><span><span className="block">Only live camera photos are accepted</span><span className="text-footnote text-label2">The server also refuses files that look like gallery photos (they carry photo-library details), stale pictures and ones too small to read. Switch off only for a partner that sends scans through the API.</span></span></label>
         </Row>
         <Row title="Minimum age" where={<Where store crm />} hint="Applicants under this age are refused, online and in the CRM.">
           <div className="w-32"><Input type="number" aria-label="Minimum age" min={0} max={100} value={f.minAge} onChange={(e) => set('minAge', Number(e.target.value))} /></div>
         </Row>
         <Row title="When identity must be settled" where={<Where store crm />}
-          hint="Before the service is switched on (recommended): the customer is not kept waiting for a person. The order is taken and paid, the service stays off, and it is activated when the review approves. If the review does not approve, the order is cancelled and refunded. Before the order: nothing is sold until the review approves.">
+          hint="Before the service is switched on (recommended): the customer is not kept waiting for a person, unless an online check is flagged. The order is taken and paid, the service stays off, and it is activated when the review approves. If the review does not approve, the order is cancelled and refunded. Before the order: nothing is sold until the review approves.">
           <Select aria-label="When identity must be settled" value={f.kycGate} onChange={(e) => set('kycGate', e.target.value as StoreSettings['kycGate'])}><option value="BEFORE_ACTIVATION">Before the service is switched on (recommended)</option><option value="BEFORE_ORDER">Before the order is taken</option></Select>
         </Row>
         <Row title="Review target" where={<Where store crm />} hint="A review task waiting longer than this is shown as overdue in KYC reviews.">
