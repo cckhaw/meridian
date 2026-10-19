@@ -16,12 +16,13 @@ import { writeFileSync } from 'node:fs';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : null)).filter(Boolean));
 const BASE = (process.env.BASE ?? args.base ?? 'http://localhost:3111').replace(/\/$/, '');
-const N = Number(args.customers ?? 60);
+const RESUME = !!args.resume;   // carry on after an interrupted run: adopt the customers already made under this tag, skip creating and ordering, run the later steps
+const N = RESUME ? 0 : Number(args.customers ?? 60);
 const TAG = String(args.tag ?? 'LT');
 const DRY = !!args.dry;
 const KEEP_USERS = !!args['keep-users'];
 const COUNT = (k, d) => Math.max(0, Number(args[k] ?? d));
-const DEALERS = COUNT('dealers', 3), NEW_STORES = COUNT('stores', 0), CALLCENTRE = COUNT('callcentre', 0), TELESALES = COUNT('telesales', 0), BACKOFFICE = COUNT('backoffice', 0);
+const DEALERS = RESUME ? 0 : COUNT('dealers', 3), NEW_STORES = RESUME ? 0 : COUNT('stores', 0), CALLCENTRE = RESUME ? 0 : COUNT('callcentre', 0), TELESALES = RESUME ? 0 : COUNT('telesales', 0), BACKOFFICE = RESUME ? 0 : COUNT('backoffice', 0);
 const CONC = Math.max(1, COUNT('concurrency', 4));
 
 // ─────────────────────────── small helpers ───────────────────────────
@@ -259,13 +260,21 @@ const orderIds = customers.flatMap((c) => c.orders.map((id) => ({ id, c })));
 for (const { id } of orderIds.filter(() => chance(0.07))) await step('orders cancelled', () => admin.call(`/orders/${id}/actions`, 'POST', { type: 'cancel', reason: pick(['Customer changed their mind', 'Found a better offer', 'Ordered by mistake']) }));
 
 // ── services ──
+if (RESUME) {
+  for (let cursor = '', i = 0; i < 200; i++) {
+    const r = await admin.call(`/customers?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    for (const x of r.json.items ?? []) if (String(x.displayName).endsWith(`[${TAG}]`)) customers.push({ id: x.id, name: x.displayName, accountId: null, kyc: x.kycStatus, verified: x.kycStatus === 'VERIFIED', orders: [], services: [] });
+    cursor = r.json.nextCursor; if (!cursor) break;
+  }
+  log(`Resuming with ${customers.length} customers already tagged ${TAG}.`);
+}
 log('Reading services…');
 for (const c of customers) { const s = await admin.call(`/services?customerId=${c.id}&limit=50`); c.services = (s.json.items ?? []).filter((x) => x.status !== 'TERMINATED'); if (!c.accountId && c.services[0]) c.accountId = c.services[0].accountId; }
 const withSvc = customers.filter((c) => c.services.length);
 log(`${withSvc.length} customers have a live service.`);
 
-// service changes
-for (const c of withSvc) {
+// service changes (already done in the run being resumed)
+for (const c of RESUME ? [] : withSvc) {
   const s = c.services.find((x) => x.type === 'MOBILE' && x.status === 'ACTIVE'); if (!s) continue;
   const roll = rnd();
   if (roll < 0.12) { const r = await step('services suspended', () => admin.call(`/services/${s.id}/actions`, 'POST', { action: 'suspend', reason: pick(['LOST_STOLEN', 'FRAUD_SUSPECTED', 'CUSTOMER_REQUEST']) })); if (r && chance(0.6)) await step('services resumed', () => admin.call(`/services/${s.id}/actions`, 'POST', { action: 'resume' })); }
@@ -295,7 +304,7 @@ for (const c of customers.filter(() => chance(0.8))) {
   }
 }
 const cases = [];
-for (let i = 0; i < Math.max(12, Math.round(N * 0.7)); i++) {
+for (let i = 0; i < Math.max(12, Math.round((N || customers.length) * 0.7)); i++) {
   const c = pick(caseCustomers.length ? caseCustomers : customers); if (!c) break;
   const type = pick(['GENERAL', 'GENERAL', 'BILLING_REFUND', 'FIBER_ASSURANCE', 'MNP_PORT_OUT']);
   const it = issueTypes.length ? pick(issueTypes) : null;
