@@ -76,7 +76,7 @@ export function Wizard() {
   // ── outcomes outside the form ──
   // A clean check does not hold the shopper up: they go on to pay while a person reviews it, and the service is switched on when it is approved.
   const notYet = view.status === 'KYC_REVIEW' && !view.kyc?.canOrderWhileWaiting;
-  if (notYet) return <Outcome title="We’re checking your ID" body="A team member is reviewing your photos. This page updates by itself; you can also come back later with the same browser." busy>{header}</Outcome>;
+  if (notYet) return <Outcome title="We’re checking your ID" body="A team member is reviewing your ID check. This page updates by itself; you can also come back later with the same browser." busy>{header}</Outcome>;
   if (view.status === 'KYC_REJECTED') return (
     <Outcome title="We couldn’t verify your identity" body={view.kyc?.reason ?? 'The details or documents did not pass our checks.'} tone="danger">
       <Button onClick={async () => { await api('/application', { method: 'DELETE' }); router.push('/'); }}>Start again</Button>
@@ -184,7 +184,7 @@ function Details({ view, onDone }: { view: View; onDone: () => void | Promise<vo
         <p className="text-subhead text-label2">Exactly as it appears on your ID. You must be at least {kyc.minAge}.</p>
         <Field label="Full name"><Input autoComplete="name" required value={f.fullName} onChange={set('fullName')} /></Field>
         <Field label="Date of birth"><Input type="date" autoComplete="bday" required max={today} value={f.dateOfBirth} onChange={set('dateOfBirth')} /></Field>
-        <Field label="Email" hint="We’ll send your order confirmation here."><Input type="email" autoComplete="email" required value={f.email} onChange={set('email')} /></Field>
+        <Field label="Email" hint="How we can reach you."><Input type="email" autoComplete="email" required value={f.email} onChange={set('email')} /></Field>
         <Field label="Mobile number" hint="A number we can reach you on, with country code."><Input type="tel" autoComplete="tel" required value={f.phone} onChange={set('phone')} /></Field>
         <Field label="ID type"><Select value={f.idType} onChange={set('idType')}>{kyc.idTypes.map((t) => <option key={t} value={t}>{ID_LABEL[t] ?? t}</option>)}</Select></Field>
         <Field label="ID number" hint={p.idNumberMasked ? `On file: ${p.idNumberMasked}. Enter it again to confirm.` : undefined}><Input required autoComplete="off" value={f.idNumber} onChange={set('idNumber')} /></Field>
@@ -329,7 +329,7 @@ function Review({ view, onBack, onSubmitted }: { view: View; onBack: () => void;
           <dt className="text-label2">Email</dt><dd>{view.personal.email}</dd>
           <dt className="text-label2">Mobile</dt><dd>{view.personal.phone}</dd>
           <dt className="text-label2">ID</dt><dd>{ID_LABEL[view.personal.idType ?? ''] ?? view.personal.idType} {view.personal.idNumberMasked}</dd>
-          {view.address && <><dt className="text-label2">Deliver to</dt><dd>{[view.address.line1, view.address.line2, view.address.city, view.address.postcode].filter(Boolean).join(', ')}</dd></>}
+          {view.address && <><dt className="text-label2">{view.quote?.requiresShipping ? 'Deliver to' : 'Install at'}</dt><dd>{[view.address.line1, view.address.line2, view.address.city, view.address.postcode].filter(Boolean).join(', ')}</dd></>}
         </dl>
         <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /><span className="text-subhead">I accept the {link(terms.termsUrl, 'terms and conditions')} (version {terms.version}).</span></label>
         <label className="flex items-start gap-3"><input type="checkbox" required className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={privacy} onChange={(e) => setPrivacy(e.target.checked)} /><span className="text-subhead">I have read the {link(terms.privacyUrl, 'privacy notice')} and agree to my ID being checked to verify my identity.</span></label>

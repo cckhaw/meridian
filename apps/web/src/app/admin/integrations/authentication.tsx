@@ -128,7 +128,7 @@ export function AuthConnections({ kind, h, reload }: { kind: Kind; h: Hub; reloa
             {(kind === 'IDP_OIDC' || kind === 'LDAP') && (
               <div className="sm:col-span-2">
                 <p className="mb-1 text-subhead font-medium">Which group gets which role</p>
-                <p className="mb-2 text-footnote text-label2">{kind === 'LDAP' ? 'A group’s name or full distinguished name.' : 'The group names (or ids) the provider sends.'} A person in no listed group gets no access. The Administrator role cannot be given this way.</p>
+                <p className="mb-2 text-footnote text-label2">{kind === 'LDAP' ? 'A group’s name or full distinguished name.' : 'The group names (or ids) the provider sends.'} {kind === 'LDAP' ? 'A person in no listed group gets no access: a new one is not created and an existing one is switched off.' : 'A new person in no listed group is refused; someone who already has an account keeps their current roles.'} The Administrator role cannot be given this way.</p>
                 {f.mappings.map((m, i) => (
                   <div key={i} className="mb-2 grid grid-cols-[1fr_1fr_auto] items-center gap-2">
                     <Input aria-label="Group" value={m.group} placeholder="Group" onChange={(e) => setF({ ...f, mappings: f.mappings.map((x, j) => (j === i ? { ...x, group: e.target.value } : x)) })} />

@@ -439,7 +439,7 @@ export function DeliveryStep({ w }: { w: Wizard }) {
       )}
       {needs.installation && (
         <Card>
-          {!w.booking.enabled && <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order.${w.quote.installationSlaDays ? ` Installations not completed within ${w.quote.installationSlaDays} days are cancelled and refunded.` : ''}`}>
+          {!w.booking.enabled && <Field label="Preferred installation visit" hint={`Optional now: if left blank the installation is scheduled after the order.${w.quote.installationSlaDays ? ` Installations not dispatched within ${w.quote.installationSlaDays} days are cancelled and refunded.` : ''}`}>
             <Input type="datetime-local" min={min} value={w.slot} onChange={(e) => w.setSlot(e.target.value)} />
           </Field>}
           {(!needs.delivery || w.method === 'COLLECT') && <div className="mt-3"><Field label="Installation address"><Input value={w.address} onChange={(e) => w.setAddress(e.target.value)} /></Field></div>}
@@ -530,7 +530,7 @@ export function ReviewStep({ w }: { w: Wizard }) {
               <ul className="grid gap-1 text-subhead sm:grid-cols-2">{l.entitlements.map((e: any, k: number) => <li key={k} className="flex gap-2"><span aria-hidden className="text-success">✓</span><span>{e.unlimited ? 'Unlimited' : e.quantity && !['unit', 'SIM'].includes(e.unit ?? '') ? `${e.quantity.toLocaleString()} ${e.unit ?? ''}`.trim() : ''} {e.name}</span></li>)}</ul></div>
           )}
           <dl className="mt-3 border-t border-separator pt-2">
-            {l.groupPlan && <Row k="Group plan" v={`You are the family head · up to ${l.groupPlan.maxMembers} member lines${l.groupPlan.sharedPoolQuotaGb ? ` · ${l.groupPlan.sharedPoolQuotaGb} GB shared` : ''}`} />}
+            {l.groupPlan && <Row k="Group plan" v={`This line is the family head · up to ${l.groupPlan.maxMembers} member lines${l.groupPlan.sharedPoolQuotaGb ? ` · ${l.groupPlan.sharedPoolQuotaGb} GB shared` : ''}`} />}
             {l.memberOf !== undefined && <Row k="Member of" v={q.lines[l.memberOf]?.name ?? 'the group plan'} />}
             {l.needsSim && <Row k="SIM" v={flat[i]?.iccid ? flat[i]!.iccid! : flat[i]?.simType === 'ESIM' ? 'New eSIM' : flat[i]?.simType === 'PHYSICAL' ? 'Next free card' : 'Not chosen'} />}
             {l.portIn ? <Row k="Number" v={`${l.portIn.donorMsisdn} ported in from ${l.portIn.donorOperator} (operator ID ${l.portIn.mnpOperatorId})${l.portIn.temporaryNumber ? ', with a temporary number until the port is approved' : ': the line starts when the number arrives'}`} /> : l.needsSim && <Row k="Number" v={flat[i]?.msisdn ? flat[i]!.msisdn! : 'Assigned from the pool'} />}
@@ -544,7 +544,7 @@ export function ReviewStep({ w }: { w: Wizard }) {
               <Row k="Down payment today" v={money(l.downMinor)} />
               <Row k="Instalments" v={`${l.months} × ${money(l.instalmentMinor)} / month`} />
             </>) : <Row k="Upfront" v={money(l.paidNowMinor)} />}
-            {l.contractMonths > 0 && (l.deal || l.etc) && <Row k="If cancelled early" v={l.deal || l.etc.method === 'SUBSIDY_AMORTISED' ? 'Early-termination charge for the unrecovered device subsidy' : `Early-termination charge of ${l.etc.percentOfRemaining ?? 0}% of the remaining fees`} />}
+            {l.contractMonths > 0 && (l.deal || l.etc) && <Row k="If cancelled early" v={l.deal || l.etc.method === 'SUBSIDY_AMORTISED' ? 'Early-termination charge for the unrecovered device subsidy' : `Early-termination charge of ${l.etc.percentOfRemaining ?? 0}% of the remaining fees${l.etc.method === 'RECURRING_PLUS_SUBSIDY' ? ' plus the unrecovered device subsidy' : ''}`} />}
           </dl>
         </Card>
       ))}

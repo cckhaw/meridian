@@ -20,7 +20,7 @@ export function DocumentSettings() {
     <Card>
       <p className="mb-4 text-subhead text-label2">The terms customers sign are written under <Link className="text-accent" href="/settings/document-templates">Document templates</Link>. Signed agreements and identity documents are kept in the vault, in {data.storage === 'S3' ? 'your object storage bucket' : 'the database'}.</p>
       <div className="grid max-w-xl gap-4">
-        {sw('requireAtOrder', 'A new order must be signed', 'When an agreement applies to what is being ordered, the order cannot be placed until the customer has read and signed it (in the CRM, the shop and the partner API).')}
+        {sw('requireAtOrder', 'A new order must be signed', 'When an agreement applies to what is being ordered, the order cannot be placed until the customer has read and signed it (in the CRM, the shop and the partner API). Quick sales at a counter are not asked.')}
         {sw('requireAtPlanChange', 'A plan change must be signed', 'The same for moving a service to another plan.')}
         {sw('deliverContracts', 'Send the signed copy to the customer', 'Queued for WhatsApp or SMS when the order is paid, or at once for a plan change, with a secure 15-minute link.')}
         <Field label="Remove unclaimed uploads after (hours)" hint="Identity uploads that never reached a customer."><Input type="number" min={1} value={cur.tempUploadHours} onChange={num('tempUploadHours')} /></Field>

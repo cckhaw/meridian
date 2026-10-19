@@ -33,7 +33,7 @@ export function identityPayload(s: IdentityState, individual: boolean, o: { dobK
   if (!o.dobKnown && !s.dateOfBirth) return { missing: 'Enter the date of birth as it is on the ID.' };
   if ((s.idType === 'PASSPORT' || s.idType === 'RESIDENCE_PERMIT') && !s.idExpiry) return { missing: 'Enter the expiry date of the passport or permit.' };
   const old = staleShots(s);
-  if (old.length) return { missing: 'A photo was taken more than ten minutes ago. Take it again.' };
+  if (old.length) return { missing: 'A photo was taken more than twelve minutes ago. Take it again.' };
   return { identity: {
     idType: s.idType, idExpiry: s.idExpiry || undefined, nationality: s.nationality || undefined, dateOfBirth: s.dateOfBirth || undefined,
     documents: need.map((n) => ({ kind: n.kind, dataBase64: s.shots[n.kind]!.dataBase64, capture: s.shots[n.kind]!.capture })),

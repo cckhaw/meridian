@@ -147,11 +147,11 @@ export function AppShell({ nav, user, brand = { name: 'Meridian' }, activeHref, 
       <span className="rail-hide min-w-0 flex-1"><BrandMark brand={brand} className="text-title3" /></span>
       <ThemeToggle />
       {rail ? (
-        <button onClick={() => setMode('expanded')} aria-label="Expand sidebar" title="Expand sidebar (Ctrl or ⌘ + \\)"
+        <button onClick={() => setMode('expanded')} aria-label="Expand sidebar" title="Expand sidebar (Ctrl or ⌘ + \)"
           className={`inline-flex min-h-tap min-w-tap items-center justify-center rounded-full text-label2 hover:bg-label/[.07] hover:text-label ${focusRing}`}><Icon name="sidebar" size={20} /></button>
       ) : (
         <span data-collapse-menu className="relative">
-          <button onClick={() => (drawer ? setDrawer(false) : setCollapseMenu((o) => !o))} aria-label="Collapse sidebar" aria-haspopup="menu" aria-expanded={collapseMenu} title="Collapse sidebar (Ctrl or ⌘ + \\)"
+          <button onClick={() => (drawer ? setDrawer(false) : setCollapseMenu((o) => !o))} aria-label="Collapse sidebar" aria-haspopup="menu" aria-expanded={collapseMenu} title="Collapse sidebar (Ctrl or ⌘ + \)"
             className={`inline-flex min-h-tap min-w-tap items-center justify-center rounded-full text-label2 hover:bg-label/[.07] hover:text-label ${focusRing}`}><Icon name="sidebar" size={20} /></button>
           {collapseMenu && (
             <div role="menu" aria-label="Collapse the sidebar" className="material-thick absolute right-0 top-full z-50 mt-1 w-56 rounded-[12px] border border-separator p-1 shadow-card">

@@ -27,7 +27,7 @@ export function HistoryTab() {
         <Select aria-label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} className="md:max-w-[200px]"><option value="">All movements</option>{KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
       </div>
       {list.error && <Alert>{list.error}</Alert>}{list.loading && list.items.length === 0 && <Spinner />}
-      {!list.loading && list.items.length === 0 && !list.error && <Empty>No stock movements yet. Receipts, CSV loads and write-offs appear here.</Empty>}
+      {!list.loading && list.items.length === 0 && !list.error && <Empty>No stock movements yet. Receipts, CSV loads, write-offs and transfers appear here.</Empty>}
       {list.items.length > 0 && (
         <>
           <TableWrap><thead><tr><Th>When</Th><Th>Location</Th><Th>SKU</Th><Th>Movement</Th><Th right>Change</Th><Th right>On hand after</Th><Th>By</Th></tr></thead><tbody>

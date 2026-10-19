@@ -396,13 +396,13 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
         {stepId === 'rules' && (
           <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <DependencyPicker title="Customer must first have" help="The customer needs one of these in the same order, or already own it. Pick a whole category or group to mean “any offer beneath it”." value={f.requires} names={names} remember={remember} levels={['OFFER', 'GROUP', 'CATEGORY', 'NETWORK_TYPE']} taken={chosen} onChange={(requires) => setF({ ...f, requires })} />
+            <DependencyPicker title="Customer must first have" help="The customer needs every one of these, in the same order or already owned. Pick a whole category or group to mean “any offer beneath it”." value={f.requires} names={names} remember={remember} levels={['OFFER', 'GROUP', 'CATEGORY', 'NETWORK_TYPE']} taken={chosen} onChange={(requires) => setF({ ...f, requires })} />
             <DependencyPicker title="Cannot be bought together with" help="Offers that cannot be in the same order as this one." value={f.excludes} names={names} remember={remember} levels={['OFFER']} taken={chosen} onChange={(excludes) => setF({ ...f, excludes })} />
           </div>
           {canGroup && (
             <Card className="space-y-4">
               <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={f.isGroup} onChange={(e) => setF({ ...f, isGroup: e.target.checked })} />
-                <span><span className="font-medium">This is a group plan (family or multi-line share)</span><span className="block text-footnote text-label2">Buying it creates the group: the buyer is the family head, and member lines join it in the same order, or later. You cannot make a group by hand.</span></span></label>
+                <span><span className="font-medium">This is a group plan (family or multi-line share)</span><span className="block text-footnote text-label2">Buying it creates the group: the buyer is the family head, and member lines join it in the same order, or later. Staff can also group a customer’s lines by hand, without a plan.</span></span></label>
               {f.isGroup && (
                 <>
                   <div className="grid gap-4 sm:grid-cols-2">

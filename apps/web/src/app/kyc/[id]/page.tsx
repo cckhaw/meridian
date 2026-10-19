@@ -64,7 +64,7 @@ export default function KycCase() {
           {c.checks.mydigitalid && (
             <div className="space-y-2 text-subhead">
               <p>The customer proved their identity with MyDigital ID on {dt(c.checks.mydigitalid.verifiedAt)}. Name, ID number and date of birth matched what was entered. There are no photographs for this case.</p>
-              <p className="text-footnote text-label2">Provider reference {c.checks.mydigitalid.subject}. {c.flags.length ? 'A rule below flagged it, so it needs a person.' : 'Automatic approval is off, so it needs a person.'}</p>
+              <p className="text-footnote text-label2">Provider reference {c.checks.mydigitalid.subject}. {c.flags.length ? 'A rule flagged it (see above), so it needs a person.' : 'Automatic approval is off, so it needs a person.'}</p>
             </div>)}
         </Card>
       )}

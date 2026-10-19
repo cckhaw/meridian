@@ -2,7 +2,7 @@
 import { Alert, Badge, Button, Card, Field, Input, Modal, SectionTitle, Select, Spinner, Textarea } from '@meridian/ui';
 import { useMemo, useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
-import { label, money, step as moneyStep, toInput, toMinor } from '@/lib/format';
+import { getRegional, label, money, step as moneyStep, toInput, toMinor } from '@/lib/format';
 import { useSegments } from '@/lib/segments';
 
 type Action = 'NOTIFY' | 'LATE_FEE' | 'CASE_TASK' | 'SOFT_BAR' | 'HARD_BAR' | 'TERMINATE' | 'COLLECTIONS_TRANSFER';
@@ -17,7 +17,7 @@ interface View {
 }
 
 const ACTIONS: Array<{ id: Action; label: string; hint: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = [
-  { id: 'NOTIFY', label: 'Notify', hint: 'SMS, e-mail or WhatsApp, with a QR code', tone: 'neutral' },
+  { id: 'NOTIFY', label: 'Notify', hint: 'SMS, e-mail, WhatsApp or push, with a QR code', tone: 'neutral' },
   { id: 'LATE_FEE', label: 'Late fee', hint: 'Charge a late payment fee', tone: 'warning' },
   { id: 'CASE_TASK', label: 'Account manager task', hint: 'Ask a person to act, optionally holding the bars', tone: 'neutral' },
   { id: 'SOFT_BAR', label: 'Soft bar', hint: 'Block outgoing; incoming and self-service still work', tone: 'warning' },
@@ -69,12 +69,12 @@ export function DunningSettings() {
   if (view.error) return <Alert>{view.error}</Alert>;
   if (!view.data) return <Spinner />;
   const v = view.data;
-  const currency = 'USD';
+  const currency = getRegional().currency;
   const rules = [...v.rules].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
   return (
     <div className="space-y-6">
       <Card>
-        <p className="text-subhead text-label2">A <strong className="text-label">rule</strong> says who it applies to (market, customer type, segment, VIP, credit risk) and holds a <strong className="text-label">ladder</strong> of steps: on day D+X past due, or when the overdue balance reaches an amount, send a reminder, charge a late fee, bar the service, terminate. For each customer the matching rule with the <strong className="text-label">highest priority</strong> is used. Customers no active rule fits follow the older single ladder in the lifecycle settings. A ladder already under way is not changed by editing a rule; the next one uses the new version.</p>
+        <p className="text-subhead text-label2">A <strong className="text-label">rule</strong> says who it applies to (market, customer type, segment, VIP, credit risk) and holds a <strong className="text-label">ladder</strong> of steps: on day D+X past due, or when the overdue balance reaches an amount, send a reminder, charge a late fee, bar the service, terminate. For each customer the matching rule with the <strong className="text-label">highest priority</strong> is used. Customers no active rule fits follow the older single ladder set in the lifecycle settings (there is no screen for it yet). A ladder already under way is not changed by editing a rule; the next one uses the new version.</p>
       </Card>
       {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
 
@@ -111,7 +111,7 @@ export function DunningSettings() {
             </li>
           ))}
         </ul>
-        {rules.length > 0 && <p className="mt-2 text-footnote text-label2">Load the starter set for another market from <button type="button" className="text-accent" onClick={() => void act.run(() => post('/settings/dunning-rules/seed', {}), 'Loaded the starter rules for the regional market')}>the regional market</button>. Rules you have already loaded are kept.</p>}
+        {rules.length > 0 && <p className="mt-2 text-footnote text-label2">Add any missing starter rules for the regional market: <button type="button" className="text-accent" onClick={() => void act.run(() => post('/settings/dunning-rules/seed', {}), 'Loaded the starter rules for the regional market')}>load them</button>. Rules you have already loaded or changed are kept.</p>}
       </section>
 
       <LateFees fees={v.lateFees} reload={view.reload} currency={currency} />
@@ -214,7 +214,7 @@ function RuleEditor({ initial, view, onClose, onSaved }: { initial: Rule; view: 
                       className={`rounded-card border bg-surface ${shown ? 'border-accent' : 'border-separator'} ${drag && 'from' in drag && drag.from === i ? 'opacity-40' : ''}`}>
                       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
                         <span aria-hidden className={`cursor-grab select-none text-label2 ${shown ? 'invisible' : ''}`} title="Drag to reorder">⠿</span>
-                        <Badge tone={s.enabled ? info.tone : 'neutral'}>{triggerText(s, 'USD')}</Badge>
+                        <Badge tone={s.enabled ? info.tone : 'neutral'}>{triggerText(s, getRegional().currency)}</Badge>
                         <button type="button" onClick={() => setOpen(shown ? null : s.key)} aria-expanded={shown} className={`min-w-0 flex-1 truncate text-left font-medium ${s.enabled ? '' : 'line-through opacity-60'}`}>{s.name} <span className="font-normal text-label2">· {info.label}</span></button>
                         {s.exclusions.dispute && <Badge>Skips disputes</Badge>}{s.exclusions.vip && <Badge>Skips VIP</Badge>}{s.exclusions.arrangement && <Badge>Skips arrangements</Badge>}
                         <span className="flex gap-1">
@@ -273,7 +273,7 @@ function StepEditor({ s, set, view }: { s: Step; set: (p: Partial<Step>) => void
         <Field label="Message"><Select value={p.template ?? ''} onChange={(e) => setP({ template: e.target.value || undefined })}>{Object.entries(view.templates).map(([k, tpl]) => <option key={k} value={k}>{tpl.label}</option>)}<option value="">My own text</option></Select></Field>
         <div className="space-y-2">
           <label className="flex min-h-tap items-center gap-2 text-subhead"><input type="checkbox" checked={!!p.includeQr} onChange={(e) => setP({ includeQr: e.target.checked })} /> Include a QR payment code</label>
-          {p.includeQr && <Select aria-label="QR scheme" value={p.qrScheme ?? ''} onChange={(e) => setP({ qrScheme: e.target.value || undefined })}><option value="">The market’s scheme</option>{view.qrSchemes.map((q) => <option key={q.id} value={q.id}>{q.label}</option>)}</Select>}
+          {p.includeQr && <Select aria-label="QR scheme" value={p.qrScheme ?? ''} onChange={(e) => setP({ qrScheme: e.target.value || undefined })}><option value="">No scheme chosen (no QR code is sent)</option>{view.qrSchemes.map((q) => <option key={q.id} value={q.id}>{q.label}</option>)}</Select>}
           <label className="flex min-h-tap items-center gap-2 text-subhead"><input type="checkbox" checked={!!p.final} onChange={(e) => setP({ final: e.target.checked })} /> Final demand (states the early-termination charge and date)</label></div>
         <div className="sm:col-span-2">
           {p.template ? <p className="rounded-control bg-surface2 px-3 py-2 text-footnote text-label2">{text}</p>

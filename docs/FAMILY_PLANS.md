@@ -15,7 +15,7 @@ Terms are checked when the offer is saved (limits, and that every named member p
 
 ## How a group is created
 
-There is no "Create group" button. A group comes from one of two moments.
+A group normally comes from one of two moments (A and B below). Staff can also make one by hand: on a customer's account, **New group** groups the customer's lines without a group plan (the group is marked as made by hand).
 
 **A. The order (checkout).** In the new-order wizard, adding a group plan adds a **Family members** step. The buyer's own line is the **family head** (the group's Principal; the group lives on the buyer's account). Each member line has its own plan, SIM (next free card, eSIM or later) and number: assigned from the pool, chosen, or **ported in**. The server refuses more members than `maxGroupMembers` and plans the group plan does not allow, in the quote and in the order. When the order activates, the group is created with the head as Principal and the members join it, so the whole family is made in one atomic order. The API takes the same shape: a line with `members: [...]` (see below).
 

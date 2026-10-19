@@ -36,7 +36,7 @@ export function ContainerInspector({ d, a }: { d: Detail; a: Actions }) {
           : <Button className="!min-h-[40px] !px-4 !text-subhead" onClick={() => a.onAdd(n)}>＋ Add {LEVEL_NOUN[childLevel]}</Button>)} />
       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat k="Offers live" v={big(n.activeOfferCount)} sub={`of ${big(n.offerCount)}`} />
-        <Stat k="Not live" v={big(n.offerCount - n.activeOfferCount)} sub="draft or retired" />
+        <Stat k="Not live" v={big(n.offerCount - n.activeOfferCount)} sub="draft, scheduled or retired" />
         <Stat k="Status" v={n.status === 'ACTIVE' ? 'Live' : label(n.status)} />
       </ul>
       <p className="px-1 text-subhead text-label2">
@@ -106,7 +106,7 @@ export function OfferInspector({ d, a }: { d: Detail; a: Actions }) {
       {refs.map((r) => <button key={r.id} onClick={() => !r.missing && a.onOpen(r.id)} disabled={!!r.missing} className="rounded-full bg-surface2 px-3 py-1 text-subhead hover:bg-separator focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{r.missing ? `${r.id} (missing)` : r.level === 'OFFER' ? r.name : `Any ${r.name}`}</button>)}
     </span>
   );
-  const fulfil = [f.requiresShipping && 'Ships to the customer', f.requiresInstallation && 'Installation visit', f.requiresSimActivation && 'SIM activation'].filter(Boolean) as string[];
+  const fulfil = [f.requiresShipping && 'Ships to the customer', f.requiresCollection && 'Collect in store', f.requiresInstallation && 'Installation visit', f.requiresSimActivation && 'SIM activation'].filter(Boolean) as string[];
   return (
     <div className="space-y-5">
       <Header node={offer} sub={types.name(offer.kind) || 'Offer'} a={a}

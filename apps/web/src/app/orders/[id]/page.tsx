@@ -118,7 +118,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
               {o.cancellable ? (<>
                 {o.cancelAll && o.cancelAll.kinds.length > 0 && (
                   <p className="text-subhead text-label2">Cancels {o.cancelAll.kinds.map((k: string) => gt(k).toLowerCase()).join(' and ')}. Refunds <strong className="text-label">{money(o.cancelAll.refundMinor, o.currency)}</strong>
-                    {o.cancelAll.feeMinor > 0 ? `, keeping a ${money(o.cancelAll.feeMinor, o.currency)} call-out fee` : ''}{o.cancelAll.clawbackMinor > 0 ? `, less ${money(o.cancelAll.clawbackMinor, o.currency)} of bundle discount that no longer applies` : ''}.
+                    {o.cancelAll.feeMinor > 0 ? `, keeping a ${money(o.cancelAll.feeMinor, o.currency)} fee` : ''}{o.cancelAll.clawbackMinor > 0 ? `, less ${money(o.cancelAll.clawbackMinor, o.currency)} of bundle discount that no longer applies` : ''}.
                     {o.groups.some((g: any) => !g.canCancel && ['LOCKED', 'DONE'].includes(g.status)) && ' Parts already shipped, dispatched or active stay.'}</p>
                 )}
                 <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
