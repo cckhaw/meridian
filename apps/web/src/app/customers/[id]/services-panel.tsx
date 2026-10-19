@@ -106,7 +106,7 @@ export function ServicePanel({ service, onClose, onDone }: { service: any; accou
       </div>
       {(action === 'terminate' || action === 'complete-port-out') && etc.data && (
         <p className="mt-3 rounded-control bg-surface2 p-3 text-subhead">
-          {etc.data.chargeMinor > 0 ? <>Early termination charge: <strong>{money(etc.data.chargeMinor)}</strong> ({etc.data.monthsRemaining} months remaining). It will be invoiced now.</> : etc.data.waived ? 'ETC waived (final month of contract).' : 'No early termination charge.'}
+          {etc.data.chargeMinor > 0 ? <>Early termination charge: <strong>{money(etc.data.chargeMinor)}</strong> ({etc.data.monthsRemaining} months remaining). It will be invoiced now.</> : etc.data.waived ? 'ETC waived (close to the end of the contract).' : 'No early termination charge.'}
         </p>
       )}
       {error && <div className="mt-3"><Alert>{error}</Alert></div>}

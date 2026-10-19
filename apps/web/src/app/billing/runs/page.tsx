@@ -80,7 +80,7 @@ function Runs({ canRun, onOpen }: { canRun: boolean; onOpen: (id: string) => voi
             {mode === 'daily' && <Field label="Bill date" hint="Leave empty for today."><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>}
             {mode === 'selective' && (
               <>
-                <Field label="Account ids" hint="One per line or separated by commas (up to 10,000). Use this to bill, or rebill, only these accounts."><textarea className="min-h-[96px] w-full rounded-control border border-separator bg-surface p-3 font-mono text-footnote" value={ids} onChange={(e) => setIds(e.target.value)} /></Field>
+                <Field label="Account ids" hint="One per line or separated by commas (up to 10,000). Use this to bill only these accounts. A period that is already billed is skipped."><textarea className="min-h-[96px] w-full rounded-control border border-separator bg-surface p-3 font-mono text-footnote" value={ids} onChange={(e) => setIds(e.target.value)} /></Field>
                 <Field label="Bill date" hint="Leave empty for today."><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
               </>
             )}

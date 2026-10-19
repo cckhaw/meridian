@@ -36,7 +36,7 @@ export function LoadPane() {
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="What are you loading?"><Select value={kind} onChange={(e) => { setKind(e.target.value as Kind); setResult(null); setMode('file'); }}><option value="msisdn">MSISDN (phone numbers)</option><option value="sim">ICCID (SIM cards or eSIMs)</option><option value="imsi">IMSI (subscriber identities)</option></Select></Field>
         {kind !== 'sim' && <Field label="From"><Select value={mode} onChange={(e) => { setMode(e.target.value as 'file' | 'range'); setResult(null); }}><option value="file">A list or file</option><option value="range">A range</option></Select></Field>}
-        <Field label="Batch name" hint="Optional, to find them later"><Input value={batch} maxLength={60} onChange={(e) => setBatch(e.target.value)} /></Field>
+        <Field label="Batch name" hint="Optional, kept with every item loaded"><Input value={batch} maxLength={60} onChange={(e) => setBatch(e.target.value)} /></Field>
       </div>
       <p className="mt-3 text-subhead text-label2">{HELP[kind]}</p>
       {kind === 'sim' && (

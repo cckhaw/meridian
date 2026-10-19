@@ -12,7 +12,7 @@ export default function FraudDesk() {
   const alerts = useApi<{ items: any[]; open: number }>('/fraud/alerts');
   return (
     <>
-      <LargeTitle subtitle="SIM-swap anomalies, usage spikes and the blacklist. Barring a service cuts it off completely until you lift the bar.">Fraud desk</LargeTitle>
+      <LargeTitle subtitle="SIM-swap anomalies, usage spikes and the blacklist. Barring a service cuts it off, except for emergency calls, until you lift the bar.">Fraud desk</LargeTitle>
       <div className="mb-4"><Segmented label="Fraud desk" value={tab} options={[{ value: 'alerts', label: `Alerts${alerts.data?.open ? ` (${alerts.data.open})` : ''}` }, { value: 'swaps', label: 'SIM swaps' }, { value: 'blacklist', label: 'Blacklist' }]} onChange={(v) => setTab(v as Tab)} /></div>
       {tab === 'alerts' && <Alerts state={alerts} />}
       {tab === 'swaps' && <Swaps />}
@@ -62,7 +62,7 @@ function Alerts({ state }: { state: ReturnType<typeof useApi<{ items: any[]; ope
       {state.data?.items.some((a) => a.status === 'OPEN') && <Field label="Note for the next alert you close" hint="Optional: saved with the decision."><Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} /></Field>}
       {bar && (
         <Modal title={`Bar ${bar.identifier ?? 'service'}`} onClose={() => setBar(null)}>
-          <p className="mb-3 text-subhead text-label2">Calls, SMS and data stop in both directions. Only a fraud analyst can lift the bar.</p>
+          <p className="mb-3 text-subhead text-label2">Calls, SMS and data stop in both directions; emergency calls still work. Only a fraud analyst can lift the bar.</p>
           <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} /></Field>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setBar(null)}>Cancel</Button>
@@ -123,7 +123,7 @@ function Blacklist() {
       {(list.error || act.error) && <Alert>{list.error || act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
       <Card>
         <h2 className="mb-1 text-title3 font-semibold">Add to the blacklist</h2>
-        <p className="mb-3 text-subhead text-label2">Only a scrambled form of the value is kept, so nobody can read it back. A match stops a sign-up, an order or a SIM swap.</p>
+        <p className="mb-3 text-subhead text-label2">Only a scrambled form of the value is kept, plus its last three characters as a hint, so nobody can read it back. A match stops a sign-up, an order or a SIM swap.</p>
         <div className="grid gap-3 sm:grid-cols-[12rem_1fr_1fr_auto] sm:items-end">
           <Field label="Kind"><Select value={kind} onChange={(e) => setKind(e.target.value)}>{Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
           <Field label="Value"><Input value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" /></Field>

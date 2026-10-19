@@ -38,7 +38,7 @@ export function AddNodeModal({ level, parent, onClose, onDone }: { level: TreeNo
         {act.error && <Alert>{act.error}</Alert>}
         <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} /></Field>
         {level === 'NETWORK_TYPE' && (
-          <Field label="Network" hint="Decides which provisioning and rating systems apply.">
+          <Field label="Network" hint="Describes this branch only. What an offer sets up and how it is charged comes from its offer type.">
             <Select value={networkType} onChange={(e) => setNetworkType(e.target.value)}>{NETWORK_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
           </Field>
         )}

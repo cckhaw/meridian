@@ -76,10 +76,10 @@ function Runs({ onDone }: { onDone: () => void }) {
       )}
       <Card>
         <h2 className="text-title3 font-semibold">Dunning</h2>
-        <p className="mb-3 text-subhead text-label2">Marks unpaid invoices overdue, suspends services 15 days after the due date, and flags accounts at 45 days for write-off review.</p>
+        <p className="mb-3 text-subhead text-label2">Marks unpaid invoices overdue, then takes each overdue account through its dunning steps: reminders, bars, termination. The steps and days are set in Settings → Dunning rules.</p>
         <Button disabled={dun.busy} onClick={async () => setDres(await dun.run(() => post('/billing/dunning', {})))}>{dun.busy ? 'Running…' : 'Run dunning'}</Button>
         {dun.error && <div className="mt-3"><Alert>{dun.error}</Alert></div>}
-        {dres && <div className="mt-3"><Alert tone="success">{dres.markedOverdue} invoices marked overdue · {dres.suspendedAccounts} accounts suspended · {dres.flaggedForReview} flagged for review</Alert></div>}
+        {dres && <div className="mt-3"><Alert tone="success">{dres.markedOverdue} invoices marked overdue · {dres.suspendedAccounts} accounts suspended · {dres.flaggedForReview} terminated</Alert></div>}
       </Card>
     </div>
   );
