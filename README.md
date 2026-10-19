@@ -20,7 +20,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 730 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 806 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -81,6 +81,9 @@ Everything about outside systems is under the **Integration** menu (next to Sett
 - [Customers, segments and groups](docs/CUSTOMERS.md): customer → account → service, segments, moving customers, groups with principal and supplementary services
 - [Working with millions of records](docs/SCALE.md): paging, search and indexes behind every list
 - [Operating Meridian](docs/OPERATIONS.md): environment variables, runbook, payments, scale, upgrades, loading stock, warehouses and stock transfers
+- [Documents, signatures and the vault](docs/DOCUMENTS.md): identity documents and signed agreements in one vault, agreement templates with legal versions, signature stamping
+- [Load test data generator](docs/LOAD-TEST.md): fill a system with realistic customers, orders, cases, bills and payments through its API
+- [Role permission test](docs/RBAC-TEST.md): check every role can do what its permissions say and nothing else
 - [Security model](docs/SECURITY.md): what is protected, and what still needs work
 - [Roles and permissions](docs/ROLES.md): the default roles (generated from the code that enforces them), and how to change them or add your own
 - [Architecture](docs/ARCHITECTURE.md)

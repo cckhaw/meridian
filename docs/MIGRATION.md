@@ -42,6 +42,13 @@ A column that holds a secret is not in any data set, so no mode (not even an unm
 
 Personal data that an export keeps is masked in a masked export: applicant details on applications, IP addresses and GPS tags on signatures and the access log, the holder's ID number on port-in requests, fibre waiting-list contacts, document names, fraud-alert identifiers, and (as keyed codes) the ID hash on credit checks and KYC cases and the blacklist values.
 
+### Identity verification (KYC) when moving data
+
+* **Customers** carry `kyc_status` and `kyc_verified_at`. Orders are only sold to a customer whose status is `VERIFIED`, so customers loaded from another system need `VERIFIED` in the file (or go through the review queue afterwards).
+* **KYC cases** are export only. The export has the details checked, the flags and the checks (including the connected ID-check service's or MyDigital ID's verdict and its reasons), who decided and why. It never has the ID number (only its masked form and a keyed code) or the photographs.
+* **The ID-check settings** are in the integration endpoints data set (`KYC_OCR` and `KYC_MYDIGITALID` in the `identity` group) and in the settings groups (which methods the store-front offers). Secrets and client credentials are not exported, so after loading into another environment enter them again under **Integration → Identity**.
+* In-flight MyDigital ID sign-ins (`kyc_provider_sessions`) are short-lived, hold encrypted form data and are deliberately left out.
+
 ### Documents and the vault
 
 The export carries the **records** of the vault (kind, owner, name, size, SHA-256, where the file is stored, status, retention, the template version it came from), the signature records with their content seal, and the access log. It does not carry the files. To move the files, copy the document bucket (the `storage_key` of each record says where its file is) or, for files held in the database, take a database backup; keep the document data key (`MERIDIAN_DATA_KEY`) the same or the files cannot be opened. The agreement templates and every version of their HTML are in the export.
