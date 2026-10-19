@@ -159,8 +159,8 @@ export const MODULE_ENTITIES: EntityDef[] = [
     description: 'Every view, download, link, decision, purge and template change: who, from where, when.',
     cols: ['id*', 'document_id:r=documents', 'template_id:r=document_templates', 'customer_id:r=customers', 'action', 'actor', 'ip!m', 'user_agent', 'detail:j', 'at'] }),
   t({ id: 'kyc_cases', label: 'KYC cases', domain: 'documents', phase: 5, table: 'kyc_cases', dependsOn: ['customers'],
-    description: 'Identity verifications from every channel (online shop, store counter, CRM order, customer record): status, the details checked, the checks and flags, who submitted and who decided, and why.',
-    note: 'The ID number is never exported: only its masked form and a keyed code. The encrypted number stays in the database.',
+    description: 'Identity verifications from every channel (online shop, store counter, CRM order, customer record): status, the details checked, the checks and flags (including the connected ID-check service’s or MyDigital ID’s verdict and its reasons), who submitted and who decided, and why.',
+    note: 'The ID number is never exported: only its masked form and a keyed code. The encrypted number stays in the database. Export only: to carry a customer’s verified status into another system, load the customer with kyc_status VERIFIED. The photographs are not in the archive.',
     cols: ['id*', 'application_id:r=applications', 'customer_id:r=customers', 'method', 'source', 'status', 'full_name', 'date_of_birth:d', 'nationality', 'id_type', 'id_number_hash!p', 'id_number_masked', 'id_expiry:d', 'flags:j', 'checks:j', 'attestation:j', 'submitted_at', 'submitted_by', 'order_id:r=orders', 'decided_by', 'decided_at', 'decision_reason', 'reason_code', 'fraud_reported:b', 'created_at', 'updated_at'] }),
 
   // ───────────────────────── Fibre coverage ─────────────────────────
