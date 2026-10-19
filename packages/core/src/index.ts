@@ -148,6 +148,8 @@ export * from './store-desk.js';
 export * from './auth-provider-config.js';
 export * from './auth-providers.js';
 export * from './otp-gateway.js';
+export * from './email-gateway.js';
+export * from './email-gateway-config.js';
 export * from './otp-relay.js';
 export * from './fiber-client.js';
 export * from './doc-store.js';

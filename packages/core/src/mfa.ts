@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { audit } from './audit.js';
 import type { Queryable } from './db.js';
 import { DomainError, invalid, rejected } from './errors.js';
+import { emailCodesAvailable } from './email-gateway.js';
 import { decryptText, encryptText } from './field-crypto.js';
 import { queueOutbox } from './lifecycle-state.js';
 import { verifyPassword } from './passwords.js';
@@ -10,7 +11,7 @@ import { raiseUserAlert } from './user-notifications.js';
 import { getSecurityPolicy } from './security-policy.js';
 
 /**
- * Second factor. Three methods: an authenticator app (TOTP, RFC 6238), a code by SMS, or a code by e-mail. Recovery codes cover a lost phone.
+ * Second factor. Three methods: an authenticator app (TOTP, RFC 6238), a code by SMS, or a code by e-mail (only while e-mail codes are available, see availableMfaMethods). Recovery codes cover a lost phone.
  * Secrets are encrypted at rest, codes and recovery codes are stored as hashes, every code works once, and a challenge locks after a few wrong tries.
  */
 export type MfaKind = 'TOTP' | 'SMS' | 'EMAIL';
@@ -65,8 +66,13 @@ export async function mfaStatus(q: Queryable, userId: string): Promise<MfaStatus
 export const confirmedKinds = async (q: Queryable, userId: string): Promise<MfaKind[]> =>
   (await q.query('SELECT kind FROM mfa_methods WHERE user_id=$1 AND confirmed_at IS NOT NULL ORDER BY kind', [userId])).rows.map((r) => r.kind as MfaKind);
 
+/** The methods people can use right now: the policy's, without e-mail unless e-mail codes are switched on and an e-mail sender is enabled (Settings → Security policy, Integration). */
+export async function availableMfaMethods(q: Queryable, policy?: Awaited<ReturnType<typeof getSecurityPolicy>>): Promise<MfaKind[]> {
+  const p = policy ?? (await getSecurityPolicy(q));
+  return p.mfa.methods.includes('EMAIL') && !(await emailCodesAvailable(q)) ? p.mfa.methods.filter((m) => m !== 'EMAIL') : p.mfa.methods;
+}
 async function requireAllowed(q: Queryable, kind: MfaKind) {
-  if (!(await getSecurityPolicy(q)).mfa.methods.includes(kind)) throw rejected('That second-factor method is not enabled here.');
+  if (!(await availableMfaMethods(q)).includes(kind)) throw rejected(kind === 'EMAIL' ? 'Codes by e-mail are not available here.' : 'That second-factor method is not enabled here.');
 }
 
 /** Recovery codes: ten, shown once. Replaces any earlier set. */
@@ -107,6 +113,7 @@ export async function confirmTotp(q: Queryable, u: { id: string; username: strin
 // ───────────────────────── codes by SMS or e-mail ─────────────────────────
 const codeOf = () => String(randomInt(0, 1_000_000)).padStart(6, '0');
 async function sendCode(q: Queryable, u: { id: string; name: string; email: string | null; phone: string | null }, kind: 'SMS' | 'EMAIL', purpose: 'LOGIN' | 'ENROL', minutes: number): Promise<string> {
+  if (kind === 'EMAIL' && !(await emailCodesAvailable(q))) throw rejected('Codes by e-mail are not available here.');
   const to = kind === 'SMS' ? u.phone : u.email;
   if (!to) throw invalid(kind === 'SMS' ? 'Add your mobile number to your profile first.' : 'Add your e-mail address to your profile first.');
   const code = codeOf();
@@ -174,7 +181,8 @@ export interface LoginChallenge { token: string; methods: MfaKind[]; method: Mfa
 /** Opens the step between a correct password and a session. If the preferred method is SMS or e-mail, its code is sent now. */
 export async function openLoginChallenge(q: Queryable, u: { id: string; name: string; email: string | null; phone: string | null }, ctx: { ip?: string; userAgent?: string }): Promise<LoginChallenge> {
   const p = await getSecurityPolicy(q);
-  const methods = (await confirmedKinds(q, u.id)).filter((k) => p.mfa.methods.includes(k));
+  const allowed = await availableMfaMethods(q, p);
+  const methods = (await confirmedKinds(q, u.id)).filter((k) => allowed.includes(k));
   if (!methods.length) throw rejected('Your second-factor methods are not available. Ask an administrator to reset them.');
   const method = methods.includes('TOTP') ? 'TOTP' : methods[0]!;
   const token = randomBytes(32).toString('base64url');
@@ -204,7 +212,7 @@ export async function sendChallengeCode(q: Queryable, challengeToken: string, ki
   if (!ch || new Date(ch.expiresAt).getTime() < Date.now() || ch.userStatus !== 'ACTIVE') throw rejected('This sign-in has expired. Sign in again.');
   if (ch.lockedUntil && new Date(ch.lockedUntil) > new Date()) throw rejected('This account is locked. Try again later or ask an administrator.');
   const p = await getSecurityPolicy(q);
-  if (!(await confirmedKinds(q, ch.userId)).includes(kind) || !p.mfa.methods.includes(kind)) throw invalid('That method is not set up.');
+  if (!(await confirmedKinds(q, ch.userId)).includes(kind) || !(await availableMfaMethods(q, p)).includes(kind)) throw invalid('That method is not set up.');
   await checkSendRules(q, challengeToken, ch.userId, kind);
   const sent = JSON.parse(await sendCode(q, { id: ch.userId, name: ch.displayName, email: ch.email, phone: ch.phone }, kind, 'LOGIN', p.mfa.challengeMinutes));
   await q.query('UPDATE mfa_challenges SET code_hash=$2, code_kind=$3, attempts=0 WHERE id=$1', [ch.id, sent.hash, kind]);

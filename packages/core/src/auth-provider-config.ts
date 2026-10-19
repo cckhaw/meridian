@@ -1,11 +1,14 @@
+import { emailGatewayProblem } from './email-gateway-config.js';
+
 /**
  * The settings of the sign-in integrations (the hub's `auth` group), checked when an administrator saves them.
  *  - IDP_OIDC  single sign-on with OpenID Connect (Microsoft Entra ID, Okta, Ping, Keycloak and any other compliant provider). `url` is the issuer.
  *  - IDP_SAML  SAML 2.0 provider settings. They are kept and checked, but Meridian does not yet accept SAML assertions (see docs/SECURITY.md).
  *  - LDAP      Active Directory / LDAP: staff accounts are synced on a schedule and sign in with their directory password. `url` is ldaps://host:636.
- *  - OTP_GATEWAY  the SMS or WhatsApp gateway that carries one-time codes (second factor, password recovery).
+ *  - OTP_GATEWAY  the SMS or WhatsApp gateway that carries one-time codes (second factor, password recovery), staff alerts and signed agreement copies.
+ *  - EMAIL_GATEWAY  the e-mail sender (HTTPS API, SMTP or the simulator) that carries e-mail codes, staff alerts and signed agreement copies; see email-gateway.ts.
  */
-export const AUTH_KINDS = ['IDP_OIDC', 'IDP_SAML', 'LDAP', 'OTP_GATEWAY'] as const;
+export const AUTH_KINDS = ['IDP_OIDC', 'IDP_SAML', 'LDAP', 'OTP_GATEWAY', 'EMAIL_GATEWAY'] as const;
 export type AuthKind = (typeof AUTH_KINDS)[number];
 export const OIDC_VENDORS = ['ENTRA', 'OKTA', 'PING', 'KEYCLOAK', 'OTHER'] as const;
 
@@ -42,9 +45,9 @@ export function authEndpointProblem(kind: string, i: { url?: string | null; conf
     case 'OTP_GATEWAY': {
       if (!i.url) return 'Enter the gateway address that accepts messages.';
       if (c.deliver !== undefined && c.deliver !== 'SMS' && c.deliver !== 'WHATSAPP') return 'Deliver codes by SMS or WHATSAPP.';
-      if (c.emailCodes !== undefined && typeof c.emailCodes !== 'boolean') return 'emailCodes is true or false.';
       return null;
     }
+    case 'EMAIL_GATEWAY': return emailGatewayProblem(i);
     default: return null;
   }
 }

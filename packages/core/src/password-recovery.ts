@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { audit } from './audit.js';
 import { revokeUserSessions } from './auth.js';
-import type { Db } from './db.js';
+import type { Db, Queryable } from './db.js';
+import { emailCodesAvailable } from './email-gateway.js';
 import { invalid, rejected } from './errors.js';
 import { queueOutbox } from './lifecycle-state.js';
 import { hashPassword, verifyPassword } from './passwords.js';
@@ -10,13 +11,19 @@ import { checkPassword, getSecurityPolicy, isReusedPassword, rememberPassword } 
 
 /**
  * "Forgot password". A person asks with their username or e-mail; what happens is the same whether or not the account exists, so the form cannot be used to
- * find out who has one. A link (e-mail) or a six-digit code (SMS) is queued for delivery, works once, expires, and a code locks after a few wrong tries.
+ * find out who has one. A link or code by e-mail (when e-mail codes are available) or a six-digit code by SMS is queued for delivery, works once, expires, and a code locks after a few wrong tries.
  * Only hashes are stored. The super user is never recoverable this way: their password lives in the environment.
  */
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const eq = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const BAD = 'This reset link or code is not valid, or it has expired. Ask for a new one.';
 const MAX_CODE_TRIES = 5;
+
+/** The ways a recovery link or code can go out right now: e-mail only while e-mail codes are switched on and a sender is enabled (Settings → Security policy, Integration). */
+export async function recoveryChannels(q: Queryable, channel: 'EMAIL' | 'SMS' | 'EITHER'): Promise<Array<'EMAIL' | 'SMS'>> {
+  const email = await emailCodesAvailable(q);
+  return channel === 'SMS' ? ['SMS'] : channel === 'EMAIL' ? (email ? ['EMAIL'] : []) : email ? ['EMAIL', 'SMS'] : ['SMS'];
+}
 
 export async function requestPasswordReset(db: Db, i: { identifier: string; ip?: string }): Promise<{ ok: true }> {
   const policy = await getSecurityPolicy(db);
@@ -34,8 +41,8 @@ export async function requestPasswordReset(db: Db, i: { identifier: string; ip?:
   const recent = (await db.query(`SELECT count(*) AS n FROM password_reset_tokens WHERE user_id=$1 AND created_at > now() - interval '1 hour'`, [u.id])).rows[0]!.n as number;
   if (recent >= policy.recovery.maxRequestsPerHour) return done;
 
-  const want = policy.recovery.channel;
-  const channel: 'EMAIL' | 'SMS' | null = want === 'SMS' ? (u.phone ? 'SMS' : null) : want === 'EMAIL' ? (u.email ? 'EMAIL' : null) : u.email ? 'EMAIL' : u.phone ? 'SMS' : null;
+  const via = await recoveryChannels(db, policy.recovery.channel);
+  const channel: 'EMAIL' | 'SMS' | null = via.includes('EMAIL') && u.email ? 'EMAIL' : via.includes('SMS') && u.phone ? 'SMS' : null;
   if (!channel) { await audit(db, u.username, 'auth', u.id, 'PASSWORD_RESET_NO_CHANNEL'); return done; }
   const expiresAt = new Date(Date.now() + policy.recovery.tokenMinutes * 60_000);
   await db.tx(async (q) => {

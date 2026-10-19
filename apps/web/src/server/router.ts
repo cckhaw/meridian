@@ -74,7 +74,8 @@ open('POST', '/auth/login', async ({ db, body, req }) => {
 open('GET', '/auth/password-policy', async ({ db }) => {
   const p = await core.getSecurityPolicy(db);
   const { minLength, requireUpper, requireLower, requireDigit, requireSymbol } = p.password;
-  return { rules: { minLength, requireUpper, requireLower, requireDigit, requireSymbol }, recovery: { enabled: p.recovery.enabled, channel: p.recovery.channel } };
+  const via = await core.recoveryChannels(db, p.recovery.channel);
+  return { rules: { minLength, requireUpper, requireLower, requireDigit, requireSymbol }, recovery: { enabled: p.recovery.enabled && via.length > 0, channel: p.recovery.channel, via } };
 });
 // "Forgot password": the same answer whether or not the account exists. The link or code goes out through the notification outbox.
 open('POST', '/auth/forgot-password', async ({ db, body, req }) => {
@@ -153,7 +154,7 @@ route('GET', '/profile/notification-channels', null, ({ db }) => core.notificati
 post('/notifications/system-alert', 'settings:manage', ({ db, user, body }) => core.broadcastSystemAlert(db, user.username, z.object({ title: z.string().min(3).max(120), body: z.string().min(3).max(400) }).parse(body)));
 route('GET', '/profile/security', null, async ({ db, user }) => {
   const policy = await core.getSecurityPolicy(db);
-  return { mfa: await core.mfaStatus(db, user.id), allowedMethods: policy.mfa.methods, required: core.mfaRequiredFor(policy, user.roles), canUseMfa: !user.isSuperuser, hasPhone: !!(await db.query('SELECT phone FROM users WHERE id=$1', [user.id])).rows[0]?.phone, hasEmail: !!user.email };
+  return { mfa: await core.mfaStatus(db, user.id), allowedMethods: await core.availableMfaMethods(db, policy), required: core.mfaRequiredFor(policy, user.roles), canUseMfa: !user.isSuperuser, hasPhone: !!(await db.query('SELECT phone FROM users WHERE id=$1', [user.id])).rows[0]?.phone, hasEmail: !!user.email };
 }, mine);
 const me = (u: SessionUser) => { if (u.isSuperuser) throw new DomainError('REJECTED', 'The super user signs in with credentials from the environment, so a second factor cannot be added here.'); return u; };
 route('POST', '/profile/mfa/totp/start', null, ({ db, user }) => core.beginTotp(db, { id: me(user).id, username: user.username }), mine);
@@ -183,8 +184,9 @@ const securityPolicyBody = z.object({
   session: z.object({ idleMinutes: z.number().int(), absoluteHours: z.number().int(), strictRoleIds: z.array(z.string().max(60)).max(50), strictIdleMinutes: z.number().int() }).partial().optional(),
   recovery: z.object({ enabled: z.boolean(), channel: z.enum(['EMAIL', 'SMS', 'EITHER']), tokenMinutes: z.number().int(), maxRequestsPerHour: z.number().int(), publicUrl: z.string().max(200) }).partial().optional(),
   mfa: z.object({ requirement: z.enum(['OFF', 'ROLES', 'ALL']), roleIds: z.array(z.string().max(60)).max(50), methods: z.array(z.enum(['TOTP', 'SMS', 'EMAIL'])).max(3), challengeMinutes: z.number().int() }).partial().optional(),
+  email: z.object({ codesEnabled: z.boolean(), signedCopyFirst: z.enum(['GATEWAY', 'EMAIL']) }).partial().optional(),
 });
-get('/settings/security-policy', 'settings:manage', async ({ db }) => ({ policy: await core.getSecurityPolicy(db), defaults: core.defaultSecurityPolicy() }));
+get('/settings/security-policy', 'settings:manage', async ({ db }) => ({ policy: await core.getSecurityPolicy(db), defaults: core.defaultSecurityPolicy(), emailSender: await core.emailSenderStatus(db) }));
 post('/settings/security-policy', 'settings:manage', async ({ db, user, body }) => ({ policy: await core.setSecurityPolicy(db, user.username, securityPolicyBody.parse(body) as Partial<core.SecurityPolicy>) }));
 
 // ───────────────────────── field-service (WFM) callback ─────────────────────────
@@ -783,13 +785,15 @@ const scopeList = z.array(z.string().max(40)).max(40);
 const hubView = async (db: Db) => ({
   groups: core.HUB_GROUPS, endpointKinds: core.HUB_ENDPOINT_KINDS, endpoints: await core.listHubEndpoints(db),
   oauthClients: await core.listOAuthClients(db), apiKeys: await core.listApiClients(db), rateLimits: await core.listRateRules(db), webhooks: await core.listHubWebhooks(db), topics: await core.listTopicMappings(db),
-  eventTypes: core.HUB_EVENT_TYPES, channels: core.HUB_CHANNELS, scopes: core.NORTHBOUND_SCOPES.map((id) => ({ id, label: core.SCOPE_LABEL[id] })),
+  emailPresets: core.EMAIL_PRESETS, eventTypes: core.HUB_EVENT_TYPES, channels: core.HUB_CHANNELS, scopes: core.NORTHBOUND_SCOPES.map((id) => ({ id, label: core.SCOPE_LABEL[id] })),
 });
 get('/settings/integration-hub', 'settings:manage', ({ db }) => hubView(db));
 get('/settings/integration-hub/calls', 'settings:manage', ({ db, query }) => core.listGatewayCalls(db, { clientRef: str(query, 'clientRef'), limit: num(query, 'limit') }));
 post('/settings/integration-hub/endpoints', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveHubEndpoint(db, user.username, endpointBody.parse(body) as core.HubEndpointInput), { status: 201 }));
 patch('/settings/integration-hub/endpoints/:id', 'settings:manage', ({ db, user, params, body }) => core.saveHubEndpoint(db, user.username, endpointBody.parse(body) as core.HubEndpointInput, params.id!));
 route('DELETE', '/settings/integration-hub/endpoints/:id', 'settings:manage', ({ db, user, params }) => core.deleteHubEndpoint(db, user.username, params.id!));
+post('/settings/integration-hub/email/:id/test', 'settings:manage', ({ db, user, params, body }) => core.testEmail(db, user.username, uuid.parse(params.id), z.object({ to: z.string().max(254) }).parse(body).to));
+get('/settings/integration-hub/email/simulated', 'settings:manage', async ({ db }) => ({ items: await core.listSimulatedEmails(db) }));
 post('/settings/integration-hub/oauth-clients', 'settings:manage', async ({ db, user, body }) => Response.json(await core.createOAuthClient(db, user.username, z.object({ name: z.string().min(1).max(80), channel: z.string().max(31).optional(), scopes: scopeList, tokenTtlSeconds: z.number().int().optional() }).parse(body)), { status: 201, headers: { 'cache-control': 'no-store' } }));   // the secret is shown once
 patch('/settings/integration-hub/oauth-clients/:id', 'settings:manage', ({ db, user, params, body }) => core.updateOAuthClient(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), channel: z.string().max(31).optional(), scopes: scopeList.optional(), tokenTtlSeconds: z.number().int().optional() }).parse(body)));
 post('/settings/integration-hub/oauth-clients/:id/rotate', 'settings:manage', async ({ db, user, params, body }) => Response.json(await core.rotateOAuthSecret(db, user.username, params.id!, z.object({ graceMinutes: z.number().int().optional() }).parse(body ?? {}).graceMinutes), { headers: { 'cache-control': 'no-store' } }));
