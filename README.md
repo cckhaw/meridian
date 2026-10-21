@@ -20,7 +20,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 906 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 912 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -51,11 +51,10 @@ Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environme
 | Roles and permissions | The role-by-permission matrix, clone and switch off roles, data scope (store, dealer, customer) | [ROLES.md](docs/ROLES.md), [SECURITY.md](docs/SECURITY.md) |
 | Security policy | Password rules and expiry, lockout, session timeouts, forgotten-password recovery, two-step sign-in (MFA). Everyone also has **My profile** for their details, password, two-step sign-in, devices and alerts | [SECURITY.md](docs/SECURITY.md) |
 | Early termination | Rules and formulas for the charge when a contract ends early | [LIFECYCLE.md](docs/LIFECYCLE.md) |
-| Device financing | Instalments over the contract, credit-check bands, fallback | [FINANCING.md](docs/FINANCING.md) |
 | Dunning rules | Ladders, late fees, QR links, arrangements, collections | [DUNNING.md](docs/DUNNING.md) |
-| Cases, Donor operators, Numbers & SIMs | SLA matrix and taxonomy, port-in operators, number pools and VIP tiers | [CASES.md](docs/CASES.md), [NUMBERING.md](docs/NUMBERING.md) |
+| Cases, Donor operators, Numbers & SIMs | SLA matrix and taxonomy, visit escalation, port-in operators, number pools and VIP tiers | [CASES.md](docs/CASES.md), [NUMBERING.md](docs/NUMBERING.md) |
 
-Everything about outside systems is under the **Integration** menu (next to Settings): a menu of sections grouped by what you are doing: the **systems Meridian connects to** (network, payments, identity and credit, field service, messaging; each with its status and connection details together), the **channels and partners that connect to Meridian** (store-front, API access, inbound callbacks), the **events Meridian shares** (webhooks, event streams, the delivery queue) and the **platform** ([INTEGRATIONS.md](docs/INTEGRATIONS.md), [INTEGRATION_API.md](docs/INTEGRATION_API.md)).
+Everything about outside systems is under the **Integration** menu (next to Settings): a menu of sections grouped by what you are doing: the **systems Meridian connects to** (network, payments, identity and credit, field service, messaging; each with its status and connection details together), the **channels and partners that connect to Meridian** (store-front, API access, inbound callbacks), the **events Meridian shares** (webhooks, event streams, the delivery queue) and the **platform**. The field-service connection and device financing (with the credit bureau) are set on their cards there ([FINANCING.md](docs/FINANCING.md), [CASES.md](docs/CASES.md#field-service-technician-visits)) ([INTEGRATIONS.md](docs/INTEGRATIONS.md), [INTEGRATION_API.md](docs/INTEGRATION_API.md)).
 
 ## Documentation
 
@@ -73,7 +72,7 @@ Everything about outside systems is under the **Integration** menu (next to Sett
 - [Bulk import and export](docs/BULK_IMPORT.md): dealers, agents and stores as spreadsheets: templates, current data, check then load
 - [Charging system (OCS)](docs/OCS.md): per-vendor connectors that create subscribers and plans in the OCS, with retries
 - [Integrations](docs/INTEGRATIONS.md): every external system Meridian connects to, grouped by function, with status
-- [Integration hub and northbound API](docs/INTEGRATION_API.md): OAuth 2.0 clients and API keys, scopes, per-channel rate limits, idempotency, TM Forum errors and TMF 688 subscriptions, webhooks, and the settings for field service, core network, finance and events
+- [Integration hub and northbound API](docs/INTEGRATION_API.md): OAuth 2.0 clients and API keys, scopes, per-channel rate limits, idempotency, TM Forum errors and TMF 688 subscriptions, webhooks, and the settings for core network, finance and events
 - [Dealer and agent commission](docs/COMMISSION.md): channel hierarchy, plans with volume bands, claw-backs, statements, payouts, GL posting
 - [Numbers, SIM cards and order numbers](docs/NUMBERING.md): `YYYYMMDD-NNNNN` order numbers, SIM and number choice, VIP tiers, pool loading, reservations, recycling
 - [Group plans, family lines and port-in](docs/FAMILY_PLANS.md): group plans, how a group is created (order or plan change), member limits, bringing numbers from other operators

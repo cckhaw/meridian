@@ -133,11 +133,11 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'wfm', group: 'Field service and logistics', name: 'Field service (workforce management)', with: 'Your field-service system: Salesforce Field Service, Oracle Field Service Cloud, TOA, or a partner’s dispatch tool',
-    summary: 'When a fault needs a technician, an agent asks the system which windows are free for the skills the issue needs, holds one while on the call, and turns it into a job. The system reports the visit (assigned, on the way, on site, done, customer not at home, needs another time) by calling Meridian’s signed callback URL, and Meridian moves the case and tells the customer by SMS or WhatsApp.',
+    summary: 'When a fault needs a technician, an agent asks the system which windows are free for the skills the issue needs, holds one while on the call, and turns it into a job. The system reports the visit (assigned, on the way, on site, done, customer not at home, needs another time) by calling Meridian’s signed callback address, and Meridian moves the case and tells the customer by SMS or WhatsApp.',
     maturity: 'BUILT', direction: 'BOTH',
-    env: [{ name: 'MERIDIAN_WFM_WEBHOOK_SECRET', purpose: 'The secret the field-service system signs its callbacks with (at least 16 characters; the name is set in Settings → Cases)', on: 'web', secret: true }, { name: 'MERIDIAN_WFM_TOKEN', purpose: 'Token for the REST connector (the name is yours to choose; it must start with MERIDIAN_WFM_)', on: 'web', secret: true }],
+    env: [{ name: 'MERIDIAN_WFM_WEBHOOK_SECRET', purpose: 'The secret the field-service system signs its callbacks with (at least 16 characters; the name is set in the field-service connection below)', on: 'web', secret: true }, { name: 'MERIDIAN_WFM_TOKEN', purpose: 'Token for the REST connector (the name is yours to choose; it must start with MERIDIAN_WFM_)', on: 'web', secret: true }],
     endpoints: [{ method: 'POST', path: '/api/v1/cases/webhooks/wfm-callback', purpose: 'The field-service system reports a visit. Signed with X-WFM-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "t.body">', auth: 'HMAC signature' }, { method: 'POST', path: '/api/cases/sla-sweep', purpose: 'Also delivers queued cancellations to the system. Schedule it every minute', auth: 'Service account with case:supervise' }],
-    needs: ['Choose the connector below (the REST contract needs no code; the simulator is for trying it out)', 'Set MERIDIAN_WFM_WEBHOOK_SECRET and give the same secret to the field-service system', 'Have the system call the callback URL as the technician’s app reports', 'Give each issue type that needs a technician its skills and equipment (Settings → Cases)'],
+    needs: ['Choose the system in the field-service connection below and switch it on (the REST contract needs no code; the simulator is for trying it out)', 'Set the environment variable named there (MERIDIAN_WFM_WEBHOOK_SECRET unless you rename it) and give the same secret to the field-service system', 'Have the system call the callback address listed below as the technician’s app reports', 'Give each issue type that needs a technician its skills and equipment (Settings → Cases)'],
     doc: 'CASES.md', keywords: 'wfm field service workforce technician truck roll dispatch appointment slot visit salesforce toa oracle engineer callback webhook',
   },
   {
@@ -197,10 +197,10 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'installation', group: 'Field service and logistics', name: 'Installation and field service', with: 'Field-service or technician scheduling system',
-    summary: 'Fibre and similar offers need an installation. Staff schedule it and mark it done in the order. The workflow’s bookInstallation step is a stand-in; a field-service system would offer slots and report completion.',
+    summary: 'Fibre and similar offers need an installation. Staff can always schedule it and mark it done in the order. Connect the field service system (the card above) and customers pick a live installation window while the order is taken, and the system’s callback marks the visit done.',
     maturity: 'MANUAL', direction: 'OUT',
     endpoints: [{ method: 'POST', path: '/api/orders/:id/actions', purpose: 'Actions schedule_installation, complete_installation', auth: 'Service account with order permissions' }],
-    needs: ['Choose the field-service system', 'Connector: send the job when an installation is needed; call the order action when the technician finishes'],
+    needs: ['Connect the field service system in the card above (installation windows and the completion callback come from there)', 'Without it, staff use the order actions to schedule and complete the installation by hand'],
     doc: 'ORDERS.md', keywords: 'installation technician field service fibre dispatch appointment',
   },
   {
@@ -312,11 +312,11 @@ export const INTEGRATIONS: IntegrationDef[] = [
 
   // ───────────── Credit and collections ─────────────
   {
-    id: 'credit-bureau', group: 'Identity, credit and collections', name: 'Credit bureau', with: 'A credit bureau (REST) that scores a customer from their ID number',
-    summary: 'The credit bureau behind device financing (and, later, the order workflow’s credit-check step, where a stand-in still approves every order today). A device on a contract is paid over the contract. With the credit check on, Meridian sends the customer’s ID number (with their consent; only a hash is kept) to the bureau. A score comes back and the score bands set the upfront payment, or the bureau returns the upfront amount itself. Without a bureau, or when it fails, the fallback share applies (or the sale stops, as you choose). A built-in simulator lets you try the flow.',
+    id: 'credit-bureau', group: 'Identity, credit and collections', name: 'Credit bureau and device financing', with: 'A credit bureau (REST) that scores a customer from their ID number, and the rules for paying a device over the contract',
+    summary: 'The credit bureau behind device financing (and, later, the order workflow’s credit-check step, where a stand-in still approves every order today), and the device financing settings below its connection. A device on a contract is paid over the contract. With the credit check on, Meridian sends the customer’s ID number (with their consent; only a hash is kept) to the bureau. A score comes back and the score bands set the upfront payment, or the bureau returns the upfront amount itself. Without a bureau, or when it fails, the fallback share applies (or the sale stops, as you choose). A built-in simulator lets you try the flow.',
     maturity: 'BUILT', direction: 'OUT',
-    needs: ['Add the bureau below (kind: credit bureau): address, key, and the names of the ID field and the score or upfront field in its answer', 'Set the score bands and what to do when the bureau fails in Settings → Device financing, then use “Try it”'],
-    configure: { label: 'Settings → Device financing', href: '/admin/settings?section=device-financing' }, doc: 'FINANCING.md', keywords: 'device financing credit check bureau score upfront payment dup instalment consent id number',
+    needs: ['Add the bureau below (kind: credit bureau): address, key, and the names of the ID field and the score or upfront field in its answer', 'Below the connection, set the financing rules, the score bands and what to do when the bureau fails, then use “Try it”'],
+    doc: 'FINANCING.md', keywords: 'device financing credit check bureau score upfront payment dup instalment consent id number',
   },
   {
     id: 'collections', group: 'Identity, credit and collections', name: 'Collections agency and write-offs', with: 'A collections agency and the finance system',

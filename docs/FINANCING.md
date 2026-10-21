@@ -2,7 +2,7 @@
 
 A device bought **on a contract with a plan** ([CATALOG.md](CATALOG.md#devices-on-a-contract-with-a-plan)) is **financed over the contract** by default: the price after the subsidy is split evenly across the whole contract and billed each month together with the plan fee. A **credit check** on the customer's ID number decides whether part of the price is paid upfront first; a weaker credit profile pays more upfront, and the rest is still split evenly.
 
-Everything is set in **Settings → Device financing** (permission `settings:manage`). The bureau connection is set in **Integration → Identity, credit and collections → Credit bureau**.
+Everything is set in **Integration → Identity, credit and collections → Credit bureau and device financing** (permission `integration:manage`): the bureau connection first, then the financing settings below it. The old address `/admin/settings?section=device-financing` redirects there. The API is `GET` and `POST /api/integrations/financing`, and `POST /api/integrations/financing/test`.
 
 ## How the price is worked out
 

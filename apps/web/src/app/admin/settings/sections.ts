@@ -23,11 +23,17 @@ export const SECTIONS: SettingsSection[] = [
   { id: 'documents', group: 'Back office', label: 'Documents', description: 'When agreements must be signed, and how long identity documents and contracts are kept', keywords: 'document documents agreement contract terms signature sign esign kyc retention purge vault template' },
   { id: 'dunning-rules', group: 'Back office', label: 'Dunning rules', description: 'Who is chased when an invoice is overdue: ladders of reminders, late fees, bars and termination per market and customer type', keywords: 'dunning collections overdue arrears debt rule ladder reminder late fee bar soft hard terminate write off agency qr promptpay paynow duitnow qris sms whatsapp partial payment arrangement vip enterprise risk drag' },
   { id: 'early-termination', group: 'Sales and orders', label: 'Early termination', description: 'What leaving a contract early costs, by situation, with the formula behind each charge', keywords: 'early termination etc charge fee contract formula scenario subsidy device instalment balance port out non payment downgrade hardship waive penalty churn' },
-  { id: 'device-financing', group: 'Sales and orders', label: 'Device financing', description: 'Pay a device over the contract, and let a credit check decide the upfront payment', keywords: 'device financing instalment installment credit check score bureau upfront payment dup down payment subsidy contract affordability' },
   { id: 'cases', group: 'Back office', label: 'Cases', description: 'How cases are classified, the service levels, and when they close', keywords: 'case cases ticket support sla service level classification category taxonomy severity escalation close reopen first response resolution incident master field service technician dispatch refund approval tier' },
   { id: 'donor-operators', group: 'Back office', label: 'Donor operators', description: 'The operators numbers can be ported in from, with their operator IDs', keywords: 'donor operator telco carrier mnp port in porting operator ID clearinghouse' },
   { id: 'numbering', group: 'Back office', label: 'Numbers & SIMs', description: 'Cooling-off periods, MSISDN holds, SIM rules and the MSISDN, ICCID and IMSI lifecycles', keywords: 'number numbers msisdn iccid imsi sim esim cooling quarantine rest recycle reservation hold lifecycle auction vip' },
 ];
+
+/** Sections that moved to the Integration page: the old `?section=` id and where it lands now, so saved links and bookmarks still work. */
+export const MOVED_TO_INTEGRATION: Record<string, string> = {
+  storefront: '/admin/integrations?item=storefront',
+  integrations: '/admin/integrations?view=hub',
+  'device-financing': '/admin/integrations?section=identity&item=credit-bureau',
+};
 
 export const sectionById = (id: string | null | undefined) => SECTIONS.find((s) => s.id === id);
 

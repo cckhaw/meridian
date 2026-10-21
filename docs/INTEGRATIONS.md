@@ -96,6 +96,7 @@ Alerts and signed copies refused by a channel are retried after 1, 5, 15, 60 and
 | Network, numbers and charging | Port-in (numbers coming to us) | The national porting clearinghouse and the donor operators | Outbox: a connector you deploy delivers it |
 | Network, numbers and charging | Port-out (numbers leaving us) | The national porting clearinghouse and the recipient operators | API: the other system calls Meridian |
 | Field service and logistics | Courier and delivery tracking | Courier or last-mile delivery partner | By hand; no connector yet |
+| Field service and logistics | Field service (workforce management) | Salesforce Field Service, Oracle Field Service Cloud, TOA or a partner's dispatch tool | Built in; needs configuring. The system, its callback secret and the installation-time switch are set on the card |
 | Field service and logistics | Installation and field service | Field-service or technician scheduling system | By hand; no connector yet |
 | Field service and logistics | Warehouse and stock files | Warehouse management system or supplier stock files | By hand; no connector yet |
 | Messaging | SMS / WhatsApp gateway | An SMS or WhatsApp gateway | Built in: Meridian posts to it |
@@ -105,7 +106,7 @@ Alerts and signed copies refused by a channel are retried after 1, 5, 15, 60 and
 | Payments and finance | Billing and charging events into the ledger | Rating, charging and billing systems, or an event bus | API: the other system calls Meridian |
 | Payments and finance | Dealer and agent payout files | Your bank (dealer transfers) and payroll (staff) | By hand; no connector yet |
 | Identity, credit and collections | Collections agency and write-offs | A collections agency and the finance system | Outbox: a connector you deploy delivers it |
-| Identity, credit and collections | Credit bureau | A credit bureau (REST) or the built-in simulator | Built in; needs configuring |
+| Identity, credit and collections | Credit bureau and device financing | A credit bureau (REST) or the built-in simulator | Built in; needs configuring. The device financing rules and score bands are set on the card, below the bureau connection |
 | Identity, credit and collections | Identity verification (ID check service) | A REST service (document OCR, face match, liveness), or the built-in simulator | Built; configured by response map |
 | Identity, credit and collections | MyDigital ID | MyDigital ID (OpenID Connect) | Built; an alternative to the photographs |
 | Platform | Keys that protect customer data | Your secrets store | Built in; needs configuring |

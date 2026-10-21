@@ -40,7 +40,7 @@ Each call is checked in this order: credential, scope (`403` if the credential l
 
 1. **API gateway.** OAuth clients (create, edit scopes and token lifetime, **rotate the secret** with a grace period during which the old secret still works, revoke); API keys (scopes, channel, expiry, signed requests, revoke); **rate limits per channel** (defaults: self-care 100/min, retail POS 500/min, partner portal 50/min, call centre 300, others 60); the last API calls.
 2. **Webhooks.** Outbound webhooks (target address, bearer or HMAC authentication, events, retries and wait) and inbound verification keys (HMAC key per provider: payment gateway, courier, dealer channel).
-3. **Field service.** Dispatch-system gateways and appointment-slot sync settings.
+3. **Field service.** No connection kinds are offered any more: the field-service connection is set in Integration → Field service and logistics (`/api/integrations/field-service`). Stored `WFM_GATEWAY` and `SLOT_SYNC` connections still list and can be removed; nothing reads them.
 4. **Core network.** HLR/HSS, UDM, PCRF, charging system and the SM-DP+ eSIM server: primary and fallback address (https, diameter, sftp…), timeout, credentials, protocol settings.
 5. **Finance.** SAP FI-CO (SFTP or REST host, file destination) and payment providers.
 6. **Events.** Which business event (`ORDER_CREATED`, `SIM_SWAPPED`, `SERVICE_SUSPENDED`, …) goes to which topic, and the TM Forum 688 subscribers.
@@ -109,4 +109,4 @@ High-volume events (`INVOICE_ISSUED`, `PAYMENT_RECEIVED`, the order events) are 
 * The rate limiter counts in PostgreSQL (so all instances agree). A Redis-backed limiter can replace it behind the same call.
 * Topic deliveries are written to `event_deliveries` with status `READY` for a relay or producer (`setTopicPublisher` in `events.ts` takes one); a Kafka producer itself is not shipped.
 * Order-capture channels are not bound to a credential's channel: any credential with `order:create` may use any channel name, so issue credentials per channel. Customer-level access control (a credential seeing only its own customers) is not built.
-* The configured connections are stored and validated here. The existing adapters still read their own settings (for example the charging-system connector and the field-service connector) until each is moved onto the hub.
+* The configured connections are stored and validated here. The existing adapters still read their own settings (for example the charging-system connector and the field-service connector, which keep their own settings) until each is moved onto the hub.

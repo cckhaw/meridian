@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { authenticateApiKey, createApiClient } from './apikeys.js';
 import type { Db } from './db.js';
 import { authenticateNorthbound, requireScope, verifyRequestSignature } from './gateway.js';
-import { checkRateLimit, deleteHubEndpoint, GatewayRateLimited, hubEndpointWithSecret, inboundWebhookKey, listHubEndpoints, listHubWebhooks, listRateRules, listTopicMappings, registerTmfListener, requestHash, saveHubEndpoint, saveHubWebhook, saveRateRule, saveTopicMapping, unregisterTmfListener, withIdempotency } from './integration-hub.js';
+import { checkRateLimit, deleteHubEndpoint, HUB_ENDPOINT_KINDS, HUB_UNUSED_KINDS, GatewayRateLimited, hubEndpointWithSecret, inboundWebhookKey, listHubEndpoints, listHubWebhooks, listRateRules, listTopicMappings, registerTmfListener, requestHash, saveHubEndpoint, saveHubWebhook, saveRateRule, saveTopicMapping, unregisterTmfListener, withIdempotency } from './integration-hub.js';
 import { createOAuthClient, issueToken, revokeOAuthClient, rotateOAuthSecret, updateOAuthClient, verifyAccessToken } from './oauth.js';
 import { freshDb } from './test-helpers.js';
 
@@ -12,6 +12,19 @@ beforeAll(async () => { db = await freshDb(); });
 afterAll(async () => { await db.close(); });
 
 describe('endpoints', () => {
+  it('no longer offers the dispatch system and slot sync, but keeps what is already stored', async () => {
+    expect(HUB_ENDPOINT_KINDS.wfm).toEqual([]);
+    expect(HUB_UNUSED_KINDS.map((k) => k.kind)).toEqual(['WFM_GATEWAY', 'SLOT_SYNC']);
+    await expect(saveHubEndpoint(db, 'root', { group: 'wfm', kind: 'WFM_GATEWAY', name: 'New dispatch' })).rejects.toThrow(/not used/);
+    await db.query(`INSERT INTO integration_endpoints (id, group_key, kind, name, url, config) VALUES (gen_random_uuid(), 'wfm', 'WFM_GATEWAY', 'Old dispatch', 'https://fsl.example.com', '{"poolSize":10}'), (gen_random_uuid(), 'wfm', 'SLOT_SYNC', 'Old slots', NULL, '{}')`);
+    const rows = await listHubEndpoints(db, 'wfm');
+    expect(rows.map((r) => r.kind).sort()).toEqual(['SLOT_SYNC', 'WFM_GATEWAY']);
+    expect(rows.find((r) => r.kind === 'WFM_GATEWAY')).toMatchObject({ name: 'Old dispatch', url: 'https://fsl.example.com', config: { poolSize: 10 } });
+    await expect(saveHubEndpoint(db, 'root', { group: 'wfm', kind: 'SLOT_SYNC', name: 'Renamed' }, rows[0]!.id)).rejects.toThrow(/not used/);
+    for (const r of rows) await deleteHubEndpoint(db, 'root', r.id);
+    expect(await listHubEndpoints(db, 'wfm')).toEqual([]);
+  });
+
   it('keeps a secret encrypted and never returns it, and validates addresses by kind', async () => {
     const e = await saveHubEndpoint(db, 'root', { group: 'network', kind: 'HLR_HSS', name: 'HLR primary', url: 'diameter://hss1.example.net:3868', fallbackUrl: 'diameter://hss2.example.net:3868', timeoutMs: 3000, config: { realm: 'epc.example.net' }, secret: 'hunter2-hunter2' });
     expect(e).toMatchObject({ hasSecret: true, url: 'diameter://hss1.example.net:3868', timeoutMs: 3000 });
