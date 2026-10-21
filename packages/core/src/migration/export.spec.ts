@@ -72,7 +72,7 @@ describe('export', () => {
     expect(cust[1]!.cells[hashCol]).toMatch(/^h:[0-9a-f]{16}$/);
     expect(masked['p3-customers.csv']).not.toMatch(/[0-9a-f]{64}/);
 
-    await expect(createExportJob(db, 'admin', { entities: ['dealers'], format: 'CSV', unmasked: true, reason: 'DR copy for migration' }, { canUnmask: false })).rejects.toThrow(/super user/);
+    await expect(createExportJob(db, 'admin', { entities: ['dealers'], format: 'CSV', unmasked: true, reason: 'DR copy for migration' }, { canUnmask: false })).rejects.toThrow(/Settings permission/);
     await expect(createExportJob(db, 'root', { entities: ['dealers'], format: 'CSV', unmasked: true, reason: 'short' }, { canUnmask: true })).rejects.toThrow(/at least 10/);
     const job = await createExportJob(db, 'root', { entities: ['dealers', 'customers'], format: 'CSV', unmasked: true, reason: 'Disaster recovery copy for the cut-over' }, { canUnmask: true });
     const clear = unzip(await download(job.id));

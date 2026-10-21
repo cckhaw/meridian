@@ -1,6 +1,6 @@
 # Integrations
 
-**Integration** (left menu, next to Settings; super user only) holds every connection between Meridian and another system. Its sections are grouped by what you are trying to do, and work like Settings (a menu on the left, the section on the right; on a phone the menu is the first screen):
+**Integration** (left menu, next to Settings; needs `integration:manage`, which the super user always has and can give to any role) holds every connection between Meridian and another system. Its sections are grouped by what you are trying to do, and work like Settings (a menu on the left, the section on the right; on a phone the menu is the first screen):
 
 | Group | Sections | Think of it as |
 |---|---|---|

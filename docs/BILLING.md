@@ -26,10 +26,10 @@
 
 * **Billing Operations** (`billing:run`): start a run, review, exclude and put back, submit, re-run the mock, cancel, retry failed accounts. Cannot approve.
 * **Finance and Revenue Assurance** (`billing:approve`): approve (or send back) and start production. The Administrator role has neither: it manages users and the catalog, not money.
-* **Super user**: the rules below, and the cycles.
+* **Settings** (`settings:manage`; the super user always has it): the rules below, and the cycles.
 * **Dual control** (a setting, overridable per cycle): the run must be *submitted*, and the person who approves cannot be the person who asked for it or who submitted it. Without it, one person with `billing:approve` approves a mock directly.
 * An approval is **refused when the mock is older** than the limit (24 hours by default), because the data may have changed: run the mock again so what is billed is what was reviewed. A run still has to have every account priced and something to bill.
-* **No bypass.** While governance is on (the default) the plain "bill this date" call (`POST /api/billing/run`) is refused. A super user can switch governance off in *Cycles and rules*; leave it on in production.
+* **No bypass.** While governance is on (the default) the plain "bill this date" call (`POST /api/billing/run`) is refused. Someone with `settings:manage` can switch governance off in *Cycles and rules*; leave it on in production.
 
 ### States
 
@@ -45,7 +45,7 @@ A run is a list of items, one per account, created in one statement when the run
 
 ## Settings and the 28 cycles
 
-*Cycles and rules* (super user): governance on/off, dual control, the spike and drop percentages, the large-bill limit, how old a mock may be, and per cycle: on/off and its own second-approver rule. A cycle that is off cannot be run.
+*Cycles and rules* (`settings:manage`): governance on/off, dual control, the spike and drop percentages, the large-bill limit, how old a mock may be, and per cycle: on/off and its own second-approver rule. A cycle that is off cannot be run.
 
 ## The billing simulator
 

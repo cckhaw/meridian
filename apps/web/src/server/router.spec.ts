@@ -1294,7 +1294,7 @@ describe('maintaining roles and permissions', () => {
     expect(changed.json.customised).toBe(true);
     expect((await call('GET', '/invoices?limit=1', { cookie: seller.cookie })).status).toBe(403);
     expect((await call('PATCH', '/roles/call-center', { cookie: seller.cookie, body: { permissions: [] } })).status).toBe(403);
-    expect((await call('PATCH', '/roles/call-center', { cookie: admin, body: { permissions: ['settings:manage'] } })).status).toBe(400);
+    expect((await call('PATCH', '/roles/call-center', { cookie: admin, body: { permissions: ['nope:read'] } })).status).toBe(400);
     expect((await call('POST', '/roles/call-center/reset', { cookie: admin })).json.customised).toBe(false);
     expect((await call('GET', '/invoices?limit=1', { cookie: seller.cookie })).status).toBe(200);
   });
@@ -1314,6 +1314,126 @@ describe('maintaining roles and permissions', () => {
     await db.query(`DELETE FROM sessions WHERE user_id=$1`, [u.id]);
     await db.query(`DELETE FROM users WHERE id=$1`, [u.id]);
     expect((await call('DELETE', '/roles/billing-viewer', { cookie: admin })).status).toBe(200);
+  });
+});
+
+describe('Settings and Integration as permissions', () => {
+  const MSG = /Only the super user can give or take away Settings and Integration/;
+  const role = async (su: string, name: string, permissions: string[]) => {
+    const r = await call('POST', '/roles', { cookie: su, body: { name, permissions: ['dashboard:read', ...permissions] } });
+    expect(r.status).toBe(200);
+    return r.json.id as string;
+  };
+  const cleanup = async (su: string, users: Array<{ id: string }>, roles: string[]) => {
+    for (const u of users) { await db.query(`DELETE FROM sessions WHERE user_id=$1`, [u.id]); await db.query(`DELETE FROM users WHERE id=$1`, [u.id]); }
+    for (const id of roles) await call('DELETE', `/roles/${id}`, { cookie: su });
+  };
+  const status = async (cookie: string, method: string, path: string, body?: unknown) => (await call(method, path, { cookie, body })).status;
+
+  it('lists both as grantable by the super user only, and the super user always holds both', async () => {
+    const su = await root(); const admin = await staff(['admin']);
+    for (const cookie of [su, admin.cookie]) {
+      const perms = (await call('GET', '/roles/permissions', { cookie })).json.permissions;
+      expect(perms.filter((p: any) => p.superuserGrant).map((p: any) => [p.id, p.key, p.group, p.label]))
+        .toEqual([['settings:manage', 'system:settings:manage', 'Administration', 'Settings'], ['integration:manage', 'system:integration:manage', 'Administration', 'Integration']]);
+    }
+    const me = (await call('GET', '/auth/me', { cookie: su })).json.user;
+    expect(me.permissions).toEqual(expect.arrayContaining(['settings:manage', 'integration:manage']));
+    expect(me.modules.map((m: any) => m.id)).toEqual(expect.arrayContaining(['settings', 'integrations']));
+    expect((await call('GET', '/auth/me', { cookie: admin.cookie })).json.user.permissions).not.toContain('integration:manage');
+    await cleanup(su, [admin], []);
+  });
+
+  it('lets only the super user give or take them away; an administrator can still edit everything else', async () => {
+    const su = await root(); const admin = await staff(['admin']);
+    const sRole = await role(su, 'Settings Desk', ['settings:manage']);
+    const iRole = await role(su, 'Integration Desk', ['integration:manage']);
+    const refused = await call('POST', '/roles', { cookie: admin.cookie, body: { name: 'Sneaky', permissions: ['integration:manage'] } });
+    expect(refused.status).toBe(403); expect(refused.json.error.message).toMatch(MSG);
+    expect((await call('PATCH', '/roles/call-center', { cookie: admin.cookie, body: { permissions: ['dashboard:read', 'system:settings:manage'] } })).status).toBe(403);
+    expect((await call('POST', '/roles', { cookie: admin.cookie, body: { name: 'Copy', copyFrom: sRole } })).status).toBe(403);
+    for (const id of [sRole, iRole]) {
+      expect(await status(admin.cookie, 'PATCH', `/roles/${id}`, { summary: 'x' })).toBe(403);
+      expect(await status(admin.cookie, 'POST', `/roles/${id}/disable`, { disabled: true })).toBe(403);
+      expect(await status(admin.cookie, 'DELETE', `/roles/${id}`)).toBe(403);
+    }
+    // the super user adds one to a built-in role; resetting it is then the super user's too
+    expect((await call('PATCH', '/roles/call-center', { cookie: su, body: { permissions: ['dashboard:read', 'integration:manage'] } })).status).toBe(200);
+    expect(await status(admin.cookie, 'POST', '/roles/call-center/reset')).toBe(403);
+    expect((await call('POST', '/roles/call-center/reset', { cookie: su })).json.customised).toBe(false);
+    // other edits are still allowed for user:manage
+    const plain = await call('POST', '/roles', { cookie: admin.cookie, body: { name: 'Plain Desk', permissions: ['dashboard:read'] } });
+    expect(plain.status).toBe(200);
+    expect(await status(admin.cookie, 'PATCH', `/roles/${plain.json.id}`, { permissions: ['dashboard:read', 'billing:read'] })).toBe(200);
+    expect(await status(admin.cookie, 'DELETE', `/roles/${plain.json.id}`)).toBe(200);
+    const view = (await call('GET', '/roles', { cookie: admin.cookie })).json.find((r: any) => r.id === sRole);
+    expect(view).toMatchObject({ permissions: ['dashboard:read', 'settings:manage'], grantsSuperuser: true });
+    await cleanup(su, [admin], [sRole, iRole]);
+  });
+
+  it('opens the Settings screens to a Settings role and the Integration screens to an Integration role, and no others', async () => {
+    const su = await root();
+    const sRole = await role(su, 'Settings Only', ['settings:manage']);
+    const iRole = await role(su, 'Integration Only', ['integration:manage']);
+    const s = await staff([sRole]); const i = await staff([iRole]); const agent = await staff(['call-center']);
+    const settingsRoutes: Array<[string, string]> = [['GET', '/settings'], ['GET', '/settings/cancellation'], ['GET', '/settings/security-policy'], ['GET', '/settings/dunning-rules'], ['GET', '/settings/catalog'], ['GET', '/settings/customers'], ['GET', '/settings/cases'], ['GET', '/settings/financing']];
+    const integrationRoutes: Array<[string, string]> = [['GET', '/integrations'], ['GET', '/integrations/ocs'], ['GET', '/settings/integration-hub'], ['GET', '/settings/integration-hub/deliveries'], ['GET', '/settings/store']];
+    for (const [m, p] of settingsRoutes) { expect(await status(s.cookie, m, p), `settings holder ${p}`).toBe(200); expect(await status(i.cookie, m, p), `integration holder ${p}`).toBe(403); expect(await status(agent.cookie, m, p)).toBe(403); }
+    for (const [m, p] of integrationRoutes) { expect(await status(i.cookie, m, p), `integration holder ${p}`).toBe(200); expect(await status(s.cookie, m, p), `settings holder ${p}`).toBe(403); expect(await status(agent.cookie, m, p)).toBe(403); }
+    // writes belong to one area too
+    expect(await status(s.cookie, 'POST', '/settings/api-clients', { name: 'k' })).toBe(403);
+    expect(await status(i.cookie, 'POST', '/settings/api-clients', { name: 'k' })).toBe(201);
+    expect(await status(i.cookie, 'POST', '/settings/segments', { name: 'VIP' })).toBe(403);
+    expect(await status(s.cookie, 'POST', '/settings/integration-hub/rate-limits', { channel: 'DEFAULT', perMinute: 5 })).toBe(403);
+    // jobs that serve the integrations run for either holder
+    for (const j of ['/jobs/deliver-otp', '/jobs/directory-sync', '/jobs/deliver-notifications']) { expect(await status(s.cookie, 'POST', j)).toBe(200); expect(await status(i.cookie, 'POST', j)).toBe(200); expect(await status(agent.cookie, 'POST', j)).toBe(403); }
+    // the menus follow the permissions
+    const menu = async (c: string) => (await call('GET', '/auth/me', { cookie: c })).json.user.modules.map((m: any) => m.id).filter((x: string) => x === 'settings' || x === 'integrations');
+    expect(await menu(s.cookie)).toEqual(['settings']); expect(await menu(i.cookie)).toEqual(['integrations']); expect(await menu(agent.cookie)).toEqual([]);
+    await db.query(`DELETE FROM api_clients WHERE name='k'`);
+    await cleanup(su, [s, i, agent], [sRole, iRole]);
+  });
+
+  it('keeps an administrator from creating, moving, changing or reaching users who hold either, or from granting themselves', async () => {
+    const su = await root(); const admin = await staff(['admin']);
+    const sRole = await role(su, 'Settings Staff', ['settings:manage']);
+    const iRole = await role(su, 'Integration Staff', ['integration:manage']);
+    const holder = await staff([sRole]); const plain = await staff(['call-center']);
+    const MSG_USER = /Only the super user can grant, change or remove users who hold Settings or Integration/;
+    for (const r of [sRole, iRole]) {
+      const made = await call('POST', '/users', { cookie: admin.cookie, body: { username: `new.${r}`, displayName: 'New', roles: [r], password: 'Sturdy-Pass-Word-77' } });
+      expect(made.status).toBe(403); expect(made.json.error.message).toMatch(MSG_USER);
+      expect(await status(admin.cookie, 'PATCH', `/users/${plain.id}`, { roles: [r] }), `move into ${r}`).toBe(403);
+    }
+    for (const [m, p, b] of [['PATCH', `/users/${holder.id}`, { displayName: 'X' }], ['PATCH', `/users/${holder.id}`, { status: 'DISABLED' }], ['PATCH', `/users/${holder.id}`, { roles: ['call-center'] }], ['POST', `/users/${holder.id}/reset-password`, undefined], ['POST', `/users/${holder.id}/unlock`, undefined], ['POST', `/users/${holder.id}/reset-mfa`, undefined]] as const) {
+      expect(await status(admin.cookie, m, p, b), `${m} ${p}`).toBe(403);
+    }
+    expect(await status(admin.cookie, 'PATCH', `/users/${admin.id}`, { roles: ['admin', iRole] })).toBe(403);   // not on oneself
+    // a role that is switched off still counts, so nobody slips a user into it before it comes back
+    await call('POST', `/roles/${sRole}/disable`, { cookie: su, body: { disabled: true } });
+    expect(await status(admin.cookie, 'PATCH', `/users/${plain.id}`, { roles: [sRole] })).toBe(403);
+    await call('POST', `/roles/${sRole}/disable`, { cookie: su, body: { disabled: false } });
+    // a role gaining it later closes the door on its holders at once
+    expect(await status(admin.cookie, 'PATCH', `/users/${plain.id}`, { displayName: 'Still fine' })).toBe(200);
+    await call('PATCH', '/roles/call-center', { cookie: su, body: { permissions: ['dashboard:read', 'settings:manage'] } });
+    expect(await status(admin.cookie, 'PATCH', `/users/${plain.id}`, { displayName: 'Now locked' })).toBe(403);
+    await call('POST', '/roles/call-center/reset', { cookie: su });
+    // the super user is not restricted
+    expect(await status(su, 'PATCH', `/users/${plain.id}`, { roles: [iRole] })).toBe(200);
+    expect(await status(su, 'POST', `/users/${holder.id}/reset-password`)).toBe(200);
+    expect((await call('POST', '/users', { cookie: su, body: { username: 'su.made.holder', displayName: 'Made', roles: [sRole], password: 'Sturdy-Pass-Word-77' } })).status).toBe(200);
+    const made = { id: (await db.query(`SELECT id FROM users WHERE username='su.made.holder'`)).rows[0]!.id as string };
+    // a sign-in group cannot be mapped to such a role by someone who is not the super user
+    const integ = await staff([iRole]);
+    const oidc = (name: string, roleMappings: Record<string, string>) => ({ group: 'auth', kind: 'IDP_OIDC', name, url: 'https://acme.okta.example', secret: 'shh', config: { clientId: 'abc', redirectUri: 'https://crm.example.com/login/sso', vendor: 'OKTA', roleMappings } });
+    expect(await status(integ.cookie, 'POST', '/settings/integration-hub/endpoints', oidc('Map settings', { Staff: sRole }))).toBe(403);
+    expect(await status(integ.cookie, 'POST', '/settings/integration-hub/endpoints', oidc('Map admin code', { Staff: 'ROLE_FINANCE_OFFICER', Ops: iRole }))).toBe(403);
+    const ok = await call('POST', '/settings/integration-hub/endpoints', { cookie: integ.cookie, body: oidc('Map finance', { Staff: 'ROLE_FINANCE_OFFICER' }) });
+    expect(ok.status).toBe(201);
+    const suMap = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: oidc('Map settings by su', { Staff: sRole }) });
+    expect(suMap.status).toBe(201);
+    for (const e of [ok, suMap]) await call('DELETE', `/settings/integration-hub/endpoints/${e.json.id}`, { cookie: su });
+    await cleanup(su, [admin, holder, plain, integ, made], [sRole, iRole]);
   });
 });
 

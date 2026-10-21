@@ -328,11 +328,11 @@ get('/meta', null, async ({ db, user }) => ({ modules: { fiberCoverage: await co
 get('/roles', 'user:manage', ({ db }) => core.listRoles(db));
 get('/roles/permissions', 'user:manage', () => ({ permissions: core.permissionCatalogue(), landing: core.MODULES.map((m) => ({ href: m.href, label: m.label })) }));
 const roleBody = z.object({ name: z.string().max(60).optional(), summary: z.string().max(300).optional(), scope: z.enum(['staff', 'store', 'dealer']).optional(), home: z.string().max(80).optional(), permissions: z.array(z.string().max(60)).max(80).optional(), creditLimitMinor: z.number().int().min(0).nullable().optional(), copyFrom: z.string().max(60).optional() });
-post('/roles', 'user:manage', ({ db, user, body }) => core.createCustomRole(db, user.username, roleBody.parse(body)));
-patch('/roles/:id', 'user:manage', ({ db, user, params, body }) => core.updateRole(db, user.username, params.id!, roleBody.parse(body)));
-route('DELETE', '/roles/:id', 'user:manage', ({ db, user, params }) => core.deleteCustomRole(db, user.username, params.id!));
-post('/roles/:id/disable', 'user:manage', ({ db, user, params, body }) => core.setRoleDisabled(db, user.username, params.id!, z.object({ disabled: z.boolean() }).parse(body).disabled));
-post('/roles/:id/reset', 'user:manage', ({ db, user, params }) => core.resetRole(db, user.username, params.id!));
+post('/roles', 'user:manage', ({ db, user, body }) => core.createCustomRole(db, user.username, roleBody.parse(body), user.isSuperuser));
+patch('/roles/:id', 'user:manage', ({ db, user, params, body }) => core.updateRole(db, user.username, params.id!, roleBody.parse(body), user.isSuperuser));
+route('DELETE', '/roles/:id', 'user:manage', ({ db, user, params }) => core.deleteCustomRole(db, user.username, params.id!, user.isSuperuser));
+post('/roles/:id/disable', 'user:manage', ({ db, user, params, body }) => core.setRoleDisabled(db, user.username, params.id!, z.object({ disabled: z.boolean() }).parse(body).disabled, user.isSuperuser));
+post('/roles/:id/reset', 'user:manage', ({ db, user, params }) => core.resetRole(db, user.username, params.id!, user.isSuperuser));
 get('/users', 'user:manage', ({ db, query }) => core.listUsers(db, { q: str(query, 'q'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 const newUser = z.object({
   username: z.string().min(3).max(50), displayName: z.string().min(1).max(100), email: blank(z.string().email()), phone: blank(z.string().max(30)), roles: z.array(z.string()).min(1),
@@ -341,7 +341,8 @@ const newUser = z.object({
 /**
  * Guards against privilege escalation through user administration:
  *  - nobody edits their own account here (the super user's password lives in the environment, others use "Change password");
- *  - only the super user may grant or remove the Administrator role, so administrators cannot multiply themselves.
+ *  - only the super user may grant or remove the Administrator role, so administrators cannot multiply themselves;
+ *  - only the super user may create, move or change a user who holds (or would hold) a role with Settings or Integration, judged on the live role book.
  * Everything here is audited.
  */
 const touchesAdminRole = (roles?: string[]) => !!roles?.includes('admin');
@@ -350,6 +351,15 @@ const guardUserChange = async (c: Ctx, targetId: string | null, roles?: string[]
   if (targetId && targetId === c.user.id) throw forbidden('You cannot change your own account. Ask another administrator.');
   const target = targetId ? (await c.db.query('SELECT roles FROM users WHERE id=$1', [targetId])).rows[0] : null;
   if (touchesAdminRole(roles) || touchesAdminRole(target?.roles)) throw forbidden('Only the super user can grant, change or remove administrators.');
+  const granting = await core.superuserGrantRoles(c.db);
+  if ([...(roles ?? []), ...((target?.roles as string[] | undefined) ?? [])].some((r) => granting.has(r))) throw forbidden('Only the super user can grant, change or remove users who hold Settings or Integration.');
+};
+/** An identity-provider group mapped to a role with Settings or Integration would hand it out at sign-in, so only the super user may set that up. */
+const guardRoleMappings = async (c: Ctx, config: Record<string, unknown> | undefined) => {
+  if (c.user.isSuperuser || !config) return;
+  const granting = await core.superuserGrantRoles(c.db);
+  const refs = [...Object.values((config.roleMappings ?? {}) as Record<string, unknown>), config.defaultRole].filter((r): r is string => typeof r === 'string');
+  if (refs.some((r) => granting.has(core.roleIdOfCode(r) ?? r))) throw forbidden('Only the super user can map sign-in groups to a role that holds Settings or Integration.');
 };
 post('/users', 'user:manage', async (c) => { const b = newUser.parse(c.body); await guardUserChange(c, null, b.roles); return core.createUser(c.db, c.user.username, b); });
 patch('/users/:id', 'user:manage', async (c) => {
@@ -435,7 +445,7 @@ post('/catalog/:id/line-items/copy-from', 'catalog:write', async ({ db, user, pa
 get('/catalog/:id/etc', 'catalog:read', ({ db, params, query }) =>
   core.etcQuoteForOffer(db, params.id!, new Date(query.get('contractStart') ?? Date.now()), new Date(query.get('terminationDate') ?? Date.now())));
 
-// ───────────────────────── settings (super user) and public branding ─────────────────────────
+// ───────────────────────── settings (Settings permission) and public branding ─────────────────────────
 const regionalSchema = z.object({
   currency: z.string().length(3), symbol: z.string().min(1).max(6), symbolPosition: z.enum(['before', 'after']), symbolSpacing: z.boolean(),
   thousandSeparator: z.enum([',', '.', ' ', "'", '’', '']), decimalSeparator: z.enum(['.', ',']), decimals: z.number().int().min(0).max(4), grouping: z.enum(['standard', 'indian']),
@@ -606,18 +616,18 @@ post('/kyc/cases/:id/decision', 'kyc:review', async ({ db, user, params, body })
   return db.tx(async (q) => core.decideKycCase(q, params.id!, user.username, b, await core.getStoreSettings(q), { canReportFraud: user.permissions.has('fraud:manage') }));
 });
 
-// ───────────────────────── store settings and API keys (super user) ─────────────────────────
+// ───────────────────────── store settings and API keys (Integration permission) ─────────────────────────
 const storeSettingsSchema = z.object({
   kycMode: z.enum(['manual', 'auto']), minAge: z.number().int(), requireKycForServices: z.boolean().optional(), kycGate: z.enum(['BEFORE_ORDER', 'BEFORE_ACTIVATION']).optional(), kycSlaHours: z.number().int().optional(), kycRequireLiveCapture: z.boolean().optional(), termsUrl: z.string().max(300), privacyUrl: z.string().max(300), termsVersion: z.string().max(20),
   applicationTtlHours: z.number().int(), gateways: z.object({ enabled: z.array(z.string().max(20)).max(10), default: z.string().max(20).nullable(), crm: z.array(z.string().max(20)).max(10).default([]) }),
 });
-get('/settings/store', 'settings:manage', async ({ db }) => ({
+get('/settings/store', 'integration:manage', async ({ db }) => ({
   store: await core.getStoreSettings(db),
   gateways: Object.values(core.GATEWAYS).map((g) => ({ id: g.id, label: g.label, configured: g.configured(), paymentLink: !!g.createPaymentLink })),
   clients: await core.listApiClients(db),
   webhookPath: '/api/webhooks/gateway/stripe',
 }));
-post('/settings/store', 'settings:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body) as core.StoreSettings));
+post('/settings/store', 'integration:manage', async ({ db, user, body }) => core.setStoreSettings(db, user.username, storeSettingsSchema.parse(body) as core.StoreSettings));
 // ───────────────────────── data migration: exports, templates, jobs ─────────────────────────
 const migrationAny: Permission[] = ['migration:export', 'migration:import'];
 get('/migration/meta', migrationAny, async ({ db, user }) => ({
@@ -672,13 +682,13 @@ get('/migration/jobs/:id/report.csv', migrationAny, async ({ db, params }) => cs
 post('/migration/run', ['billing:run'], ({ db }) => core.runDueMigrationJobs(db));
 
 // ───────────────────────── charging system (OCS): connector, queue, retries ─────────────────────────
-get('/integrations/ocs', 'settings:manage', ({ db }) => core.ocsOverview(db));
-post('/integrations/ocs', 'settings:manage', async ({ db, user, body }) => {
+get('/integrations/ocs', 'integration:manage', ({ db }) => core.ocsOverview(db));
+post('/integrations/ocs', 'integration:manage', async ({ db, user, body }) => {
   const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), config: z.unknown().optional() }).parse(body);
   await core.setOcsSettings(db, user.username, b);
   return core.ocsOverview(db);
 });
-post('/integrations/ocs/test', 'settings:manage', async ({ db, body }) => {
+post('/integrations/ocs/test', 'integration:manage', async ({ db, body }) => {
   const b = z.object({ vendor: z.string().max(40), config: z.unknown() }).parse(body);
   const v = core.OCS_VENDORS[b.vendor];
   if (!v) throw new DomainError('INVALID', 'unknown vendor');
@@ -687,13 +697,13 @@ post('/integrations/ocs/test', 'settings:manage', async ({ db, body }) => {
   if (problem) return { ok: false, detail: problem };
   return c.test ? c.test() : { ok: true, detail: 'This connector has no connection test.' };
 });
-get('/integrations/ocs/jobs', 'settings:manage', async ({ db, query }) => ({ items: await core.listOcsJobs(db, { status: str(query, 'status'), serviceId: str(query, 'serviceId'), limit: num(query, 'limit') }) }));
-post('/integrations/ocs/jobs/:id/retry', 'settings:manage', ({ db, user, params }) => core.retryOcsJob(db, params.id!, user.username));
+get('/integrations/ocs/jobs', 'integration:manage', async ({ db, query }) => ({ items: await core.listOcsJobs(db, { status: str(query, 'status'), serviceId: str(query, 'serviceId'), limit: num(query, 'limit') }) }));
+post('/integrations/ocs/jobs/:id/retry', 'integration:manage', ({ db, user, params }) => core.retryOcsJob(db, params.id!, user.username));
 /** Delivers due jobs to the charging system. Schedule it every minute (service account with billing:run); the Run now button calls it too. */
 post('/ocs/dispatch', 'billing:run', ({ db }) => core.dispatchOcs(db));
 
-/** Every external integration with its live status (environment variable names only, never values). Super user. */
-get('/integrations', 'settings:manage', async ({ db }) => core.integrationOverview(db));
+/** Every external integration with its live status (environment variable names only, never values). Integration permission. */
+get('/integrations', 'integration:manage', async ({ db }) => core.integrationOverview(db));
 // ── cancellation rules (Settings → Cancellation) ──
 const conditionSchema = z.object({
   fact: z.string().max(40), op: z.enum(['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'not_in', 'contains']),
@@ -787,24 +797,24 @@ const hubView = async (db: Db) => ({
   oauthClients: await core.listOAuthClients(db), apiKeys: await core.listApiClients(db), rateLimits: await core.listRateRules(db), webhooks: await core.listHubWebhooks(db), topics: await core.listTopicMappings(db),
   emailPresets: core.EMAIL_PRESETS, eventTypes: core.HUB_EVENT_TYPES, channels: core.HUB_CHANNELS, scopes: core.NORTHBOUND_SCOPES.map((id) => ({ id, label: core.SCOPE_LABEL[id] })),
 });
-get('/settings/integration-hub', 'settings:manage', ({ db }) => hubView(db));
-get('/settings/integration-hub/calls', 'settings:manage', ({ db, query }) => core.listGatewayCalls(db, { clientRef: str(query, 'clientRef'), limit: num(query, 'limit') }));
-post('/settings/integration-hub/endpoints', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveHubEndpoint(db, user.username, endpointBody.parse(body) as core.HubEndpointInput), { status: 201 }));
-patch('/settings/integration-hub/endpoints/:id', 'settings:manage', ({ db, user, params, body }) => core.saveHubEndpoint(db, user.username, endpointBody.parse(body) as core.HubEndpointInput, params.id!));
-route('DELETE', '/settings/integration-hub/endpoints/:id', 'settings:manage', ({ db, user, params }) => core.deleteHubEndpoint(db, user.username, params.id!));
-post('/settings/integration-hub/email/:id/test', 'settings:manage', ({ db, user, params, body }) => core.testEmail(db, user.username, uuid.parse(params.id), z.object({ to: z.string().max(254) }).parse(body).to));
-get('/settings/integration-hub/email/simulated', 'settings:manage', async ({ db }) => ({ items: await core.listSimulatedEmails(db) }));
-post('/settings/integration-hub/oauth-clients', 'settings:manage', async ({ db, user, body }) => Response.json(await core.createOAuthClient(db, user.username, z.object({ name: z.string().min(1).max(80), channel: z.string().max(31).optional(), scopes: scopeList, tokenTtlSeconds: z.number().int().optional() }).parse(body)), { status: 201, headers: { 'cache-control': 'no-store' } }));   // the secret is shown once
-patch('/settings/integration-hub/oauth-clients/:id', 'settings:manage', ({ db, user, params, body }) => core.updateOAuthClient(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), channel: z.string().max(31).optional(), scopes: scopeList.optional(), tokenTtlSeconds: z.number().int().optional() }).parse(body)));
-post('/settings/integration-hub/oauth-clients/:id/rotate', 'settings:manage', async ({ db, user, params, body }) => Response.json(await core.rotateOAuthSecret(db, user.username, params.id!, z.object({ graceMinutes: z.number().int().optional() }).parse(body ?? {}).graceMinutes), { headers: { 'cache-control': 'no-store' } }));
-post('/settings/integration-hub/oauth-clients/:id/revoke', 'settings:manage', ({ db, user, params }) => core.revokeOAuthClient(db, user.username, params.id!));
-post('/settings/integration-hub/rate-limits', 'settings:manage', ({ db, user, body }) => { const b = z.object({ channel: z.string().max(31), perMinute: z.number().int(), enabled: z.boolean().optional() }).parse(body); return core.saveRateRule(db, user.username, b.channel, b.perMinute, b.enabled); });
-route('DELETE', '/settings/integration-hub/rate-limits/:channel', 'settings:manage', ({ db, user, params }) => core.deleteRateRule(db, user.username, params.channel!));
-post('/settings/integration-hub/webhooks', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveHubWebhook(db, user.username, webhookBody.parse(body) as core.HubWebhookInput), { status: 201 }));
-patch('/settings/integration-hub/webhooks/:id', 'settings:manage', ({ db, user, params, body }) => core.saveHubWebhook(db, user.username, webhookBody.parse(body) as core.HubWebhookInput, params.id!));
-route('DELETE', '/settings/integration-hub/webhooks/:id', 'settings:manage', ({ db, user, params }) => core.deleteHubWebhook(db, user.username, params.id!));
-post('/settings/integration-hub/topics', 'settings:manage', async ({ db, user, body }) => Response.json(await core.saveTopicMapping(db, user.username, z.object({ eventType: z.string().max(40), topic: z.string().max(120), enabled: z.boolean().optional() }).parse(body)), { status: 201 }));
-route('DELETE', '/settings/integration-hub/topics/:id', 'settings:manage', ({ db, user, params }) => core.deleteTopicMapping(db, user.username, params.id!));
+get('/settings/integration-hub', 'integration:manage', ({ db }) => hubView(db));
+get('/settings/integration-hub/calls', 'integration:manage', ({ db, query }) => core.listGatewayCalls(db, { clientRef: str(query, 'clientRef'), limit: num(query, 'limit') }));
+post('/settings/integration-hub/endpoints', 'integration:manage', async (c) => { const b = endpointBody.parse(c.body); await guardRoleMappings(c, b.config); return Response.json(await core.saveHubEndpoint(c.db, c.user.username, b as core.HubEndpointInput), { status: 201 }); });
+patch('/settings/integration-hub/endpoints/:id', 'integration:manage', async (c) => { const b = endpointBody.parse(c.body); await guardRoleMappings(c, b.config); return core.saveHubEndpoint(c.db, c.user.username, b as core.HubEndpointInput, c.params.id!); });
+route('DELETE', '/settings/integration-hub/endpoints/:id', 'integration:manage', ({ db, user, params }) => core.deleteHubEndpoint(db, user.username, params.id!));
+post('/settings/integration-hub/email/:id/test', 'integration:manage', ({ db, user, params, body }) => core.testEmail(db, user.username, uuid.parse(params.id), z.object({ to: z.string().max(254) }).parse(body).to));
+get('/settings/integration-hub/email/simulated', 'integration:manage', async ({ db }) => ({ items: await core.listSimulatedEmails(db) }));
+post('/settings/integration-hub/oauth-clients', 'integration:manage', async ({ db, user, body }) => Response.json(await core.createOAuthClient(db, user.username, z.object({ name: z.string().min(1).max(80), channel: z.string().max(31).optional(), scopes: scopeList, tokenTtlSeconds: z.number().int().optional() }).parse(body)), { status: 201, headers: { 'cache-control': 'no-store' } }));   // the secret is shown once
+patch('/settings/integration-hub/oauth-clients/:id', 'integration:manage', ({ db, user, params, body }) => core.updateOAuthClient(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), channel: z.string().max(31).optional(), scopes: scopeList.optional(), tokenTtlSeconds: z.number().int().optional() }).parse(body)));
+post('/settings/integration-hub/oauth-clients/:id/rotate', 'integration:manage', async ({ db, user, params, body }) => Response.json(await core.rotateOAuthSecret(db, user.username, params.id!, z.object({ graceMinutes: z.number().int().optional() }).parse(body ?? {}).graceMinutes), { headers: { 'cache-control': 'no-store' } }));
+post('/settings/integration-hub/oauth-clients/:id/revoke', 'integration:manage', ({ db, user, params }) => core.revokeOAuthClient(db, user.username, params.id!));
+post('/settings/integration-hub/rate-limits', 'integration:manage', ({ db, user, body }) => { const b = z.object({ channel: z.string().max(31), perMinute: z.number().int(), enabled: z.boolean().optional() }).parse(body); return core.saveRateRule(db, user.username, b.channel, b.perMinute, b.enabled); });
+route('DELETE', '/settings/integration-hub/rate-limits/:channel', 'integration:manage', ({ db, user, params }) => core.deleteRateRule(db, user.username, params.channel!));
+post('/settings/integration-hub/webhooks', 'integration:manage', async ({ db, user, body }) => Response.json(await core.saveHubWebhook(db, user.username, webhookBody.parse(body) as core.HubWebhookInput), { status: 201 }));
+patch('/settings/integration-hub/webhooks/:id', 'integration:manage', ({ db, user, params, body }) => core.saveHubWebhook(db, user.username, webhookBody.parse(body) as core.HubWebhookInput, params.id!));
+route('DELETE', '/settings/integration-hub/webhooks/:id', 'integration:manage', ({ db, user, params }) => core.deleteHubWebhook(db, user.username, params.id!));
+post('/settings/integration-hub/topics', 'integration:manage', async ({ db, user, body }) => Response.json(await core.saveTopicMapping(db, user.username, z.object({ eventType: z.string().max(40), topic: z.string().max(120), enabled: z.boolean().optional() }).parse(body)), { status: 201 }));
+route('DELETE', '/settings/integration-hub/topics/:id', 'integration:manage', ({ db, user, params }) => core.deleteTopicMapping(db, user.username, params.id!));
 
 // ───────────────────────── northbound API gateway (/api/v1, /api/tmf-api) ─────────────────────────
 /**
@@ -852,8 +862,8 @@ north('POST', '/v1/services/:id/vas', 'vas:manage', ({ db, params, body, princip
 // a subscription is identified by the service it is on
 north('POST', '/v1/subscriptions/:id/change-plan', 'subscription:change', ({ db, params, body, principal, req }) => core.changePlanNorth(db, params.id!, z.object({ serviceId: z.string().max(60).optional(), targetOfferId: z.string().max(80), effective: z.enum(['IMMEDIATE', 'NEXT_BILL_CYCLE']), addOns: z.array(z.string().max(80)).max(10).optional(), acceptContractTerms: z.boolean().optional(), agreement: agreementBody.optional() }).transform((b) => ({ ...b, agreement: b.agreement ? { signature: { image: b.agreement.image, signerName: b.agreement.signerName, geo: b.agreement.geo ?? null }, versionIds: b.agreement.versionIds, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined } : undefined })).parse(body), northActor(principal)), { idempotent: true });
 north('DELETE', '/v1/subscriptions/:id/change-plan', 'subscription:change', async ({ db, params, principal }) => { await core.cancelPendingPlanChange(db, params.id!, northActor(principal)); return new Response(null, { status: 204 }); });
-get('/settings/integration-hub/operations', 'settings:manage', ({ db }) => core.getNorthSettings(db));
-post('/settings/integration-hub/operations', 'settings:manage', ({ db, user, body }) => core.setNorthSettings(db, user.username, z.object({ simSwapOtpRequired: z.boolean().optional(), otpTtlMinutes: z.number().int().optional(), simSwapFeeMinor: z.number().int().optional(), numberChangeFeeMinor: z.number().int().optional(), ownershipTransferFeeMinor: z.number().int().optional(), planChangeFeeMinor: z.number().int().optional() }).parse(body)));
+get('/settings/integration-hub/operations', 'integration:manage', ({ db }) => core.getNorthSettings(db));
+post('/settings/integration-hub/operations', 'integration:manage', ({ db, user, body }) => core.setNorthSettings(db, user.username, z.object({ simSwapOtpRequired: z.boolean().optional(), otpTtlMinutes: z.number().int().optional(), simSwapFeeMinor: z.number().int().optional(), numberChangeFeeMinor: z.number().int().optional(), ownershipTransferFeeMinor: z.number().int().optional(), planChangeFeeMinor: z.number().int().optional() }).parse(body)));
 
 // ── Northbound: ordering, billing and payments (TMF 622 / 670 / 676) ──
 const northOrderBody = () => z.object({
@@ -880,15 +890,15 @@ open('GET', '/v1/invoices/:id/pdf', async ({ db, params, query }) => {
 north('POST', '/v1/payments', 'payment:create', async ({ db, body, principal }) => created(await core.createPaymentNorth(db, z.object({ accountId: uuid.optional(), invoiceId: uuid.optional(), orderId: uuid.optional(), amountMinor: z.number().int().positive(), method: z.enum(['CASH', 'CREDIT_CARD', 'QR']), reference: z.string().min(3).max(100), topUp: z.boolean().optional() }).parse(body), northActor(principal))), { idempotent: true });
 
 // ── Event delivery: dispatch now, recent deliveries, retry ──
-post('/settings/integration-hub/auth/directory/:id/sync', 'settings:manage', ({ db, params, user }) => core.syncDirectory(db, params.id!, user.username));
-get('/settings/integration-hub/auth/directory/runs', 'settings:manage', ({ db, query }) => core.listSyncRuns(db, str(query, 'endpointId')).then((items) => ({ items })));
-post('/jobs/directory-sync', 'settings:manage', ({ db }) => core.runDueDirectorySyncs(db));
-post('/jobs/deliver-otp', 'settings:manage', ({ db }) => core.deliverOtpMessages(db));
+post('/settings/integration-hub/auth/directory/:id/sync', 'integration:manage', ({ db, params, user }) => core.syncDirectory(db, params.id!, user.username));
+get('/settings/integration-hub/auth/directory/runs', 'integration:manage', ({ db, query }) => core.listSyncRuns(db, str(query, 'endpointId')).then((items) => ({ items })));
+post('/jobs/directory-sync', ['settings:manage', 'integration:manage'], ({ db }) => core.runDueDirectorySyncs(db));
+post('/jobs/deliver-otp', ['settings:manage', 'integration:manage'], ({ db }) => core.deliverOtpMessages(db));
 /** Retries what waits for the SMS / WhatsApp gateway besides one-time codes: staff alerts and signed agreement copies. Also runs on the 15-second heartbeat below. */
-post('/jobs/deliver-notifications', 'settings:manage', async ({ db }) => ({ alerts: await core.deliverUserAlerts(db), signedCopies: await core.deliverSignedCopies(db) }));
-post('/settings/integration-hub/events/dispatch', 'settings:manage', ({ db }) => core.dispatchEvents(db));
-get('/settings/integration-hub/deliveries', 'settings:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
-post('/settings/integration-hub/deliveries/:id/retry', 'settings:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));
+post('/jobs/deliver-notifications', ['settings:manage', 'integration:manage'], async ({ db }) => ({ alerts: await core.deliverUserAlerts(db), signedCopies: await core.deliverSignedCopies(db) }));
+post('/settings/integration-hub/events/dispatch', 'integration:manage', ({ db }) => core.dispatchEvents(db));
+get('/settings/integration-hub/deliveries', 'integration:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
+post('/settings/integration-hub/deliveries/:id/retry', 'integration:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));
 
 // ── Settings → Early termination: scenarios and the formulas behind the charge ──
 const etcRuleBody = z.object({
@@ -919,14 +929,14 @@ post('/arrangements/:id/cancel', 'collections:manage', async ({ db, user, params
 get('/collections/placements', 'collections:manage', ({ db, query }) => core.listPlacements(db, { status: str(query, 'status'), pending: query.get('pending') === '1', limit: num(query, 'limit') }));
 post('/collections/placements/:id/recall', 'collections:manage', ({ db, user, params, body }) => core.recallPlacement(db, params.id!, user.username, z.object({ reason: z.string().min(1).max(300) }).parse(body).reason));
 post('/collections/export', 'collections:manage', async ({ db, user, body }) => { const r = await core.exportAgencyFile(db, user.username, z.object({ limit: z.number().int().min(1).max(5000).optional() }).parse(body ?? {})); return csv(r.csv, `meridian-collections-${r.batchId}.csv`, { 'x-batch-id': r.batchId, 'x-count': String(r.count) }); });
-post('/settings/api-clients', 'settings:manage', async ({ db, user, body }) => {
+post('/settings/api-clients', 'integration:manage', async ({ db, user, body }) => {
   const r = await core.createApiClient(db, user.username, z.object({ name: z.string().min(1).max(60), scopes: z.array(z.string().max(40)).max(40).optional(), channel: z.string().max(31).optional(), expiresAt: z.string().max(40).nullish(), signRequests: z.boolean().optional() }).parse(body) as Parameters<typeof core.createApiClient>[2]);
   return Response.json({ client: r.client, key: r.key, ...(r.hmacSecret ? { hmacSecret: r.hmacSecret } : {}) }, { status: 201, headers: { 'cache-control': 'no-store' } }); // the only time the key is shown
 });
-route('DELETE', '/settings/api-clients/:id', 'settings:manage', async ({ db, user, params }) => { await core.revokeApiClient(db, user.username, params.id!); return { ok: true }; });
+route('DELETE', '/settings/api-clients/:id', 'integration:manage', async ({ db, user, params }) => { await core.revokeApiClient(db, user.username, params.id!); return { ok: true }; });
 
 // ───────────────────────── catalog configuration (offer types and fulfilment options) ─────────────────────────
-// Read by anyone who works on the catalog (the offer wizard, bundle rules); changed only in Settings by the super user.
+// Read by anyone who works on the catalog (the offer wizard, bundle rules); changed only in Settings, by whoever holds the Settings permission.
 get('/catalog-config', 'catalog:read', async ({ db }) => ({ types: await core.listOfferTypes(db, { activeOnly: true }), options: await core.listFulfilmentOptions(db, { activeOnly: true }), serviceKinds: await core.listServiceKinds(db, { activeOnly: true }), ocsEnabled: (await core.getOcsSettings(db)).enabled }));
 get('/settings/offer-type-conflicts', 'settings:manage', async ({ db }) => ({ pairs: await core.getTypeConflicts(db) }));
 post('/settings/offer-type-conflicts', 'settings:manage', async ({ db, user, body }) => ({ pairs: await core.setTypeConflicts(db, user.username, z.object({ pairs: z.array(z.tuple([z.string().max(40), z.string().max(40)])).max(200) }).parse(body).pairs) }));
@@ -1007,7 +1017,7 @@ post('/customers/:id/kyc/mydigitalid', 'customer:write', async ({ db, user, para
 });
 /** The CRM screen asks while the pop-up is open. Only the person who started it can see the answer. */
 get('/kyc/mydigitalid/sessions/:id', 'customer:read', ({ db, user, params }) => core.mydigitalidSession(db, params.id!, { actor: user.username }));
-route('POST', '/kyc/mydigitalid/test', 'settings:manage', ({ db }) => core.mydigitalidTest(db));
+route('POST', '/kyc/mydigitalid/test', 'integration:manage', ({ db }) => core.mydigitalidTest(db));
 /** Where MyDigital ID sends the browser back to in the CRM (the address registered with the provider). It finishes the check and shows a short page to close. */
 open('GET', '/kyc/mydigitalid/callback', async ({ db, query }) => {
   const state = String(query.get('state') ?? ''), code = query.get('code') ? String(query.get('code')) : undefined, error = query.get('error') ? String(query.get('error')) : undefined;
@@ -1117,7 +1127,7 @@ post('/services/:id/change-plan', 'service:manage', async ({ db, user, req, para
 post('/services/:id/upgrade-to-group', 'service:manage', async ({ db, user, params, body }) => new core.GroupOrderService(db).upgrade(params.id!, z.object({ offerId: z.string().max(70) }).parse(body).offerId, user.username));
 
 // ───────────────────────── number portability into the operator (port-in) ─────────────────────────
-/** The operators numbers can come from, with their operator IDs. Everyone who sells reads the active ones for the drop-down; the super user keeps the list. */
+/** The operators numbers can come from, with their operator IDs. Everyone who sells reads the active ones for the drop-down; whoever holds the Settings permission keeps the list. */
 get('/settings/donor-operators', ['numbering:select', 'mnp:manage', 'settings:manage'], ({ db, query }) => core.listDonorOperators(db, { activeOnly: query.get('active') === '1' }).then((items) => ({ items })));
 post('/settings/donor-operators', ['settings:manage'], ({ db, user, body }) => core.createDonorOperator(db, user.username, z.object({ name: z.string().max(80), mnpOperatorId: z.string().max(30) }).parse(body)));
 patch('/settings/donor-operators/:id', ['settings:manage'], ({ db, user, params, body }) => core.updateDonorOperator(db, user.username, params.id!, z.object({ name: z.string().max(80).optional(), mnpOperatorId: z.string().max(30).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() }).parse(body)));

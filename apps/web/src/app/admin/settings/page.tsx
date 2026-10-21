@@ -4,6 +4,7 @@ import { Alert, Empty, LargeTitle, SearchField, Spinner } from '@meridian/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { AppearanceSettings } from './appearance';
 import { CancellationSettings } from './cancellation';
 import { FulfilmentSettings, OfferTypeSettings, ServiceKindSettings } from './catalog-config';
@@ -80,7 +81,7 @@ function Settings() {
 
   return (
     <>
-      <LargeTitle subtitle="Everything that shapes how Meridian behaves for your business. Only the super user can change these; every change is recorded in the audit log.">Settings</LargeTitle>
+      <LargeTitle subtitle="Everything that shapes how Meridian behaves for your business. Only people whose role includes Settings can change these (the super user always can); every change is recorded in the audit log.">Settings</LargeTitle>
       {error && <Alert>{error}</Alert>}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,320px)_minmax(0,1fr)] lg:items-start">
         {/* On a phone the menu and the section are separate screens; from lg up they sit side by side. */}
@@ -133,6 +134,11 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
 
 /** The roles matrix reads its own list, so it stays current as people tick boxes. */
 function RolesFromApi() {
+  const { can } = useAuth();
+  if (!can('user:manage')) return <Alert tone="info">Changing what roles can do needs the permission to manage users and roles.</Alert>;
+  return <RolesLoaded />;
+}
+function RolesLoaded() {
   const roles = useApi<any[]>('/roles');
   if (!roles.data) return <Spinner />;
   return <RolesSettings roles={roles.data as never} reload={roles.reload} />;

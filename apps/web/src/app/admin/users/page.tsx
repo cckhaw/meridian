@@ -4,11 +4,12 @@ import { useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
 import { StorePicker } from '@/app/stores/store-picker';
 import { useRegional } from '@/components/settings-provider';
+import { useAuth } from '@/lib/auth';
 import { RolesSettings } from '../settings/roles';
 import { useMultiMarket } from '@/lib/markets';
 import { dt, label, money } from '@/lib/format';
 
-interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null }
+interface Role { id: string; label: string; summary: string; scope: string; permissions: string[]; creditLimitMinor?: number | null; grantsSuperuser?: boolean }
 
 export default function Users() {
   const multi = useMultiMarket();
@@ -85,16 +86,20 @@ function MarketField({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
+/** Mirrors the server: only the super user may give the Administrator role or a role that holds Settings or Integration. */
 function RolePicker({ roles, value, onChange }: { roles: Role[]; value: string[]; onChange: (v: string[]) => void }) {
+  const su = !!useAuth().me?.isSuperuser;
   return (
     <fieldset className="grid gap-2 sm:grid-cols-2">
       <legend className="mb-1 text-subhead font-medium">Roles</legend>
-      {roles.map((r) => (
-        <label key={r.id} className="flex min-h-tap cursor-pointer items-start gap-3 rounded-control bg-surface2 p-3">
-          <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={value.includes(r.id)} onChange={(e) => onChange(e.target.checked ? [...value, r.id] : value.filter((x) => x !== r.id))} />
-          <span><span className="font-medium">{r.label}</span><span className="block text-footnote text-label2">{r.summary}</span></span>
-        </label>
-      ))}
+      {roles.map((r) => {
+        const why = su ? '' : r.id === 'admin' ? 'Only the super user can give this role' : r.grantsSuperuser ? 'Holds Settings or Integration: only the super user can give this role' : '';
+        return (
+          <label key={r.id} className={`flex min-h-tap items-start gap-3 rounded-control bg-surface2 p-3 ${why ? 'opacity-60' : 'cursor-pointer'}`}>
+            <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" disabled={!!why} aria-describedby={why ? `why-${r.id}` : undefined} checked={value.includes(r.id)} onChange={(e) => onChange(e.target.checked ? [...value, r.id] : value.filter((x) => x !== r.id))} />
+            <span><span className="font-medium">{r.label}</span><span className="block text-footnote text-label2">{r.summary}</span>{why && <span id={`why-${r.id}`} className="block text-caption text-label2">{why}</span>}</span>
+          </label>);
+      })}
     </fieldset>
   );
 }

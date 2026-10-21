@@ -20,7 +20,7 @@ Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.developm
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
-pnpm typecheck && pnpm test          # 896 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
+pnpm typecheck && pnpm test          # 906 tests; set TEST_DATABASE_URL=postgres://.../postgres to run the core suite on real Postgres
 ```
 
 ## Run it in production
@@ -40,7 +40,7 @@ Set `DATABASE_URL`, `MERIDIAN_SUPERUSER_USERNAME`, `MERIDIAN_SUPERUSER_PASSWORD`
 
 ## Configuration at a glance
 
-Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environment) and `.env.example`. Everything else is set in the CRM under **Settings** (needs `settings:manage`):
+Environment variables are in [docs/OPERATIONS.md](docs/OPERATIONS.md#1-environment) and `.env.example`. Everything else is set in the CRM under **Settings** (needs `settings:manage`; connections to outside systems are under **Integration**, which needs `integration:manage`). Only the super user can give either permission to a role:
 
 | Settings section | What it controls | Read |
 |---|---|---|

@@ -73,7 +73,7 @@ A switched-off type cannot be chosen for new offers; existing offers keep workin
 
 **Settings → Catalog → Service types** lists what an order can start: the four that come with the platform (Mobile, Fibre, IoT, Subscription) and any you define: a roaming pass, a voucher, a top-up. Choose one as the *service it creates* in an offer type.
 
-**Built-in types** can be adapted by the super user (`settings:manage`): rename and describe them, and change how the outside world hears about them. Their identifiers (the number comes from the number pool; `FBR-`, `IOT`, `SUB-` for the rest), their life cycle (they never end by themselves) and their existence are fixed: they cannot be switched off or removed.
+**Built-in types** can be adapted by whoever holds `settings:manage` (the super user always does): rename and describe them, and change how the outside world hears about them. Their identifiers (the number comes from the number pool; `FBR-`, `IOT`, `SUB-` for the rest), their life cycle (they never end by themselves) and their existence are fixed: they cannot be switched off or removed.
 
 For **every** type, built-in or yours, you set:
 
