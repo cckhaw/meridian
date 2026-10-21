@@ -54,7 +54,7 @@ export async function createExportJob(db: Queryable, actor: string, r: ExportReq
   if (!['CSV', 'JSON'].includes(r.format)) throw invalid('The format is CSV or JSON.');
   const unmasked = !!r.unmasked;
   if (unmasked) {
-    if (!o.canUnmask) throw rejected('Only the super user can export sensitive fields unmasked.');
+    if (!o.canUnmask) throw rejected('Only someone with the Settings permission can export sensitive fields unmasked.');
     if ((r.reason ?? '').trim().length < REASON_MIN) throw invalid(`Say why the sensitive fields are needed unmasked (at least ${REASON_MIN} characters). It is recorded in the audit log.`);
   }
   if (r.maxRowsPerEntity !== undefined && (!Number.isInteger(r.maxRowsPerEntity) || r.maxRowsPerEntity < 1)) throw invalid('Rows per data set must be a whole number from 1.');

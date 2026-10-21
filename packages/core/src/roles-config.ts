@@ -1,7 +1,7 @@
 import { audit } from './audit.js';
 import { permissionDomain, permissionKey, resolvePermission } from './permission-catalog.js';
 import type { Queryable } from './db.js';
-import { invalid, rejected } from './errors.js';
+import { forbidden, invalid, rejected } from './errors.js';
 import { ALL_PERMISSIONS, CHANNELS, isBuiltinRole, isPermission, MODULES, ROLE_IDS, ROLES, roleCreditLimit, roleDef, rolePermissions, type DataScope, type Permission, type RoleBook, type RoleDef, type RoleId, type RoleOverrides } from './rbac.js';
 
 const KEY = 'rolePermissions';
@@ -32,8 +32,27 @@ export async function getRoleOverrides(q: Queryable): Promise<RoleBook> {
   return book;
 }
 
-/** Permissions that can never be given to a role: the super user holds them alone. */
-export const SUPERUSER_ONLY: readonly Permission[] = ['settings:manage'];
+/** Permissions any role can hold, but only the super user may give or take away: whoever holds `user:manage` could otherwise give themselves Settings or Integration. */
+export const SUPERUSER_GRANTS: readonly Permission[] = ['settings:manage', 'integration:manage'];
+export const SUPERUSER_GRANT_MESSAGE = 'Only the super user can give or take away Settings and Integration.';
+/** True when the permissions include one only the super user may grant. */
+export const holdsSuperuserGrant = (perms: readonly string[]) => perms.some((p) => (SUPERUSER_GRANTS as readonly string[]).includes(p));
+/** What a role is set to grant, whether or not it is switched off now: switching it back on must not slip past the guard. */
+export const configuredPermissions = (id: string, book: RoleBook): Permission[] => rolePermissions(id, { ...book, disabled: [] });
+/** Ids of the roles (built-in and created) that hold Settings or Integration right now, overrides included, switched off or not. A non-super user may not hand these out or manage their holders. */
+export async function superuserGrantRoles(q: Queryable): Promise<Set<string>> {
+  const book = await getRoleOverrides(q);
+  return new Set([...ROLE_IDS, ...Object.keys(book.custom)].filter((id) => holdsSuperuserGrant(configuredPermissions(id, book))));
+}
+/** Refuses a non-super actor any change that adds or removes a super user grant, or touches a role that holds one, judged on the role's permissions now (`before`) and after the change. */
+const guardGrants = (actorIsSuperuser: boolean, before: readonly Permission[], after: readonly Permission[] = before) => {
+  if (!actorIsSuperuser && (holdsSuperuserGrant(before) || holdsSuperuserGrant(after))) throw forbidden(SUPERUSER_GRANT_MESSAGE);
+};
+/** A separate audit row for every grant or removal of Settings or Integration, so they are easy to find. */
+const auditGrants = async (q: Queryable, actor: string, id: string, before: readonly Permission[], after: readonly Permission[]) => {
+  const added = after.filter((p) => !before.includes(p) && SUPERUSER_GRANTS.includes(p)), removed = before.filter((p) => !after.includes(p) && SUPERUSER_GRANTS.includes(p));
+  if (added.length || removed.length) await audit(q, actor, 'role', id, 'grant-super-user-permission', { added, removed, byActor: actor });
+};
 /** Permissions a role must keep, so an administrator cannot lock everyone out of this very screen. */
 const KEEP: Partial<Record<string, Permission[]>> = { admin: ['user:manage'] };
 
@@ -105,15 +124,16 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'migration:export': ['Administration', 'Export data', 'Download backups and migration extracts, with sensitive fields masked'],
   'migration:import': ['Administration', 'Import data', 'Load customers, services and other data from files'],
   'user:manage': ['Administration', 'Manage users and roles', 'Create users and change what roles can do'],
-  'settings:manage': ['Administration', 'Settings (super user only)', 'Regional, branding, gateways, API keys'],
+  'settings:manage': ['Administration', 'Settings', 'Opens the Settings menu: regional format, branding, catalog and customer configuration, dunning, cases, security policy, the roles matrix and the other Settings screens'],
+  'integration:manage': ['Administration', 'Integration', 'Opens the Integration menu: connections to outside systems, the messaging gateways, the e-mail sender, identity and payment connections, the store-front settings, API clients and keys, OCS'],
 };
 const CHANNEL_NAME: Record<string, string> = { SELF_SERVE: 'online self-serve', RETAIL_ASSISTED: 'assisted at a store', QUICK_SALE: 'quick sale at a store', TELESALES: 'telesales', DEALER: 'through a dealer', CALL_CENTER: 'call center' };
 for (const c of CHANNELS) INFO[`order:create:${c}`] = ['Selling', `Sell ${CHANNEL_NAME[c]}`, `Create orders on the ${c.toLowerCase().replace(/_/g, ' ')} channel`];
 
-export interface PermissionInfo { id: Permission; /** domain:resource:action */ key: string; domain: string; group: string; label: string; hint: string; superuserOnly: boolean }
+export interface PermissionInfo { id: Permission; /** domain:resource:action */ key: string; domain: string; group: string; label: string; hint: string; /** Only the super user may give or take this away. */ superuserGrant: boolean }
 export const permissionCatalogue = (): PermissionInfo[] => ALL_PERMISSIONS.map((id) => {
   const [group, label, hint] = INFO[id] ?? ['Other', id, ''];
-  return { id, key: permissionKey(id), domain: permissionDomain(id), group, label, hint, superuserOnly: SUPERUSER_ONLY.includes(id) };
+  return { id, key: permissionKey(id), domain: permissionDomain(id), group, label, hint, superuserGrant: SUPERUSER_GRANTS.includes(id) };
 });
 
 export interface RoleView {
@@ -123,6 +143,8 @@ export interface RoleView {
   code?: string;
   /** Switched off: it keeps its users and settings but grants nothing. */
   disabled: boolean;
+  /** Set to give Settings or Integration (even while switched off): only the super user may change it, delete it or give it to a user. */
+  grantsSuperuser: boolean;
 }
 
 const viewOf = (id: string, book: RoleBook, users: Map<string, number>): RoleView => {
@@ -132,7 +154,7 @@ const viewOf = (id: string, book: RoleBook, users: Map<string, number>): RoleVie
   return {
     id, label: d.label, summary: d.summary, scope: d.scope, home: d.home, permissions: perms, defaults: d.permissions, creditLimitMinor: roleCreditLimit(id, book), defaultCreditLimitMinor: d.creditLimitMinor,
     customised: !custom && !!book.changes[id], custom, users: users.get(id) ?? 0, modules: MODULES.filter((m) => m.anyOf.some((p) => perms.includes(p))).map((m) => m.label),
-    code: d.code, disabled: !!book.disabled?.includes(id),
+    code: d.code, disabled: !!book.disabled?.includes(id), grantsSuperuser: holdsSuperuserGrant(configuredPermissions(id, book)),
   };
 };
 
@@ -153,8 +175,6 @@ const cleanPerms = (id: string, named: string[]): Permission[] => {
   const bad = raw.filter((p) => !isPermission(p));
   if (bad.length) throw invalid(`unknown permission ${bad.join(', ')}`);
   const perms = [...new Set(raw as Permission[])];
-  const su = perms.filter((p) => SUPERUSER_ONLY.includes(p));
-  if (su.length) throw invalid(`${su.join(', ')} belongs to the super user and cannot be given to a role.`);
   const lost = (KEEP[id] ?? []).filter((p) => !perms.includes(p));
   if (lost.length) throw invalid(`${ROLES[id as keyof typeof ROLES].label} must keep “${INFO[lost[0]!]?.[1] ?? lost[0]}”, or nobody could manage roles any more.`);
   return perms;
@@ -165,33 +185,39 @@ const cleanCredit = (v: number | null | undefined) => {
 };
 
 /** Saves an edit from the roles screen: a created role can change in every way, a built-in role only in what it may do. */
-export async function updateRole(q: Queryable, actor: string, id: string, input: CustomRoleInput): Promise<RoleView> {
+export async function updateRole(q: Queryable, actor: string, id: string, input: CustomRoleInput, actorIsSuperuser: boolean): Promise<RoleView> {
   if (isBuiltinRole(id)) {
     if (input.name !== undefined || input.scope !== undefined || input.home !== undefined) throw invalid(`${ROLES[id].label} is a built-in role: only what it can do can change.`);
-    return setRolePermissions(q, actor, id, { permissions: input.permissions ?? rolePermissions(id, await getRoleOverrides(q)), creditLimitMinor: input.creditLimitMinor });
+    return setRolePermissions(q, actor, id, { permissions: input.permissions ?? rolePermissions(id, await getRoleOverrides(q)), creditLimitMinor: input.creditLimitMinor }, actorIsSuperuser);
   }
-  return updateCustomRole(q, actor, id, input);
+  return updateCustomRole(q, actor, id, input, actorIsSuperuser);
 }
 
-export async function setRolePermissions(q: Queryable, actor: string, id: string, input: { permissions: string[]; creditLimitMinor?: number | null }): Promise<RoleView> {
+export async function setRolePermissions(q: Queryable, actor: string, id: string, input: { permissions: string[]; creditLimitMinor?: number | null }, actorIsSuperuser: boolean): Promise<RoleView> {
   const book = await getRoleOverrides(q);
-  if (book.custom[id]) return updateCustomRole(q, actor, id, input);
+  if (book.custom[id]) return updateCustomRole(q, actor, id, input, actorIsSuperuser);
   if (!isBuiltinRole(id)) throw invalid(`unknown role ${id}`);
   const perms = cleanPerms(id, input.permissions);
   const credit = cleanCredit(input.creditLimitMinor);
-  const before = rolePermissions(id, book);
+  const before = configuredPermissions(id, book);
+  guardGrants(actorIsSuperuser, before, perms);
   const cur = book.changes[id];
   const next = { ...book.changes, [id]: { permissions: perms, ...(credit !== undefined ? { creditLimitMinor: credit } : cur && 'creditLimitMinor' in cur ? { creditLimitMinor: cur.creditLimitMinor } : {}) } };
   await save(q, actor, KEY, next);
   await audit(q, actor, 'role', id, 'update', { added: perms.filter((p) => !before.includes(p)), removed: before.filter((p) => !perms.includes(p)), creditLimitMinor: credit });
+  await auditGrants(q, actor, id, before, perms);
   return (await listRoles(q)).find((r) => r.id === id)!;
 }
 
-export async function resetRole(q: Queryable, actor: string, id: string): Promise<RoleView> {
+export async function resetRole(q: Queryable, actor: string, id: string, actorIsSuperuser: boolean): Promise<RoleView> {
   if (!isBuiltinRole(id)) throw invalid(`${id} is not a built-in role, so it has no default to go back to.`);
-  const { [id]: _gone, ...rest } = (await getRoleOverrides(q)).changes;
+  const { changes } = await getRoleOverrides(q);
+  const before = rolePermissions(id, { changes, custom: {} });   // resetting drops any Settings or Integration added to the role
+  guardGrants(actorIsSuperuser, before, ROLES[id].permissions);
+  const { [id]: _gone, ...rest } = changes;
   await save(q, actor, KEY, rest);
   await audit(q, actor, 'role', id, 'reset', {});
+  await auditGrants(q, actor, id, before, ROLES[id].permissions);
   return (await listRoles(q)).find((r) => r.id === id)!;
 }
 
@@ -211,7 +237,7 @@ async function saveCustom(q: Queryable, actor: string, book: RoleBook) {
   await save(q, actor, CUSTOM_KEY, Object.values(book.custom));
 }
 
-export async function createCustomRole(q: Queryable, actor: string, input: CustomRoleInput): Promise<RoleView> {
+export async function createCustomRole(q: Queryable, actor: string, input: CustomRoleInput, actorIsSuperuser: boolean): Promise<RoleView> {
   const book = await getRoleOverrides(q);
   const label = (input.name ?? '').trim();
   if (label.length < 2 || label.length > 40) throw invalid('Give the role a name of 2 to 40 characters.');
@@ -226,21 +252,24 @@ export async function createCustomRole(q: Queryable, actor: string, input: Custo
   let source = input.permissions;
   if (!source && input.copyFrom) {
     if (!roleDef(input.copyFrom, book)) throw invalid(`unknown role ${input.copyFrom}`);
-    source = rolePermissions(input.copyFrom, book).filter((p) => !SUPERUSER_ONLY.includes(p));
+    source = rolePermissions(input.copyFrom, book);
   }
   const permissions = cleanPerms(id, source ?? []);
+  guardGrants(actorIsSuperuser, [], permissions);
   const credit = cleanCredit(input.creditLimitMinor);
   const def: RoleDef = { id, label, summary: (input.summary ?? '').trim().slice(0, 200), scope, home: cleanHome(input.home), permissions, ...(credit !== undefined ? { creditLimitMinor: credit } : {}) };
   book.custom[id] = def;
   await saveCustom(q, actor, book);
   await audit(q, actor, 'role', id, 'create', { label, scope, permissions: permissions.length, copiedFrom: input.copyFrom });
+  await auditGrants(q, actor, id, [], permissions);
   return viewOf(id, book, new Map());
 }
 
-export async function updateCustomRole(q: Queryable, actor: string, id: string, input: CustomRoleInput): Promise<RoleView> {
+export async function updateCustomRole(q: Queryable, actor: string, id: string, input: CustomRoleInput, actorIsSuperuser: boolean): Promise<RoleView> {
   const book = await getRoleOverrides(q);
   const cur = book.custom[id];
   if (!cur) throw invalid(`${id} is a built-in role: change what it can do, not what it is called.`);
+  guardGrants(actorIsSuperuser, cur.permissions);   // a role that holds Settings or Integration is the super user's to change
   const users = await holders(q, false);
   const next: RoleDef = { ...cur };
   if (input.name !== undefined) {
@@ -259,16 +288,19 @@ export async function updateCustomRole(q: Queryable, actor: string, id: string, 
   }
   if (input.permissions !== undefined) next.permissions = cleanPerms(id, input.permissions);
   if (input.creditLimitMinor !== undefined) next.creditLimitMinor = cleanCredit(input.creditLimitMinor);
+  guardGrants(actorIsSuperuser, cur.permissions, next.permissions);
   book.custom[id] = next;
   await saveCustom(q, actor, book);
   await audit(q, actor, 'role', id, 'update', { label: next.label, scope: next.scope, permissions: next.permissions.length });
+  await auditGrants(q, actor, id, cur.permissions, next.permissions);
   return viewOf(id, book, users);
 }
 
-export async function deleteCustomRole(q: Queryable, actor: string, id: string): Promise<{ deleted: string }> {
+export async function deleteCustomRole(q: Queryable, actor: string, id: string, actorIsSuperuser: boolean): Promise<{ deleted: string }> {
   const book = await getRoleOverrides(q);
   const cur = book.custom[id];
   if (!cur) throw invalid(isBuiltinRole(id) ? `${ROLES[id].label} is a built-in role and cannot be deleted. Use Reset to default to undo your changes.` : `unknown role ${id}`);
+  guardGrants(actorIsSuperuser, cur.permissions);
   const n = (await holders(q, false)).get(id) ?? 0;
   if (n) throw rejected(`${cur.label} is still held by ${n} user${n === 1 ? '' : 's'} (including disabled ones). Give them another role first.`);
   delete book.custom[id];
@@ -282,9 +314,10 @@ async function save(q: Queryable, actor: string, key: string, v: unknown) {
 }
 
 /** Switches a role off (its users keep it but it grants nothing, at once) or back on. The Administrator role cannot be switched off: nobody could manage roles any more. */
-export async function setRoleDisabled(q: Queryable, actor: string, id: string, disabled: boolean): Promise<RoleView> {
+export async function setRoleDisabled(q: Queryable, actor: string, id: string, disabled: boolean, actorIsSuperuser: boolean): Promise<RoleView> {
   const book = await getRoleOverrides(q);
   if (!roleDef(id, book)) throw invalid(`unknown role ${id}`);
+  guardGrants(actorIsSuperuser, configuredPermissions(id, book));
   if (disabled && KEEP[id]) throw invalid(`${roleDef(id, book)!.label} cannot be switched off: nobody could manage roles any more.`);
   const now = new Set(book.disabled ?? []);
   if (disabled) now.add(id); else now.delete(id);

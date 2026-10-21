@@ -2,10 +2,11 @@
 import { Alert, Badge, Button, Card, Field, Input, Select, Spinner } from '@meridian/ui';
 import { useMemo, useState } from 'react';
 import { del, patch, post, useAction, useApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { money } from '@/lib/format';
 
-export interface RoleView { custom: boolean; code?: string; disabled: boolean; home: string; id: string; label: string; summary: string; scope: string; permissions: string[]; defaults: string[]; creditLimitMinor?: number | null; defaultCreditLimitMinor?: number | null; customised: boolean; users: number; modules: string[] }
-interface PermInfo { id: string; key: string; domain: string; group: string; label: string; hint: string; superuserOnly: boolean }
+export interface RoleView { custom: boolean; code?: string; disabled: boolean; home: string; id: string; label: string; summary: string; scope: string; permissions: string[]; defaults: string[]; creditLimitMinor?: number | null; defaultCreditLimitMinor?: number | null; customised: boolean; users: number; modules: string[]; grantsSuperuser: boolean }
+interface PermInfo { id: string; key: string; domain: string; group: string; label: string; hint: string; superuserGrant: boolean }
 
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -30,6 +31,7 @@ export function RolesEditor({ roles, onChanged }: { roles: RoleView[]; onChanged
 function NewRole({ roles, landing, onCancel, onDone }: { roles: RoleView[]; landing: Array<{ href: string; label: string }>; onCancel: () => void; onDone: (id: string) => void }) {
   const [f, setF] = useState({ name: '', summary: '', scope: 'staff', home: '/', copyFrom: '' });
   const { run, busy, error } = useAction();
+  const su = !!useAuth().me?.isSuperuser;
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   return (
     <form className="mb-4 space-y-3 rounded-control border border-accent/30 bg-surface p-3" onSubmit={async (e) => { e.preventDefault(); const r = await run(() => post('/roles', { name: f.name, summary: f.summary || undefined, scope: f.scope, home: f.home, copyFrom: f.copyFrom || undefined })); if (r) onDone(r.id); }}>
@@ -37,7 +39,7 @@ function NewRole({ roles, landing, onCancel, onDone }: { roles: RoleView[]; land
       <Field label="Description"><Input maxLength={200} value={f.summary} onChange={set('summary')} /></Field>
       <Field label="Sees" hint="A store or dealer role sees only that store’s or dealer’s records; the user is bound to one when created."><Select value={f.scope} onChange={set('scope')}><option value="staff">All records</option><option value="store">Only their own store</option><option value="dealer">Only their own dealer</option></Select></Field>
       <Field label="Starts on"><Select value={f.home} onChange={set('home')}><option value="/">Overview</option>{landing.filter((m) => m.href !== '/').map((m) => <option key={m.href} value={m.href}>{m.label}</option>)}</Select></Field>
-      <Field label="Start from" hint="Copies that role’s permissions to tick off afterwards."><Select value={f.copyFrom} onChange={set('copyFrom')}><option value="">Nothing (no permissions yet)</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</Select></Field>
+      <Field label="Start from" hint="Copies that role’s permissions to tick off afterwards."><Select value={f.copyFrom} onChange={set('copyFrom')}><option value="">Nothing (no permissions yet)</option>{roles.map((r) => { const no = !su && r.grantsSuperuser; return <option key={r.id} value={r.id} disabled={no}>{r.label}{no ? ' (only the super user can copy this)' : ''}</option>; })}</Select></Field>
       {error && <Alert>{error}</Alert>}
       <div className="flex gap-2"><Button type="submit" disabled={busy || f.name.trim().length < 2}>{busy ? 'Creating…' : 'Create role'}</Button><Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button></div>
     </form>
@@ -45,6 +47,9 @@ function NewRole({ roles, landing, onCancel, onDone }: { roles: RoleView[]; land
 }
 
 function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDeleted }: { role: RoleView; roles: RoleView[]; setSel: (id: string) => void; catalogue: PermInfo[]; landing: Array<{ href: string; label: string }>; top: React.ReactNode; onChanged: () => void; onDeleted: () => void }) {
+  const su = !!useAuth().me?.isSuperuser;
+  const frozen = !su && role.grantsSuperuser;   // the server refuses every change to a role that gives Settings or Integration unless the super user makes it
+  const locked = (p: PermInfo) => p.superuserGrant && !su;
   const [perms, setPerms] = useState<string[]>(role.permissions);
   const [credit, setCredit] = useState<string>(role.creditLimitMinor === null ? '' : role.creditLimitMinor ? String(role.creditLimitMinor / 100) : '0');
   const [unlimited, setUnlimited] = useState(role.creditLimitMinor === null);
@@ -62,7 +67,7 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
   const dirty = !same(perms, role.permissions) || creditDirty || detailsDirty;
   const added = perms.filter((p) => !role.defaults.includes(p)).length, removed = role.defaults.filter((p) => !perms.includes(p)).length;
   const toggle = (id: string) => setPerms(perms.includes(id) ? perms.filter((p) => p !== id) : [...perms, id]);
-  const setGroup = (items: PermInfo[], on: boolean) => setPerms(on ? [...new Set([...perms, ...items.filter((i) => !i.superuserOnly).map((i) => i.id)])] : perms.filter((p) => !items.some((i) => i.id === p)));
+  const setGroup = (items: PermInfo[], on: boolean) => setPerms(on ? [...new Set([...perms, ...items.filter((i) => !locked(i)).map((i) => i.id)])] : perms.filter((p) => !items.some((i) => i.id === p && !locked(i))));
   return (
     <div className="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
       <nav aria-label="Roles" className="space-y-1">
@@ -93,15 +98,16 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
         <div className="mt-4 space-y-5">
           {groups.map(([group, items]) => {
             const on = items.filter((i) => perms.includes(i.id)).length;
+            const free = items.filter((i) => !locked(i)), freeOn = free.filter((i) => perms.includes(i.id)).length;
             return (
               <fieldset key={group}>
                 <legend className="mb-1 flex w-full items-center justify-between text-subhead font-semibold"><span>{group} <span className="font-normal text-label2">({on}/{items.length})</span></span>
-                  <button type="button" className="text-footnote font-normal text-accent" onClick={() => setGroup(items, on < items.filter((i) => !i.superuserOnly).length)}>{on < items.filter((i) => !i.superuserOnly).length ? 'Select all' : 'Clear'}</button></legend>
+                  {free.length > 0 && <button type="button" disabled={frozen} className="text-footnote font-normal text-accent disabled:opacity-50" onClick={() => setGroup(items, freeOn < free.length)}>{freeOn < free.length ? 'Select all' : 'Clear'}</button>}</legend>
                 <div className="grid gap-1 sm:grid-cols-2">
                   {items.map((p) => (
-                    <label key={p.id} className={`flex min-h-tap items-start gap-3 rounded-control bg-surface2 p-2.5 ${p.superuserOnly ? 'opacity-60' : 'cursor-pointer'}`}>
-                      <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" disabled={p.superuserOnly} checked={perms.includes(p.id)} onChange={() => toggle(p.id)} />
-                      <span><span className="font-medium">{p.label}</span>{role.defaults.includes(p.id) !== perms.includes(p.id) && <span className="ml-2 text-caption text-accent">{perms.includes(p.id) ? 'added' : 'removed'}</span>}<span className="block text-footnote text-label2">{p.hint}</span></span>
+                    <label key={p.id} className={`flex min-h-tap items-start gap-3 rounded-control bg-surface2 p-2.5 ${locked(p) || frozen ? 'opacity-60' : 'cursor-pointer'}`}>
+                      <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" disabled={locked(p) || frozen} aria-describedby={locked(p) ? `su-${p.id}` : undefined} checked={perms.includes(p.id)} onChange={() => toggle(p.id)} />
+                      <span><span className="font-medium">{p.label}</span>{locked(p) && <span id={`su-${p.id}`} className="ml-2 text-caption text-label2">Only the super user can give this</span>}{role.defaults.includes(p.id) !== perms.includes(p.id) && <span className="ml-2 text-caption text-accent">{perms.includes(p.id) ? 'added' : 'removed'}</span>}<span className="block text-footnote text-label2">{p.hint}</span></span>
                     </label>
                   ))}
                 </div>
@@ -118,15 +124,16 @@ function Editor({ role, roles, setSel, catalogue, landing, top, onChanged, onDel
           </div>
         )}
         {role.modules.length > 0 && <p className="mt-4 text-footnote text-label2">Saved access opens: {role.modules.join(' · ')}.</p>}
+        {frozen && <div className="mt-3"><Alert tone="info">This role gives Settings or Integration, so only the super user can change, clone, switch off or delete it.</Alert></div>}
         {role.disabled && <div className="mt-3"><Alert tone="info">This role is switched off: it grants nothing right now.</Alert></div>}
         {(save.error || remove.error || other.error) && <div className="mt-3"><Alert>{save.error || remove.error || other.error}</Alert></div>}{other.ok && <div className="mt-3"><Alert tone="success">{other.ok}</Alert></div>}{save.ok && !dirty && <div className="mt-3"><Alert tone="success">{save.ok}</Alert></div>}
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Button disabled={!dirty || save.busy} onClick={() => save.run(() => patch(`/roles/${role.id}`, { ...(role.custom ? { name, summary, scope, home } : {}), permissions: perms, ...(perms.includes('billing:credit') ? { creditLimitMinor: creditMinor } : {}) }), 'Saved')}>{save.busy ? 'Saving…' : 'Save changes'}</Button>
+          <Button disabled={!dirty || save.busy || frozen} onClick={() => save.run(() => patch(`/roles/${role.id}`, { ...(role.custom ? { name, summary, scope, home } : {}), permissions: perms, ...(perms.includes('billing:credit') ? { creditLimitMinor: creditMinor } : {}) }), 'Saved')}>{save.busy ? 'Saving…' : 'Save changes'}</Button>
           {dirty && <Button variant="secondary" onClick={() => { setPerms(role.permissions); setCredit(role.creditLimitMinor === null ? '' : String((role.creditLimitMinor ?? 0) / 100)); setUnlimited(role.creditLimitMinor === null); setName(role.label); setSummary(role.summary); setScope(role.scope); setHome(role.home); }}>Discard</Button>}
-          {role.customised && <Button variant="plain" disabled={save.busy} onClick={() => { if (confirm(`Put ${role.label} back to its default permissions?`)) void save.run(() => post(`/roles/${role.id}/reset`), 'Back to the default'); }}>Reset to default</Button>}
-          <Button variant="plain" disabled={other.busy} onClick={() => { const n = prompt(`Name for the copy of ${role.label}`, `Copy of ${role.label}`); if (n?.trim()) void other.run(async () => { const r = await post('/roles', { name: n.trim(), copyFrom: role.id, scope: role.scope === 'customer' ? 'staff' : role.scope, home: role.home }); setSel(r.id); }, 'Copied. Adjust the copy and save.'); }}>Clone</Button>
-          {role.id !== 'admin' && <Button variant="plain" disabled={other.busy} onClick={() => { if (role.disabled || confirm(`Switch off ${role.label}? Its ${role.users} user(s) keep the role but get nothing from it until you switch it back on.`)) void other.run(() => post(`/roles/${role.id}/disable`, { disabled: !role.disabled }), role.disabled ? 'Switched on' : 'Switched off'); }}>{role.disabled ? 'Switch on' : 'Switch off'}</Button>}
-          {role.custom && <Button variant="plain" disabled={remove.busy} onClick={() => { if (confirm(`Delete the role ${role.label}?`)) void remove.run(() => del(`/roles/${role.id}`)); }}>Delete role</Button>}
+          {role.customised && <Button variant="plain" disabled={save.busy || frozen} onClick={() => { if (confirm(`Put ${role.label} back to its default permissions?`)) void save.run(() => post(`/roles/${role.id}/reset`), 'Back to the default'); }}>Reset to default</Button>}
+          <Button variant="plain" disabled={other.busy || frozen} onClick={() => { const n = prompt(`Name for the copy of ${role.label}`, `Copy of ${role.label}`); if (n?.trim()) void other.run(async () => { const r = await post('/roles', { name: n.trim(), copyFrom: role.id, scope: role.scope === 'customer' ? 'staff' : role.scope, home: role.home }); setSel(r.id); }, 'Copied. Adjust the copy and save.'); }}>Clone</Button>
+          {role.id !== 'admin' && <Button variant="plain" disabled={other.busy || frozen} onClick={() => { if (role.disabled || confirm(`Switch off ${role.label}? Its ${role.users} user(s) keep the role but get nothing from it until you switch it back on.`)) void other.run(() => post(`/roles/${role.id}/disable`, { disabled: !role.disabled }), role.disabled ? 'Switched on' : 'Switched off'); }}>{role.disabled ? 'Switch on' : 'Switch off'}</Button>}
+          {role.custom && <Button variant="plain" disabled={remove.busy || frozen} onClick={() => { if (confirm(`Delete the role ${role.label}?`)) void remove.run(() => del(`/roles/${role.id}`)); }}>Delete role</Button>}
           {!role.custom && <span className="text-footnote text-label2">{added + removed > 0 ? `Compared with the default: ${added} added, ${removed} removed` : 'Same as the default'}</span>}
         </div>
       </Card>

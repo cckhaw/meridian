@@ -29,9 +29,9 @@ describe('the permission catalogue', () => {
     expect(resolvePermission('nonsense:thing:do')).toBeUndefined();
   });
   it('accepts keys and aliases when a role is built', async () => {
-    const v = await createCustomRole(db, 'root', { name: 'Waiver desk', permissions: ['billing:invoice:waive', 'customer:profile:read', 'dashboard:read'] });
+    const v = await createCustomRole(db, 'root', { name: 'Waiver desk', permissions: ['billing:invoice:waive', 'customer:profile:read', 'dashboard:read'] }, true);
     expect(v.permissions.sort()).toEqual(['billing:credit', 'customer:read', 'dashboard:read']);
-    await expect(createCustomRole(db, 'root', { name: 'Typo role', permissions: ['billing:invoice:wavie'] })).rejects.toThrow(/unknown permission/);
+    await expect(createCustomRole(db, 'root', { name: 'Typo role', permissions: ['billing:invoice:wavie'] }, true)).rejects.toThrow(/unknown permission/);
   });
 });
 
@@ -61,12 +61,12 @@ describe('switching a role off', () => {
     await db.query('UPDATE users SET must_change_password=false WHERE id=$1', [u.user.id]);
     const token = (await login(db, { username: 'mgr.one', password: 'Sturdy-Pass-Word-77' })).token;
     expect((await validateSession(db, token))!.permissions.has('order:override')).toBe(true);
-    const off = await setRoleDisabled(db, 'root', 'retail-manager', true);
+    const off = await setRoleDisabled(db, 'root', 'retail-manager', true, true);
     expect(off).toMatchObject({ disabled: true, users: 1, code: 'ROLE_RETAIL_MANAGER' });
     expect((await validateSession(db, token))!.permissions.size).toBe(0);
     expect((await listRoles(db)).find((r) => r.id === 'retail-manager')!.disabled).toBe(true);
-    await expect(setRoleDisabled(db, 'root', 'admin', true)).rejects.toThrow(/cannot be switched off/);
-    await setRoleDisabled(db, 'root', 'retail-manager', false);
+    await expect(setRoleDisabled(db, 'root', 'admin', true, true)).rejects.toThrow(/cannot be switched off/);
+    await setRoleDisabled(db, 'root', 'retail-manager', false, true);
     expect((await validateSession(db, token))!.permissions.has('order:override')).toBe(true);
   });
   it('does not let a switched-off unrestricted role widen what the other roles may see', () => {
@@ -76,7 +76,7 @@ describe('switching a role off', () => {
     expect(permissionsOf({ isSuperuser: false, roles: ['call-center'] }, book).size).toBe(0);
   });
   it('still lets permissions of a built-in role be edited by key', async () => {
-    const v = await setRolePermissions(db, 'root', 'rating-charging', { permissions: ['dashboard:overview:read', 'catalog:offer:read', 'catalog:offer:write'] });
+    const v = await setRolePermissions(db, 'root', 'rating-charging', { permissions: ['dashboard:overview:read', 'catalog:offer:read', 'catalog:offer:write'] }, true);
     expect(v.permissions).toEqual(['dashboard:read', 'catalog:read', 'catalog:write']);
   });
 });

@@ -385,7 +385,7 @@ function Cycles({ canConfigure }: { canConfigure: boolean }) {
               <Field label="Refuse approval when the mock is older than (hours)"><Input type="number" disabled={!canConfigure} value={form.maxMockAgeHours} onChange={num('maxMockAgeHours')} /></Field>
             </div>
             {act.error && <Alert>{act.error}</Alert>}
-            {canConfigure ? <Button disabled={act.busy} onClick={() => void act.run(() => post('/billing/runs/settings', form), 'Saved.')}>Save</Button> : <p className="text-footnote text-label2">Only the super user can change these.</p>}
+            {canConfigure ? <Button disabled={act.busy} onClick={() => void act.run(() => post('/billing/runs/settings', form), 'Saved.')}>Save</Button> : <p className="text-footnote text-label2">Only people with the Settings permission can change these.</p>}
             {act.ok && <Alert tone="success">{act.ok}</Alert>}
           </div>
         )}

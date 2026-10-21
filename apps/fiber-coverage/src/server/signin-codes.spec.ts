@@ -24,9 +24,9 @@ const verify = (challenge: string, code: string) => call('/api/admin/verify-2fa'
 const waited = () => db.query(`UPDATE auth_attempts SET at = now() - interval '2 minutes' WHERE key LIKE 'mfa-send:%' AND key NOT LIKE 'mfa-send:ip:%'`);
 const outbox = async () => Number((await db.query(`SELECT count(*) AS n FROM lifecycle_outbox WHERE instruction='MFA_OTP'`)).rows[0]!.n);
 
-async function person(methods: Array<'TOTP' | 'SMS' | 'EMAIL'>) {
+async function person(methods: Array<'TOTP' | 'SMS' | 'EMAIL'>, roles = ['call-center']) {
   const username = `hub.user${++n}`, phone = `+65912345${String(10 + n).padStart(2, '0')}`, email = `hub${n}@example.com`;
-  const { user } = await core.createUser(db, 'admin', { username, displayName: `Hub ${n}`, roles: ['call-center'], email, phone, password: PW });
+  const { user } = await core.createUser(db, 'admin', { username, displayName: `Hub ${n}`, roles, email, phone, password: PW });
   await db.query('UPDATE users SET must_change_password=false WHERE id=$1', [user.id]);
   const u = { id: user.id, name: `Hub ${n}`, username, email, phone };
   let secret = '';
@@ -80,11 +80,30 @@ describe('the hub sign-in step', () => {
     const ask = await sendCode(r.json.challenge.token, 'SMS');
     expect(ask.status).toBe(400); expect(ask.json.error.message).toMatch(/not set up/);
     expect(sent).toHaveLength(0);
-    // the authenticator code still works: it passes the second factor (this hub then only lets people who may manage settings in)
+    // the authenticator code still works: it passes the second factor (this hub then only lets in people whose role holds Settings or Integration)
     expect((await verify(r.json.challenge.token, '000000')).status).toBe(401);
     await db.query(`UPDATE mfa_methods SET last_counter=0 WHERE user_id=$1`, [u.id]);   // the set-up used this step's code; a code works once
     const ok = await verify(r.json.challenge.token, u.totp());
     expect(ok.status).toBe(403); expect(ok.json.error.message).toMatch(/may not manage fibre coverage/); expect(ok.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('admits staff whose role holds Settings or Integration after their second factor, and still refuses the rest', async () => {
+    await gateway();
+    for (const [name, perm] of [['Hub settings', 'settings:manage'], ['Hub integration', 'integration:manage']] as const) {
+      const role = await core.createCustomRole(db, 'root', { name, permissions: ['dashboard:read', perm] }, true);
+      const u = await person(['TOTP'], [role.id]);
+      const r = await signIn(u.username);
+      expect(r.json).toMatchObject({ mfaRequired: true });
+      await db.query(`UPDATE mfa_methods SET last_counter=0 WHERE user_id=$1`, [u.id]);
+      const ok = await verify(r.json.challenge.token, u.totp());
+      expect(ok.status).toBe(200); expect(ok.json.user.username).toBe(u.username);
+      const cookie = /(?:__Host-)?fiber_session=[^;]+/.exec(ok.headers.get('set-cookie') ?? '')?.[0];
+      expect(cookie).toBeTruthy();
+      const me = await dispatch(new Request(ORIGIN + '/api/admin/me', { headers: { host: 'fiber.test', origin: ORIGIN, cookie: cookie! } }), ['admin', 'me']);
+      expect(me.status).toBe(200);
+      await db.query(`DELETE FROM sessions WHERE user_id=$1`, [u.id]); await db.query(`DELETE FROM mfa_methods WHERE user_id=$1`, [u.id]); await db.query(`DELETE FROM users WHERE id=$1`, [u.id]);
+      await core.deleteCustomRole(db, 'root', role.id, true);
+    }
   });
 
   it('delivers the code queued at sign-in itself, through the gateway, and shows the channel only masked', async () => {

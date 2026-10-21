@@ -16,12 +16,25 @@ afterEach(async () => { await db.query('DELETE FROM auth_attempts'); });
 describe('role matrix', () => {
   it('only references real permissions and every module is reachable by some role', () => {
     for (const id of ROLE_IDS) for (const p of ROLES[id].permissions) expect(ALL_PERMISSIONS).toContain(p);
-    // Settings is the one module reserved for the environment-defined super user (see the test below).
+    // Settings and Integration are held by no built-in role: the super user has them and can give them to a role (see the test below).
     for (const m of MODULES.filter((x) => x.id !== 'settings' && x.id !== 'integrations')) expect(ROLE_IDS.some((r) => m.anyOf.some((p) => ROLES[r].permissions.includes(p))), m.id).toBe(true);
   });
-  it('keeps settings:manage (currency, branding, payment gateways, API keys) with the super user only', () => {
-    for (const id of ROLE_IDS) expect(ROLES[id].permissions as string[], id).not.toContain('settings:manage');
-    expect(permissionsOf({ isSuperuser: true, roles: [] }).has('settings:manage')).toBe(true);
+  it('gives Settings and Integration to no built-in role, to the super user always, and to a role only when it holds the permission', () => {
+    for (const id of ROLE_IDS) for (const p of ['settings:manage', 'integration:manage']) expect(ROLES[id].permissions as string[], `${id} ${p}`).not.toContain(p);
+    const su = permissionsOf({ isSuperuser: true, roles: [] });
+    expect(su.has('settings:manage') && su.has('integration:manage')).toBe(true);
+    const book = { changes: {}, disabled: [], custom: {
+      s: { id: 's', label: 'S', summary: '', scope: 'staff' as const, home: '/', permissions: ['settings:manage' as const] },
+      i: { id: 'i', label: 'I', summary: '', scope: 'staff' as const, home: '/', permissions: ['integration:manage' as const] },
+    } };
+    const menu = (roles: string[], isSuperuser = false) => modulesOf({ isSuperuser, roles }, undefined, book).map((m) => m.id).filter((id) => id === 'settings' || id === 'integrations');
+    expect(menu(['s'])).toEqual(['settings']);
+    expect(menu(['i'])).toEqual(['integrations']);
+    expect(menu(['s', 'i'])).toEqual(['settings', 'integrations']);
+    expect(menu(['admin'])).toEqual([]);
+    expect(menu([], true)).toEqual(['settings', 'integrations']);
+    expect(MODULES.find((m) => m.id === 'settings')!.anyOf).toEqual(['settings:manage']);
+    expect(MODULES.find((m) => m.id === 'integrations')!.anyOf).toEqual(['integration:manage']);
   });
   it('encodes the separation of duties that matter', () => {
     const has = (r: (typeof ROLE_IDS)[number], p: string) => (ROLES[r].permissions as string[]).includes(p);

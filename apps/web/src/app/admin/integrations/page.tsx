@@ -85,7 +85,7 @@ function Integration() {
 
   return (
     <>
-      <LargeTitle subtitle="Everything that connects Meridian to other systems: the systems it talks to, the channels and partners that call it, and the events it shares. Only the super user sees this. Keys are never shown after they are saved.">Integration</LargeTitle>
+      <LargeTitle subtitle="Everything that connects Meridian to other systems: the systems it talks to, the channels and partners that call it, and the events it shares. Only people whose role includes Integration see this (the super user always can). Keys are never shown after they are saved.">Integration</LargeTitle>
       {(ov.error || hub.error) && <Alert>{ov.error ?? hub.error}</Alert>}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,330px)_minmax(0,1fr)] lg:items-start">
         <div className={`${current ? 'hidden lg:block' : 'block'} lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto`}>{menu}</div>

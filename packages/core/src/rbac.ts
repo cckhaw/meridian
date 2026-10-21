@@ -58,7 +58,8 @@ const CORE_PERMISSIONS = [
   'fraud:read', // the fraud desk: alerts, SIM-swap anomalies and the blacklist (values shown only as a hint)
   'fraud:manage', // work alerts, raise one by hand, add to and remove from the blacklist
   'fraud:bar', // hard-bar a service for fraud, and lift the bar
-  'settings:manage', // super user only: regional format, branding, payment gateways, store-front API keys
+  'settings:manage', // the Settings menu: regional format, branding, catalog and customer configuration, dunning, cases, security policy. Only the super user can give it to a role
+  'integration:manage', // the Integration menu: outside systems, messaging gateways, identity and payment connections, store-front, API clients and keys, OCS. Only the super user can give it to a role
 ] as const;
 
 const CHANNEL_PERMISSIONS = CHANNELS.map((c) => `order:create:${c}` as const);
@@ -242,7 +243,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'commission', label: 'Commission', href: '/dealer/commission', icon: 'coins', anyOf: ['commission:read'] },
   { id: 'users', label: 'Users & roles', href: '/admin/users', icon: 'people', anyOf: ['user:manage'] },
   { id: 'settings', label: 'Settings', href: '/admin/settings', icon: 'gear', anyOf: ['settings:manage'] },
-  { id: 'integrations', label: 'Integration', href: '/admin/integrations', icon: 'plug', anyOf: ['settings:manage'] },
+  { id: 'integrations', label: 'Integration', href: '/admin/integrations', icon: 'plug', anyOf: ['integration:manage'] },
   { id: 'migration', label: 'Data migration', href: '/admin/migration', icon: 'migration', anyOf: ['migration:export', 'migration:import'] },
   { id: 'audit', label: 'Audit log', href: '/admin/audit', icon: 'list', anyOf: ['audit:read'] },
 ];

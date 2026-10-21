@@ -58,7 +58,7 @@ Device colours and storage are edited on the offer (Catalog → Edit offer → C
 
 ## The cancellation rule base (Settings → Cancellation)
 
-Nothing above is hard-coded. Every decision comes from rules the super user edits in **Settings → Cancellation**, and changes apply to every order straight away (recorded in the audit log). The standard policy described in this document is installed the first time it is needed, and **Restore the standard policy** brings it back.
+Nothing above is hard-coded. Every decision comes from rules that people with `settings:manage` edit in **Settings → Cancellation**, and changes apply to every order straight away (recorded in the audit log). The standard policy described in this document is installed the first time it is needed, and **Restore the standard policy** brings it back.
 
 A rule says *what it decides*, *which part of an order it applies to*, *when* (conditions), and *then what* (outcome):
 

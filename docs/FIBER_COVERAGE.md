@@ -60,7 +60,7 @@ The hub signs in with the CRM's code, so its second-factor rules are the CRM's: 
 * **Nothing to send with**: asking for an SMS code with no gateway, or an e-mail code while e-mail codes are off or no sender is enabled, answers `503 CODE_DELIVERY_UNAVAILABLE` ("… Use your authenticator app or a recovery code, or ask an administrator.") and queues nothing; the buttons are not shown.
 * **E-mail codes** follow the CRM's setting: Settings → Security policy → *Allow sign-in and recovery codes by e-mail* (default off) **and** an enabled e-mail sender in Integration → Messaging. Both on: the e-mail method is offered at the hub and the code goes out through the sender (same fall-back to the CRM as SMS). Either off: the hub does not offer e-mail codes and refuses to send one. There is no setting in the SMS gateway for this any more.
 
-Only the environment's super user can manage settings (`settings:manage` cannot be given to a role), and that account has no second factor. So today nobody completes a hub sign-in with a code: the code step is checked, and the hub then declines a person whose role may not manage fibre coverage. The code flow is ready for the day a role may.
+The hub admits the super user and any staff member whose role holds `settings:manage` or `integration:manage` (the super user can give either to a role; no built-in role has them by default). The super user has no second factor, so the sign-in code flow above is for those staff: they sign in with their CRM password, pass the code step, and the hub then checks the permission. A person whose role holds neither is signed out again with "Your role may not manage fibre coverage. It needs the Settings or the Integration permission."
 
 ## How Meridian uses it
 

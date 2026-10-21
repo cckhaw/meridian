@@ -96,7 +96,7 @@ function ExportPanel({ meta, onStarted, jobs }: { meta: Meta; onStarted: () => v
           <Alert tone="info">Sensitive fields (ID document references and their hashes, bank account numbers, eSIM activation codes) are <strong>masked</strong> in the file. Login passwords and API keys are never exported.</Alert>
           {meta.canUnmask && (
             <div className="space-y-2 rounded-control border border-warning p-3">
-              <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={unmasked} onChange={(e) => setUnmasked(e.target.checked)} /><span><span className="block font-medium">Export sensitive fields unmasked</span><span className="text-footnote text-label2">For a full backup or a cut-over. Super user only. The reason and the data sets are written to the audit log.</span></span></label>
+              <label className="flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[rgb(var(--accent))]" checked={unmasked} onChange={(e) => setUnmasked(e.target.checked)} /><span><span className="block font-medium">Export sensitive fields unmasked</span><span className="text-footnote text-label2">For a full backup or a cut-over. Needs the Settings permission. The reason and the data sets are written to the audit log.</span></span></label>
               {unmasked && <Field label={`Why (at least ${meta.reasonMin} characters)`}><input className="min-h-tap w-full rounded-control border border-separator bg-surface px-3" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} /></Field>}
             </div>
           )}

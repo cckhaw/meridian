@@ -80,7 +80,7 @@ By default sensitive fields are masked. A masked value is never the real one:
 * **MASK** keeps the end so a person can recognise it: `****4556` (bank account numbers, the stored ID reference).
 * **PSEUDONYM** is a keyed one-way code, `h:3fa9…`: the same value always gives the same code (records can still be matched) but it cannot be turned back, and it cannot be recomputed without the server's data key (ID-document hashes, eSIM activation codes).
 * Login passwords, session data and API keys are **never** exported, masked or not. Meridian never stores a raw national ID: only a masked reference and a keyed hash.
-* **Unmasked** export is for the super user only, needs a written reason (at least 10 characters), and writes the reason, the data sets and the person to the audit log. The archive says on its cover whether it is masked.
+* **Unmasked** export needs `settings:manage` (the super user always has it), needs a written reason (at least 10 characters), and writes the reason, the data sets and the person to the audit log. The archive says on its cover whether it is masked.
 * Masked values are recognisable (`****…`, `h:…`) and can never be loaded back as if they were data.
 
 ## Templates

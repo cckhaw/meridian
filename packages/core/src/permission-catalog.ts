@@ -25,6 +25,7 @@ const KEYS: Record<string, string> = {
   'kyc:attest': 'kyc:document:attest', 'kyc:review': 'kyc:case:review',
   'document:read': 'document:agreement:read', 'document:kyc': 'document:kyc:read', 'document:manage': 'document:vault:manage', 'document:template': 'document:template:author',
   'audit:read': 'audit:log:read', 'migration:export': 'migration:data:export', 'migration:import': 'migration:data:import', 'user:manage': 'iam:user:manage', 'settings:manage': 'system:settings:manage',
+  'integration:manage': 'system:integration:manage',
 };
 for (const c of CHANNELS) KEYS[`order:create:${c}`] = `order:${c.toLowerCase()}:create`;
 

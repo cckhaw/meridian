@@ -1,6 +1,6 @@
 # Integration hub and northbound API gateway
 
-Meridian exposes TM Forum Open API style endpoints to digital channels (self-care app, web portal, IVR and call centre, retail kiosks and POS, dealer apps, partner super-apps), and keeps every outside connection in one place: **Settings → Back office → Integration hub** (short link `/settings/integrations`, `settings:manage`). The older **Integration** page (`/admin/integrations`) is the status board that shows which connections are healthy; this page is where they are configured.
+Meridian exposes TM Forum Open API style endpoints to digital channels (self-care app, web portal, IVR and call centre, retail kiosks and POS, dealer apps, partner super-apps), and keeps every outside connection in one place: **Settings → Back office → Integration hub** (short link `/settings/integrations`, `integration:manage`). The older **Integration** page (`/admin/integrations`) is the status board that shows which connections are healthy; this page is where they are configured.
 
 > This describes what is built. Things in the original design that are not: see [Not built](#not-built).
 

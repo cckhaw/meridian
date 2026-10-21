@@ -65,12 +65,14 @@ api('GET', `${TA}/geographicAddress/:id`, (c) => new fiber.Tmf645Adapter(c.db, c
 api('POST', `${TA}/geographicAddressValidation`, (c) => new fiber.Tmf645Adapter(c.db, c.origin).validate(c.body), { created: true });
 
 // ───────────────────────── admin: sign in ─────────────────────────
+/** Staff whose role holds Settings or Integration (and the super user) may run the hub. */
+const mayManage = (u: SessionUser) => u.permissions.has('settings:manage') || u.permissions.has('integration:manage');
 const answer = (req: Request, r: core.LoginResult) => new Response(JSON.stringify({ user: { username: r.user.username, displayName: r.user.displayName } }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie(req, r.token, r.expiresAt), 'cache-control': 'no-store' } });
 login('POST', '/admin/login', async ({ db, body, req }) => {
   const b = z.object({ username: z.string().min(1).max(100), password: z.string().min(1).max(1024) }).parse(body);
   try {
     const r = await core.login(db, { ...b, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
-    if (!r.user.permissions.has('settings:manage')) { await core.logout(db, r.token); throw new DomainError('FORBIDDEN', 'Your role may not manage fibre coverage.'); }
+    if (!mayManage(r.user)) { await core.logout(db, r.token); throw new DomainError('FORBIDDEN', 'Your role may not manage fibre coverage. It needs the Settings or the Integration permission.'); }
     return answer(req, r);
   } catch (e) {
     if (e instanceof core.MfaRequired) {
@@ -87,7 +89,7 @@ login('POST', '/admin/verify-2fa', async ({ db, body, req }) => {
   const b = z.object({ challenge: z.string().min(20).max(200), code: z.string().max(20).optional(), recoveryCode: z.string().max(30).optional() }).parse(body);
   try {
     const r = await core.verifyMfaLogin(db, { ...b, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
-    if (!r.user.permissions.has('settings:manage')) { await core.logout(db, r.token); throw new DomainError('FORBIDDEN', 'Your role may not manage fibre coverage.'); }
+    if (!mayManage(r.user)) { await core.logout(db, r.token); throw new DomainError('FORBIDDEN', 'Your role may not manage fibre coverage. It needs the Settings or the Integration permission.'); }
     return answer(req, r);
   } catch (e) { if (e instanceof DomainError && (e.code === 'REJECTED' || e.code === 'UNAUTHENTICATED')) return fail(401, 'UNAUTHENTICATED', e.message); if (e instanceof core.RateLimited) return fail(429, 'RATE_LIMITED', e.message, { 'retry-after': String(e.retryAfterSeconds) }); throw e; }
 });
@@ -204,7 +206,7 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
     if (rt.kind === 'admin') {
       const user = await core.validateSession(db, readToken(req));
       if (!user) return done(err(401, 'UNAUTHENTICATED', 'Sign in to continue.', { 'set-cookie': clearCookie(req) }));
-      if (!user.permissions.has('settings:manage')) return done(err(403, 'FORBIDDEN', 'Your role does not allow this.'));
+      if (!mayManage(user)) return done(err(403, 'FORBIDDEN', 'Your role does not allow this.'));
       return done(await out({ ...base, user }));
     }
     return done(await out(base));
