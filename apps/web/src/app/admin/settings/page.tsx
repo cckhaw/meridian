@@ -12,7 +12,6 @@ import { BillCycleSettings, CustomerSettings } from './customers';
 import { CaseSettings } from './cases';
 import { DunningSettings } from './dunning';
 import { EtcSettings } from './etc';
-import { FinancingSettings } from './financing';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
@@ -20,7 +19,7 @@ import { RegionalSettingsForm } from './regional';
 import { RolesSettings } from './roles';
 import { SecurityPolicySettings } from './security-policy';
 import { ModulesSettings } from './modules';
-import { GROUPS, SECTIONS, searchSections, sectionById } from './sections';
+import { GROUPS, MOVED_TO_INTEGRATION, SECTIONS, searchSections, sectionById } from './sections';
 
 /**
  * Settings: a menu of sections on the left (grouped, searchable) and the chosen section on the right. On a phone the menu is the first screen and
@@ -35,10 +34,10 @@ function Settings() {
   const path = usePathname();
   const sp = useSearchParams();
   const current = sectionById(sp.get('section'));
-  // The store-front moved to the Integration page; old links still land in the right place.
+  // The store-front, the hub and Device financing moved to the Integration page; old links still land in the right place.
   useEffect(() => {
-    if (sp.get('section') === 'storefront') router.replace('/admin/integrations?item=storefront');
-    if (sp.get('section') === 'integrations') router.replace('/admin/integrations?view=hub'); // the hub moved to the Integration menu
+    const moved = MOVED_TO_INTEGRATION[sp.get('section') ?? ''];
+    if (moved) router.replace(moved);
     if (sp.get('section') === 'service-kinds') router.replace(`${path}?section=service-types`); // renamed
   }, [sp, router, path]);
   const [q, setQ] = useState('');
@@ -123,7 +122,6 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'cases': return <CaseSettings />;
     case 'dunning-rules': return <DunningSettings />;
     case 'early-termination': return <EtcSettings />;
-    case 'device-financing': return <FinancingSettings />;
     case 'security-policy': return <SecurityPolicySettings />;
     case 'roles': return <RolesFromApi />;
     case 'numbering': return <NumberingSettings />;

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { INTEGRATIONS, INTEGRATION_GROUPS, integrationOverview } from './integrations.js';
 import { setSapSettings } from './sap-exporter.js';
+import { setWfmSettings } from './workforce.js';
 import { queueOutbox } from './lifecycle-state.js';
 import { freshDb } from './test-helpers.js';
 
@@ -48,6 +49,29 @@ describe('integration registry', () => {
     o = await integrationOverview(db, { MERIDIAN_SAP_TOKEN: 'x', DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv);
     expect(find(o, 'sap').status).toBe('CONNECTED');
     expect(find(o, 'database').status).toBe('CONNECTED');
+  });
+
+  it('judges field service from the connection settings, and points at its own card for them', async () => {
+    let o = await integrationOverview(db, {} as NodeJS.ProcessEnv);
+    expect(find(o, 'wfm')).toMatchObject({ status: 'NEEDS_SETUP', detail: 'No field-service system chosen yet.' });
+    await setWfmSettings(db, 'tester', { vendor: 'simulator', enabled: true });
+    o = await integrationOverview(db, {} as NodeJS.ProcessEnv);
+    expect(find(o, 'wfm').status).toBe('NEEDS_SETUP');
+    expect(find(o, 'wfm').detail).toMatch(/MERIDIAN_WFM_WEBHOOK_SECRET is not set/);
+    o = await integrationOverview(db, { MERIDIAN_WFM_WEBHOOK_SECRET: 'x'.repeat(20) } as NodeJS.ProcessEnv);
+    expect(find(o, 'wfm').status).toBe('STAND_IN');
+    const card = INTEGRATIONS.find((i) => i.id === 'wfm')!;
+    const text = JSON.stringify([card.summary, card.needs, card.env, card.configure]);
+    expect(text).not.toMatch(/Settings → Cases → Field|set in Settings → Cases/);
+    expect(card.configure).toBeUndefined();
+    expect(card.endpoints!.filter((e) => e.path.includes('wfm-callback'))).toHaveLength(1);
+  });
+
+  it('keeps device financing on the credit bureau card, with no link back to Settings', () => {
+    const card = INTEGRATIONS.find((i) => i.id === 'credit-bureau')!;
+    expect(card.name).toBe('Credit bureau and device financing');
+    expect(card.configure).toBeUndefined();
+    expect(JSON.stringify(card)).not.toMatch(/Settings → Device financing|device-financing/);
   });
 
   it('shows queued instructions as waiting, and acknowledged ones as a connected connector', async () => {

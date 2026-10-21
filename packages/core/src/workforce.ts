@@ -40,7 +40,7 @@ export async function activeWfm(q: Queryable, env: NodeJS.ProcessEnv = process.e
 }
 async function needConnector(q: Queryable, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch): Promise<WfmConnector> {
   const c = await activeWfm(q, env, fetchImpl);
-  if (!c) throw conflict('The field-service system is not connected. An administrator switches it on in Settings → Cases.');
+  if (!c) throw conflict('The field-service system is not connected. An administrator switches it on in Integration → Field service and logistics.');
   const problem = c.problem();
   if (problem) throw conflict(`The field-service system cannot be used yet: ${problem}`);
   return c;
@@ -128,7 +128,7 @@ export async function orderBookingAvailable(q: Queryable, env?: NodeJS.ProcessEn
 }
 /** Installation times for an address, before any order or case exists. */
 export async function findOrderSlots(q: Queryable, i: { address: string; from?: string; to?: string; durationMinutes?: number }, env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch) {
-  if (!(await orderBookingAvailable(q, env, fetchImpl))) throw conflict('Live installation times are not switched on. An administrator switches them on in Settings → Cases → Field service.');
+  if (!(await orderBookingAvailable(q, env, fetchImpl))) throw conflict('Live installation times are not switched on. An administrator switches them on in Integration → Field service and logistics.');
   if (!i.address?.trim()) throw invalid('Enter the installation address first.');
   const conn = await needConnector(q, env, fetchImpl);
   const it = await issueType(q, INSTALL_ISSUE);

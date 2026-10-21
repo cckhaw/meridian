@@ -8,7 +8,7 @@ type Tab = 'gateway' | 'webhooks' | 'wfm' | 'network' | 'finance' | 'events' | '
 
 export interface Hub {
   groups: Tab[]; endpointKinds: Record<string, Array<{ kind: string; label: string; hint: string }>>; endpoints: any[]; oauthClients: any[]; apiKeys: any[]; rateLimits: Array<{ channel: string; perMinute: number; enabled: boolean; isDefault: boolean }>;
-  webhooks: any[]; topics: any[]; emailPresets: Array<{ id: string; label: string; auth: 'BEARER' | 'HEADER'; authHeader: string; bodyTemplate: string }>; eventTypes: string[]; channels: string[]; scopes: Array<{ id: string; label: string }>;
+  unusedKinds: Array<{ group: string; kind: string; label: string }>; webhooks: any[]; topics: any[]; emailPresets: Array<{ id: string; label: string; auth: 'BEARER' | 'HEADER'; authHeader: string; bodyTemplate: string }>; eventTypes: string[]; channels: string[]; scopes: Array<{ id: string; label: string }>;
 }
 
 /** The hub's data (credentials, endpoints, webhooks, topics) shared by the Integration sections. */
@@ -212,8 +212,6 @@ export function Webhooks({ h, reload, only }: { h: Hub; reload: () => void | Pro
 
 // ───────────────────────── 3–5. endpoints (field service, network, finance) ─────────────────────────
 const CONFIG_HINT: Record<string, string> = {
-  WFM_GATEWAY: '{"vendor":"Salesforce Field Service","oauthTokenUrl":"https://…/token","scope":"api","poolSize":10}',
-  SLOT_SYNC: '{"windows":["08:00-12:00","13:00-17:00"],"skills":["FIBER_SPLICING","ONT_INSTALL"],"emergencyPriority":"P1"}',
   HLR_HSS: '{"protocol":"Diameter","realm":"epc.example.net","poolSize":8}',
   UDM: '{"protocol":"HTTP/2","apiRoot":"/nudm-sdm/v2"}',
   PCRF: '{"protocol":"Diameter","realm":"pcrf.example.net"}',
@@ -268,6 +266,31 @@ export function EndpointManager({ kinds: wanted, h, reload }: { kinds: string[];
             <div className="flex gap-2 sm:col-span-2"><Button disabled={act.busy || !f.name.trim()} onClick={() => void save()}>Save</Button><Button variant="secondary" onClick={() => setF(null)}>Cancel</Button></div>
           </div>
         </Modal>)}
+    </section>
+  );
+}
+
+/** Stored connections of kinds nothing reads any more (the old dispatch system and slot sync): still listed so they can be seen and removed, never added or edited. */
+export function UnusedConnections({ h, reload, group }: { h: Hub; reload: () => void | Promise<void>; group: string }) {
+  const act = useAction(reload);
+  const kinds = h.unusedKinds.filter((k) => k.group === group);
+  const items = h.endpoints.filter((e) => kinds.some((k) => k.kind === e.kind));
+  if (!items.length) return null;
+  return (
+    <section aria-label="Connections not used">
+      <h3 className="mb-1.5 text-footnote font-semibold uppercase tracking-wide text-label2">Connections not used</h3>
+      <div className="rounded-control bg-surface2 p-3">
+        {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+        <ul className="divide-y divide-separator">{items.map((e) => (
+          <li key={e.id} className="flex flex-wrap items-center gap-3 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{e.name}</span><Badge>{kinds.find((k) => k.kind === e.kind)?.label ?? e.kind}</Badge></div>
+              <p className="truncate text-footnote text-label2">{e.url ?? 'no address'}</p>
+              <p className="text-footnote text-label2">Not used: the field service connection is set above.</p>
+            </div>
+            <button type="button" className="text-footnote text-danger" onClick={() => confirm(`Remove ${e.name}?`) && void act.run(() => del(`/settings/integration-hub/endpoints/${e.id}`), 'Removed')}>Remove</button>
+          </li>))}</ul>
+      </div>
     </section>
   );
 }

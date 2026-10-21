@@ -192,7 +192,7 @@ post('/settings/security-policy', 'settings:manage', async ({ db, user, body }) 
 // ───────────────────────── field-service (WFM) callback ─────────────────────────
 /**
  * The field-service system reports a visit's progress here (EN_ROUTE, ON_SITE, JOB_COMPLETED, CUSTOMER_NOT_AT_HOME, RE_SCHEDULING_REQUIRED, …). Authenticated by
- * `X-WFM-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">` with the secret in the environment variable named in Settings → Cases. A bad or stale
+ * `X-WFM-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">` with the secret in the environment variable named in Integration → Field service and logistics. A bad or stale
  * signature is refused and nothing is stored. Repeats are harmless (one row per event id); an unknown job answers 404 so the system retries; a failure answers 500 for the same reason.
  */
 open('POST', '/v1/cases/webhooks/wfm-callback', async ({ db, raw, req }) => {
@@ -793,7 +793,7 @@ const endpointBody = z.object({ group: hubGroup, kind: z.string().max(40), name:
 const webhookBody = z.object({ kind: z.enum(['OUTBOUND', 'INBOUND', 'TMF688']), name: z.string().min(1).max(80), targetUrl: z.string().max(500).nullish(), authKind: z.enum(['NONE', 'BEARER', 'HMAC']).optional(), secret: z.string().max(2000).optional(), provider: z.string().max(60).nullish(), events: z.array(z.string().max(60)).max(40).optional(), query: z.string().max(500).nullish(), retryMax: z.number().int().optional(), retryBackoffSeconds: z.number().int().optional(), status: z.enum(['ACTIVE', 'PAUSED', 'FAILED']).optional() });
 const scopeList = z.array(z.string().max(40)).max(40);
 const hubView = async (db: Db) => ({
-  groups: core.HUB_GROUPS, endpointKinds: core.HUB_ENDPOINT_KINDS, endpoints: await core.listHubEndpoints(db),
+  groups: core.HUB_GROUPS, endpointKinds: core.HUB_ENDPOINT_KINDS, unusedKinds: core.HUB_UNUSED_KINDS, endpoints: await core.listHubEndpoints(db),
   oauthClients: await core.listOAuthClients(db), apiKeys: await core.listApiClients(db), rateLimits: await core.listRateRules(db), webhooks: await core.listHubWebhooks(db), topics: await core.listTopicMappings(db),
   emailPresets: core.EMAIL_PRESETS, eventTypes: core.HUB_EVENT_TYPES, channels: core.HUB_CHANNELS, scopes: core.NORTHBOUND_SCOPES.map((id) => ({ id, label: core.SCOPE_LABEL[id] })),
 });
@@ -1303,8 +1303,8 @@ post('/orders/credit-check', null, async ({ db, user, body }) => {
   if (!customerId) throw new DomainError('INVALID', 'choose the customer first');
   return core.creditCheckForBasket(db, { customerId, idNumber: b.idNumber, consent: { given: b.consent.given, by: user.username, how: b.consent.how }, channel: b.channel, marketCode: user.marketCode, lines: b.lines, actor: user.username });
 });
-get('/settings/financing', 'settings:manage', async ({ db }) => ({ settings: await core.getFinancing(db), bureauConfigured: await core.bureauConfigured(db), defaults: core.DEFAULT_FINANCING }));
-post('/settings/financing', 'settings:manage', async ({ db, user, body }) => {
+get('/integrations/financing', 'integration:manage', async ({ db }) => ({ settings: await core.getFinancing(db), bureauConfigured: await core.bureauConfigured(db), defaults: core.DEFAULT_FINANCING }));
+post('/integrations/financing', 'integration:manage', async ({ db, user, body }) => {
   const b = z.object({
     financeOverContract: z.boolean(), creditCheckRequired: z.boolean(), providerReturns: z.enum(['SCORE', 'UPFRONT_AMOUNT']), onProviderFailure: z.enum(['FALLBACK_SHARE', 'BLOCK']),
     fallbackUpfrontBps: z.number().int(), validityDays: z.number().int(), minUpfrontMinor: z.number().int(),
@@ -1313,7 +1313,7 @@ post('/settings/financing', 'settings:manage', async ({ db, user, body }) => {
   return { settings: await core.setFinancing(db, user.username, b as Partial<core.FinancingSettings>), bureauConfigured: await core.bureauConfigured(db) };
 });
 // Tries the bureau connection the way a real check would, with a made-up amount, and shows the answer. Nothing is kept against a customer.
-post('/settings/financing/test', 'settings:manage', ({ db, body }) => {
+post('/integrations/financing/test', 'integration:manage', ({ db, body }) => {
   const b = z.object({ idNumber: z.string().min(3).max(40), financedMinor: z.number().int().min(100).default(100000) }).parse(body);
   return core.testBureau(db, b.idNumber, b.financedMinor);
 });
@@ -1324,7 +1324,7 @@ post('/orders/quote', null, async ({ db, user, body }) => {
   const b = orderBody.partial({ payment: true }).parse(body);
   return core.quoteOrder(db, { customerId: user.scope.customerId ?? b.customerId, accountId: b.accountId, channel: b.channel, marketCode: user.marketCode, lines: b.lines, financing: b.financing, payment: { method: b.payment?.method ?? 'CREDIT_CARD', installmentMonths: b.payment?.installmentMonths } });
 });
-// Live installation windows from the field-service system, when Settings → Cases → Field service says orders may book them.
+// Live installation windows from the field-service system, when Integration → Field service and logistics says orders may book them.
 get('/orders/installation-slots', 'order:read', ({ db, query }) => core.findOrderSlots(db, { address: str(query, 'address') ?? '', from: str(query, 'from'), to: str(query, 'to') }));
 // The agreements this basket needs (the text with the customer's details filled in) and whether they must be signed: shown at the review step. Same channel permission as the quote.
 post('/orders/agreements', null, async ({ db, user, body }) => {
@@ -1722,9 +1722,9 @@ post('/appointments/:id/cancel', 'case:write', ({ db, user, params, body }) => c
 post('/appointments/:id/reschedule', 'case:write', ({ db, user, params, body }) => core.rescheduleAppointment(db, params.id!, z.object({ slot, notes: z.string().max(1000).optional() }).parse(body), user.username));
 /** Delivers the cancellations queued for the field-service system. Schedule it with the SLA sweep. */
 post('/cases/wfm-outbox', superv, ({ db }) => core.deliverWfmCancels(db));
-get('/settings/cases/field-service', 'settings:manage', ({ db }) => core.wfmOverview(db));
-post('/settings/cases/field-service', 'settings:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), bookAtOrder: z.boolean().optional(), config: z.record(z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
-post('/settings/cases/field-service/test', 'settings:manage', ({ db }) => core.testWfm(db));
+get('/integrations/field-service', 'integration:manage', ({ db }) => core.wfmOverview(db));
+post('/integrations/field-service', 'integration:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), bookAtOrder: z.boolean().optional(), config: z.record(z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
+post('/integrations/field-service/test', 'integration:manage', ({ db }) => core.testWfm(db));
 
 // ── TM Forum Open APIs: TMF621 trouble tickets, TMF656 service problems, TMF683 party interactions ──
 const tmfPage = (items: unknown[], total: number, offset: number) => Response.json(items, { headers: { 'x-total-count': String(total), 'x-result-count': String(items.length), 'x-offset': String(offset) } });

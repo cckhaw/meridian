@@ -125,7 +125,7 @@ const INFO: Record<string, [group: string, label: string, hint: string]> = {
   'migration:import': ['Administration', 'Import data', 'Load customers, services and other data from files'],
   'user:manage': ['Administration', 'Manage users and roles', 'Create users and change what roles can do'],
   'settings:manage': ['Administration', 'Settings', 'Opens the Settings menu: regional format, branding, catalog and customer configuration, dunning, cases, security policy, the roles matrix and the other Settings screens'],
-  'integration:manage': ['Administration', 'Integration', 'Opens the Integration menu: connections to outside systems, the messaging gateways, the e-mail sender, identity and payment connections, the store-front settings, API clients and keys, OCS'],
+  'integration:manage': ['Administration', 'Integration', 'Opens the Integration menu: connections to outside systems, the messaging gateways, the e-mail sender, identity and payment connections, the store-front settings, API clients and keys, OCS, the field service connection, the credit bureau and device financing'],
 };
 const CHANNEL_NAME: Record<string, string> = { SELF_SERVE: 'online self-serve', RETAIL_ASSISTED: 'assisted at a store', QUICK_SALE: 'quick sale at a store', TELESALES: 'telesales', DEALER: 'through a dealer', CALL_CENTER: 'call center' };
 for (const c of CHANNELS) INFO[`order:create:${c}`] = ['Selling', `Sell ${CHANNEL_NAME[c]}`, `Create orders on the ${c.toLowerCase().replace(/_/g, ' ')} channel`];

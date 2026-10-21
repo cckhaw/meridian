@@ -1376,11 +1376,23 @@ describe('Settings and Integration as permissions', () => {
     const sRole = await role(su, 'Settings Only', ['settings:manage']);
     const iRole = await role(su, 'Integration Only', ['integration:manage']);
     const s = await staff([sRole]); const i = await staff([iRole]); const agent = await staff(['call-center']);
-    const settingsRoutes: Array<[string, string]> = [['GET', '/settings'], ['GET', '/settings/cancellation'], ['GET', '/settings/security-policy'], ['GET', '/settings/dunning-rules'], ['GET', '/settings/catalog'], ['GET', '/settings/customers'], ['GET', '/settings/cases'], ['GET', '/settings/financing']];
-    const integrationRoutes: Array<[string, string]> = [['GET', '/integrations'], ['GET', '/integrations/ocs'], ['GET', '/settings/integration-hub'], ['GET', '/settings/integration-hub/deliveries'], ['GET', '/settings/store']];
+    const settingsRoutes: Array<[string, string]> = [['GET', '/settings'], ['GET', '/settings/cancellation'], ['GET', '/settings/security-policy'], ['GET', '/settings/dunning-rules'], ['GET', '/settings/catalog'], ['GET', '/settings/customers'], ['GET', '/settings/cases']];
+    const integrationRoutes: Array<[string, string]> = [['GET', '/integrations'], ['GET', '/integrations/ocs'], ['GET', '/integrations/field-service'], ['GET', '/integrations/financing'], ['GET', '/settings/integration-hub'], ['GET', '/settings/integration-hub/deliveries'], ['GET', '/settings/store']];
     for (const [m, p] of settingsRoutes) { expect(await status(s.cookie, m, p), `settings holder ${p}`).toBe(200); expect(await status(i.cookie, m, p), `integration holder ${p}`).toBe(403); expect(await status(agent.cookie, m, p)).toBe(403); }
     for (const [m, p] of integrationRoutes) { expect(await status(i.cookie, m, p), `integration holder ${p}`).toBe(200); expect(await status(s.cookie, m, p), `settings holder ${p}`).toBe(403); expect(await status(agent.cookie, m, p)).toBe(403); }
     // writes belong to one area too
+    expect(await status(i.cookie, 'POST', '/integrations/field-service', { vendor: null, enabled: false })).toBe(200);
+    expect(await status(s.cookie, 'POST', '/integrations/field-service', { vendor: null, enabled: false })).toBe(403);
+    expect(await status(i.cookie, 'POST', '/integrations/field-service/test')).toBe(200);
+    expect(await status(s.cookie, 'POST', '/integrations/field-service/test')).toBe(403);
+    expect(await status(i.cookie, 'POST', '/integrations/financing', { validityDays: 30 })).toBe(200);
+    expect(await status(s.cookie, 'POST', '/integrations/financing', { validityDays: 30 })).toBe(403);
+    expect(await status(i.cookie, 'POST', '/integrations/financing/test', { idNumber: 'ID-12345' })).toBe(200);
+    expect(await status(s.cookie, 'POST', '/integrations/financing/test', { idNumber: 'ID-12345' })).toBe(403);
+    // the old addresses are gone, and the case escalation numbers stay with Settings
+    for (const [m, p] of [['GET', '/settings/cases/field-service'], ['GET', '/settings/financing']] as const) expect(await status(s.cookie, m, p), p).toBe(404);
+    expect(await status(s.cookie, 'POST', '/settings/cases', { autoDispatch: false })).toBe(200);
+    expect(await status(i.cookie, 'POST', '/settings/cases', { autoDispatch: false })).toBe(403);
     expect(await status(s.cookie, 'POST', '/settings/api-clients', { name: 'k' })).toBe(403);
     expect(await status(i.cookie, 'POST', '/settings/api-clients', { name: 'k' })).toBe(201);
     expect(await status(i.cookie, 'POST', '/settings/segments', { name: 'VIP' })).toBe(403);
@@ -1866,9 +1878,9 @@ describe('offer type switches and service types', () => {
     process.env.MERIDIAN_WFM_WEBHOOK_SECRET = SECRET;
     expect((await call('POST', '/v1/cases/webhooks/wfm-callback', { raw: body0, headers: { 'x-wfm-signature': sign(body0) }, origin: null })).status).toBe(404);   // switched off
     // settings are an administrator's
-    expect((await call('GET', '/settings/cases/field-service', { cookie: agent.cookie })).status).toBe(403);
-    expect((await call('POST', '/settings/cases/field-service', { cookie: su, body: { vendor: 'simulator', enabled: true, config: { mode: 'OK', capacity: 2 } } })).json).toMatchObject({ enabled: true, webhookSecretSet: true, callbackPath: '/api/v1/cases/webhooks/wfm-callback' });
-    expect((await call('POST', '/settings/cases/field-service/test', { cookie: su })).json.ok).toBe(true);
+    expect((await call('GET', '/integrations/field-service', { cookie: agent.cookie })).status).toBe(403);
+    expect((await call('POST', '/integrations/field-service', { cookie: su, body: { vendor: 'simulator', enabled: true, config: { mode: 'OK', capacity: 2 } } })).json).toMatchObject({ enabled: true, webhookSecretSet: true, callbackPath: '/api/v1/cases/webhooks/wfm-callback' });
+    expect((await call('POST', '/integrations/field-service/test', { cookie: su })).json.ok).toBe(true);
     // book
     const slots = (await call('GET', `/cases/${kase.id}/slots`, { cookie: agent.cookie })).json;
     expect(slots.slots.length).toBeGreaterThan(3);
@@ -2095,15 +2107,28 @@ describe('offer type switches and service types', () => {
     expect(tried.json.quote).toMatchObject({ chargeMinor: 5000, rule: { name: 'Flat fee' } });
     expect((await call('DELETE', `/settings/etc/rules/${made.json.id}`, { cookie: su })).json.ok).toBe(true);
   });
+  it('keeps stored dispatch-system and slot-sync connections viewable and removable, and offers no new ones', async () => {
+    const su = await root();
+    await db.query(`INSERT INTO integration_endpoints (id, group_key, kind, name, url) VALUES (gen_random_uuid(), 'wfm', 'WFM_GATEWAY', 'Old dispatch', 'https://fsl.example.com'), (gen_random_uuid(), 'wfm', 'SLOT_SYNC', 'Old slots', NULL)`);
+    const hub = (await call('GET', '/settings/integration-hub', { cookie: su })).json;
+    expect(hub.endpointKinds.wfm).toEqual([]);
+    expect(hub.unusedKinds.map((k: any) => k.kind)).toEqual(['WFM_GATEWAY', 'SLOT_SYNC']);
+    const old = hub.endpoints.filter((e: any) => e.group === 'wfm');
+    expect(old.map((e: any) => e.name).sort()).toEqual(['Old dispatch', 'Old slots']);
+    expect((await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'wfm', kind: 'WFM_GATEWAY', name: 'Another' } })).status).toBe(400);
+    expect((await call('PATCH', `/settings/integration-hub/endpoints/${old[0].id}`, { cookie: su, body: { group: 'wfm', kind: old[0].kind, name: 'Renamed' } })).status).toBe(400);
+    for (const e of old) expect((await call('DELETE', `/settings/integration-hub/endpoints/${e.id}`, { cookie: su })).json.ok).toBe(true);
+    expect((await call('GET', '/settings/integration-hub', { cookie: su })).json.endpoints.filter((e: any) => e.group === 'wfm')).toEqual([]);
+  });
   it('device financing: administrator settings, a device is financed over the contract, and the credit check sets the upfront share', async () => {
     const su = await root();
     const bo = await staff(['billing-ops']);
-    expect((await call('GET', '/settings/financing', { cookie: bo.cookie })).status).toBe(403);
-    const view = (await call('GET', '/settings/financing', { cookie: su })).json;
+    expect((await call('GET', '/integrations/financing', { cookie: bo.cookie })).status).toBe(403);
+    const view = (await call('GET', '/integrations/financing', { cookie: su })).json;
     expect(view.settings.financeOverContract).toBe(true);
     expect(view.bureauConfigured).toBe(false);
-    expect((await call('POST', '/settings/financing', { cookie: su, body: { bands: [{ label: 'A', minScore: 0, maxScore: 600, upfrontBps: 0 }, { label: 'B', minScore: 500, maxScore: 900, upfrontBps: 0 }] } })).status).toBe(400);
-    expect((await call('POST', '/settings/financing/test', { cookie: su, body: { idNumber: 'ID-12345' } })).json).toMatchObject({ ok: false, error: expect.stringMatching(/No credit bureau/) });
+    expect((await call('POST', '/integrations/financing', { cookie: su, body: { bands: [{ label: 'A', minScore: 0, maxScore: 600, upfrontBps: 0 }, { label: 'B', minScore: 500, maxScore: 900, upfrontBps: 0 }] } })).status).toBe(400);
+    expect((await call('POST', '/integrations/financing/test', { cookie: su, body: { idNumber: 'ID-12345' } })).json).toMatchObject({ ok: false, error: expect.stringMatching(/No credit bureau/) });
     const { customer } = await createCustomer(db, { segment: 'CONSUMER', displayName: 'Financed Buyer', idDocument: 'FIN-ROUTER-3' });
     await markVerified(db, customer.id);
     const lines = [{ offerId: 'plan-sim-5g' }, { offerId: 'good-phone-outright', attachTo: 0, dealTermMonths: 24 }];

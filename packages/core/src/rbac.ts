@@ -59,7 +59,7 @@ const CORE_PERMISSIONS = [
   'fraud:manage', // work alerts, raise one by hand, add to and remove from the blacklist
   'fraud:bar', // hard-bar a service for fraud, and lift the bar
   'settings:manage', // the Settings menu: regional format, branding, catalog and customer configuration, dunning, cases, security policy. Only the super user can give it to a role
-  'integration:manage', // the Integration menu: outside systems, messaging gateways, identity and payment connections, store-front, API clients and keys, OCS. Only the super user can give it to a role
+  'integration:manage', // the Integration menu: outside systems, messaging gateways, identity and payment connections, store-front, API clients and keys, OCS, the field service connection, the credit bureau and device financing. Only the super user can give it to a role
 ] as const;
 
 const CHANNEL_PERMISSIONS = CHANNELS.map((c) => `order:create:${c}` as const);

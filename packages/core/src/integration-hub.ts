@@ -17,10 +17,7 @@ export type HubGroup = (typeof HUB_GROUPS)[number];
 export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: string; hint: string }>> = {
   gateway: [],
   webhooks: [],
-  wfm: [
-    { kind: 'WFM_GATEWAY', label: 'Dispatch system', hint: 'Salesforce Field Service, Oracle Field Service Cloud, TOA: endpoint, OAuth parameters, connection pool' },
-    { kind: 'SLOT_SYNC', label: 'Appointment slot sync', hint: 'Time windows, technician skill tags and the emergency-dispatch priority triggers' },
-  ],
+  wfm: [],
   network: [
     { kind: 'HLR_HSS', label: 'HLR / HSS', hint: 'Subscriber data for 2G/3G/4G provisioning' },
     { kind: 'UDM', label: 'UDM (5G core)', hint: 'Subscriber data for 5G provisioning' },
@@ -46,6 +43,12 @@ export const HUB_ENDPOINT_KINDS: Record<HubGroup, Array<{ kind: string; label: s
     { kind: 'EMAIL_GATEWAY', label: 'E-mail sender', hint: 'Carries e-mail codes (when Settings → Security policy allows them), e-mail alerts for staff and signed agreement copies for customers: sender name and address, and an HTTPS API (address, token, request body), SMTP (host, port, security, user, password) or the simulator' },
   ],
 };
+
+/** Kinds that earlier versions offered and nothing reads: the field-service connection is Integration → Field service and logistics. Stored rows of these kinds still load, can be viewed and removed, but not added or changed. */
+export const HUB_UNUSED_KINDS: Array<{ group: HubGroup; kind: string; label: string }> = [
+  { group: 'wfm', kind: 'WFM_GATEWAY', label: 'Dispatch system' },
+  { group: 'wfm', kind: 'SLOT_SYNC', label: 'Appointment slot sync' },
+];
 
 const URL_SCHEMES = ['https', 'http', 'sftp', 'diameter', 'rfc', 'kafka', 'tls', 'tcp', 'ldap', 'ldaps'];
 const prod = () => process.env.NODE_ENV === 'production';
@@ -84,6 +87,7 @@ export async function hubEndpointByIdWithSecret(q: Queryable, id: string): Promi
 
 export async function saveHubEndpoint(q: Queryable, actor: string, i: HubEndpointInput, id?: string): Promise<HubEndpoint> {
   if (!(HUB_GROUPS as readonly string[]).includes(i.group)) throw invalid('Unknown group.');
+  if (HUB_UNUSED_KINDS.some((k) => k.kind === i.kind)) throw invalid('This kind of connection is not used. The field-service connection is set in Integration → Field service and logistics.');
   const kinds = HUB_ENDPOINT_KINDS[i.group].map((k) => k.kind);
   if (!kinds.includes(i.kind)) throw invalid(`Choose a kind of endpoint for this group (${kinds.join(', ') || 'none'}).`);
   const name = (i.name ?? '').trim();
