@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { creditInvoice, getInvoice, payInvoice, runBillCycle } from './billing.js';
+import { creditInvoice, getInvoice, issueInvoice, payInvoice, runBillCycle } from './billing.js';
+import { GL } from './config.js';
+import { postJournal } from './ledger.js';
 import { runDunning } from './lifecycle-service.js';
 import { addDays, dayOf, today } from './dates.js';
 import type { Db } from './db.js';
@@ -144,5 +146,43 @@ describe('general ledger export', () => {
     const second = await exportGl(db);
     expect(second.batch).toBeNull();
     expect((await reconcile(db)).ok).toBe(true);
+  });
+});
+
+describe('an invoice that nets a stream below zero', () => {
+  it('posts the negative stream as a debit instead of failing the constraint, and the ledger still balances', async () => {
+    const { account } = await newCustomer(db);
+    const acct = (await db.query('SELECT * FROM accounts WHERE id=$1', [account!.id])).rows[0]!;
+    // a pro-rated credit from an immediate plan change, bigger than anything else booked to the device stream
+    const inv = await issueInvoice(db, acct, {
+      kind: 'ADJUSTMENT', periodStart: addDays(today(), -30), periodEnd: addDays(today(), -1), issueDate: today(),
+      lines: [
+        { kind: 'RECURRING', revenueAccount: GL.SERVICE_REVENUE, description: 'Plan fee', amountMinor: 5000, taxInclusive: false },
+        { kind: 'ADJUSTMENT', stream: 'DEVICE_INSTALMENT', revenueAccount: GL.GOODS_REVENUE, description: 'Credit for the old plan', amountMinor: -1200, taxInclusive: false },
+      ],
+    });
+    expect(inv).toBeTruthy();
+    expect(inv!.totalMinor).toBeGreaterThan(0);
+    const entries = (await db.query(`SELECT account_code, stream, debit_minor, credit_minor FROM gl_entries WHERE source_type='INVOICE' AND source_id=$1`, [inv!.id])).rows;
+    const dr = entries.reduce((n, e) => n + Number(e.debitMinor), 0), cr = entries.reduce((n, e) => n + Number(e.creditMinor), 0);
+    expect(dr).toBe(cr);
+    const device = entries.find((e) => e.stream === 'DEVICE_INSTALMENT')!;
+    expect(Number(device.debitMinor)).toBe(1200);
+    expect(Number(device.creditMinor)).toBe(0);
+  });
+
+  it('turns a negative amount on either side into the same amount on the other side', async () => {
+    const id = `neg-${Date.now()}`;
+    const journal = await postJournal(db, { date: today(), sourceType: 'TEST_NEGATIVE', sourceId: id, currency: 'SGD', lines: [
+      { account: GL.AR, debit: 700, description: 'a' }, { account: GL.SERVICE_REVENUE, credit: 1000, description: 'b' }, { account: GL.GOODS_REVENUE, credit: -300, description: 'c' },
+    ] });
+    expect(journal).toBeTruthy();
+    const rows = (await db.query(`SELECT account_code, debit_minor, credit_minor FROM gl_entries WHERE source_id=$1`, [id])).rows;
+    const flipped = rows.find((r) => r.accountCode === GL.GOODS_REVENUE)!;
+    expect([Number(flipped.debitMinor), Number(flipped.creditMinor)]).toEqual([300, 0]);
+    expect(rows.every((r) => Number(r.debitMinor) >= 0 && Number(r.creditMinor) >= 0)).toBe(true);
+    await expect(postJournal(db, { date: today(), sourceType: 'TEST_NEGATIVE', sourceId: `${id}-b`, currency: 'SGD', lines: [
+      { account: GL.AR, debit: 100, description: 'a' }, { account: GL.SERVICE_REVENUE, credit: -100, description: 'b' },
+    ] })).rejects.toThrow(/unbalanced/);
   });
 });

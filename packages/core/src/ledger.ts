@@ -17,12 +17,22 @@ export const EVENT_OF_SOURCE: Record<string, string> = {
   INVOICE: 'INVOICE_GENERATED', PAYMENT: 'PAYMENT_SUCCESS', CREDIT_NOTE: 'ADJUSTMENT_POSTED', REFUND: 'REFUND_POSTED', ORDER: 'ORDER_PAID', DEPOSIT: 'DEPOSIT_RECEIVED', WRITE_OFF: 'WRITE_OFF',
 };
 
+/**
+ * A negative amount on one side is the same amount on the other side of the same account (a credit of -12.00 on revenue is a debit of 12.00 on revenue), and the
+ * ledger stores only non-negative amounts. An invoice that nets a stream below zero (a pro-rated credit larger than that stream's charges) needs this.
+ */
+const unsigned = (l: JournalLine): JournalLine => {
+  const d = l.debit ?? 0, c = l.credit ?? 0;
+  if (d >= 0 && c >= 0) return l;
+  return { ...l, debit: Math.max(d, 0) + Math.max(-c, 0), credit: Math.max(c, 0) + Math.max(-d, 0) };
+};
+
 /** Posts one balanced journal. Zero-value lines are dropped; unbalanced journals are rejected before touching the DB. */
 export async function postJournal(
   q: Queryable,
   j: { date: string; sourceType: string; sourceId: string; currency: string; lines: JournalLine[]; eventType?: string; eventId?: string },
 ): Promise<string | null> {
-  const lines = j.lines.filter((l) => (l.debit ?? 0) !== 0 || (l.credit ?? 0) !== 0);
+  const lines = j.lines.map(unsigned).filter((l) => (l.debit ?? 0) !== 0 || (l.credit ?? 0) !== 0);
   const dr = lines.reduce((s, l) => s + (l.debit ?? 0), 0);
   const cr = lines.reduce((s, l) => s + (l.credit ?? 0), 0);
   if (dr !== cr) throw invalid(`unbalanced journal for ${j.sourceType} ${j.sourceId}: debit ${dr} != credit ${cr}`);
