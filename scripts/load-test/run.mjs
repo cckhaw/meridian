@@ -13,7 +13,7 @@
  *   --dealers N (3) --agents-per-dealer N (2) --stores N (new stores, 0) --callcentre N --telesales N --backoffice N   (staff accounts left active)
  *   --concurrency N (6, at most 12)  --tag LT  --seed N  --dry (read-only: shows what could be sold and what stock there is)  --keep-users
  *   --bill-chunk N (500 accounts per bill run)  --cycle-run (also run the bill cycle that has most load-test accounts: bills every account on it!)
- *   --esim-share 0.35  --quicksale-stores N (5)  --groups N  --out FILE (report path)
+ *   --esim-share 0.35  --quicksale-stores N (5)  --groups N  --immediate-share 0.5 (plan changes that apply at once)  --out FILE (report path)
  *
  * It uses the products already in the system (nothing is invented) and tags everything it creates: customer names end in “[LT]”, ID numbers carry the
  * tag, references start with LT-. It needs an administrator (to create short-lived staff logins: compliance, finance and five agents, which it
@@ -44,6 +44,7 @@ const ESIM_SHARE = Math.min(1, Math.max(0, Number(args['esim-share'] ?? 0.35)));
 const BILL_CHUNK = Math.min(10_000, Math.max(1, COUNT('bill-chunk', 500)));
 const OUT = String(args.out && args.out !== true ? args.out : `load-test-report-${TAG}.json`);
 const AGENT_USERS = 5;
+const IMMEDIATE_SHARE = Math.min(1, Math.max(0, Number(args['immediate-share'] ?? 0.5)));   // plan changes that take effect at once (they leave a pro-rating credit on the next invoice)
 
 // ─────────────────────────── small helpers ───────────────────────────
 const rng = makeRng(args.seed !== undefined ? Number(args.seed) : Date.now() % 100000);
@@ -126,11 +127,11 @@ function buildReport(final = false) {
     steps: steps.stats, errors: steps.errors,
     customers: { known: S.customers.length, created: S.customers.filter((c) => c.created).length, verified: S.customers.filter((c) => c.verified).length, pending: S.customers.filter((c) => !c.verified && /PENDING/.test(c.kycStatus ?? '')).length },
     orders: { ...S.orders, byChannel: S.channelOrders, byKind: S.kindOrders, perOffer: [...S.offers.values()].map(offerRow).sort((a, b) => a.orders - b.orders), perStore, perDealer, perAgent: top(S.agentOrders), blocked: S.blockedNotes, failingStores: S.failingStores, storesWithNoOrders: perStore.filter((s) => !s.orders).length, dealersWithNoOrders: perDealer.filter((d) => !d.orders).length },
-    stock: S.stock, needs: S.needs, billing: S.billing, care: S.care,
+    soldOut: S.soldOut ?? [], stock: S.stock, needs: S.needs, billing: S.billing, care: S.care,
     sample: S.customers.slice(0, 5).map((c) => ({ id: c.id, name: c.name })),
   };
 }
-const offerRow = (o) => ({ id: o.offer.id, name: o.offer.name, kind: o.offer.kind, orders: o.orders, refused: o.refused, shapes: o.shapes.filter((s) => !s.dead).map((s) => s.type), firstRefusal: o.firstRefusal, blocked: o.blocked ? { reason: o.blocked.reason, until: o.blocked.until === Infinity ? 'for the run' : new Date(o.blocked.until).toISOString() } : null, whyNotSold: o.orders ? undefined : o.firstRefusal ?? o.whyNot ?? 'never picked' });
+const offerRow = (o) => ({ id: o.offer.id, name: o.offer.name, kind: o.offer.kind, orders: o.orders, refused: o.refused, shapes: o.shapes.filter((s) => !s.dead).map((s) => s.type), firstRefusal: o.firstRefusal, blocked: o.blocked ? { reason: o.blocked.reason, until: o.blocked.until === Infinity ? 'for the run' : new Date(o.blocked.until).toISOString() } : null, whyNotSold: o.orders ? undefined : o.firstRefusal ?? (o.infeasible ? `could not be put in a basket: ${o.infeasible} (${o.infeasibleCount} times)` : o.whyNot) ?? 'never picked', lastShortage: o.infeasible });
 let reportTimer;
 const writeReport = (final = false) => { try { writeFileSync(OUT, JSON.stringify(buildReport(final), null, 2)); } catch (e) { log(`(could not write ${OUT}: ${e.message})`); } };
 reportTimer = setInterval(() => writeReport(false), 60_000); reportTimer.unref();
@@ -251,10 +252,11 @@ async function staffUser(username, roles, extra = {}) {
 }
 const staff = { compliance: null, finance: null, agents: [] };
 async function ensureStaff() {
-  const need = (k) => !staff[k] || (Array.isArray(staff[k]) && !staff[k].length);
-  if (has('kyc') && need('compliance')) staff.compliance = await staffUser('lt.compliance', ['compliance']);
-  if ((has('billing') || has('payments')) && need('finance')) staff.finance = await staffUser('lt.finance', ['finance']);
-  if ((has('care') || has('payments')) && need('agents')) for (let i = 1; i <= AGENT_USERS; i++) staff.agents.push(await staffUser(`lt.agent.${i}`, ['customer-service']));
+  const todo = [];
+  if (has('kyc') && !staff.compliance) todo.push(staffUser('lt.compliance', ['compliance']).then((u) => { staff.compliance = u; }));
+  if (has('billing') && !staff.finance) todo.push(staffUser('lt.finance', ['finance']).then((u) => { staff.finance = u; }));
+  if ((has('care') || has('payments')) && !staff.agents.length) { const slots = Array(AGENT_USERS); staff.agents = slots; for (let i = 1; i <= AGENT_USERS; i++) todo.push(staffUser(`lt.agent.${i}`, ['customer-service']).then((u) => { slots[i - 1] = u; })); }
+  if (todo.length) { startPhase('staff logins'); await Promise.all(todo); }
 }
 const agentFor = (i) => staff.agents[i % staff.agents.length];
 
@@ -422,10 +424,14 @@ async function discoverOffers() {
 
 function stockReport(sellable) {
   // plan share: lines that need a number per order, estimated from what the catalog offers
-  const needs = estimateNeeds({ orders: ORDERS, planShare: 0.8, esimShare: ESIM_SHARE });
+  // a store with no SIM cards sells eSIM only, so retail orders at such stores push the eSIM share up
+  const noSim = S.stores.length ? S.stores.filter((st) => !(stock.storeSims.get(st.id) > 0)).length / S.stores.length : 0;
+  const retailShare = S.stores.length ? 0.28 / 0.97 : 0;
+  const esimShare = Math.min(1, ESIM_SHARE + (1 - ESIM_SHARE) * retailShare * noSim);
+  const needs = estimateNeeds({ orders: ORDERS, planShare: 0.8, esimShare });
   S.needs = { ...needs, orders: ORDERS };
   const free = { msisdn: stock.msisdn, physical: stock.whSims + [...stock.storeSims.values()].reduce((a, b) => a + b, 0), esims: stock.esim, imsi: stock.imsi };
-  log(`Estimated need for ${ORDERS} orders: ~${needs.planLines} plan lines = ${needs.msisdn} numbers, ~${needs.physical} physical SIMs, ~${needs.esims} eSIM profiles (and as many IMSIs).`);
+  log(`Estimated need for ${ORDERS} orders: ~${needs.planLines} plan lines = ${needs.msisdn} numbers, ~${needs.physical} physical SIMs, ~${needs.esims} eSIM profiles (and as many IMSIs); ${Math.round(noSim * 100)}% of stores hold no SIM cards, so eSIM share ${Math.round(esimShare * 100)}%.`);
   const warn = [];
   if (stock.numbers && free.msisdn < needs.msisdn) warn.push(`NUMBERS: ${needs.msisdn} needed, ${free.msisdn} standard numbers free`);
   if (free.physical < needs.physical) warn.push(`PHYSICAL SIMs: ~${needs.physical} needed, ${free.physical} free in the warehouse and counted stores`);
@@ -449,9 +455,9 @@ function learn(job, lines, r) {
       break;
     }
     case 'store-sims': stock.storeSims.set(job.storeId, 0); break;
-    case 'warehouse-sims': stock.whSims = 0; log('  ! no physical SIMs left in the warehouse: remote channels sell eSIM only'); break;
-    case 'esims': stock.esim = 0; log('  ! no eSIM profiles (or IMSIs) left: selling physical SIMs only'); break;
-    case 'msisdn': stock.msisdn = 0; log('  ! no standard numbers left: offers that need a number are paused until stock is loaded'); break;
+    case 'warehouse-sims': if (stock.whSims !== 0) log('  ! no physical SIMs left in the warehouse: remote channels sell eSIM only'); stock.whSims = 0; break;
+    case 'esims': if (stock.esim !== 0) log('  ! no eSIM profiles (or IMSIs) left: selling physical SIMs only'); stock.esim = 0; break;
+    case 'msisdn': if (stock.msisdn !== 0) log('  ! no standard numbers left: offers that need a number are paused until stock is loaded'); stock.msisdn = 0; break;
     case 'requires': case 'excludes': { const sh = job.shape; if (sh) sh.dead = true; if (mainOffer && !mainOffer.shapes.some((s) => !s.dead)) block(mainOffer, msg.slice(0, 160), Infinity); break; }
     case 'channel': { const o = mainOffer; if (o) (o.badChannels ??= new Set()).add(job.channel); break; }
     case 'credit-check': { if (job.shape) job.shape.dead = true; break; }
@@ -480,10 +486,11 @@ const eligibleChannel = (st, sh, ch) => !st.badChannels?.has(ch) && sh.channels.
 function basketFor(st, shape, job) {
   const o = st.offer; const lines = [];
   const loc = goodsLoc(job);
+  const no = (reason) => { st.infeasible = reason; st.infeasibleCount = (st.infeasibleCount ?? 0) + 1; return null; };
   const addVariant = (off, line) => {
     const vs = off.variants ?? []; if (!vs.length) return line;
     const avail = vs.filter((v) => skusOf(off, v.id).every((s) => skuAvail(loc, s) > 0));
-    if (!avail.length) return null;
+    if (!avail.length) return no(`no stock of ${off.name} (any colour/size) at ${loc}`);
     const s2 = S.offers.get(off.id); const pickV = leastUsed(avail, new Map(Object.entries(s2.variantSold)), rng, (v) => v.id);
     return { ...line, options: { variantId: pickV.id } };
   };
@@ -493,7 +500,8 @@ function basketFor(st, shape, job) {
     const g = o.group; const allowed = (g.allowedMemberOfferIds?.length ? g.allowedMemberOfferIds : shape.plans.map((p) => p.id)).filter((id) => S.offers.get(id) && !offerBlocked(S.offers.get(id)));
     if (!allowed.length) return null;
     const members = Array.from({ length: Math.min(between(1, 3), g.maxGroupMembers ?? 3) }, () => { const sim = simFor(job); return sim ? { offerId: pick(allowed), simType: sim } : null; });
-    if (members.some((m) => !m) || (stock.numbers && stock.msisdn < members.length)) return null;
+    if (members.some((m) => !m)) return no(`no SIM card or eSIM profile to give at ${job.storeId ?? 'the warehouse'}`);
+    if (stock.numbers && stock.msisdn < members.length) return no('no standard numbers left');
     return { lines: [{ offerId: o.id, members }], numbers: members.length, sims: members.map((m) => m.simType) };
   }
   let main = { offerId: o.id };
@@ -508,11 +516,11 @@ function basketFor(st, shape, job) {
   const sims = [];
   for (const l of lines) {
     const off = S.offers.get(l.offerId).offer; const q = l.quantity ?? 1;
-    if (!needsStock(off, l.options?.variantId, q)) return null;
-    if (mobile(off) && q === 1) { const sim = simFor(job); if (!sim) return null; l.simType = sim; sims.push(sim); }
+    if (!needsStock(off, l.options?.variantId, q)) return no(`no stock of ${skusOf(off, l.options?.variantId).join(', ')} at ${loc}`);
+    if (mobile(off) && q === 1) { const sim = simFor(job); if (!sim) return no(`no SIM card or eSIM profile to give at ${job.storeId ?? 'the warehouse'}`); l.simType = sim; sims.push(sim); }
   }
   const numbers = lines.filter((l) => beh(S.offers.get(l.offerId).offer).service === 'MOBILE' || mobile(S.offers.get(l.offerId).offer)).length;
-  if (stock.numbers && numbers > 0 && stock.msisdn < numbers) return null;
+  if (stock.numbers && numbers > 0 && stock.msisdn < numbers) return no('no standard numbers left');
   // sometimes an add-on rides along with a plan
   if (!job.noExtras && lines.some((l) => isPlainPlan(S.offers.get(l.offerId).offer)) && chance(0.2)) {
     const inBasket = lines.map((l) => S.offers.get(l.offerId).offer);
@@ -543,6 +551,7 @@ function chooseTarget(job, sellable) {
     else { const kinds = [...new Set(cands.map((x) => x.st.kindGroup))]; const k = rng.weighted(kinds.map((kk) => [kk, kindWeight[kk] ?? 5])); c = pick(cands.filter((x) => x.st.kindGroup === k)); }
     const b = feasible(c); if (b) return { ...c, basket: b };
   }
+  for (const c of shuffle(cands)) { const b = feasible(c); if (b) return { ...c, basket: b }; }   // the random picks all hit shortages: look at everything once
   return null;
 }
 
@@ -644,6 +653,19 @@ async function placeJob(job, sellable, budget) {
   return false;
 }
 
+/** Goods and devices (every colour/size) whose stock is gone at every location. */
+function soldOutOffers() {
+  if (!stock.sku) return [];
+  const total = (sku) => { let n = 0; for (const [loc, m] of stock.sku) if (m.has(sku)) n += skuAvail(loc, sku); return n; };
+  const out = [];
+  for (const st of S.offers.values()) {
+    const o = st.offer; const opts = o.variants?.length ? o.variants.map((v) => skusOf(o, v.id)) : [skusOf(o)];
+    if (!opts[0].length) continue;
+    if (opts.every((skus) => skus.some((k) => total(k) <= 0))) out.push(o.name);
+  }
+  return out;
+}
+
 async function ordersPhase() {
   startPhase('orders', ORDERS);
   await loadCatalog();
@@ -658,12 +680,14 @@ async function ordersPhase() {
   // store users for counter sales
   const qs = COUNT('quicksale-stores', 5);
   if (!DRY && qs && S.stores.length && [...sellable.values()].some((st) => st.shapes.some((s) => s.type === 'solo' && s.channels.has('QUICK_SALE')))) {
-    for (const st of S.stores.slice(0, qs)) {
+    const stocked = S.stores.filter((st) => [...(stock.sku?.get(st.id)?.values() ?? [])].some((v) => v > 0));   // a counter sale takes goods off the shelf of its own store
+    for (const st of stocked.slice(0, qs)) {
       try { quickUsers.push({ storeId: st.id, session: await staffUser(`lt.qs.${st.id.toLowerCase().replace(/[^a-z0-9]/g, '')}`.slice(0, 40), ['retail-store'], { storeId: st.id }) }); } catch (e) { note('quick-sale users', false, e.message); }
     }
     if (quickUsers.length) log(`${quickUsers.length} counter users ready for quick sales.`);
   }
   planned = newJobPlan(sellable);
+  if (!planned.tickets.length) { log('No verified customers (or customers waiting on their identity check) to sell to: run the kyc phase first.'); return; }
   const budget = { attempts: 0, cap: Math.ceil(ORDERS * 1.6) };
   let inflight = 0, stalled = 0;
   setTotal(ORDERS);
@@ -684,6 +708,8 @@ async function ordersPhase() {
   await Promise.all(Array.from({ length: CONC }, worker));
   clearInterval(refresher);
   log(`Orders: ${S.orders.ok} placed in ${S.orders.attempts} attempts (${S.orders.held} waiting on identity checks, ${S.orders.replays} repeats answered from the idempotency key).`);
+  S.soldOut = soldOutOffers();
+  if (S.soldOut.length) log(`Out of stock everywhere the run could sell from: ${S.soldOut.join(', ')}.`);
   if (S.orders.ok < ORDERS) log(`!!! Only ${S.orders.ok} of ${ORDERS} orders could be placed. See the refusals below and the stock figures above.`);
   // order lifecycle: some cancelled, returns left alone
   const toCancel = S.orderIds.filter((o) => !['COMPLETED', 'CANCELLED', 'FAILED'].includes(o.state) && chance(0.15)).map((o) => o.id);   // an order that is already live cannot be cancelled
@@ -719,7 +745,7 @@ async function changesPhase() {
     const roll = rnd() * 0.45;
     if (roll < 0.12) { const r = await step('services suspended', () => admin.call(`/services/${s.id}/actions`, 'POST', { action: 'suspend', reason: pick(['LOST_STOLEN', 'FRAUD_SUSPECTED', 'CUSTOMER_REQUEST']) })); if (r && chance(0.6)) await step('services resumed', () => admin.call(`/services/${s.id}/actions`, 'POST', { action: 'resume' })); }
     else if (roll < 0.20) await step('voluntary suspensions', () => admin.call(`/services/${s.id}/actions`, 'POST', { action: 'suspend-voluntary', months: between(1, 6) }));
-    else if (roll < 0.34 && plans.length > 1) { const to = pick(plans.filter((p) => p.id !== s.offerId)); if (to) await step('plan changes', () => admin.call(`/services/${s.id}/change-plan`, 'POST', { targetOfferId: to.id, effective: pick(['IMMEDIATE', 'NEXT_BILL_CYCLE']), acceptContractTerms: true })); }
+    else if (roll < 0.34 && plans.length > 1) { const to = pick(plans.filter((p) => p.id !== s.offerId)); if (to) await step('plan changes', () => admin.call(`/services/${s.id}/change-plan`, 'POST', { targetOfferId: to.id, effective: chance(IMMEDIATE_SHARE) ? 'IMMEDIATE' : 'NEXT_BILL_CYCLE', acceptContractTerms: true })); }
     else if (roll < 0.40 && groupPlans.length) await step('moved to a group plan', () => admin.call(`/services/${s.id}/upgrade-to-group`, 'POST', { offerId: pick(groupPlans).id }));
     else if (roll < 0.45) await step('services terminated', () => admin.call(`/services/${s.id}/actions`, 'POST', { action: 'terminate', reason: 'Customer left the operator' }));
   });
@@ -768,8 +794,8 @@ async function carePhase() {
   const typeOrder = shuffle(types);
   const fromInter = new Set(shuffle(Array.from({ length: nCases }, (_, i) => i)).slice(0, Math.round(nCases * 0.08)));
   await each('cases', caseOwners.map((c, i) => [c, i]), async ([c0, i]) => {
-    const c = chance(0.6) && withSvc.length ? k(withSvc, i) : c0;
     const it = k(typeOrder, i); const type = it.caseType ?? 'GENERAL'; const ag = agentFor(i);
+    const c = (chance(0.6) || type === 'BILLING_REFUND') && withSvc.length ? k(withSvc, i) : c0;
     const sev = chance(0.15) ? 'CRITICAL_OUTAGE' : chance(0.3) ? 'MAJOR_DEGRADATION' : 'MINOR_INQUIRY';
     const common = { subject: pick(SUBJECTS[type] ?? SUBJECTS.GENERAL), severity: sev, note: 'Opened by the load test.' };
     let r;
@@ -780,10 +806,11 @@ async function carePhase() {
     const k2 = { id, customerId: r.json.customerId ?? c.id, type: r.json.type ?? type };
     cases.push(k2); S.care[k2.type] = (S.care[k2.type] ?? 0) + 1;
     const roll = rnd();
+    k2.open = k2.type === 'BILLING_REFUND' && roll < 0.6;
     await step('cases assigned', () => ag.call(`/cases/${id}/assign`, 'POST', { assignee: `lt.agent.${(i % AGENT_USERS) + 1}` }));
     for (let n = 0; n < between(1, 3); n++) await step('case notes', () => ag.call(`/cases/${id}/notes`, 'POST', { text: pick(['Called the customer, no answer.', 'Checked the network: no outage in the area.', 'Waiting for the customer to send a photo.', 'Escalated to the second line.', 'Customer confirmed the details by phone.']) }));
     if (chance(0.12)) await step('cases escalated', () => ag.call(`/cases/${id}/severity`, 'POST', { severity: 'CRITICAL_OUTAGE', why: 'Escalated by the load test' }));
-    const path = roll < 0.12 || k2.type === 'BILLING_REFUND' && roll < 0.5 ? [] : roll < 0.3 ? ['IN_PROGRESS'] : roll < 0.45 ? ['IN_PROGRESS', 'PENDING_CUSTOMER'] : roll < 0.55 ? ['IN_PROGRESS', 'PENDING_CUSTOMER', 'IN_PROGRESS', 'RESOLVED'] : roll < 0.8 ? ['IN_PROGRESS', 'RESOLVED'] : roll < 0.93 ? ['IN_PROGRESS', 'RESOLVED', 'CLOSED_VERIFIED'] : ['IN_PROGRESS', 'RESOLVED', 'REOPENED'];
+    const path = k2.type === 'BILLING_REFUND' && roll < 0.6 ? (roll < 0.3 ? [] : ['IN_PROGRESS']) : roll < 0.12 ? [] : roll < 0.3 ? ['IN_PROGRESS'] : roll < 0.45 ? ['IN_PROGRESS', 'PENDING_CUSTOMER'] : roll < 0.55 ? ['IN_PROGRESS', 'PENDING_CUSTOMER', 'IN_PROGRESS', 'RESOLVED'] : roll < 0.8 ? ['IN_PROGRESS', 'RESOLVED'] : roll < 0.93 ? ['IN_PROGRESS', 'RESOLVED', 'CLOSED_VERIFIED'] : ['IN_PROGRESS', 'RESOLVED', 'REOPENED'];
     for (const st of path) { const ok = await step('case status changes', () => ag.call(`/cases/${id}/status`, 'POST', { status: st, note: 'Updated by the load test.', ...(st === 'RESOLVED' ? { resolution: 'Resolved after checking with the customer.' } : {}) })); if (!ok) break; }
   });
   S.cases = cases;
@@ -823,12 +850,15 @@ async function billingPhase() {
     const detail = (await admin.call(`/billing/runs/${id}`)).json;
     const row = { id, accounts: ids.length, status: detail.status, counts: detail.counts, summary: detail.summary?.totals ?? detail.summary };
     S.billing.runs.push(row); prog.done++;
+    const res = detail.summary?.result; if (res) S.billing.invoicesProduced += Math.max(0, (res.billed ?? 0) - (res.noInvoice ?? 0));
     log(`  bill run ${i + 1}/${parts.length} ${id}: ${detail.status} ${JSON.stringify(detail.counts ?? {})}`);
     writeReport(false);
     void fin;
   }
   // a cycle run: bills every active account on that cycle day, so only on request
   if (args['cycle-run']) {
+    const unknown = S.customers.filter((c) => c.services.length && c.accountId && !c.billCycleDay);
+    await each('bill cycle days read', unknown, async (c) => { const r = await admin.call(`/customers/${c.id}/accounts`); const a = (r.json.items ?? []).find((x) => x.id === c.accountId); if (a) c.billCycleDay = a.billCycleDay; });
     const byDay = new Map(); for (const c of S.customers) if (c.billCycleDay && c.services.length) byDay.set(c.billCycleDay, (byDay.get(c.billCycleDay) ?? 0) + 1);
     const day = [...byDay.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
     const cycles = (await admin.call('/billing/cycles')).json.items ?? [];
@@ -842,7 +872,7 @@ async function billingPhase() {
         if (mock?.status === 'MOCK_COMPLETED') await step('bill runs submitted', () => admin.call(`/billing/runs/${id}/submit`, 'POST', { note: 'Load test' }));
         const ap = await step('bill runs approved', () => staff.finance.call(`/billing/runs/${id}/approve`, 'POST', { note: 'Load test', execute: true }));
         if (ap) await waitRun(id, ['COMPLETED', 'FAILED', 'CANCELLED'], 'cycle production');
-        const d = (await admin.call(`/billing/runs/${id}`)).json; S.billing.cycleRun = { id, cycleDay: day, status: d.status, counts: d.counts }; log(`  cycle run for day ${day}: ${d.status} ${JSON.stringify(d.counts ?? {})}`);
+        const d = (await admin.call(`/billing/runs/${id}`)).json; S.billing.cycleRun = { id, cycleDay: day, status: d.status, counts: d.counts }; const cr = d.summary?.result; if (cr) S.billing.invoicesProduced += Math.max(0, (cr.billed ?? 0) - (cr.noInvoice ?? 0)); log(`  cycle run for day ${day}: ${d.status} ${JSON.stringify(d.counts ?? {})}`);
       }
     }
   }
@@ -871,9 +901,9 @@ async function paymentsPhase() {
   let cases = S.cases ?? [];
   if (!cases.length) {
     const owned = new Map(S.customers.map((c) => [c.id, c])); cases = [];
-    await pages(admin, '/cases?type=BILLING_REFUND&limit=100', (items) => { for (const k of items) if (owned.has(k.customerId) && !/CLOSED/.test(k.status ?? '')) cases.push({ id: k.id, customerId: k.customerId, type: 'BILLING_REFUND' }); }, { maxPages: 200 });
+    for (const status of ['NEW', 'IN_PROGRESS']) await pages(admin, `/cases?type=BILLING_REFUND&status=${status}&limit=100`, (items) => { for (const k of items) if (owned.has(k.customerId)) cases.push({ id: k.id, customerId: k.customerId, type: 'BILLING_REFUND', open: true }); }, { maxPages: 200 });
   }
-  const billingCases = cases.filter((x) => x.id && x.type === 'BILLING_REFUND').slice(0, 400);
+  const billingCases = cases.filter((x) => x.id && x.type === 'BILLING_REFUND' && x.open).slice(0, 400);
   const byCustomer = new Map(); for (const i of invoices) if (!byCustomer.has(i.customerId)) byCustomer.set(i.customerId, i);
   startPhase('refunds', billingCases.length);
   await each('refunds', billingCases.map((k, i) => [k, i]), async ([k, i]) => {
@@ -936,7 +966,7 @@ function summary() {
   for (const [k, v] of Object.entries(steps.stats)) log(`  ${k.padEnd(30)} ${String(v.ok).padStart(6)} ok${v.failed ? `, ${v.failed} failed` : ''}`);
   if (Object.keys(steps.errors).length) { log('\nSome calls were refused (first examples):'); for (const [k, e] of Object.entries(steps.errors)) log(`  ${k}: ${e.join(' | ')}`); }
   log('\nPhase timings:'); for (const [k, v] of Object.entries(rep.timings)) log(`  ${k.padEnd(24)} ${String(v.seconds).padStart(7)} s`);
-  if (S.offers.size && S.orders.attempts) {
+  if (has('orders') && S.orders.attempts) {
     log('\nOrders by offer (fewest first):');
     log(`  ${'offer'.padEnd(44)} ${'kind'.padEnd(22)} orders`);
     for (const r of rep.orders.perOffer) log(`  ${r.name.slice(0, 43).padEnd(44)} ${String(r.kind).slice(0, 21).padEnd(22)} ${String(r.orders).padStart(6)}${r.orders ? '' : `   NEVER SOLD: ${String(r.whyNotSold).slice(0, 160)}`}${r.blocked && r.orders ? `   (paused: ${r.blocked.reason.slice(0, 80)})` : ''}`);
