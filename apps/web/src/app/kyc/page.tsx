@@ -99,8 +99,8 @@ function Workspace() {
         <>
           <div className="mb-4 space-y-3">
             <div>
-              <SearchField label="Search cases" placeholder="Name, ID, case number, phone, officer…" value={qBox} onChange={setQBox} />
-              <p className="mt-1.5 px-1 text-footnote text-label2" id="kyc-search-help"><code className="font-mono">*</code> matches any characters, <code className="font-mono">?</code> matches one: <code className="font-mono">Tan*</code>, <code className="font-mono">*4567</code>, <code className="font-mono">KYC-00120?</code></p>
+              <SearchField label="Search cases" describedBy="kyc-search-help" placeholder="Name, ID, case number, phone, officer…" value={qBox} onChange={setQBox} />
+              <p className="mt-1.5 px-1 text-footnote text-label2" id="kyc-search-help">Plain text finds it anywhere (contains). With <code className="font-mono">*</code> (any characters) or <code className="font-mono">?</code> (exactly one) the pattern must match the whole field: <code className="font-mono">tan*</code> starts with tan, <code className="font-mono">*tan</code> ends with tan, <code className="font-mono">*tan*</code> contains tan, <code className="font-mono">KYC-00012?</code> one character left open. Looks at the name, the last digits of the ID, the case number, phone, e-mail and the officer.</p>
             </div>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Select aria-label="Came from" value={f.source} onChange={(e) => patchF({ source: e.target.value })}><option value="">Any source</option>{Object.entries(SOURCE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
@@ -126,7 +126,7 @@ function Workspace() {
             )}
           </div>
 
-          {tab === 'waiting' && s && <p className="mb-3 text-subhead text-label2">{s.waiting} waiting{s.overdue > 0 && <>, <strong className="text-danger">{s.overdue} overdue</strong></>}, {s.unassigned} of them unassigned. Search the list to see who each case is assigned to.</p>}
+          {tab === 'waiting' && s && <p className="mb-3 text-subhead text-label2">{s.waiting} waiting{s.overdue > 0 && <>, <strong className="text-danger">{s.overdue} overdue</strong></>}, {s.unassigned} of them unassigned. The last column shows who holds each case.</p>}
           {tab === 'mine' && s && <p className="mb-3 text-subhead text-label2">{s.mine} assigned to you{s.mineOverdue > 0 && <>, <strong className="text-danger">{s.mineOverdue} overdue</strong></>}. Highest priority first.</p>}
 
           {list.error && <Alert>{list.error}</Alert>}
@@ -152,7 +152,7 @@ function Workspace() {
                   </span>) },
                 { key: 'applicant', label: 'Applicant', render: (c) => <span><span className="block font-medium">{c.fullName}</span><span className="block text-footnote text-label2">{ID_TYPE_LABEL[c.idType] ?? c.idType} {c.idNumberMasked}</span></span> },
                 { key: 'from', label: 'Came from', render: (c) => <span>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')}{c.method === 'MYDIGITAL_ID' ? ' · MyDigital ID' : ''}</span> },
-                { key: 'checks', label: 'Risk and checks', render: (c) => <span className="flex flex-wrap justify-end gap-1 sm:justify-start"><RiskBadge risk={c.risk} />{c.flags?.length ? c.flags.map((x: string) => <Badge key={x} tone="warning">{label(x)}</Badge>) : <span className="text-label2">Clean</span>}</span> },
+                { key: 'checks', label: 'Risk and checks', render: (c) => <span className="flex flex-wrap justify-end gap-1 sm:justify-start"><RiskBadge risk={c.risk} />{c.flags?.length ? c.flags.map((x: string) => <Badge key={x} tone="warning">{label(x)}</Badge>) : <span className="text-label2">No flags</span>}</span> },
                 { key: 'waiting', label: tab === 'decided' || tab === 'returned' ? 'Submitted' : 'Waiting', render: (c) => <Waiting submittedAt={c.submittedAt} dueAt={c.dueAt} overdue={c.overdue} done={c.status !== 'PENDING'} /> },
                 { key: 'orders', label: 'Orders on hold', render: (c) => (c.waitingOrders > 0 ? <Badge tone="warning">{c.waitingOrders} {c.waitingOrders === 1 ? 'order' : 'orders'}</Badge> : <span className="text-label2">–</span>) },
                 { key: 'assignee', label: tab === 'decided' ? 'Decided by' : 'Assigned to', render: (c) => (tab === 'decided' && c.decidedBy ? <span>{c.decidedBy}</span> : <Assignee username={c.assignedTo} name={c.assignedToName} me={me?.username} source={c.assignmentSource} />) },

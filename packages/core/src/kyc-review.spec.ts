@@ -498,6 +498,19 @@ describe('sweeping: away officers, overdue cases', () => {
     await setKycReviewSettings(db, 'root', { redistributeAway: true });
   });
 
+  it('does not take back a case a supervisor deliberately gave an away officer (after confirming), but does take back what they held when they left', async () => {
+    const [mine, forced] = [await addCase(db), await addCase(db)];
+    await db.query(`UPDATE kyc_cases SET assigned_to=NULL, assigned_at=NULL, assignment_source=NULL WHERE id = ANY($1::uuid[])`, [[mine, forced]]);
+    await assignCases(db, 's.senior', { caseIds: [mine!], mode: 'ASSIGN', officer: 's.three' });
+    await setOfficerStatus(db, { username: 's.three' }, 's.three', { away: true });
+    expect((await db.query(`SELECT assigned_to FROM kyc_cases WHERE id=$1`, [mine])).rows[0]!.assignedTo).not.toBe('s.three');   // held when they left: handed on at once
+    await expect(assignCases(db, 's.senior', { caseIds: [forced!], mode: 'ASSIGN', officer: 's.three' })).rejects.toThrow(/Confirm to assign anyway/);
+    await assignCases(db, 's.senior', { caseIds: [forced!], mode: 'ASSIGN', officer: 's.three', force: true });
+    await sweepKycReview(db);
+    expect((await db.query(`SELECT assigned_to FROM kyc_cases WHERE id=$1`, [forced])).rows[0]!.assignedTo).toBe('s.three');   // the sweep leaves a deliberate assignment alone
+    await setOfficerStatus(db, { username: 's.three' }, 's.three', { away: false });
+  });
+
   it('lets only the officer, or an assigner, change availability; the return time must be ahead', async () => {
     await expect(setOfficerStatus(db, { username: 's.two' }, 's.one', { away: true })).rejects.toThrow(/your own availability/);
     await expect(setOfficerStatus(db, { username: 's.one' }, 's.one', { away: true, awayUntil: '2020-01-01T00:00:00Z' })).rejects.toThrow(/future/);

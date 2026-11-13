@@ -561,10 +561,16 @@ async function redistributeFrom(q: Queryable, rs: KycReviewSettings, only?: stri
   const active = new Set(reviewers.map((r) => r.username));
   const away = new Set(reviewers.filter((r) => r.away).map((r) => r.username));
   const holders = (await q.query(`SELECT DISTINCT k.assigned_to AS u FROM ${CASES_FROM} WHERE k.status='PENDING' AND k.assigned_to IS NOT NULL AND ${QUEUE_SQL}`)).rows.map((r) => r.u as string);
-  const gone = holders.filter((u) => (!active.has(u) || (rs.redistributeAway && away.has(u))) && (!only || only.includes(u)));
+  const inactive = holders.filter((u) => !active.has(u) && (!only || only.includes(u)));
+  const awayHolders = holders.filter((u) => active.has(u) && rs.redistributeAway && away.has(u) && (!only || only.includes(u)));
+  const gone = [...inactive, ...awayHolders];
   if (!gone.length) return { moved: 0, pooled: 0 };
+  // A case a supervisor handed to an away officer on purpose (after confirming) stays with them: only cases they held when they went away are taken back.
   const rows = (await q.query(
-    `SELECT k.* FROM ${CASES_FROM} WHERE k.status='PENDING' AND k.assigned_to = ANY($1::text[]) AND ${QUEUE_SQL} ORDER BY k.priority DESC, COALESCE(k.submitted_at, k.created_at), k.id LIMIT ${MAX_BATCH} FOR UPDATE OF k`, [gone])).rows;
+    `SELECT k.* FROM ${CASES_FROM} WHERE k.status='PENDING' AND ${QUEUE_SQL}
+        AND (k.assigned_to = ANY($1::text[]) OR (k.assigned_to = ANY($2::text[]) AND NOT (k.assignment_source = 'MANUAL' AND k.assigned_at > COALESCE((SELECT s.updated_at FROM kyc_officer_status s WHERE s.username = k.assigned_to), '-infinity'::timestamptz))))
+      ORDER BY k.priority DESC, COALESCE(k.submitted_at, k.created_at), k.id LIMIT ${MAX_BATCH} FOR UPDATE OF k`, [inactive, awayHolders])).rows;
+  if (!rows.length) return { moved: 0, pooled: 0 };
   const why = (u: string) => (!active.has(u) ? 'The officer can no longer review KYC cases.' : 'The officer is away.');
   const plan = rs.autoAssign && rs.strategy !== 'OFF' ? await planAuto(q, rows, rs, { pool: reviewers }) : { picks: [] as Planned['picks'], unassigned: rows.map((r) => r.id as string) };
   const byId = new Map(rows.map((r) => [r.id as string, r]));
@@ -577,6 +583,23 @@ async function redistributeFrom(q: Queryable, rs: KycReviewSettings, only?: stri
   for (const r of rows) lost.set(r.assignedTo, (lost.get(r.assignedTo) ?? 0) + 1);
   for (const [u, n] of lost) await safeNotify(q, u, 'caseAssigned', { title: 'KYC reviews moved away from you', body: `${n} open KYC ${plural(n, 'review was', 'reviews were')} handed back because you are ${active.has(u) ? 'away' : 'no longer a reviewer'}.`, link: '/kyc' });
   return { moved: moved.length, pooled };
+}
+
+const ASSIGN_BUDGET_MS = 8000;
+/** One batch of the automatic assignment step: the most urgent unassigned cases, given out equally. Returns how many were assigned. */
+async function assignBatch(db: Queryable, rs: KycReviewSettings, lock: (tx: Queryable) => Promise<boolean>): Promise<number> {
+  return withTx(db, async (tx) => {
+      if (!(await lock(tx))) return 0;
+      const rows = (await tx.query(
+        `SELECT k.* FROM ${CASES_FROM} WHERE k.status='PENDING' AND k.assigned_to IS NULL AND ${QUEUE_SQL} ORDER BY k.priority DESC, COALESCE(k.submitted_at, k.created_at), k.id LIMIT ${SWEEP_BATCH} FOR UPDATE OF k SKIP LOCKED`)).rows;
+      if (!rows.length) return 0;
+      const plan = await planAuto(tx, rows, rs);
+      const moved = await applyAssignments(tx, plan.picks.map((p) => ({ ...p, from: null })), { by: 'system', source: 'AUTO' });
+      const per = new Map<string, number>();
+      for (const m of moved) per.set(m.to, (per.get(m.to) ?? 0) + 1);
+      for (const [u, n] of per) await safeNotify(tx, u, 'caseAssigned', { title: 'KYC reviews assigned to you', body: `${n} KYC ${plural(n, 'review was', 'reviews were')} assigned to you.`, link: '/kyc' });
+      return moved.length;
+  });
 }
 
 /**
@@ -610,18 +633,13 @@ export async function sweepKycReview(db: Queryable): Promise<KycSweepResult> {
   out.redistributed = await withTx(db, async (tx) => ((await lock(tx)) ? (await redistributeFrom(tx, rs)).moved : 0));
 
   if (rs.autoAssign && rs.strategy !== 'OFF') {
-    out.assigned = await withTx(db, async (tx) => {
-      if (!(await lock(tx))) return 0;
-      const rows = (await tx.query(
-        `SELECT k.* FROM ${CASES_FROM} WHERE k.status='PENDING' AND k.assigned_to IS NULL AND ${QUEUE_SQL} ORDER BY k.priority DESC, COALESCE(k.submitted_at, k.created_at), k.id LIMIT ${SWEEP_BATCH} FOR UPDATE OF k SKIP LOCKED`)).rows;
-      if (!rows.length) return 0;
-      const plan = await planAuto(tx, rows, rs);
-      const moved = await applyAssignments(tx, plan.picks.map((p) => ({ ...p, from: null })), { by: 'system', source: 'AUTO' });
-      const per = new Map<string, number>();
-      for (const m of moved) per.set(m.to, (per.get(m.to) ?? 0) + 1);
-      for (const [u, n] of per) await safeNotify(tx, u, 'caseAssigned', { title: 'KYC reviews assigned to you', body: `${n} KYC ${plural(n, 'review was', 'reviews were')} assigned to you.`, link: '/kyc' });
-      return moved.length;
-    });
+    // A big backlog is given out in batches of SWEEP_BATCH, one transaction each, for up to ASSIGN_BUDGET_MS (functions are limited to 10 to 60 seconds); the rest waits for the next run.
+    const started = Date.now();
+    for (let round = 0; round < 20 && Date.now() - started < ASSIGN_BUDGET_MS; round++) {
+      const n = await assignBatch(db, rs, lock);
+      out.assigned += n;
+      if (n < SWEEP_BATCH) break;
+    }
   }
 
   const tail = await withTx(db, async (tx) => {

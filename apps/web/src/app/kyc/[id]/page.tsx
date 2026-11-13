@@ -8,9 +8,7 @@ import { AssigneeCard, ChecklistForm, NotesCard, QaForm, SecondReview, Timeline,
 import { d, dt, label, money } from '@/lib/format';
 import { useAuth } from '@/lib/auth';
 import { ImageViewer } from '@/components/image-viewer';
-import { RiskBadge } from '../parts';
-import { dueText } from '../view';
-import { DOC_LABEL, FLAG_TEXT, ID_TYPE_LABEL, METHOD_LABEL, REASONS, SOURCE_LABEL } from '../flags';
+import { CHECKLIST, DOC_LABEL, FLAG_TEXT, ID_TYPE_LABEL, METHOD_LABEL, REASONS, SOURCE_LABEL } from '../flags';
 
 export default function KycCase() {
   const { id } = useParams<{ id: string }>();
@@ -21,15 +19,22 @@ export default function KycCase() {
   const [code, setCode] = useState('');
   const [fraud, setFraud] = useState(false);
   const [checks, setChecks] = useState<Checks>({});
-  const [done, setDone] = useState<string | null>(null);   // the decision just recorded: offers the next case
+  const [done, setDone] = useState<{ text: string; held?: boolean } | null>(null);   // the decision just recorded: offers the next case
   const [nextMsg, setNextMsg] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | null>(null);   // index into the case's pictures
   const act = useAction(reload);
   if (loading && !c) return <Spinner />;
   if (error || !c) return <Alert>{error ?? 'Not found'}</Alert>;
+  const naChecks = c.method === 'MYDIGITAL_ID' ? ['documentLegible', 'photoMatchesId'] : [];
   const decide = async (decision: 'APPROVE' | 'REJECT' | 'RETURN') => {
-    const r = await act.run(() => post(`/kyc/cases/${id}/decision`, { decision, reason, reasonCode: code || undefined, reportFraud: decision === 'REJECT' && fraud ? true : undefined, checklist: Object.keys(checks).length ? checks : undefined }), 'Decision recorded.');
-    if (r) { setDone(decision === 'APPROVE' ? 'Approved' : decision === 'REJECT' ? 'Rejected' : 'Sent back'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    // Every check is sent as ticked, not ticked, or (where there is nothing to compare) not applicable.
+    const checklist = Object.keys(checks).length || naChecks.length ? { ...Object.fromEntries(CHECKLIST.map((i) => [i.key, naChecks.includes(i.key) ? null : !!checks[i.key]])), ...(checks.notes ? { notes: checks.notes } : {}) } : undefined;
+    const r = await act.run(() => post<{ awaitingSecondReview?: boolean; secondReviewer?: string | null }>(`/kyc/cases/${id}/decision`, { decision, reason, reasonCode: code || undefined, reportFraud: decision === 'REJECT' && fraud ? true : undefined, checklist }));
+    if (!r) return;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setDone(r.awaitingSecondReview
+      ? { held: true, text: `Your recommendation to ${decision === 'APPROVE' ? 'approve' : 'reject'} is recorded, but it is not final. This is a high risk case, so ${r.secondReviewer ? r.secondReviewer : 'a different officer'} has to confirm it${r.secondReviewer ? '' : ' (it waits in the pool until one takes it)'}. Nothing is approved or rejected yet.` }
+      : { text: `${decision === 'APPROVE' ? 'Approved' : decision === 'REJECT' ? 'Rejected' : 'Sent back'}. The decision is recorded.` });
   };
   const nextCase = async () => {
     setNextMsg(null);
@@ -41,22 +46,25 @@ export default function KycCase() {
   const p = app?.personal ?? { email: c.customer?.email, phone: c.customer?.phone };
   const open = c.status === 'PENDING' && (!app || ['KYC_REVIEW', 'ORDERED'].includes(app.status));
   const mine = !!me && (c.submittedBy === me.username || c.attestation?.by === me.username);
-  // Older servers do not send canDecide; the old rule then applies.
   const blocked: string | null = c.canDecide === false ? c.decideBlockedReason ?? 'You cannot decide this case.' : mine ? 'You submitted this case, so someone else has to approve it. You can still reject it or send it back.' : null;
-  const sr = c.secondReview, awaitingSecond = !!sr && (sr.pending ?? sr.status === 'PENDING'), qaTask = !!c.qa && (c.qa.pending ?? c.qa.status === 'PENDING');
-  const due = c.status === 'PENDING' ? dueText(c.dueAt) : null;
+  // c.secondReview is { status: 'AWAITING' | 'DONE', recommended, by, byName, ... }; the quality check is the qa* fields on the case.
+  const sr = c.secondReview, awaitingSecond = sr?.status === 'AWAITING' && c.status === 'PENDING';
+  const qaTask = !!me && !!c.qaAssignedTo && c.qaAssignedTo.toLowerCase() === me.username.toLowerCase() && !c.qaResult;
   return (
     <>
-      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><span>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')} · {METHOD_LABEL[c.method] ?? c.method}</span>{c.caseNumber && <span className="font-mono">{c.caseNumber}</span>}{c.assignedTo === undefined && <RiskBadge risk={c.risk} />}{c.assignedTo === undefined && c.status === 'PENDING' && <Badge tone={c.overdue || due?.overdue ? 'danger' : 'warning'}>{c.overdue || due?.overdue ? 'Overdue' : 'Due'} {dt(c.dueAt)}{due ? ` (${due.text})` : ''}</Badge>}{c.customer && <Link className="text-accent" href={`/customers/${c.customer.id}`}>Open the customer</Link>}</span>}>{c.fullName}</LargeTitle>
+      <LargeTitle subtitle={<span className="flex flex-wrap items-center gap-2"><span>{SOURCE_LABEL[c.source] ?? (c.method === 'IN_PERSON' ? 'In store' : 'Online')} · {METHOD_LABEL[c.method] ?? c.method}</span>{c.caseNumber && <span className="font-mono">{c.caseNumber}</span>}{c.customer && <Link className="text-accent" href={`/customers/${c.customer.id}`}>Open the customer</Link>}</span>}>{c.fullName}</LargeTitle>
       <p className="mb-4"><Link href="/kyc" className="text-subhead text-accent">← Back to the queue</Link></p>
       {done && (
-        <div className="mb-4" role="status"><Alert tone="success"><span className="flex flex-wrap items-center gap-3"><span>{done}. The decision is recorded.</span><Button onClick={() => void nextCase()}>Next case</Button><Link href="/kyc" className="text-accent underline">Back to the queue</Link>{nextMsg && <span>{nextMsg}</span>}</span></Alert></div>
+        <div className="mb-4" role="status"><Alert tone={done.held ? 'info' : 'success'}><span className="flex flex-wrap items-center gap-3"><span>{done.text}</span><Button onClick={() => void nextCase()}>Next case</Button><Link href="/kyc" className="text-accent underline">Back to the queue</Link>{nextMsg && <span>{nextMsg}</span>}</span></Alert></div>
       )}
-      {c.assignedTo !== undefined && <AssigneeCard c={{ ...c, id }} me={me?.username} reload={reload} />}
+      <AssigneeCard c={{ ...c, id }} me={me?.username} reload={reload} />
       {awaitingSecond && <SecondReview c={{ ...c, id }} reload={reload} />}
       {qaTask && <QaForm c={{ ...c, id }} reload={reload} />}
+      {sr?.status === 'DONE' && <div className="mb-4"><Alert tone="info">Second review: {sr.secondBy ?? 'a second officer'} {sr.secondDecision === 'OVERRIDE' ? 'overrode' : 'confirmed'} {sr.byName ?? sr.by}’s recommendation to {String(sr.recommended ?? '').toLowerCase()}{sr.secondDecision === 'OVERRIDE' ? ` and decided to ${String(sr.applied ?? '').toLowerCase()}` : ''}{sr.secondNote ? `: ${sr.secondNote}` : '.'}</Alert></div>}
+      {c.qaResult && <div className="mb-4"><Alert tone={c.qaResult === 'AGREE' ? 'success' : 'danger'}>Quality check by {c.qaBy}: {c.qaResult === 'AGREE' ? 'agrees' : 'disagrees'} with the approval{c.qaNote ? `: ${c.qaNote}` : '.'}</Alert></div>}
       {c.flags.length > 0 && <div className="mb-4"><Alert tone="info">{c.flags.map((f: string) => FLAG_TEXT[f] ?? label(f)).join(' · ')}</Alert></div>}
-      {c.status !== 'PENDING' && <div className="mb-4"><Alert tone={c.status === 'APPROVED' ? 'success' : 'danger'}>{label(c.status)} by {c.decidedBy} on {dt(c.decidedAt)}{c.decisionReason ? `: ${c.decisionReason}` : ''}</Alert></div>}
+      {c.status === 'PENDING' && c.risk === 'HIGH' && (c.riskReasons ?? []).length > 0 && <div className="mb-4"><Alert tone="warning"><strong>High risk:</strong> {(c.riskReasons as string[]).join(' ')}</Alert></div>}
+      {c.status !== 'PENDING' && <div className="mb-4"><Alert tone={c.status === 'APPROVED' ? 'success' : 'danger'}>{c.status === 'RETURNED' ? 'Sent back' : label(c.status)} by {c.decidedBy ?? 'the system'} on {dt(c.decidedAt ?? c.updatedAt)}{c.decisionReason ? `: ${c.decisionReason}` : ''}</Alert></div>}
 
       {(c.checks?.provider || c.checks?.mydigitalid) && (
         <Card className="mb-5">
@@ -138,8 +146,9 @@ export default function KycCase() {
         <Card className="mt-5">
           <SectionTitle>Decision</SectionTitle>
           {blocked && <div className="mb-3"><Alert tone="info">{blocked}</Alert></div>}
-          <fieldset disabled={c.canDecide === false} className="min-w-0 space-y-0">
-          <ChecklistForm value={checks} onChange={setChecks} disabled={c.canDecide === false} />
+          {c.canDecide !== false && (
+          <fieldset className="min-w-0 space-y-0">
+          <ChecklistForm value={checks} onChange={setChecks} disabled={c.canDecide === false} notApplicable={naChecks} />
           {dup && <div className="mb-3"><Alert tone="info">This ID already belongs to a customer, so it cannot be approved online. Reject it (the customer can visit a store) or send it back.</Alert></div>}
           <Field label="Reason code" hint="Used in reports. Choose the closest."><Select value={code} onChange={(e) => setCode(e.target.value)}><option value="">Not stated</option>{REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
           <div className="mt-3" />
@@ -147,16 +156,17 @@ export default function KycCase() {
           {can('fraud:manage') && <label className="mt-3 flex min-h-tap items-start gap-3"><input type="checkbox" className="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={fraud} onChange={(e) => setFraud(e.target.checked)} /><span><span className="block">Report this ID to the fraud register</span><span className="text-footnote text-label2">Applies when you reject. The ID is then refused everywhere it is offered, and the customer cannot be submitted again.</span></span></label>}
           {act.error && <div className="mt-3"><Alert>{act.error}</Alert></div>}
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button onClick={() => decide('APPROVE')} disabled={act.busy || dup || (c.canDecide === undefined && mine) || c.canDecide === false}>Approve</Button>
+            <Button onClick={() => decide('APPROVE')} disabled={act.busy || dup || mine || c.canDecide === false}>Approve</Button>
             {c.canReturn && <Button variant="secondary" onClick={() => decide('RETURN')} disabled={act.busy || !reason.trim()}>Send back for corrections</Button>}
             <Button variant="destructive" onClick={() => decide('REJECT')} disabled={act.busy || !reason.trim()}>Reject</Button>
           </div>
           </fieldset>
+          )}
         </Card>
       )}
       <div className="mt-5 grid gap-5 lg:grid-cols-2 lg:items-start">
-        {c.notes !== undefined && <NotesCard c={{ ...c, id }} reload={reload} />}
-        {c.events !== undefined && <Timeline events={c.events} />}
+        <NotesCard c={{ ...c, id }} reload={reload} />
+        <Timeline events={c.events ?? []} />
       </div>
       {zoom !== null && <ImageViewer items={pictures.map((x: any) => ({ src: `/api/kyc/documents/${x.id}`, label: DOC_LABEL[x.kind] ?? x.kind }))} index={zoom} onIndex={setZoom} onClose={() => setZoom(null)} />}
     </>

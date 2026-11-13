@@ -21,12 +21,14 @@ const OUTCOMES = [
 ] as const;
 
 const DEFINITIONS: Array<[string, string]> = [
-  ['Reviews done', 'Cases the officer decided in the period: approved, rejected or sent back. Each decision counts on the day it was made.'],
-  ['Approval rate', 'Approved decisions out of all decisions in the period.'],
-  ['Average and median handling time', 'Minutes from the case being submitted to the decision. The median is the middle case, so one very slow case does not pull it up.'],
-  ['Within SLA', 'The share of decisions made before the case’s due time.'],
-  ['Backlog', 'Cases still waiting for a decision right now, whatever the period.'],
-  ['Quality check agreement', 'Of the decisions that were sampled for a quality check, the share where the checker agreed.'],
+  ['Reviews done', 'Approvals, rejections and cases sent back, counted for the person who made the decision (a supervisor deciding on someone’s behalf counts for the supervisor) on the day the decision was made. Automatic approvals and rejections are not an officer’s work and are not counted.'],
+  ['Approval rate', 'Approved decisions out of all decisions in the period (approved, rejected and sent back).'],
+  ['Average and median handling time', 'Minutes from the case being assigned to that officer (else from the officer first opening it, else from submission) to the decision. The median is the middle case, so one very slow case does not pull it up. Decisions from before the review workflow existed have no time and are left out.'],
+  ['Within SLA', 'The share of decisions made no later than the review target after the case was submitted, out of the decisions that carry that information.'],
+  ['Backlog (Open)', 'Cases the officer holds right now and has not decided, whatever the period. The team figure adds up the officers’ cases; cases nobody holds are not included.'],
+  ['Escalated', 'Cases that went up from the officer: escalated by them, or taken from them automatically because they were overdue.'],
+  ['Reopened', 'Decisions of the officer that a supervisor later reopened, counted in the period in which they were reopened.'],
+  ['Quality check agreement', 'Of the officer’s approvals that another officer checked, the share the checker agreed with.'],
 ];
 
 export function Performance({ report }: { report: boolean }) {
@@ -122,7 +124,7 @@ export function Performance({ report }: { report: boolean }) {
                       <tr>
                         <Td className="whitespace-nowrap"><button type="button" aria-expanded={on} onClick={() => setOpen(on ? null : o.username)} className="flex items-center gap-2 rounded text-left font-medium text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><span aria-hidden className={`inline-block transition-transform ${on ? 'rotate-90' : ''}`}>›</span>{o.displayName || o.username}<span className="sr-only">, {on ? 'hide' : 'show'} daily numbers</span></button></Td>
                         <Td right>{x.decided}</Td><Td right>{x.approved}</Td><Td right>{x.rejected}</Td><Td right>{x.returned}</Td><Td right>{x.escalated}</Td><Td right>{x.reopened}</Td>
-                        <Td right>{fmtMinutes(x.avgMinutes)}</Td><Td right>{fmtMinutes(x.medianMinutes)}</Td><Td right>{fmtPct(x.slaMetPct)}</Td><Td right>{fmtPct(x.qaAgreePct)}</Td>
+                        <Td right className="whitespace-nowrap">{fmtMinutes(x.avgMinutes)}</Td><Td right className="whitespace-nowrap">{fmtMinutes(x.medianMinutes)}</Td><Td right>{fmtPct(x.slaMetPct)}</Td><Td right>{fmtPct(x.qaAgreePct)}</Td>
                         <Td right>{x.open}{x.oldestOpenHours !== null && x.open > 0 && <span className="block text-caption text-label2">oldest {fmtHours(x.oldestOpenHours)}</span>}</Td>
                       </tr>
                       {on && (
@@ -172,6 +174,8 @@ function Chart({ data, stack }: { data: Report; stack: 'outcome' | 'officer' }) 
     const ro = new ResizeObserver(() => setAvail(el.clientWidth || 640)); ro.observe(el); setAvail(el.clientWidth || 640);
     return () => ro.disconnect();
   }, []);
+  // The newest days are on the right: when the chart scrolls, start there.
+  useEffect(() => { const el = wrap.current; if (el) el.scrollLeft = el.scrollWidth; }, [data, avail]);
   const totals = data.buckets.map((_, i) => L.reduce((s, l) => s + (l.values[i] ?? 0), 0));
   const top = niceMax(Math.max(0, ...totals));
   const H = 240, padL = 34, padB = 26, padT = 10;

@@ -139,6 +139,7 @@ function ComboCore({ label, id, options, load, placeholder, emptyText = 'No matc
                 <span className="min-w-0 flex-1">
                   <span className={cx('block truncate', on && !multiple && 'font-semibold text-accent')}>{o.label}</span>
                   {(o.disabled ? o.disabledReason ?? o.description : o.description) && <span className="block truncate text-footnote text-label2">{o.disabled ? o.disabledReason ?? o.description : o.description}</span>}
+                  {o.warning && !o.disabled && <span className="block truncate text-footnote font-medium text-warning">{o.warning}</span>}
                 </span>
                 {o.detail && <span className="shrink-0 text-footnote tabular-nums text-label2">{o.detail}</span>}
                 {on && !multiple && <span aria-hidden className="text-accent">✓</span>}

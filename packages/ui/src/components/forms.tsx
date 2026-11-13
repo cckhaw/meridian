@@ -27,8 +27,8 @@ export const Input = ({ className, ...p }: InputHTMLAttributes<HTMLInputElement>
 export const Textarea = ({ className, ...p }: TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea {...p} className={cx(control, 'py-2', className)} />;
 export const Select = ({ className, ...p }: SelectHTMLAttributes<HTMLSelectElement>) => <select {...p} className={cx(control, className)} />;
 
-export function Alert({ tone = 'danger', children }: { tone?: 'danger' | 'success' | 'info'; children: ReactNode }) {
-  const t = { danger: 'bg-danger/10 text-danger', success: 'bg-success/10 text-success', info: 'bg-accent/10 text-accent' }[tone];
+export function Alert({ tone = 'danger', children }: { tone?: 'danger' | 'success' | 'info' | 'warning'; children: ReactNode }) {
+  const t = { danger: 'bg-danger/10 text-danger', success: 'bg-success/10 text-success', info: 'bg-accent/10 text-accent', warning: 'bg-warning/15 text-label' }[tone];
   return <div role={tone === 'danger' ? 'alert' : 'status'} className={cx('rounded-control px-4 py-3 text-subhead', t)}>{children}</div>;
 }
 
@@ -227,11 +227,11 @@ export function MenuButton({ label, items, align = 'right' }: { label: string; i
 
 
 /** A search field in the platform style: leading magnifier, clear button, `type=search` semantics. Controlled. */
-export function SearchField({ value, onChange, placeholder = 'Search', label, className }: { value: string; onChange: (v: string) => void; placeholder?: string; label: string; className?: string }) {
+export function SearchField({ value, onChange, placeholder = 'Search', label, className, describedBy }: { value: string; onChange: (v: string) => void; placeholder?: string; label: string; className?: string; /** Id of text that explains the syntax. */ describedBy?: string }) {
   return (
     <div className={cx('relative', className)}>
       <svg aria-hidden viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-label2"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
-      <input type="search" role="searchbox" aria-label={label} placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)} autoComplete="off" spellCheck={false}
+      <input type="search" role="searchbox" aria-label={label} aria-describedby={describedBy} placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)} autoComplete="off" spellCheck={false}
         className={cx(control, 'rounded-[12px] bg-label/[.06] pl-10 pr-9 [&::-webkit-search-cancel-button]:hidden')} />
       {value && <button type="button" aria-label="Clear search" onClick={() => onChange('')} className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-label2 hover:bg-label/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">×</button>}
     </div>

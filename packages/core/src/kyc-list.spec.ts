@@ -177,3 +177,23 @@ describe('the summary', () => {
     expect((await kycSummary(db, 'lead')).decidedToday).toBe(1);
   });
 });
+
+describe('status aliases used by the screens', () => {
+  it('DECIDED is approved or rejected, and the existing statuses keep working', async () => {
+    const decided = await names({ status: 'DECIDED' }), approved = await names({ status: 'APPROVED' }), rejected = await names({ status: 'REJECTED' });
+    expect(decided).toContain('Decided Dora');
+    expect([...decided].sort()).toEqual([...approved, ...rejected].sort());
+    expect((await listKycCases(db, { status: 'DECIDED', limit: 100 })).items.every((i) => ['APPROVED', 'REJECTED'].includes(i.status as string))).toBe(true);
+    expect((await names({ status: 'PENDING' })).length).toBe((await kycSummary(db, 'l.one')).waiting);
+  });
+  it('SECOND_REVIEW is the waiting cases that await a second officer, exactly what the summary counts', async () => {
+    expect(await names({ status: 'SECOND_REVIEW' })).toEqual([]);
+    expect((await kycSummary(db, 'l.one')).awaitingSecondReview).toBe(0);
+    await db.query(`UPDATE kyc_cases SET second_review = '{"status":"AWAITING","by":"l.two","recommended":"APPROVE"}' WHERE id=$1`, [ids.li]);
+    await db.query(`UPDATE kyc_cases SET second_review = '{"status":"DONE"}' WHERE id=$1`, [ids.pct]);
+    expect(await names({ status: 'SECOND_REVIEW' })).toEqual(['Li 李明']);
+    expect((await kycSummary(db, 'l.one')).awaitingSecondReview).toBe(1);
+    expect((await listKycCases(db, { status: 'SECOND_REVIEW', limit: 100 })).items[0]).toMatchObject({ secondReviewStatus: 'AWAITING' });
+    await expect(listKycCases(db, { status: 'NOPE' })).rejects.toThrow(/DECIDED/);
+  });
+});

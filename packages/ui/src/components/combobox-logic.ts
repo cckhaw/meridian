@@ -1,5 +1,5 @@
 /** Pure helpers behind the combobox, kept apart from React so the keyboard and filter rules can be unit tested. */
-export interface ComboOption { value: string; label: string; description?: string; /** Right-aligned text, e.g. a count. */ detail?: string; disabled?: boolean; /** Shown instead of the description when the option is disabled. */ disabledReason?: string }
+export interface ComboOption { value: string; label: string; description?: string; /** Right-aligned text, e.g. a count. */ detail?: string; disabled?: boolean; /** Shown instead of the description when the option is disabled. */ disabledReason?: string; /** A caution shown under a selectable option (it can still be chosen). */ warning?: string }
 
 /** `*` matches any run of characters and `?` exactly one; everything else is literal and case does not matter. */
 export function wildcardRegExp(q: string): RegExp {

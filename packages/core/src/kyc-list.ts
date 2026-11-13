@@ -49,6 +49,9 @@ export interface KycListFilter {
   me?: string;
 }
 const STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'RETURNED'];
+/** Aliases the screens use: DECIDED is approved or rejected; SECOND_REVIEW is a waiting case whose first officer's recommendation is awaiting a second officer. */
+const ALIASES = ['DECIDED', 'SECOND_REVIEW'];
+const isWaiting = (status: string | undefined) => status === 'PENDING' || status === 'SECOND_REVIEW';
 const SOURCES = ['STOREFRONT', 'ASSISTED', 'CRM_ORDER', 'CRM_CUSTOMER'];
 const day = (s: string, what: string) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) throw invalid(`${what} is a date as YYYY-MM-DD.`); return s; };
 const caseNumberOf = (text: string): string | null => { const m = /^(?:kyc-?)?0*(\d{1,9})$/i.exec(text.trim()); return m ? `KYC-${m[1]!.padStart(6, '0')}` : null; };
@@ -67,17 +70,19 @@ function searchSql(p: (v: unknown) => string, text: string, status: string | und
     `EXISTS (SELECT 1 FROM users u WHERE lower(u.username) = lower(k.assigned_to) AND u.display_name ILIKE ${n})`];
   const no = caseNumberOf(text); if (no) parts.push(`k.case_number = ${p(no)}`);
   if (!/[*?]/.test(text) && /^[A-Za-z0-9][A-Za-z0-9 -]{3,24}$/.test(text.trim())) parts.push(`k.id_number_hash = ${p(hashIdDocument(text.trim()))}`);
-  if (status === 'PENDING') parts.push(`EXISTS (SELECT 1 FROM orders o JOIN order_groups g ON g.order_id = o.id AND g.kind='ACTIVATION' AND g.status='PENDING' WHERE o.customer_id = k.customer_id AND o.number ILIKE ${n})`);
+  if (isWaiting(status)) parts.push(`EXISTS (SELECT 1 FROM orders o JOIN order_groups g ON g.order_id = o.id AND g.kind='ACTIVATION' AND g.status='PENDING' WHERE o.customer_id = k.customer_id AND o.number ILIKE ${n})`);
   return `(${parts.join(' OR ')})`;
 }
 
 async function whereOf(q: Queryable, f: KycListFilter, p: (v: unknown) => string, sla: number): Promise<string[]> {
   const status = f.status && f.status.toLowerCase() !== 'any' ? f.status.toUpperCase() : undefined;
-  if (status && !STATUSES.includes(status)) throw invalid(`The status is one of ${STATUSES.join(', ')}.`);
+  if (status && !STATUSES.includes(status) && !ALIASES.includes(status)) throw invalid(`The status is one of ${[...STATUSES, ...ALIASES].join(', ')}.`);
   if (f.source && !SOURCES.includes(f.source)) throw invalid(`The source is one of ${SOURCES.join(', ')}.`);
   if (f.risk && !['LOW', 'MEDIUM', 'HIGH'].includes(f.risk)) throw invalid('The risk is LOW, MEDIUM or HIGH.');
   const where: string[] = [`(k.status <> 'PENDING' OR ${QUEUE_SQL})`];
-  if (status) where.push(`k.status = ${p(status)}`);
+  if (status === 'DECIDED') where.push(`k.status IN ('APPROVED','REJECTED')`);
+  else if (status === 'SECOND_REVIEW') where.push(`k.status = 'PENDING' AND k.second_review->>'status' = 'AWAITING'`);
+  else if (status) where.push(`k.status = ${p(status)}`);
   const who = f.assignee?.trim();
   if (who && who !== 'any') {
     if (who === 'me') { if (!f.me) throw invalid('Sign in to see your own cases.'); where.push(`lower(k.assigned_to) = lower(${p(f.me)})`); }
@@ -119,7 +124,7 @@ export async function listKycCases(q: Queryable, f: KycListFilter = {}): Promise
   const { params, p } = sqlBuilder();
   const sla = (await getStoreSettings(q)).kycSlaHours;
   const where = await whereOf(q, f, p, sla);
-  const sort = f.sort ?? (f.status?.toUpperCase() === 'PENDING' ? 'priority' : 'newest');
+  const sort = f.sort ?? (isWaiting(f.status?.toUpperCase()) ? 'priority' : 'newest');
   if (!['priority', 'oldest', 'due', 'newest'].includes(sort)) throw invalid('The sort is priority, oldest, due or newest.');
   const ord = `COALESCE(k.decided_at, ${SUB})`;
   let order: string, key: string;

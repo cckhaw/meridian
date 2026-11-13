@@ -8,7 +8,7 @@ import { conflict, invalid, notFound, rejected } from './errors.js';
 import { raiseEvent } from './events.js';
 import { blacklistAdd } from './fraud.js';
 import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
-import { autoClaim, enqueueForReview, getKycReviewSettings, logEvent, maybeSampleQa, reopenProblem, routeToSecondReview, safeNotify, type KycReviewSettings, type ReviewActor } from './kyc-review.js';
+import { assessCase, autoClaim, enqueueForReview, getKycReviewSettings, logEvent, maybeSampleQa, reopenProblem, routeToSecondReview, safeNotify, type KycReviewSettings, type ReviewActor } from './kyc-review.js';
 import { displayNames } from './kyc-list.js';
 export { kycQueueCounts, listKycCases } from './kyc-list.js';
 import { inspectImage } from './settings.js';
@@ -617,6 +617,7 @@ export async function getKycCase(q: Queryable, id: string, reviewer: string, vie
     ...rest, idNumber: decryptText(idNumberEnc), application: app, customer: cust, documents: await listCaseDocuments(q, { id: c.id, applicationId: c.applicationId }),
     waitingOrders: c.customerId && c.status === 'PENDING' ? await waitingOrders(q, c.customerId) : [], dueAt: due, overdue: c.status === 'PENDING' && Date.now() > Date.parse(due),
     canReturn: !app || app.status === 'KYC_REVIEW', canReportFraud: true,
+    riskReasons: assessCase({ flags: c.flags, checks: c.checks, dateOfBirth: c.dateOfBirth ? String(c.dateOfBirth).slice(0, 10) : null, idExpiry: c.idExpiry ? String(c.idExpiry).slice(0, 10) : null, reasonCode: c.reasonCode, fraudReported: c.fraudReported, submittedAt: c.submittedAt, createdAt: c.createdAt }, s, new Date()).reasons,
     assignedToName: c.assignedTo ? nameOf(c.assignedTo) : null,
     events: events.map((e) => ({ at: e.at, actor: e.actor, actorName: nameOf(e.actor), action: e.action, detail: e.detail })),
     notes: events.filter((e) => e.action === 'NOTE').map((e) => ({ at: e.at, actor: e.actor, actorName: nameOf(e.actor), text: e.detail?.text ?? '' })),
