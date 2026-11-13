@@ -44,6 +44,10 @@ Tier rules are data (**Numbers & SIMs → VIP tiers**, `numbering:manage`). Each
 
 Patterns are validated (no nested quantifiers, bounded length) before they are saved; **Re-classify** applies changed rules to free numbers. A VIP service's early-termination charge is multiplied by its tier's multiplier.
 
+## Cancelling and recycling
+
+Cancelling an order (or a part of it) gives back what it held: the reserved number returns to `AVAILABLE`, the SIM to stock and the order number is freed. This covers installation and goods groups too, and a fully cancelled order releases anything left on it. `POST /api/numbering/recycle` (`numbering:manage`; also part of the daily lifecycle job) finishes the quarantine of old numbers and IMSIs and also frees reservations still held by orders that are CANCELLED or FAILED, so nothing stays stuck if an order ended abnormally. The response counts `imsis`, `msisdns`, `orderNumbers` and `orderSims` released.
+
 ## Loading pools
 
 **Numbers & SIMs → Load** takes a CSV or a range for MSISDNs (up to 200,000 per load), IMSIs, and ICCIDs (SIM cards and eSIMs, `89…`, 19–20 digits; an ICCID can be bound to a free IMSI on load). Each load has a *check* step before *apply*. An MSISDN starts with its **country code and needs no + sign** (`60128001234`; spreadsheets drop the + anyway). A + is accepted and spaces or dashes are ignored, but a local number starting with 0 is refused. MSISDNs are stored as `+60128001234`. Each load has a **Download the … template** link (`GET /api/numbering/template/msisdn|imsi|sim`), a ready-to-fill sample whose MSISDNs start with the regional country code.
