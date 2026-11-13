@@ -89,6 +89,7 @@ export * from './gateways.js';
 export * from './kyc.js';
 export * from './kyc-list.js';
 export * from './kyc-review.js';
+export * from './kyc-report.js';
 export * from './kyc-providers.js';
 export { identityEndpointProblem } from './kyc-provider-config.js';
 export * from './mydigitalid.js';

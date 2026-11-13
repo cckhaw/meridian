@@ -340,16 +340,15 @@ export async function assignCases(q: Queryable, actor: string, i: AssignInput): 
     if (!['ASSIGN', 'DISTRIBUTE', 'UNASSIGN'].includes(i.mode)) throw invalid('The mode is ASSIGN, DISTRIBUTE or UNASSIGN.');
     const wanted = i.mode === 'ASSIGN' ? (i.officer ? [i.officer] : []) : i.mode === 'DISTRIBUTE' ? [...new Set(i.officers ?? [])] : [];
     if (i.mode !== 'UNASSIGN' && !wanted.length) throw invalid(i.mode === 'ASSIGN' ? 'Choose the officer.' : 'Choose the officers to spread the cases over.');
-    const rs = await getKycReviewSettings(tx);
-    const targets = wanted.length ? await loadReviewers(tx, { usernames: wanted }, rs) : [];
-    for (const w of wanted) if (!targets.some((t) => t.username.toLowerCase() === w.toLowerCase())) throw invalid(`${w} is not an active user who may review KYC cases (it needs the "Review ID checks" permission).`);
-    const away = targets.filter((t) => t.away);
-    if (away.length && !i.force) throw rejected(`${away.map((t) => `${t.displayName} is away${t.awayUntil ? ` until ${t.awayUntil.slice(0, 10)}` : ''}`).join('; ')}. Confirm to assign anyway.`);
-
-    await lockDistribution(tx);
+    // Rows first, then the distribution lock: every path takes them in this order, so two of them can never wait on each other.
     const rows = (await tx.query(
       `SELECT k.id, k.case_number, k.status, k.assigned_to, k.submitted_by, k.attestation, k.second_review, k.avoid_assignee, ${QUEUE_SQL} AS queued
          FROM ${CASES_FROM} WHERE k.id = ANY($1::uuid[]) ORDER BY k.id FOR UPDATE OF k`, [ids])).rows;
+    await lockDistribution(tx);
+    const targets = wanted.length ? await loadReviewers(tx, { usernames: wanted }, await getKycReviewSettings(tx)) : [];
+    for (const w of wanted) if (!targets.some((t) => t.username.toLowerCase() === w.toLowerCase())) throw invalid(`${w} is not an active user who may review KYC cases (it needs the "Review ID checks" permission).`);
+    const away = targets.filter((t) => t.away);
+    if (away.length && !i.force) throw rejected(`${away.map((t) => `${t.displayName} is away${t.awayUntil ? ` until ${t.awayUntil.slice(0, 10)}` : ''}`).join('; ')}. Confirm to assign anyway.`);
     const byId = new Map(rows.map((r) => [r.id as string, r]));
     const skipped: AssignResult['skipped'] = [];
     const skip = (id: string, reason: string) => skipped.push({ caseId: id, caseNumber: byId.get(id)?.caseNumber ?? null, reason });
@@ -434,7 +433,7 @@ export async function nextCase(q: Queryable, user: string): Promise<{ caseId: st
     const c = (await tx.query(
       `SELECT k.*, true AS queued FROM ${CASES_FROM}
         WHERE k.status='PENDING' AND k.assigned_to IS NULL AND ${QUEUE_SQL} AND k.submitted_by IS DISTINCT FROM $1 AND k.attestation->>'by' IS DISTINCT FROM $1
-          AND k.avoid_assignee IS DISTINCT FROM $1 AND NOT (k.second_review->>'status' = 'AWAITING' AND k.second_review->>'by' = $1)
+          AND k.avoid_assignee IS DISTINCT FROM $1 AND NOT (COALESCE(k.second_review->>'status', '') = 'AWAITING' AND COALESCE(k.second_review->>'by', '') = $1)
         ORDER BY k.priority DESC, COALESCE(k.submitted_at, k.created_at), k.id LIMIT 1 FOR UPDATE OF k SKIP LOCKED`, [user])).rows[0];
     if (!c) return { caseId: null };
     await takeFor(tx, c, user, 'CLAIMED');
@@ -597,6 +596,10 @@ export async function sweepKycReview(db: Queryable): Promise<KycSweepResult> {
   out.refreshed = await withTx(db, async (tx) => {
     if (!(await lock(tx))) return 0;
     await tx.query(`UPDATE kyc_cases SET priority = priority + $2::int WHERE status='PENDING' AND risk_assessed_at IS NOT NULL AND priority < $2::int AND COALESCE(submitted_at, created_at) < now() - make_interval(hours => $1::int)`, [sla, PRIORITY.overdue]);
+    // An order placed (or settled) after the case was queued adds or removes the bonus for orders on hold.
+    const waits = `EXISTS (SELECT 1 FROM orders o JOIN order_groups g ON g.order_id = o.id AND g.kind='ACTIVATION' AND g.status='PENDING' WHERE o.customer_id = kyc_cases.customer_id AND o.state NOT IN ('COMPLETED','CANCELLED','FAILED'))`;
+    await tx.query(`UPDATE kyc_cases SET priority = priority + $1::int WHERE status='PENDING' AND customer_id IS NOT NULL AND risk_assessed_at IS NOT NULL AND priority % 100 = 0 AND ${waits}`, [PRIORITY.waitingOrders]);
+    await tx.query(`UPDATE kyc_cases SET priority = priority - $1::int WHERE status='PENDING' AND customer_id IS NOT NULL AND risk_assessed_at IS NOT NULL AND priority % 100 = $1::int AND NOT ${waits}`, [PRIORITY.waitingOrders]);
     const stale = (await tx.query(
       `SELECT k.* FROM ${CASES_FROM} WHERE k.status='PENDING' AND ${QUEUE_SQL} AND (k.risk_assessed_at IS NULL OR k.risk_assessed_at < now() - interval '1 hour')
         ORDER BY k.risk_assessed_at NULLS FIRST LIMIT ${SWEEP_BATCH} FOR UPDATE OF k SKIP LOCKED`)).rows;

@@ -22,6 +22,7 @@ export function rolesMarkdown(): string {
     '- Customer Service can refund up to a limit; Billing Operations and Finance have no limit.',
     '- Only users holding `order:payment` can state that money was received, and in production they must give the terminal approval or receipt number.',
     '- Customers in the self-serve portal can never confirm their own payment; that comes from the payment provider webhook.',
-    '- Who sold an order is taken from the signed-in session, never from the request, so commission cannot be forged.', '');
+    '- Who sold an order is taken from the signed-in session, never from the request, so commission cannot be forged.',
+    '- KYC review is split: `kyc:review` decides cases (only the officer a case is assigned to, or someone who can assign), `kyc:assign` hands cases out and sees everyone’s workload, `kyc:senior` takes escalations and second reviews and reopens decisions, `kyc:report` sees every officer’s numbers. Only the Compliance Lead holds the last three by default; whoever submitted a case never approves it.', '');
   return L.join('\n');
 }

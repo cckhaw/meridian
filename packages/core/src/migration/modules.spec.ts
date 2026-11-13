@@ -55,7 +55,7 @@ const NOT_IN_FILE: Record<string, Record<string, string>> = {
   applications: { token_hash: 'the access token of an application' },
   workforce_appointments: { last_event_rank: 'internal', last_event_at: 'internal' },
   documents: { data: 'the file content (kept in the bucket or the database, copied separately)' },
-  kyc_cases: { id_number_enc: 'the encrypted ID number' },
+  kyc_cases: { id_number_enc: 'the encrypted ID number', risk_assessed_at: 'internal: when risk and priority were last worked out', previous_assignee: 'routing hint (who gets the case back when it is resubmitted)', avoid_assignee: 'routing hint (who just released the case)' },
   fiber_providers: { adapter_secret_enc: 'adapter secret' },
   fiber_coverage_polygons: { min_lng: 'derived from geometry', min_lat: 'derived from geometry', max_lng: 'derived from geometry', max_lat: 'derived from geometry' },
   commission_payout_batches: { content: 'the payout file (holds bank details)' },

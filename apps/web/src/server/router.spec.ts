@@ -2436,6 +2436,8 @@ describe('identity check at customer creation', () => {
     expect((await call('GET', `/orders/${order.json.id}`, { cookie: su })).json).toMatchObject({ kycHold: true, serviceCount: 0 });
     const officer = await staff(['compliance']);
     expect((await call('GET', '/kyc/summary', { cookie: officer.cookie })).json.waiting).toBeGreaterThan(0);
+    // the case was given to one of the officers who already exist; only its holder decides, so it is handed to this officer
+    expect((await call('POST', '/kyc/assignments', { cookie: su, body: { caseIds: [made.json.kyc.caseId], mode: 'ASSIGN', officer: officer.username, reason: 'Desk cover' } })).json).toMatchObject({ assigned: 1 });
     expect((await call('POST', `/kyc/cases/${made.json.kyc.caseId}/decision`, { cookie: su, body: { decision: 'APPROVE' } })).status).toBe(422);   // four eyes: the one who took the photos cannot approve them
     expect((await call('POST', `/kyc/cases/${made.json.kyc.caseId}/decision`, { cookie: officer.cookie, body: { decision: 'APPROVE' } })).status).toBe(200);
     expect((await call('GET', `/orders/${order.json.id}`, { cookie: su })).json).toMatchObject({ kycHold: false, state: 'COMPLETED', serviceCount: 1 });
@@ -2487,5 +2489,163 @@ describe('identity check at customer creation', () => {
     } finally {
       for (const e of [ocr.json, mdid.json]) await call('DELETE', `/settings/integration-hub/endpoints/${e.id}`, { cookie: su });
     }
+  });
+});
+
+describe('KYC review workflow: who may do what, and the officer view', () => {
+  let su: string;
+  let o1: Awaited<ReturnType<typeof staff>>, o2: Awaited<ReturnType<typeof staff>>, lead: Awaited<ReturnType<typeof staff>>, retail: Awaited<ReturnType<typeof staff>>, reporter: Awaited<ReturnType<typeof staff>>;
+  let caseIds: string[] = [];
+  /** A new customer with an identity check: a review task in the queue. */
+  const newCase = async (): Promise<string> => {
+    const made = await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: `Review Case ${++n}`, idDocument: `RV${n}${Math.random().toString(36).slice(2, 7)}` } });
+    return made.json.kyc.caseId as string;
+  };
+  beforeAll(async () => {
+    su = await root();
+    o1 = await staff(['compliance']); o2 = await staff(['compliance']); lead = await staff(['compliance-lead']); retail = await staff(['retail-store'], { storeId: 'STORE-SG-001' });
+    // reports for everyone, without assigning: a created role
+    const role = await call('POST', '/roles', { cookie: su, body: { name: 'Review analyst', permissions: ['kyc:review', 'kyc:report'] } });
+    reporter = await staff([role.json.id]);
+    await call('POST', '/settings/kyc-review', { cookie: su, body: { autoAssign: false } });
+    caseIds = [await newCase(), await newCase(), await newCase(), await newCase()];
+  });
+  afterAll(async () => { await call('POST', '/settings/kyc-review', { cookie: su, body: { autoAssign: true } }); });
+
+  it('needs kyc:review for everything an officer does, and kyc:assign for assigning, the workload and the officer list', async () => {
+    const id = caseIds[0]!;
+    const reviewOnly: Array<[string, string, unknown?]> = [
+      ['GET', '/kyc/cases'], ['GET', '/kyc/summary'], ['GET', `/kyc/cases/${id}`], ['GET', '/kyc/me'], ['GET', '/kyc/reports/officers'], ['GET', '/kyc/reports/officers.csv'],
+      ['POST', '/kyc/next', {}], ['POST', `/kyc/cases/${id}/claim`, {}], ['POST', `/kyc/cases/${id}/release`, { reason: 'x' }], ['POST', `/kyc/cases/${id}/escalate`, { note: 'x' }], ['POST', `/kyc/cases/${id}/notes`, { text: 'x' }],
+      ['POST', `/kyc/cases/${id}/qa`, { result: 'AGREE' }], ['POST', `/kyc/cases/${id}/second-review`, { decision: 'CONFIRM' }], ['POST', '/kyc/me/status', { away: false }], ['POST', `/kyc/cases/${id}/decision`, { decision: 'APPROVE' }],
+    ];
+    for (const [m, p, b] of reviewOnly) expect((await call(m, p, { cookie: retail.cookie, body: b })).status, `${m} ${p} without kyc:review`).toBe(403);
+    const assignOnly: Array<[string, string, unknown?]> = [
+      ['GET', '/kyc/officers'], ['GET', '/kyc/workload'], ['POST', '/kyc/assignments', { caseIds: [id], mode: 'UNASSIGN' }], ['POST', '/kyc/sweep', {}], ['POST', `/kyc/officers/${o2.username}/status`, { away: false }],
+      ['POST', `/kyc/cases/${id}/take-over`, { reason: 'x' }], ['POST', `/kyc/cases/${id}/reopen`, { reason: 'x' }], ['GET', '/settings/kyc-review'], ['POST', '/settings/kyc-review', { autoAssign: true }],
+    ];
+    for (const [m, p, b] of assignOnly) {
+      expect((await call(m, p, { cookie: o1.cookie, body: b })).status, `${m} ${p} as an officer`).toBe(403);
+      expect((await call(m, p, { cookie: retail.cookie, body: b })).status, `${m} ${p} without kyc:review`).toBe(403);
+    }
+    // the review-only role is also kept out of what needs assigning
+    expect((await call('GET', '/kyc/officers', { cookie: reporter.cookie })).status).toBe(403);
+    expect((await call('GET', '/kyc/officers', { cookie: lead.cookie })).status).toBe(200);
+    expect((await call('GET', '/kyc/workload', { cookie: lead.cookie })).status).toBe(200);
+    expect((await call('POST', '/kyc/sweep', { cookie: lead.cookie, body: {} })).status).toBe(200);
+    expect((await call('POST', '/kyc/sweep', { cookie: su, body: {} })).json).toMatchObject({ assigned: expect.any(Number), redistributed: expect.any(Number), escalated: expect.any(Number) });
+    expect((await call('GET', '/settings/kyc-review', { cookie: lead.cookie })).status).toBe(403);       // settings need settings:manage even for the lead
+  });
+
+  it('lists the officers for the type-ahead, with wildcards, and the workload', async () => {
+    const all = await call('GET', '/kyc/officers', { cookie: lead.cookie });
+    const mine = all.json.items.find((o: any) => o.username === o1.username);
+    expect(mine).toMatchObject({ username: o1.username, displayName: o1.username, roles: ['KYC Compliance Officer'], open: 0, overdue: 0, away: false, awayUntil: null, capacityLeft: null, eligible: true, notEligibleReason: null });
+    expect(all.json.items.some((o: any) => o.username === retail.username)).toBe(false);
+    const found = await call('GET', `/kyc/officers?q=${encodeURIComponent(`${o2.username.slice(0, 4)}*`)}&limit=50`, { cookie: lead.cookie });
+    expect(found.json.items.map((o: any) => o.username)).toContain(o2.username);
+    expect((await call('GET', '/kyc/officers?q=zzzz-nobody', { cookie: lead.cookie })).json.items).toEqual([]);
+    const wl = (await call('GET', '/kyc/workload', { cookie: lead.cookie })).json;
+    expect(wl).toMatchObject({ unassigned: expect.any(Number), unassignedOverdue: expect.any(Number) });
+    expect(wl.officers.find((o: any) => o.username === o1.username)).toMatchObject({ away: false, open: 0, overdue: 0, decidedToday: 0, decidedWeek: 0 });
+  });
+
+  it('assigns in a batch, shows each officer their own cases and everyone the whole waiting list with who holds what', async () => {
+    const r = await call('POST', '/kyc/assignments', { cookie: lead.cookie, body: { caseIds: caseIds.slice(0, 3), mode: 'DISTRIBUTE', officers: [o1.username, o2.username] } });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ requested: 3, assigned: 3, skipped: [] });
+    expect(Object.keys(r.json.perOfficer).sort()).toEqual([o1.username, o2.username].sort());
+    const mine = await call('GET', `/kyc/cases?status=PENDING&assignee=me`, { cookie: o1.cookie });
+    expect(mine.json.items.every((c: any) => c.assignedTo === o1.username)).toBe(true);
+    expect(mine.json.items.length).toBe(r.json.perOfficer[o1.username]);
+    const whole = await call('GET', `/kyc/cases?status=PENDING&assignee=any&q=${encodeURIComponent('Review Case*')}&limit=100`, { cookie: o1.cookie });
+    expect(whole.json.items.length).toBeGreaterThanOrEqual(4);
+    expect(whole.json.items.find((c: any) => c.id === caseIds[3])).toMatchObject({ assignedTo: null, assignedToName: null });
+    expect(whole.json.items.find((c: any) => c.assignedTo === o2.username)).toMatchObject({ assignedToName: o2.username, assignmentSource: 'MANUAL' });
+    expect((await call('GET', '/kyc/cases?assignee=unassigned&status=PENDING', { cookie: o2.cookie })).json.items.some((c: any) => c.id === caseIds[3])).toBe(true);
+    const sum = (await call('GET', '/kyc/summary', { cookie: o1.cookie })).json;
+    expect(sum).toMatchObject({ mine: r.json.perOfficer[o1.username], unassigned: expect.any(Number), waiting: expect.any(Number), overdue: expect.any(Number), mineOverdue: 0, escalated: 0, awaitingSecondReview: 0, decidedToday: 0, qaTasks: 0 });
+    expect((await call('GET', '/kyc/cases?sort=bogus', { cookie: o1.cookie })).status).toBe(400);
+    expect((await call('GET', '/kyc/cases?cursor=bogus', { cookie: o1.cookie })).status).toBe(400);
+  });
+
+  it('validates what is sent to the assignment and settings endpoints', async () => {
+    const post = (b: unknown) => call('POST', '/kyc/assignments', { cookie: lead.cookie, body: b });
+    expect((await post({ mode: 'ASSIGN', officer: o1.username })).status).toBe(400);                               // no cases
+    expect((await post({ caseIds: ['nope'], mode: 'UNASSIGN' })).status).toBe(400);
+    expect((await post({ caseIds: [caseIds[3]], mode: 'SHUFFLE' })).status).toBe(400);
+    expect((await post({ caseIds: [caseIds[3]], mode: 'ASSIGN' })).status).toBe(400);                              // no officer
+    expect((await post({ caseIds: [caseIds[3]], mode: 'ASSIGN', officer: retail.username })).status).toBe(400);    // cannot review
+    expect((await post({ caseIds: Array(2001).fill(caseIds[3]), mode: 'UNASSIGN' })).status).toBe(400);
+    const set = (b: unknown) => call('POST', '/settings/kyc-review', { cookie: su, body: b });
+    expect((await set({ maxOpenPerOfficer: -1 })).status).toBe(400);
+    expect((await set({ qaSamplePercent: 101 })).status).toBe(400);
+    expect((await set({ strategy: 'RANDOM' })).status).toBe(400);
+    expect((await set({ nonsense: true })).status).toBe(400);
+    expect((await set({ autoAssign: 'yes' })).status).toBe(400);
+    expect((await set({ escalateOverdueHours: 24, fourEyesHighRisk: false, qaSamplePercent: 0, reopenDays: 14, maxOpenPerOfficer: 0, autoAssign: false })).json).toMatchObject({ escalateOverdueHours: 24, strategy: 'EQUAL', stickyOnResubmit: true });
+    expect((await call('GET', '/settings/kyc-review', { cookie: su })).json).toMatchObject({ autoAssign: false, escalateOverdueHours: 24, requireChecklist: false });
+  });
+
+  it('lets only the assignee decide, shows what each person can do, and keeps the timeline', async () => {
+    const r = await call('GET', '/kyc/cases?status=PENDING&assignee=me', { cookie: o2.cookie });
+    const mineId = r.json.items[0].id as string;
+    const other = (await call('GET', '/kyc/cases?status=PENDING&assignee=me', { cookie: o1.cookie })).json.items[0].id as string;
+    expect((await call('POST', `/kyc/cases/${other}/decision`, { cookie: o2.cookie, body: { decision: 'APPROVE' } })).status).toBe(422);
+    const view = (await call('GET', `/kyc/cases/${other}`, { cookie: o2.cookie })).json;
+    expect(view).toMatchObject({ canDecide: false, canClaim: false, caseNumber: expect.stringMatching(/^KYC-/), assignedTo: o1.username, assignedToName: o1.username, risk: 'LOW' });
+    expect(view.decideBlockedReason).toMatch(new RegExp(`assigned to ${o1.username}`));
+    const leadView = (await call('GET', `/kyc/cases/${other}`, { cookie: lead.cookie })).json;
+    expect(leadView).toMatchObject({ canDecide: true, canAssign: true, canRelease: true, canEscalate: true });
+    expect(leadView.events.map((e: any) => e.action)).toEqual(expect.arrayContaining(['CREATED', 'SUBMITTED', 'ASSIGNED']));
+    expect((await call('POST', `/kyc/cases/${mineId}/notes`, { cookie: o2.cookie, body: { text: 'Called the customer' } })).status).toBe(200);
+    expect((await call('GET', `/kyc/cases/${mineId}`, { cookie: o2.cookie })).json.notes[0]).toMatchObject({ actor: o2.username, text: 'Called the customer' });
+    const done = await call('POST', `/kyc/cases/${mineId}/decision`, { cookie: o2.cookie, body: { decision: 'APPROVE', checklist: { documentLegible: true, photoMatchesId: true, detailsMatchId: true, notExpired: true, ageOk: true, notDuplicate: true } } });
+    expect(done.json).toMatchObject({ status: 'APPROVED', decidedBy: o2.username });
+    // on behalf: the lead decides a case o1 holds
+    expect((await call('POST', `/kyc/cases/${other}/decision`, { cookie: lead.cookie, body: { decision: 'REJECT', reason: 'No clear ID', reasonCode: 'UNREADABLE' } })).json).toMatchObject({ status: 'REJECTED', decidedBy: lead.username });
+    expect((await call('POST', `/kyc/cases/${other}/reopen`, { cookie: o1.cookie, body: { reason: 'x' } })).status).toBe(403);
+    expect((await call('POST', `/kyc/cases/${other}/reopen`, { cookie: lead.cookie, body: { reason: 'The customer came to the store' } })).json).toMatchObject({ status: 'PENDING' });
+  });
+
+  it('claims, releases, takes the next case, escalates and sets availability', async () => {
+    const id = caseIds[3]!;
+    expect((await call('POST', `/kyc/cases/${id}/claim`, { cookie: o1.cookie, body: {} })).json).toMatchObject({ assignedTo: o1.username });
+    expect((await call('POST', `/kyc/cases/${id}/claim`, { cookie: o2.cookie, body: {} })).status).toBe(409);
+    expect((await call('POST', `/kyc/cases/${id}/release`, { cookie: o2.cookie, body: { reason: 'mine' } })).status).toBe(422);
+    expect((await call('POST', `/kyc/cases/${id}/escalate`, { cookie: o1.cookie, body: { note: 'Looks altered' } })).json).toMatchObject({ escalatedTo: lead.username });
+    expect((await call('POST', `/kyc/cases/${id}/take-over`, { cookie: lead.cookie, body: { reason: 'It is mine already' } })).status).toBe(409);
+    expect((await call('POST', `/kyc/cases/${id}/release`, { cookie: lead.cookie, body: { reason: 'Back to the pool' } })).json).toMatchObject({ assignedTo: null });
+    expect((await call('POST', '/kyc/next', { cookie: o2.cookie, body: {} })).json.caseId).toBe(id);
+    expect((await call('POST', `/kyc/cases/${id}/release`, { cookie: o2.cookie, body: { reason: ' ' } })).status).toBe(400);
+
+    const away = await call('POST', '/kyc/me/status', { cookie: o2.cookie, body: { away: true, awayUntil: new Date(Date.now() + 86_400_000).toISOString(), note: 'Leave' } });
+    expect(away.json).toMatchObject({ away: true, note: 'Leave' });
+    expect((await call('GET', '/kyc/me', { cookie: o2.cookie })).json).toMatchObject({ username: o2.username, away: true, today: { decided: 1, approved: 1, rejected: 0, returned: 0 }, open: expect.any(Number), overdue: 0 });
+    expect((await call('GET', '/kyc/officers', { cookie: lead.cookie })).json.items.find((o: any) => o.username === o2.username)).toMatchObject({ away: true, eligible: false, notEligibleReason: expect.stringMatching(/Away/) });
+    expect((await call('POST', `/kyc/officers/${o2.username}/status`, { cookie: lead.cookie, body: { away: false } })).json).toMatchObject({ away: false });
+    expect((await call('POST', `/kyc/officers/${o1.username}/status`, { cookie: o2.cookie, body: { away: true } })).status).toBe(403);
+  });
+
+  it('shows an officer only their own KPIs without kyc:report, everyone’s with it, as JSON and CSV', async () => {
+    const own = await call('GET', '/kyc/reports/officers?by=day', { cookie: o2.cookie });
+    expect(own.json.officers.map((o: any) => o.username)).toEqual([o2.username]);
+    expect(own.json.officers[0].totals).toMatchObject({ decided: 1, approved: 1 });
+    expect(own.json.period).toMatchObject({ by: 'day', tz: expect.any(String) });
+    expect(own.json.team.totals.decided).toBe(1);                                                // the team figure is the officer's own: nothing of the others leaks
+    expect((await call('GET', `/kyc/reports/officers?officer=${lead.username}`, { cookie: o2.cookie })).status).toBe(403);
+    expect((await call('GET', `/kyc/reports/officers?officer=${o2.username}`, { cookie: o2.cookie })).status).toBe(200);
+    const ownCsv = await call('GET', '/kyc/reports/officers.csv', { cookie: o2.cookie });
+    expect(ownCsv.headers.get('content-type')).toMatch(/text\/csv/);
+    expect(ownCsv.text).toContain(o2.username);
+    expect(ownCsv.text).not.toContain(lead.username);
+    const all = await call('GET', '/kyc/reports/officers?by=week', { cookie: reporter.cookie });
+    const names = all.json.officers.map((o: any) => o.username);
+    expect(names).toEqual(expect.arrayContaining([o1.username, o2.username, lead.username]));
+    expect(all.json.officers.find((o: any) => o.username === lead.username).totals.decided).toBe(1);
+    expect(all.json.team.totals.decided).toBeGreaterThanOrEqual(2);
+    expect((await call('GET', `/kyc/reports/officers?officer=${o1.username}&by=month`, { cookie: lead.cookie })).json.officers.map((o: any) => o.username)).toEqual([o1.username]);
+    expect((await call('GET', '/kyc/reports/officers?by=year', { cookie: lead.cookie })).status).toBe(400);
+    expect((await call('GET', '/kyc/reports/officers.csv?by=day', { cookie: lead.cookie })).text).toContain('TEAM,Team,TOTAL');
   });
 });
