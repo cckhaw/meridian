@@ -249,6 +249,56 @@ describe('selling a plan with a SIM and a number', () => {
   });
 });
 
+describe('a paid order that is cancelled before the SIM ships', () => {
+  let d: Db;   // its own database: it loads SIM cards into the warehouse, which the other specs in this file count
+  beforeAll(async () => {
+    d = await freshDb();
+    await d.query(`UPDATE catalog_nodes SET data = jsonb_set(data, '{fulfilment,requiresShipping}', 'true') WHERE id='plan-sim-5g'`);   // the SIM is posted, like the plans sold by call centre and dealers
+    await importMsisdns(d, { range: { from: '+60125000000', to: '+60125000049' } }, { apply: true, actor: 'ops' });
+    await importImsis(d, { csv: Array.from({ length: 6 }, imsi).join('\n') }, { apply: true, actor: 'ops' });
+    await importSims(d, { csv: `iccid\n${Array.from({ length: 4 }, iccid).join('\n')}\n` }, { apply: true, actor: 'ops', locationId: 'WH-MAIN', batch: 'WH' });
+  });
+  afterAll(async () => { await d.close(); });
+  it('gives the number, the SIM and the IMSI back, for a plan on its own and for a plan with a number chosen', async () => {
+    for (const choose of [false, true]) {
+      const c = await newCustomer(d);
+      const num = choose ? (await d.query(`SELECT msisdn FROM msisdn_inventory WHERE tier='STANDARD' AND state='AVAILABLE' LIMIT 1`)).rows[0]!.msisdn as string : undefined;
+      const o = await placeOrder(d, { customerId: c.customer.id, channel: 'CALL_CENTER', payment: { method: 'CASH', confirmed: true, reference: 'R' }, deliveryAddress: '1 Test Road', lines: [{ offerId: 'plan-sim-5g', simType: 'PHYSICAL', ...(num ? { msisdn: num } : {}) }] });
+      const line = (await d.query('SELECT msisdn FROM order_lines WHERE order_id=$1', [o.id])).rows[0]!;
+      const sim = (await d.query(`SELECT iccid, imsi FROM iccid_inventory WHERE order_id=$1`, [o.id])).rows[0]!;
+      expect((await d.query('SELECT state FROM msisdn_inventory WHERE msisdn=$1', [line.msisdn])).rows[0]!.state).toBe('RESERVED_CHECKOUT');
+      expect((await d.query('SELECT state FROM iccid_inventory WHERE iccid=$1', [sim.iccid])).rows[0]!.state).toBe('RESERVED');
+      const cancelled = await cancelOrder(d, o.id, 'changed my mind', 'agent');
+      expect(cancelled.state).toBe('CANCELLED');
+      expect((await d.query('SELECT state, reserved_by FROM msisdn_inventory WHERE msisdn=$1', [line.msisdn])).rows[0]).toMatchObject({ state: 'AVAILABLE', reservedBy: null });
+      expect((await d.query('SELECT state, order_id FROM iccid_inventory WHERE iccid=$1', [sim.iccid])).rows[0]).toMatchObject({ state: 'WAREHOUSE_INVENTORY', orderId: null });
+    }
+  });
+
+  it('frees what an earlier cancellation left reserved, when the numbering job runs', async () => {
+    const c = await newCustomer(d);
+    const o = await placeOrder(d, { customerId: c.customer.id, channel: 'CALL_CENTER', payment: { method: 'CASH', confirmed: true, reference: 'R' }, deliveryAddress: '1 Test Road', lines: [{ offerId: 'plan-sim-5g', simType: 'PHYSICAL' }] });
+    const line = (await d.query('SELECT msisdn FROM order_lines WHERE order_id=$1', [o.id])).rows[0]!;
+    const sim = (await d.query(`SELECT iccid FROM iccid_inventory WHERE order_id=$1`, [o.id])).rows[0]!;
+    await d.query(`UPDATE orders SET state='CANCELLED' WHERE id=$1`, [o.id]);   // cancelled the way it used to be: the order is closed and nothing was handed back
+    const done = await recycleExpired(d);
+    expect(done.orderNumbers).toBeGreaterThanOrEqual(1);
+    expect(done.orderSims).toBeGreaterThanOrEqual(1);
+    expect((await d.query('SELECT state, reserved_by FROM msisdn_inventory WHERE msisdn=$1', [line.msisdn])).rows[0]).toMatchObject({ state: 'AVAILABLE', reservedBy: null });
+    expect((await d.query('SELECT state, order_id FROM iccid_inventory WHERE iccid=$1', [sim.iccid])).rows[0]).toMatchObject({ state: 'WAREHOUSE_INVENTORY', orderId: null });
+    expect((await recycleExpired(d)).orderNumbers).toBe(0);   // and it is safe to run again
+  });
+
+  it('keeps them for a part of the order that is still going ahead', async () => {
+    const c = await newCustomer(d);
+    const o = await placeOrder(d, { customerId: c.customer.id, channel: 'CALL_CENTER', payment: { method: 'CASH', confirmed: true, reference: 'R' }, deliveryAddress: '1 Test Road', lines: [{ offerId: 'plan-sim-5g', simType: 'PHYSICAL' }] });
+    const line = (await d.query('SELECT msisdn FROM order_lines WHERE order_id=$1', [o.id])).rows[0]!;
+    const other = await getOrder(d, o.id);
+    expect(other.state).not.toBe('CANCELLED');
+    expect((await d.query('SELECT state FROM msisdn_inventory WHERE msisdn=$1', [line.msisdn])).rows[0]!.state).toBe('RESERVED_CHECKOUT');
+  });
+});
+
 describe('when the subscriber leaves', () => {
   it('scraps the plastic, decouples and quarantines the IMSI, rests the number, and recycles all of it later', async () => {
     const c = await newCustomer(db);
@@ -263,7 +313,7 @@ describe('when the subscriber leaves', () => {
     const n = (await db.query('SELECT state, quarantine_until::text AS until FROM msisdn_inventory WHERE msisdn=$1', [s.identifier])).rows[0]!;
     expect([n.state, n.until]).toEqual(['QUARANTINE_COOLING', addDays(today(), 90)]);
 
-    expect(await recycleExpired(db, addDays(today(), 89))).toEqual({ imsis: 0, msisdns: 0 });
+    expect(await recycleExpired(db, addDays(today(), 89))).toMatchObject({ imsis: 0, msisdns: 0 });
     const out = await recycleExpired(db, addDays(today(), 91));
     expect(out.imsis).toBeGreaterThanOrEqual(1);
     expect(out.msisdns).toBeGreaterThanOrEqual(1);

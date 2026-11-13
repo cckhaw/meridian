@@ -1953,6 +1953,18 @@ async function sweepScheduled(db: Db) {
 function tmfFail(status: number, code: string, reason: string, message: string, extra: Record<string, string> = {}) {
   return new Response(JSON.stringify({ code, reason, message, status: String(status), '@type': 'Error' }), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
 }
+/** The value Postgres refused as a uuid ("invalid input syntax for type uuid"), or null when the error is something else. */
+const badUuid = (e: unknown): string | null => {
+  const x = e as { code?: string; message?: string } | null;
+  if (!x || typeof x !== 'object' || (x.code !== '22P02' && !/invalid input syntax for type uuid/.test(String(x.message)))) return null;
+  return /type uuid: "(.*)"/.exec(String(x.message))?.[1] ?? '';
+};
+/** An id in the address that is not even an id is "not found", like an id nobody holds; one in the body is a bad request. */
+const badIdAnswer = (bad: string, path: string) => {
+  let decoded = path; try { decoded = decodeURIComponent(path); } catch { /* keep the raw path */ }
+  return bad !== '' && decoded.includes(bad) ? { status: 404, code: 'NOT_FOUND', message: 'No record has that id.' } : { status: 400, code: 'INVALID', message: 'An id in the request is not valid.' };
+};
+
 const TMF_CODE: Record<string, string> = { NOT_FOUND: 'NOT_FOUND', INVALID: 'INVALID_REQUEST', CONFLICT: 'CONFLICT', REJECTED: 'UNPROCESSABLE', FORBIDDEN: 'FORBIDDEN', UNAUTHENTICATED: 'UNAUTHORIZED', RATE_LIMITED: 'TOO_MANY_REQUESTS' };
 
 /** One northbound call: authenticate, check the scope, apply the channel's rate limit, run (once per idempotency key when the route asks), and log it. Errors use the TM Forum shape. */
@@ -1992,6 +2004,7 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
       return out(tmfFail(e.status, TMF_CODE[e.code] ?? 'ERROR', e.code, e.message + why));
     }
     if (e instanceof ZodError) return out(tmfFail(400, 'INVALID_REQUEST', 'VALIDATION', e.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ')));
+    const bad = badUuid(e); if (bad !== null) { const a = badIdAnswer(bad, p); return out(tmfFail(a.status, a.status === 404 ? 'NOT_FOUND' : 'INVALID_REQUEST', a.code, a.message)); }
     console.error(`[north] ${req.method} ${p}`, e);
     return out(tmfFail(500, 'INTERNAL', 'INTERNAL', 'unexpected server error'));
   } finally {
@@ -2017,7 +2030,9 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
   const rt = matches.find((r) => r.method === req.method);
   if (!rt) return done(fail(405, 'METHOD_NOT_ALLOWED', `${req.method} not allowed`));
   const m = rt.re.exec(p)!;
-  const params = Object.fromEntries(rt.keys.map((k, i) => [k, decodeURIComponent(m[i + 1]!)]));
+  let params: Record<string, string>;
+  try { params = Object.fromEntries(rt.keys.map((k, i) => [k, decodeURIComponent(m[i + 1]!)])); }
+  catch { return done(fail(404, 'NOT_FOUND', 'not found')); }   // a broken percent-escape in the address names nothing
 
   try {
     // Fail closed: a misconfigured production deployment serves nothing except the liveness probe.
@@ -2071,6 +2086,7 @@ export async function dispatch(req: Request, path: string[]): Promise<Response> 
       return done(fail(e.status, e.code, e.message + why));
     }
     if (e instanceof ZodError) return done(fail(400, 'INVALID', e.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ')));
+    const bad = badUuid(e); if (bad !== null) { const a = badIdAnswer(bad, p); return done(fail(a.status, a.code, a.message)); }
     console.error(`[api] ${req.method} ${p}`, e);
     return done(fail(500, 'INTERNAL', 'unexpected server error'));
   }

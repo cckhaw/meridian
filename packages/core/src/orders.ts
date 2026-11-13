@@ -154,10 +154,10 @@ async function allocateLineTx(q: Queryable, p: Awaited<ReturnType<typeof priceBa
 }
 
 /** An order that did not become a service gives its numbers and SIMs back. */
-export async function releaseOrderNumbering(q: Queryable, orderId: string, actor = 'system'): Promise<void> {
-  await releaseOrderSimsTx(q, orderId, actor);
+export async function releaseOrderNumbering(q: Queryable, orderId: string, actor = 'system', only?: { msisdns: string[]; iccids: string[] }): Promise<void> {
+  await releaseOrderSimsTx(q, orderId, actor, only?.iccids);
   const holder = `order:${orderId}`;
-  for (const r of (await q.query(`SELECT msisdn FROM msisdn_inventory WHERE state='RESERVED_CHECKOUT' AND reserved_by=$1`, [holder])).rows) await releaseMsisdnTx(q, r.msisdn as string, holder, actor);
+  for (const r of (await q.query(`SELECT msisdn FROM msisdn_inventory WHERE state='RESERVED_CHECKOUT' AND reserved_by=$1 AND ($2::text[] IS NULL OR msisdn = ANY($2::text[]))`, [holder, only?.msisdns ?? null])).rows) await releaseMsisdnTx(q, r.msisdn as string, holder, actor);
 }
 
 /** The order transaction body, so callers (store checkout) can create a customer and its order atomically. */
@@ -864,6 +864,10 @@ async function cancelGroups(q: Queryable, o: Row, kinds: GroupKind[], reason: st
     const mine = lines.filter((l) => l.fulfilGroup === kind && l.status === 'ACTIVE');
     await releaseReservations(q, o.id, kind);
     if (kind === 'ACTIVATION') await releaseOrderNumbering(q, o.id, actor); // the SIM and number of a plan that is not going ahead
+    else {   // a plan whose SIM is posted or collected sits in the delivery part, not the activation part: its SIM and number go back with that part
+      const held = mine.filter((l) => createsService(l.offer));
+      if (held.length) await releaseOrderNumbering(q, o.id, actor, { msisdns: held.map((l) => l.msisdn as string).filter(Boolean), iccids: held.map((l) => l.iccid as string).filter(Boolean) });
+    }
     const r = await refund(q, o, mine, { retainMinor: p.fee, clawbackMinor: p.claw, label: `Cancelled ${kind.toLowerCase()}` });
     await q.query(`UPDATE order_lines SET status='CANCELLED' WHERE order_id=$1 AND fulfil_group=$2 AND status='ACTIVE'`, [o.id, kind]);
     if (kind === 'INSTALL') {
@@ -910,7 +914,9 @@ export async function cancelOrderTx(q: Queryable, orderId: string, reason: strin
     }
     await cancelGroups(q, o, kinds, reason || 'cancelled', actor, who);
     await progress(q, o, { actor }); // what is left may now be able to finish (e.g. a plan no longer waiting for a cancelled device)
-    return getOrder(q, orderId);
+    const after = await getOrder(q, orderId);
+    if (after.state === 'CANCELLED') await releaseOrderNumbering(q, orderId, actor);   // nothing is going ahead: whatever number or SIM is still held goes back
+    return after;
   }
 }
 

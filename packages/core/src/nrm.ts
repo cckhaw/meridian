@@ -3,6 +3,8 @@ import type { Db, Queryable, Row } from './db.js';
 import { addDays, fmt, today, type DateStr } from './dates.js';
 import { conflict, invalid, notFound, rejected } from './errors.js';
 import { getLifecycleSettings } from './lifecycle-config.js';
+import { releaseMsisdnTx } from './number-reservation.js';
+import { releaseOrderSimsTx } from './nrm-pools.js';
 import { patternProblem, VipPatternMatcher, VIP_TIERS, type TierPattern, type TierRule, type VipTier } from './vip-pattern-matcher.js';
 
 // ───────────────────────── settings ─────────────────────────
@@ -173,9 +175,9 @@ export async function releaseResourcesOnTermination(q: Queryable, s: Row, o: { p
  * The cooling-off periods that have ended: IMSIs go QUARANTINED -> RECYCLED -> POOL_UNASSIGNED (free to be written onto new SIM batches or issued as
  * fresh eSIM profiles), numbers go QUARANTINE_COOLING -> AVAILABLE in the tier they now belong to. Safe to run as often as you like.
  */
-export async function recycleExpired(db: Db, asOf: DateStr = today(), actor = 'nrm'): Promise<{ imsis: number; msisdns: number }> {
+export async function recycleExpired(db: Db, asOf: DateStr = today(), actor = 'nrm'): Promise<{ imsis: number; msisdns: number; orderNumbers: number; orderSims: number }> {
   const matcher = await getMatcher(db);
-  const out = { imsis: 0, msisdns: 0 };
+  const out = { imsis: 0, msisdns: 0, orderNumbers: 0, orderSims: 0 };
   for (;;) {
     const n = await db.tx(async (q) => {
       const rows = (await q.query(`SELECT imsi FROM imsi_inventory WHERE state='QUARANTINED' AND quarantine_until <= $1::date ORDER BY quarantine_until, imsi LIMIT 500 FOR UPDATE SKIP LOCKED`, [asOf])).rows;
@@ -204,7 +206,27 @@ export async function recycleExpired(db: Db, asOf: DateStr = today(), actor = 'n
     out.msisdns += n;
     if (n < 500) break;
   }
-  if (out.imsis || out.msisdns) await audit(db, actor, 'numbering', 'recycle', 'RECYCLED', { ...out, asOf });
+  // numbers and SIMs still held by an order that was cancelled or failed (a cancelled delivery used to leave them reserved for good): they go back to the pool
+  for (;;) {
+    const n = await db.tx(async (q) => {
+      const rows = (await q.query(`SELECT m.msisdn, m.reserved_by FROM msisdn_inventory m JOIN orders o ON m.reserved_by = 'order:' || o.id::text WHERE m.state='RESERVED_CHECKOUT' AND o.state IN ('CANCELLED','FAILED') ORDER BY m.msisdn LIMIT 500 FOR UPDATE OF m SKIP LOCKED`)).rows;
+      for (const r of rows) await releaseMsisdnTx(q, r.msisdn as string, r.reservedBy as string, actor);
+      return rows.length;
+    });
+    out.orderNumbers += n;
+    if (n < 500) break;
+  }
+  for (;;) {
+    const n = await db.tx(async (q) => {
+      const orders = (await q.query(`SELECT DISTINCT i.order_id FROM iccid_inventory i JOIN orders o ON o.id = i.order_id WHERE i.state='RESERVED' AND o.state IN ('CANCELLED','FAILED') LIMIT 200`)).rows;
+      let sims = 0;
+      for (const r of orders) sims += await releaseOrderSimsTx(q, r.orderId as string, actor);
+      return sims;
+    });
+    out.orderSims += n;
+    if (n === 0) break;
+  }
+  if (out.imsis || out.msisdns || out.orderNumbers || out.orderSims) await audit(db, actor, 'numbering', 'recycle', 'RECYCLED', { ...out, asOf });
   return out;
 }
 

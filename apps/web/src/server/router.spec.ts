@@ -62,6 +62,17 @@ describe('authentication', () => {
     expect((await call('GET', '/nope')).status).toBe(404);
   });
 
+  it('answers an id that is not an id with "not found", not a server error', async () => {
+    const root_ = await root();
+    for (const p of ['/customers/not-a-uuid', '/orders/not-a-uuid', '/invoices/not-a-uuid', '/cases/not-a-uuid', '/services/not-a-uuid', '/kyc/cases/not-a-uuid', '/billing/runs/not-a-uuid']) {
+      const r = await call('GET', p, { cookie: root_ });
+      expect(r.status, p).toBe(404);
+      expect(r.json.error.code, p).toBe('NOT_FOUND');
+    }
+    expect((await call('GET', '/customers/%E0%A4%A', { cookie: root_ })).status).toBeLessThan(500);   // not even valid percent-encoding
+    expect((await call('GET', `/customers/00000000-0000-4000-8000-000000000000`, { cookie: root_ })).status).toBe(404);   // an id nobody holds still is
+  });
+
   it('super user signs in from the environment and gets an HttpOnly SameSite cookie', async () => {
     const r = await call('POST', '/auth/login', { body: SU });
     expect(r.status).toBe(200);
