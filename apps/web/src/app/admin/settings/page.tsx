@@ -12,6 +12,7 @@ import { BillCycleSettings, CustomerSettings } from './customers';
 import { CaseSettings } from './cases';
 import { DunningSettings } from './dunning';
 import { EtcSettings } from './etc';
+import { KycReviewSettings } from './kyc-review';
 import { MarketSettings } from './markets';
 import { DonorOperatorSettings } from './donor-operators';
 import { NumberingSettings } from './numbering';
@@ -120,6 +121,7 @@ function Section({ id, data, reload }: { id: string; data: any; reload: () => vo
     case 'service-types': return <ServiceKindSettings />;
     case 'cancellation': return <CancellationSettings />;
     case 'cases': return <CaseSettings />;
+    case 'kyc-review': return <KycReviewSettings />;
     case 'dunning-rules': return <DunningSettings />;
     case 'early-termination': return <EtcSettings />;
     case 'security-policy': return <SecurityPolicySettings />;

@@ -59,12 +59,13 @@ export interface DataColumn<T> {
  * its actions) or wraps every cell to a sliver; a card gives each record the full width: its name on top, one label and value per line, and the
  * actions as large buttons underneath.
  */
-export function DataList<T>({ rows, columns, rowKey, actions, label }: { rows: T[]; columns: Array<DataColumn<T>>; rowKey: (row: T) => string; actions?: (row: T) => ReactNode; label: string }) {
+export function DataList<T>({ rows, columns, rowKey, actions, label, onRowClick }: { rows: T[]; columns: Array<DataColumn<T>>; rowKey: (row: T) => string; actions?: (row: T) => ReactNode; label: string; /** Makes the whole row (table row or card) open something. Clicks on links, buttons and fields inside it keep their own meaning. */ onRowClick?: (row: T) => void }) {
   const title = columns.find((c) => c.primary) ?? columns[0]!;
   const rest = columns.filter((c) => c !== title);
   // Room a table needs: about 7.5rem a column and 13rem for the action buttons, rounded up to one of the widths globals.css knows.
   const need = columns.length * 120 + (actions ? 210 : 0);
   const needed = [720, 900, 1100, 1300, 1500].find((w) => need <= w) ?? 1500;
+  const click = (r: T) => onRowClick ? { onClick: (e: React.MouseEvent) => { if (!(e.target as HTMLElement).closest('a, button, input, select, textarea, label, [role=combobox]')) onRowClick(r); } } : {};
   // Which layout is shown depends on the width of the space the list is in, not of the screen (see .dl-* in globals.css): a settings page beside a
   // sidebar and a menu is narrow even on a wide monitor.
   return (
@@ -74,7 +75,7 @@ export function DataList<T>({ rows, columns, rowKey, actions, label }: { rows: T
           <thead><tr>{columns.map((c) => <Th key={c.key} right={c.right}>{c.label}</Th>)}{actions && <Th><span className="sr-only">Actions</span></Th>}</tr></thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={rowKey(r)}>
+              <tr key={rowKey(r)} {...click(r)} className={onRowClick ? 'cursor-pointer hover:bg-surface2' : undefined}>
                 {columns.map((c) => <Td key={c.key} right={c.right}>{c.render(r)}</Td>)}
                 {actions && <Td right><span className="flex flex-nowrap justify-end gap-2 whitespace-nowrap">{actions(r)}</span></Td>}
               </tr>
@@ -84,7 +85,7 @@ export function DataList<T>({ rows, columns, rowKey, actions, label }: { rows: T
       </div>
       <ul className="dl-cards space-y-3" aria-label={label}>
         {rows.map((r) => (
-          <li key={rowKey(r)} className="rounded-card border border-separator bg-surface p-4">
+          <li key={rowKey(r)} {...click(r)} className={cx('rounded-card border border-separator bg-surface p-4', onRowClick && 'cursor-pointer active:bg-surface2')}>
             <div className="min-w-0">{title.render(r)}</div>
             {rest.length > 0 && (
               <dl className="mt-3 divide-y divide-separator border-t border-separator">
