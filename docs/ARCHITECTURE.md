@@ -40,6 +40,10 @@
 - **Markets** (`settings.ts`): one market by default (the Regional country); optionally several, each with its own name, tax and dial code, and a default market. `marketMode`/`effectiveMarket` are the only places that decide whether a market filter or check applies. **Stock** (`inventory.ts`, `warehouses.ts`): locations are warehouses and stores; every receipt, CSV load and write-off leaves a row in `stock_movements`.
 - Catalog for the working app lives in Postgres (JSONB). `services/catalog-service` (Mongo) keeps the same model and now shares the ETC and
   hierarchy rules from `@meridian/core`.
+- **KYC review** (`kyc-review.ts`, `kyc-list.ts`, `kyc-report.ts`, [KYC.md](KYC.md)): cases get a number, risk and priority and are assigned to eligible officers (equal distribution with random tie-break, round-robin or off); claim, escalation, second review, QA sampling and officer KPIs; settings row `kycReview`, migration 0060.
+- **Staff alerts** (`user-notifications.ts`): in-app inbox plus SMS and e-mail copies through the outbox with retry ([SECURITY.md](SECURITY.md#alerts-to-staff)). **E-mail sender** (`sendEmail`, hub `EMAIL_GATEWAY`): HTTPS API, SMTP or simulator.
+- **Numbers and SIMs on cancel**: `cancelGroups` releases numbers and SIMs held by any group; the daily job also frees reservations of cancelled or failed orders ([NUMBERING.md](NUMBERING.md)).
+- **Tests and the calendar**: core and web vitest configs load `packages/core/test-setup/clock.ts`, which shifts `Date` to the 28th when the real day is later, so bill-cycle tests pass on any day.
 
 ## Identity and access
 `packages/core/src/rbac.ts` is the single source of truth: permissions, the built-in roles (16), data scopes, modules. Administrators can change what a built-in role may do and define roles of their own (`roles-config.ts`, kept in settings and read on every request), so access is decided from the defaults in `rbac.ts` plus that role book. `auth.ts` handles credentials,

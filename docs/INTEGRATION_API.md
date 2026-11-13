@@ -30,7 +30,7 @@ Each call is checked in this order: credential, scope (`403` if the credential l
 
 **Idempotency.** State-changing endpoints require `X-Idempotency-Key` (8 to 120 visible characters; a UUID is ideal). The first request with a key runs; a repeat with the same key and the same request returns the first answer with `Idempotent-Replay: true`; the same key with a different request is refused (`422`); a repeat while the first is still running is `409` (retry shortly). A request that failed frees its key. Keys are per credential.
 
-**Errors** follow TM Forum guidelines: `{"code": "FORBIDDEN", "reason": "FORBIDDEN", "message": "…", "status": "403", "@type": "Error"}`.
+**Errors** follow TM Forum guidelines: `{"code": "FORBIDDEN", "reason": "FORBIDDEN", "message": "…", "status": "403", "@type": "Error"}`. An identifier in the path that is not a valid id (for example `/customers/abc`) answers `404 NOT_FOUND`; one in a request body answers `400`.
 
 **Scopes.** `subscriber:read`, `subscriber:write`, `sim:swap`, `msisdn:change`, `ownership:transfer`, `subscriber:status`, `subscription:change`, `vas:manage`, `order:create`, `order:read`, `order:cancel`, `billing:read`, `payment:create`, `event:subscribe`. A scope removed from a client stops working on tokens already issued; revoking a client stops all of them at once.
 

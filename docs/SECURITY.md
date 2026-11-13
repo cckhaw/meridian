@@ -94,6 +94,10 @@ Accounts that sign in through a provider or a directory cannot use "forgot passw
 
 A retail manager (`store:report`, `store:cashdrawer`, bound to one store) sees that store's sales by day, salesperson and payment method with the commission earned, and closes the cash drawer each day: counted cash against captured cash payments less refunds. A day closes once, and any difference needs a note and is audited.
 
+## Alerts to staff
+
+Staff get alerts for four events: `caseAssigned`, `caseUpdates`, `systemAlerts` and `securityAlerts`. Each person chooses channels per event under **My profile → Notifications**: **in the app** (the bell and the inbox, table `user_notifications`), **SMS** (through the SMS/WhatsApp gateway, needs a phone number) and **e-mail** (through the e-mail sender; stays queued while none is configured). Defaults are in-app and e-mail on, SMS off. Alerts never carry codes, links or passwords. A delivery failure never blocks the action that caused it; failed copies retry after 1, 5, 15, 60 and 240 minutes (`POST /api/jobs/deliver-notifications`). The super user receives none. Routes: `GET /api/notifications`, `POST /api/notifications/:id/read`, `POST /api/notifications/read-all`, `GET /api/profile/notification-channels`, `POST /api/notifications/system-alert`.
+
 ## Not covered yet (plan for these before regulated go-live)
 - **Multi-factor authentication and single sign-on** (SAML/OIDC). Strongly recommended for staff before handling real customer data.
 - **Portal sign-up** (needs identity verification). Self-service password reset by e-mail or SMS is built (see above).

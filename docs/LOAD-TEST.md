@@ -96,7 +96,20 @@ Stop (Ctrl-C) or crash: the report holds what was done. Run the remaining phases
 
 `--resume --tag <TAG>` is the old shortcut: every phase except setup, customers and kyc.
 
+## Loading fibre coverage points
+
+`scripts/load-test/load-fibre.mjs` fills the fibre coverage hub with distribution points through the hub's own import (`/api/admin/import`), so the map, the ports page and the serviceability checks have data:
+
+```bash
+FIBER_URL=https://<hub> ADMIN_USER=… ADMIN_PASS=… node scripts/load-test/load-fibre.mjs --count 5000 [--dry]
+```
+
+Options: `--count`, `--provider`, `--prefix` (default `LT`; codes are `LT-DP-00001`, cabinets `LT-CAB-001`), `--chunk` (rows per request, default 200), `--seed`, `--dry` (checks the first chunk only). Points spread over Malaysian cities and Singapore, about 24 to a cabinet, with 8, 16 or 32 ports, some in use or faulty and a few full. It matches on (provider, code), so running it again updates rather than duplicates, and it never deletes. If the admin account has two-step sign-in, set `ADMIN_OTP`. `load-pools.mjs` does the same for number, IMSI and SIM pools.
+
 ## Known issues found by the load test
+
+Fixed since the first runs: the negative-credit ledger failure on pro-rating lines (`unsigned` in `postJournal`), cancelled orders leaving numbers and SIMs reserved (see [NUMBERING.md](NUMBERING.md)), and malformed ids in a path returning 500 instead of 404. Billing tests that depended on the calendar day now pin the clock (`packages/core/test-setup/clock.ts`).
+
 
 * An invoice that carries a **negative pro-rating line** (an immediate plan change in the billing period) fails to post to the general ledger: `gl_entries_credit_minor_check1` (a negative amount is posted as a credit instead of a debit in `createInvoice`, `packages/core/src/billing.ts`). About 2% of the accounts in a bill run were affected when 45% of customers had a service change. Use `--immediate-share 0` to avoid it, or fix `billing.ts` to post a negative per-stream total as a debit.
 * List endpoints cap a page at 100 rows (stores, dealers, customers, orders, invoices, cases), so `limit=200` still gives 100; the script follows the cursor either way. The selective bill-run limit is 10,000 accounts (`core.SELECTIVE_MAX`), the script uses 500 per run so each run's work slices stay short.

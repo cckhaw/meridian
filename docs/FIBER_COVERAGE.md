@@ -95,6 +95,10 @@ Map tiles come from OpenStreetMap; to use another tile provider change `TILES` i
 
 `pnpm --filter @meridian/fiber-coverage seed:demo` loads sample Singapore coverage into the embedded database (it refuses to write to `DATABASE_URL` without `--yes`; never use it on production).
 
+## Loading many points
+
+The hub's import takes CSV or JSON. `scripts/load-test/load-fibre.mjs` generates and loads thousands of points for testing ([LOAD-TEST.md](LOAD-TEST.md#loading-fibre-coverage-points)).
+
 ## Not included
 
 PostGIS (geometry is GeoJSON with bounding-box indexes so it runs on the embedded database; swap in PostGIS if a national network outgrows it), Redis (the partner cache is a table with a TTL), a bundled geocoder (`setGeocoder` takes one), live port reservation on a partner's side (partner holds are recorded here only), and a drawn fibre-line trace layer (cabinets, DPs and their reach are drawn).
