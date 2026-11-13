@@ -378,8 +378,8 @@ export async function activateResourcesTx(q: Queryable, r: { iccid?: string | nu
 }
 
 /** An order that never became a service (cancelled, failed, expired): its SIM goes back where it was, and a fresh eSIM profile is undone. */
-export async function releaseOrderSimsTx(q: Queryable, orderId: string, actor: string): Promise<number> {
-  const sims = (await q.query(`SELECT * FROM iccid_inventory WHERE order_id=$1 AND state='RESERVED' FOR UPDATE`, [orderId])).rows;
+export async function releaseOrderSimsTx(q: Queryable, orderId: string, actor: string, only?: string[]): Promise<number> {
+  const sims = (await q.query(`SELECT * FROM iccid_inventory WHERE order_id=$1 AND state='RESERVED' AND ($2::text[] IS NULL OR iccid = ANY($2::text[])) FOR UPDATE`, [orderId, only ?? null])).rows;
   for (const s of sims) {
     const to = ((s.previousState as string) ?? 'WAREHOUSE_INVENTORY') as IccidState;
     assertIccidTransition(s.iccid, 'RESERVED', to);
