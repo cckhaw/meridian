@@ -8,7 +8,9 @@ import { conflict, invalid, notFound, rejected } from './errors.js';
 import { raiseEvent } from './events.js';
 import { blacklistAdd } from './fraud.js';
 import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
-import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
+import { assessCase, autoClaim, enqueueForReview, getKycReviewSettings, logEvent, maybeSampleQa, reopenProblem, routeToSecondReview, safeNotify, type KycReviewSettings, type ReviewActor } from './kyc-review.js';
+import { displayNames } from './kyc-list.js';
+export { kycQueueCounts, listKycCases } from './kyc-list.js';
 import { inspectImage } from './settings.js';
 import { ID_TYPES, getStoreSettings, type StoreSettings } from './store-settings.js';
 
@@ -80,6 +82,8 @@ export function hardFailures(p: Pick<Personal, 'dateOfBirth' | 'idExpiry'>, s: P
   return out;
 }
 
+/** What a case sheds when it becomes a review task again (resubmitted, reopened): who held it (remembered, so it can go back to them), escalation, a pending second review. */
+const RESET = `previous_assignee=COALESCE(assigned_to, previous_assignee), assigned_to=NULL, assigned_at=NULL, assigned_by=NULL, assignment_source=NULL, avoid_assignee=NULL, first_opened_at=NULL, escalated_at=NULL, escalated_by=NULL, escalation_note=NULL, sla_breached_at=NULL, second_review=NULL, checklist=NULL, risk_assessed_at=NULL`;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 async function loadApp(q: Queryable, id: string): Promise<Row> {
@@ -216,12 +220,13 @@ export async function syncCase(q: Queryable, appId: string, method: 'DOCUMENT_RE
   const vals = [pp.fullName.trim(), pp.dateOfBirth, pp.nationality ?? null, pp.idType, encryptText(pp.idNumber.trim()), hash, maskIdDocument(pp.idNumber.trim()), pp.idExpiry ?? null];
   if (existing) {
     await q.query(`UPDATE kyc_cases SET method=$2, full_name=$3, date_of_birth=$4, nationality=$5, id_type=$6, id_number_enc=$7, id_number_hash=$8, id_number_masked=$9, id_expiry=$10,
-      status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, attestation=NULL, updated_at=now() WHERE id=$1`, [existing.id, method, ...vals]);
+      status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, attestation=NULL, previous_assignee=COALESCE(assigned_to, previous_assignee), assigned_to=NULL, assigned_at=NULL, assigned_by=NULL, assignment_source=NULL, avoid_assignee=NULL, first_opened_at=NULL, escalated_at=NULL, escalated_by=NULL, escalation_note=NULL, sla_breached_at=NULL, second_review=NULL, checklist=NULL, risk_assessed_at=NULL, updated_at=now() WHERE id=$1`, [existing.id, method, ...vals]);
     return (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [existing.id])).rows[0]!;
   }
   const id = randomUUID();
   await q.query(`INSERT INTO kyc_cases (id, application_id, customer_id, method, source, full_name, date_of_birth, nationality, id_type, id_number_enc, id_number_hash, id_number_masked, id_expiry)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [id, appId, app.customerId, method, app.channel === 'RETAIL_ASSISTED' ? 'ASSISTED' : 'STOREFRONT', ...vals]);
+  await logEvent(q, id, app.createdBy ?? 'applicant', 'CREATED', { source: app.channel === 'RETAIL_ASSISTED' ? 'ASSISTED' : 'STOREFRONT' });
   return (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [id])).rows[0]!;
 }
 
@@ -237,8 +242,25 @@ export async function listDocuments(q: Queryable, appId: string): Promise<CaseDo
   return c ? listCaseDocuments(q, { id: c.id, applicationId: appId }) : [];
 }
 
-interface Outcome { case: 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETURNED'; app?: string; by: string | null; reason?: string; reasonCode?: string; flags?: string[]; checks?: Record<string, unknown>; attestation?: unknown }
-async function setOutcome(q: Queryable, app: Row | null, c: Row, o: Outcome) {
+export interface KycOutcome {
+  case: 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETURNED'; app?: string; by: string | null; reason?: string; reasonCode?: string; flags?: string[]; checks?: Record<string, unknown>; attestation?: unknown;
+  /** A person decided (the officer reports count it); otherwise the rules or a service did. */
+  human?: boolean; /** Goes into the DECIDED event. */ detail?: Record<string, unknown>; forceSticky?: boolean;
+}
+/** The DECIDED (or RETURNED) event of a case, with the time it took from assignment and whether the review target was met. Automatic outcomes are marked so the officer reports leave them out. */
+async function decisionEvent(q: Queryable, caseId: string, kind: 'APPROVED' | 'REJECTED' | 'RETURNED', o: Pick<KycOutcome, 'by' | 'human' | 'detail' | 'reason' | 'reasonCode'>) {
+  const decision = { APPROVED: 'APPROVE', REJECTED: 'REJECT', RETURNED: 'RETURN' }[kind];
+  const base = { decision, reason: o.reason ?? null, reasonCode: o.reasonCode ?? null, ...(o.human ? {} : { auto: true }), ...(o.detail ?? {}) };
+  const sla = (await getStoreSettings(q)).kycSlaHours;
+  await q.query(
+    `INSERT INTO kyc_case_events (case_id, actor, action, detail)
+     SELECT k.id, $2, $3, jsonb_build_object('source', k.source, 'risk', k.risk) || $4::jsonb ||
+            CASE WHEN $5 THEN jsonb_build_object('minutes', round((extract(epoch FROM now() - COALESCE(k.assigned_at, k.first_opened_at, k.submitted_at, k.created_at)) / 60)::numeric, 1),
+                                                  'withinSla', now() <= COALESCE(k.submitted_at, k.created_at) + make_interval(hours => $6::int), 'overdue', now() > COALESCE(k.submitted_at, k.created_at) + make_interval(hours => $6::int)) ELSE '{}'::jsonb END
+       FROM kyc_cases k WHERE k.id = $1`, [caseId, o.by ?? 'system', kind === 'RETURNED' ? 'RETURNED' : 'DECIDED', JSON.stringify(base), !!o.human, sla]);
+}
+
+export async function setOutcome(q: Queryable, app: Row | null, c: Row, o: KycOutcome) {
   const decided = o.case === 'APPROVED' || o.case === 'REJECTED';
   await q.query(`UPDATE kyc_cases SET status=$2, decided_by=$3, decided_at=CASE WHEN $4 THEN now() ELSE NULL END, decision_reason=$5, reason_code=$9, flags=COALESCE($6, flags),
       checks=COALESCE($7, checks), attestation=COALESCE($8, attestation), updated_at=now() WHERE id=$1`,
@@ -248,7 +270,12 @@ async function setOutcome(q: Queryable, app: Row | null, c: Row, o: Outcome) {
   const customerId = (c.customerId ?? app?.customerId ?? null) as string | null;
   if (customerId) await q.query(`UPDATE customers SET kyc_status=$2, kyc_verified_at=CASE WHEN $2='VERIFIED' THEN now() ELSE NULL END WHERE id=$1`,
     [customerId, ({ APPROVED: 'VERIFIED', REJECTED: 'REJECTED', PENDING: 'PENDING_REVIEW', RETURNED: 'NOT_VERIFIED' } as const)[o.case]]);
-  if (decided) await settleCaseDocuments(q, { caseId: c.id, applicationId: c.applicationId ?? null }, o.case === 'APPROVED' ? 'APPROVED' : 'REJECTED', customerId, o.by && !/^auto/.test(o.by) ? o.by : null, o.reason ?? null);
+  if (decided) {
+    await settleCaseDocuments(q, { caseId: c.id, applicationId: c.applicationId ?? null }, o.case === 'APPROVED' ? 'APPROVED' : 'REJECTED', customerId, o.by && !/^auto/.test(o.by) ? o.by : null, o.reason ?? null);
+    await decisionEvent(q, c.id, o.case as 'APPROVED' | 'REJECTED', o);
+  }
+  // Every way a case becomes a review task ends here: it gets its risk and priority, and an officer.
+  if (o.case === 'PENDING') await enqueueForReview(q, c.id, { forceSticky: o.forceSticky });
 }
 
 export async function markVerified(q: Queryable, customerId: string) {
@@ -396,11 +423,12 @@ export async function submitCustomerKyc(q: Queryable, i: CustomerKycInput): Prom
   if (prior && prior.status !== 'APPROVED') {
     caseId = prior.id;
     await q.query(`UPDATE kyc_cases SET method='DOCUMENT_STORE', source=$2, full_name=$3, date_of_birth=$4, nationality=$5, id_type=$6, id_number_enc=$7, id_number_hash=$8, id_number_masked=$9, id_expiry=$10, order_id=COALESCE($11, order_id),
-      status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, fraud_reported=false, flags='{}', checks='{}', updated_at=now() WHERE id=$1`, [caseId, i.source, ...vals, i.orderId ?? null]);
+      status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, fraud_reported=false, flags='{}', checks='{}', previous_assignee=COALESCE(assigned_to, previous_assignee), assigned_to=NULL, assigned_at=NULL, assigned_by=NULL, assignment_source=NULL, avoid_assignee=NULL, first_opened_at=NULL, escalated_at=NULL, escalated_by=NULL, escalation_note=NULL, sla_breached_at=NULL, second_review=NULL, checklist=NULL, risk_assessed_at=NULL, updated_at=now() WHERE id=$1`, [caseId, i.source, ...vals, i.orderId ?? null]);
   } else {
     caseId = randomUUID();
     await q.query(`INSERT INTO kyc_cases (id, application_id, customer_id, method, source, full_name, date_of_birth, nationality, id_type, id_number_enc, id_number_hash, id_number_masked, id_expiry, order_id)
       VALUES ($1,NULL,$2,'DOCUMENT_STORE',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [caseId, i.customerId, i.source, ...vals, i.orderId ?? null]);
+    await logEvent(q, caseId, i.actor, 'CREATED', { source: i.source });
   }
   const ref: CaseRef = { id: caseId, applicationId: null, customerId: i.customerId, source: i.source };
   for (const e of i.evidence) await addEvidence(q, ref, e, s, i.actor, i.who);
@@ -465,11 +493,12 @@ export async function recordAssertedIdentity(q: Queryable, a: AssertedIdentity):
     if (prior && prior.status !== 'APPROVED') {
       id = prior.id;
       await q.query(`UPDATE kyc_cases SET method='MYDIGITAL_ID', source=$2, full_name=$3, date_of_birth=$4, nationality=$5, id_type=$6, id_number_enc=$7, id_number_hash=$8, id_number_masked=$9, id_expiry=$10,
-        status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, fraud_reported=false, flags='{}', checks='{}', updated_at=now() WHERE id=$1`, [id, a.source, ...vals]);
+        status='PENDING', decided_by=NULL, decided_at=NULL, decision_reason=NULL, reason_code=NULL, fraud_reported=false, flags='{}', checks='{}', previous_assignee=COALESCE(assigned_to, previous_assignee), assigned_to=NULL, assigned_at=NULL, assigned_by=NULL, assignment_source=NULL, avoid_assignee=NULL, first_opened_at=NULL, escalated_at=NULL, escalated_by=NULL, escalation_note=NULL, sla_breached_at=NULL, second_review=NULL, checklist=NULL, risk_assessed_at=NULL, updated_at=now() WHERE id=$1`, [id, a.source, ...vals]);
     } else {
       id = randomUUID();
       await q.query(`INSERT INTO kyc_cases (id, application_id, customer_id, method, source, full_name, date_of_birth, nationality, id_type, id_number_enc, id_number_hash, id_number_masked, id_expiry)
         VALUES ($1,NULL,$2,'MYDIGITAL_ID',$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [id, cid, a.source, ...vals]);
+      await logEvent(q, id, a.actor, 'CREATED', { source: a.source });
     }
     if (!cust.dateOfBirth && individual) await q.query('UPDATE customers SET date_of_birth=$2 WHERE id=$1', [cid, pp.dateOfBirth]);
     c = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [id])).rows[0]!;
@@ -531,50 +560,73 @@ async function releaseOrders(q: Queryable, customerId: string, outcome: 'APPROVE
 }
 
 // ───────────────────────── compliance review ─────────────────────────
-export async function listKycCases(q: Queryable, f: { status?: string; limit?: number; cursor?: string } = {}): Promise<Page<Row>> {
-  const limit = pageSize(f.limit, 50, 100);
-  const { params, p } = sqlBuilder();
-  const sla = (await getStoreSettings(q)).kycSlaHours;
-  // A store-front case exists as soon as details are typed in; it only reaches the queue once submitted. A case that belongs to a customer is submitted by definition.
-  const where: string[] = [`(k.status <> 'PENDING' OR k.application_id IS NULL OR a.status IN ('KYC_REVIEW','ORDERED'))`];
-  if (f.status) where.push(`k.status = ${p(f.status)}`);
-  const cur = decodeCursor(f.cursor, 2); // oldest waiting first
-  if (cur) where.push(`(k.created_at, k.id) > (${p(cur[0])}::timestamptz, ${p(cur[1])}::uuid)`);
-  const slaP = p(String(sla));
-  const rows = (await q.query(
-    `SELECT k.id, k.application_id, k.customer_id, k.method, k.source, k.status, k.full_name, k.id_type, k.id_number_masked, k.flags, k.created_at, k.created_at::text AS cursor_ts, k.submitted_at, k.decided_by, k.decided_at, k.reason_code,
-            COALESCE(a.channel, 'RETAIL_ASSISTED') AS channel, a.status AS application_status,
-            (k.status = 'PENDING' AND COALESCE(k.submitted_at, k.created_at) < now() - (${slaP} || ' hours')::interval) AS overdue,
-            (SELECT count(*) FROM orders o JOIN order_groups g ON g.order_id = o.id AND g.kind='ACTIVATION' AND g.status='PENDING'
-               WHERE k.status = 'PENDING' AND o.customer_id = k.customer_id AND o.state NOT IN ('COMPLETED','CANCELLED','FAILED'))::int AS waiting_orders
-     FROM kyc_cases k LEFT JOIN applications a ON a.id = k.application_id WHERE ${where.join(' AND ')} ORDER BY k.created_at, k.id LIMIT ${p(limit + 1)}`, params)).rows;
-  const page = toPage(rows as Array<Row & { id: string; cursorTs: string }>, limit, (r) => [r.cursorTs, r.id]);
-  return { items: page.items.map(({ cursorTs: _d, ...r }) => r), nextCursor: page.nextCursor };
+/** The checks a reviewer ticks. `null` means not applicable (no photograph to compare with a MyDigital ID case). */
+export const CHECKLIST_ITEMS = ['documentLegible', 'photoMatchesId', 'detailsMatchId', 'notExpired', 'ageOk', 'notDuplicate'] as const;
+export type Checklist = Partial<Record<(typeof CHECKLIST_ITEMS)[number], boolean | null>> & { notes?: string };
+
+export function cleanChecklist(x: unknown): Checklist | null {
+  if (x == null) return null;
+  if (typeof x !== 'object' || Array.isArray(x)) throw invalid('The checklist is not valid.');
+  const out: Record<string, unknown> = {}, src = x as Record<string, unknown>;
+  for (const k of CHECKLIST_ITEMS) if (k in src) { if (src[k] !== null && typeof src[k] !== 'boolean') throw invalid(`${k} is true, false or not applicable.`); out[k] = src[k]; }
+  if (typeof src.notes === 'string' && src.notes.trim()) out.notes = src.notes.trim().slice(0, 1000);
+  return out as Checklist;
+}
+/** Approving needs every applicable check ticked, or a note that explains what is off. */
+export function checklistProblem(c: Checklist | null): string | null {
+  const open = CHECKLIST_ITEMS.filter((k) => c?.[k] !== true && c?.[k] !== null);
+  return open.length && !c?.notes ? 'Tick every check that applies (or write a note that explains) before approving.' : null;
 }
 
-/** How many tasks wait, and how many are overdue: the number on the menu. */
-export async function kycQueueCounts(q: Queryable): Promise<{ waiting: number; overdue: number }> {
-  const sla = (await getStoreSettings(q)).kycSlaHours;
-  const r = (await q.query(
-    `SELECT count(*)::int AS waiting, count(*) FILTER (WHERE COALESCE(k.submitted_at, k.created_at) < now() - ($1 || ' hours')::interval)::int AS overdue
-       FROM kyc_cases k LEFT JOIN applications a ON a.id = k.application_id WHERE k.status='PENDING' AND (k.application_id IS NULL OR a.status IN ('KYC_REVIEW','ORDERED'))`, [String(sla)])).rows[0]!;
-  return { waiting: r.waiting, overdue: r.overdue };
+/** Whether the person may decide the case now, and what deciding does to who holds it. Pure. */
+export function gateDecision(c: Row, actor: ReviewActor, assigneeName?: string | null): { block: string | null; claim: boolean; onBehalf: boolean } {
+  const ok = { block: null, claim: false, onBehalf: false };
+  const sr = c.secondReview;
+  if (sr?.status === 'AWAITING' && sr.by === actor.username) return { ...ok, block: 'You made the first recommendation on this case, so a different officer must confirm it.' };
+  if (!c.assignedTo) return { ...ok, claim: true };
+  if (String(c.assignedTo).toLowerCase() === actor.username.toLowerCase()) return ok;
+  if (actor.canAssign) return { ...ok, onBehalf: true };
+  return { ...ok, block: `This case is assigned to ${assigneeName ?? c.assignedTo}. Only they, or a supervisor who assigns cases, can decide it.` };
 }
 
-/** One case with the full ID number (decrypted for the reviewer) and its documents. Opening it is itself audited. */
-export async function getKycCase(q: Queryable, id: string, reviewer: string): Promise<Row> {
+/** One case with the full ID number (decrypted for the reviewer), its documents, its timeline and what this person may do with it. Opening it is itself audited. */
+export async function getKycCase(q: Queryable, id: string, reviewer: string, viewer: ReviewActor = { username: reviewer }): Promise<Row> {
   const c = (await q.query('SELECT * FROM kyc_cases WHERE id=$1', [id])).rows[0];
   if (!c) throw notFound('KYC case', id);
   const app = c.applicationId ? (await q.query('SELECT id, channel, status, personal, address, consent, lines, created_at FROM applications WHERE id=$1', [c.applicationId])).rows[0] : null;
   const cust = c.customerId ? (await q.query('SELECT id, display_name, email, phone, segment, kyc_status, address, created_at FROM customers WHERE id=$1', [c.customerId])).rows[0] : null;
   const s = await getStoreSettings(q);
+  const rs = await getKycReviewSettings(q);
   const { idNumberEnc, idNumberHash: _h, ...rest } = c;
   await audit(q, reviewer, 'kyc_case', id, 'VIEWED');
+  // The first time the assignee opens a case is when they started on it.
+  if (c.status === 'PENDING' && c.assignedTo && c.assignedTo.toLowerCase() === reviewer.toLowerCase() && !c.firstOpenedAt) {
+    c.firstOpenedAt = (await q.query('UPDATE kyc_cases SET first_opened_at=now() WHERE id=$1 AND first_opened_at IS NULL RETURNING first_opened_at', [id])).rows[0]?.firstOpenedAt ?? null;
+    if (c.firstOpenedAt) await logEvent(q, id, reviewer, 'OPENED', {});
+  }
+  const events = (await q.query('SELECT at, actor, action, target, detail FROM kyc_case_events WHERE case_id=$1 ORDER BY id LIMIT 500', [id])).rows;
+  const names = await displayNames(q, [...events.map((e) => e.actor as string), ...(c.assignedTo ? [c.assignedTo as string] : [])]);
+  const nameOf = (u: string) => (u === 'system' ? 'System' : names.get(u.toLowerCase()) ?? u);
   const due = new Date(new Date(c.submittedAt ?? c.createdAt).getTime() + s.kycSlaHours * 3_600_000).toISOString();
+  const queued = c.status === 'PENDING' && (!app || ['KYC_REVIEW', 'ORDERED'].includes(app.status));
+  const gate = gateDecision(c, viewer, c.assignedTo ? nameOf(c.assignedTo) : null);
+  const mine = !!c.assignedTo && c.assignedTo.toLowerCase() === viewer.username.toLowerCase();
+  const reopenBlock = viewer.canSenior || viewer.canAssign ? await reopenProblem(q, c, rs) : 'Reopening a case needs a senior officer or a supervisor.';
+  const sr = c.secondReview;
   return {
     ...rest, idNumber: decryptText(idNumberEnc), application: app, customer: cust, documents: await listCaseDocuments(q, { id: c.id, applicationId: c.applicationId }),
     waitingOrders: c.customerId && c.status === 'PENDING' ? await waitingOrders(q, c.customerId) : [], dueAt: due, overdue: c.status === 'PENDING' && Date.now() > Date.parse(due),
     canReturn: !app || app.status === 'KYC_REVIEW', canReportFraud: true,
+    riskReasons: assessCase({ flags: c.flags, checks: c.checks, dateOfBirth: c.dateOfBirth ? String(c.dateOfBirth).slice(0, 10) : null, idExpiry: c.idExpiry ? String(c.idExpiry).slice(0, 10) : null, reasonCode: c.reasonCode, fraudReported: c.fraudReported, submittedAt: c.submittedAt, createdAt: c.createdAt }, s, new Date()).reasons,
+    assignedToName: c.assignedTo ? nameOf(c.assignedTo) : null,
+    events: events.map((e) => ({ at: e.at, actor: e.actor, actorName: nameOf(e.actor), action: e.action, detail: e.detail })),
+    notes: events.filter((e) => e.action === 'NOTE').map((e) => ({ at: e.at, actor: e.actor, actorName: nameOf(e.actor), text: e.detail?.text ?? '' })),
+    secondReview: sr ? { ...sr, byName: sr.by ? nameOf(sr.by) : null } : null,
+    canDecide: queued && !gate.block, decideBlockedReason: !queued ? (c.status === 'PENDING' ? 'This case is not waiting for review yet.' : `This case was already ${String(c.status).toLowerCase()}.`) : gate.block,
+    canClaim: queued && !c.assignedTo && c.submittedBy !== reviewer && c.attestation?.by !== reviewer && !(sr?.status === 'AWAITING' && sr.by === reviewer),
+    canRelease: queued && !!c.assignedTo && (mine || !!viewer.canAssign), canAssign: queued && !!viewer.canAssign,
+    canEscalate: queued && (!c.assignedTo || mine || !!viewer.canAssign || !!viewer.canSenior),
+    canReopen: !reopenBlock, reopenBlockedReason: reopenBlock,
   };
 }
 
@@ -587,10 +639,27 @@ export async function getKycDocument(q: Queryable, docId: string, viewer: DocWho
   return { contentType: r.contentType, bytes: r.bytes };
 }
 
-export type Decision = { decision: 'APPROVE' | 'REJECT' | 'RETURN'; reason?: string; reasonCode?: string; reportFraud?: boolean };
+export type Decision = { decision: 'APPROVE' | 'REJECT' | 'RETURN'; reason?: string; reasonCode?: string; reportFraud?: boolean; checklist?: Checklist | null };
 export const REASON_CODES = ['NOT_AN_ID', 'UNREADABLE', 'MISMATCH', 'EXPIRED', 'SUSPECTED_FRAUD', 'OTHER'] as const;
+export interface DecideOpts { canReportFraud?: boolean; canAssign?: boolean; canSenior?: boolean; /** Set when a second reviewer is explicitly confirming or overriding. */ second?: { decision: 'CONFIRM' | 'OVERRIDE'; note?: string } }
 
-export async function decideKycCase(q: Queryable, caseId: string, reviewer: string, d: Decision, s: StoreSettings, o: { canReportFraud?: boolean } = {}): Promise<Row> {
+/** What stops this person approving: the rules no reviewer can waive, and the four-eyes rule on a case they submitted. */
+function approveProblem(c: Row, app: Row | null, reviewer: string, s: StoreSettings): string | null {
+  const hard = hardFailures({ dateOfBirth: String(c.dateOfBirth).slice(0, 10), idExpiry: c.idExpiry ? String(c.idExpiry).slice(0, 10) : undefined }, s, todayStr());
+  if (hard.length) return `This cannot be approved: ${hard.join(' ')}`;
+  // An online applicant whose ID already belongs to a customer must never be attached to that customer's account: the existing owner would be billed.
+  if (app?.channel === 'SELF_SERVE' && (c.flags as string[]).includes('DUPLICATE_IDENTITY')) return 'This ID is already registered to an existing customer, so it cannot be approved online. Reject it (the customer can visit a store) or send it back.';
+  // Whoever attested or submitted in person cannot also approve their own case.
+  if (c.attestation?.by === reviewer || c.submittedBy === reviewer) return 'A different person must review a case you submitted.';
+  return null;
+}
+
+/**
+ * A reviewer's decision. Only the assignee decides an assigned case (a supervisor with `kyc:assign` may decide on their behalf, recorded as such); a case nobody holds is
+ * taken by whoever decides it. On a HIGH risk case, with four eyes switched on, the first decision (approve or reject) is only a recommendation: the case goes to a
+ * different officer, and only that officer's decision is applied.
+ */
+export async function decideKycCase(q: Queryable, caseId: string, reviewer: string, d: Decision, s: StoreSettings, o: DecideOpts = {}): Promise<Row> {
   const c = (await q.query('SELECT * FROM kyc_cases WHERE id=$1 FOR UPDATE', [caseId])).rows[0];
   if (!c) throw notFound('KYC case', caseId);
   if (c.status !== 'PENDING') throw conflict(`This case was already ${c.status.toLowerCase()}${c.decidedBy ? ` by ${c.decidedBy}` : ''}.`);
@@ -600,34 +669,101 @@ export async function decideKycCase(q: Queryable, caseId: string, reviewer: stri
   if (d.decision !== 'APPROVE' && !reason) throw invalid('Give a reason; the applicant or store will see it.');
   if (d.reasonCode && !(REASON_CODES as readonly string[]).includes(d.reasonCode)) throw invalid(`The reason code is one of ${REASON_CODES.join(', ')}.`);
   if (d.reportFraud && !o.canReportFraud) throw rejected('You are not allowed to add to the fraud register.');
-  const personal = { dateOfBirth: String(c.dateOfBirth).slice(0, 10), idExpiry: c.idExpiry ? String(c.idExpiry).slice(0, 10) : undefined };
-  const customerId = (c.customerId ?? app?.customerId ?? null) as string | null;
+  const checklist = cleanChecklist(d.checklist);
+  const rs = await getKycReviewSettings(q);
+  const actor: ReviewActor = { username: reviewer, canAssign: o.canAssign, canSenior: o.canSenior };
+  const gate = gateDecision(c, actor, c.assignedTo ? (await displayNames(q, [c.assignedTo])).get(String(c.assignedTo).toLowerCase()) : null);
+  if (gate.block) throw rejected(gate.block);
   if (d.decision === 'APPROVE') {
-    const hard = hardFailures(personal, s, todayStr());
-    if (hard.length) throw rejected(`This cannot be approved: ${hard.join(' ')}`);
-    // An online applicant whose ID already belongs to a customer must never be attached to that customer's account: the existing owner would be billed.
-    if (app?.channel === 'SELF_SERVE' && (c.flags as string[]).includes('DUPLICATE_IDENTITY')) {
-      throw rejected('This ID is already registered to an existing customer, so it cannot be approved online. Reject it (the customer can visit a store) or send it back.');
-    }
-    // Whoever attested or submitted in person cannot also approve their own case.
-    if (c.attestation?.by === reviewer || c.submittedBy === reviewer) throw rejected('A different person must review a case you submitted.');
-    await setOutcome(q, app, c, { case: 'APPROVED', app: 'KYC_APPROVED', by: reviewer, reason: reason ?? 'Approved after review' });
+    const p = approveProblem(c, app, reviewer, s);
+    if (p) throw rejected(p);
+    if (rs.requireChecklist) { const cp = checklistProblem(checklist); if (cp) throw rejected(cp); }
+  }
+  if (d.decision === 'RETURN' && app && app.status !== 'KYC_REVIEW') throw rejected('The order has already been placed, so this cannot be sent back. Approve it or reject it.');
+  const sr = c.secondReview?.status === 'AWAITING' ? c.secondReview : null;
+  if (!sr && rs.fourEyesHighRisk && c.risk === 'HIGH' && d.decision !== 'RETURN') {
+    const to = await routeToSecondReview(q, c, reviewer, { ...d, checklist });
+    return { id: caseId, status: 'PENDING', decidedBy: null, decisionReason: null, reasonCode: null, awaitingSecondReview: true, secondReviewer: to };
+  }
+  if (gate.claim) await autoClaim(q, c, reviewer);
+  return applyDecision(q, c, app, reviewer, { ...d, reason, checklist }, rs, { ...o, onBehalf: gate.onBehalf, second: sr ? { decision: o.second?.decision ?? (sr.recommended === d.decision ? 'CONFIRM' : 'OVERRIDE'), note: o.second?.note } : undefined, recommendation: sr });
+}
+
+async function applyDecision(q: Queryable, c: Row, app: Row | null, reviewer: string, d: Decision, rs: KycReviewSettings, o: DecideOpts & { onBehalf: boolean; recommendation: Row | null }): Promise<Row> {
+  const caseId = c.id as string, reason = d.reason;
+  const customerId = (c.customerId ?? app?.customerId ?? null) as string | null;
+  const detail = { checklist: d.checklist ?? null, ...(o.onBehalf ? { onBehalf: true, assignedTo: c.assignedTo } : {}), ...(d.reportFraud ? { fraud: true } : {}), ...(o.recommendation ? { secondReview: true, recommended: o.recommendation.recommended, recommendedBy: o.recommendation.by } : {}) };
+  if (d.checklist) await q.query('UPDATE kyc_cases SET checklist=$2 WHERE id=$1', [caseId, JSON.stringify(d.checklist)]);
+  if (d.decision === 'APPROVE') {
+    await setOutcome(q, app, c, { case: 'APPROVED', app: 'KYC_APPROVED', by: reviewer, reason: reason ?? 'Approved after review', human: true, detail });
   } else if (d.decision === 'REJECT') {
-    await setOutcome(q, app, c, { case: 'REJECTED', app: 'KYC_REJECTED', by: reviewer, reason, reasonCode: d.reasonCode ?? (d.reportFraud ? 'SUSPECTED_FRAUD' : 'OTHER') });
+    await setOutcome(q, app, c, { case: 'REJECTED', app: 'KYC_REJECTED', by: reviewer, reason, reasonCode: d.reasonCode ?? (d.reportFraud ? 'SUSPECTED_FRAUD' : 'OTHER'), human: true, detail });
     if (d.reportFraud) {
       await blacklistAdd(q, { kind: 'ID_DOCUMENT', hash: c.idNumberHash, hint: c.idNumberMasked, reason: `KYC rejected: ${reason}`, actor: reviewer }).catch((e) => { if (!/already on the blacklist/.test((e as Error).message)) throw e; });
       await q.query('UPDATE kyc_cases SET fraud_reported=true WHERE id=$1', [caseId]);
     }
   } else {
-    if (app && app.status !== 'KYC_REVIEW') throw rejected('The order has already been placed, so this cannot be sent back. Approve it or reject it.');
     // Sent back: the applicant (or the store) fixes the details or photographs again, then submits again.
     await q.query(`UPDATE kyc_cases SET checks = checks || $2::jsonb, updated_at=now() WHERE id=$1`, [caseId, JSON.stringify({ returnReason: reason, returnedBy: reviewer })]);
     if (app) await q.query(`UPDATE applications SET status='DRAFT', updated_at=now() WHERE id=$1`, [app.id]);
     else await setOutcome(q, null, c, { case: 'RETURNED', by: reviewer, reason, reasonCode: d.reasonCode ?? 'OTHER' });
+    await decisionEvent(q, caseId, 'RETURNED', { by: reviewer, human: true, reason, reasonCode: d.reasonCode ?? 'OTHER', detail });
+    // It leaves the officer's list; whoever sent it back gets it again when it is resubmitted.
+    await q.query(`UPDATE kyc_cases SET previous_assignee=$2, assigned_to=NULL, assigned_at=NULL, assigned_by=NULL, assignment_source=NULL, first_opened_at=NULL WHERE id=$1`, [caseId, c.assignedTo ?? reviewer]);
   }
-  await audit(q, reviewer, 'kyc_case', caseId, d.decision, { applicationId: app?.id ?? null, customerId, reason, reasonCode: d.reasonCode ?? null, fraud: !!d.reportFraud });
+  if (o.recommendation) {
+    const sec = o.second ?? { decision: 'CONFIRM' as const };
+    await q.query(`UPDATE kyc_cases SET second_review = second_review || $2::jsonb WHERE id=$1`, [caseId, JSON.stringify({ status: 'DONE', secondBy: reviewer, secondDecision: sec.decision, applied: d.decision, secondNote: sec.note ?? null, secondAt: new Date().toISOString() })]);
+    await logEvent(q, caseId, reviewer, 'SECOND_REVIEW_DECIDED', { decision: sec.decision, recommended: o.recommendation.recommended, applied: d.decision, note: sec.note ?? null, recommendedBy: o.recommendation.by });
+  }
+  await audit(q, reviewer, 'kyc_case', caseId, d.decision, { applicationId: app?.id ?? null, customerId, reason, reasonCode: d.reasonCode ?? null, fraud: !!d.reportFraud, onBehalf: o.onBehalf || undefined, assignedTo: c.assignedTo ?? null });
   const after = (await q.query('SELECT id, status, decided_by, decision_reason, reason_code FROM kyc_cases WHERE id=$1', [caseId])).rows[0]!;
   await raiseEvent(q, 'KYC_DECIDED', { resourceId: caseId, payload: { caseId, customerId, decision: d.decision, status: after.status, reasonCode: after.reasonCode ?? null } }, { onlyIfWanted: true });
   if (customerId && d.decision !== 'RETURN') await releaseOrders(q, customerId, d.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED', reviewer);
+  if (d.decision === 'APPROVE') await maybeSampleQa(q, c, reviewer, rs);
+  return after;
+}
+
+/** The second reviewer of a high risk case confirms the first officer's recommendation, or overrides it with a decision of their own (and a note). */
+export async function secondReview(q: Queryable, actor: ReviewActor & { canReportFraud?: boolean }, caseId: string, b: { decision: 'CONFIRM' | 'OVERRIDE'; decisionBody?: Decision; note?: string }, s: StoreSettings): Promise<Row> {
+  const c = (await q.query('SELECT second_review FROM kyc_cases WHERE id=$1', [caseId])).rows[0];
+  if (!c) throw notFound('KYC case', caseId);
+  const sr = c.secondReview;
+  if (sr?.status !== 'AWAITING') throw conflict('This case is not waiting for a second review.');
+  const note = b.note?.trim();
+  let d: Decision;
+  if (b.decision === 'CONFIRM') d = { decision: sr.recommended, reason: sr.note ?? note, reasonCode: sr.reasonCode ?? undefined, reportFraud: !!sr.reportFraud, checklist: sr.checklist ?? null };
+  else if (b.decision === 'OVERRIDE') {
+    if (!b.decisionBody) throw invalid('Say what you decide instead.');
+    if (!note) throw invalid('Explain why you override the first officer.');
+    d = { ...b.decisionBody, reason: b.decisionBody.reason?.trim() || note };
+  } else throw invalid('The second review is CONFIRM or OVERRIDE.');
+  return decideKycCase(q, caseId, actor.username, d, s, { canReportFraud: actor.canReportFraud || (b.decision === 'CONFIRM' && !!sr.reportFraud), canAssign: actor.canAssign, canSenior: actor.canSenior, second: { decision: b.decision, note } });
+}
+
+/**
+ * A supervisor (`kyc:senior` or `kyc:assign`) puts a decided case back in the queue, within the reopening window.
+ *  - REJECTED and RETURNED cases reopen freely, except a rejection reported as suspected fraud (that needs the fraud register looked at first).
+ *    The orders cancelled and refunded by a rejection are not brought back: the customer orders again after approval.
+ *  - APPROVED cases reopen only while no service has been activated since the approval. The customer goes back to "In review", so a service not yet activated waits for the
+ *    new decision; an activated service is never switched off by a reopening, so once one exists the approval stands.
+ * The case returns to the officer who decided it when they are still eligible, else to the distribution.
+ */
+export async function reopenCase(q: Queryable, actor: ReviewActor, caseId: string, reason: string): Promise<Row> {
+  if (!actor.canSenior && !actor.canAssign) throw rejected('Reopening a case needs a senior officer or a supervisor.');
+  if (!reason?.trim()) throw invalid('Say why the case is reopened.');
+  const c = (await q.query('SELECT * FROM kyc_cases WHERE id=$1 FOR UPDATE', [caseId])).rows[0];
+  if (!c) throw notFound('KYC case', caseId);
+  const problem = await reopenProblem(q, c, await getKycReviewSettings(q));
+  if (problem) throw rejected(problem);
+  const app = c.applicationId ? await loadApp(q, c.applicationId) : null;
+  const decider = c.decidedBy ? (await q.query('SELECT username FROM users WHERE lower(username)=lower($1)', [c.decidedBy])).rows[0]?.username ?? null : null;
+  await q.query(`UPDATE kyc_cases SET reopened_count = reopened_count + 1, ${RESET}, updated_at=now() WHERE id=$1`, [caseId]);
+  if (decider) await q.query('UPDATE kyc_cases SET previous_assignee=$2 WHERE id=$1', [caseId, decider]);
+  await logEvent(q, caseId, actor.username, 'REOPENED', { reason: reason.trim(), from: c.status, decidedBy: c.decidedBy ?? null, decision: c.status === 'APPROVED' ? 'APPROVE' : c.status === 'REJECTED' ? 'REJECT' : 'RETURN' }, decider);
+  await audit(q, actor.username, 'kyc_case', caseId, 'REOPENED', { from: c.status, reason: reason.trim() });
+  await setOutcome(q, app && ['KYC_APPROVED', 'KYC_REJECTED'].includes(app.status) ? app : null, c, { case: 'PENDING', app: 'KYC_REVIEW', by: null, forceSticky: true });
+  const after = (await q.query('SELECT id, case_number, status, assigned_to FROM kyc_cases WHERE id=$1', [caseId])).rows[0]!;
+  if (after.assignedTo) await safeNotify(q, after.assignedTo, 'caseAssigned', { title: 'KYC case reopened', body: `${after.caseNumber} was reopened: ${reason.trim()}`.slice(0, 300), link: `/kyc/${caseId}` });
   return after;
 }

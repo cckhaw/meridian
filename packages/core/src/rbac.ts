@@ -49,6 +49,9 @@ const CORE_PERMISSIONS = [
   'migration:import', // load data from files: templates, a check that changes nothing, then the load
   'user:manage',
   'store:assist', 'kyc:attest', 'kyc:review',
+  'kyc:assign', // assign, reassign and spread waiting KYC reviews, see every officer's workload and availability, run the assignment sweep
+  'kyc:report', // see every officer's review KPIs (an officer without it sees only their own)
+  'kyc:senior', // receives escalations and second reviews of high risk cases, and may reopen a decided case
   'document:read', // signed agreements and who looked at them
   'document:kyc', // identity documents in the vault: view, verify, reject, upload
   'document:manage', // purge, change retention, run the retention sweep
@@ -70,7 +73,7 @@ export const isPermission = (p: string): p is Permission => (ALL_PERMISSIONS as 
 
 export const ROLE_IDS = [
   'admin', 'product-configurator', 'billing-ops', 'rating-charging', 'self-serve', 'call-center', 'telesales',
-  'retail-store', 'retail-manager', 'dealer', 'dealer-desk', 'customer-service', 'team-lead', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'inventory-ops',
+  'retail-store', 'retail-manager', 'dealer', 'dealer-desk', 'customer-service', 'team-lead', 'finance', 'fraud', 'revenue-assurance', 'compliance', 'compliance-lead', 'inventory-ops',
 ] as const;
 export type BuiltinRoleId = (typeof ROLE_IDS)[number];
 /** A role id: one of the built-in roles, or the id of a role an administrator created. */
@@ -186,6 +189,11 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     summary: 'Reviews identity verification for online sign-ups and referred cases: approves, rejects, or sends back for corrections. Sees identity evidence; cannot sell or change billing.',
     permissions: ['dashboard:read', 'customer:search', 'customer:read', 'kyc:review', 'audit:read', 'case:read', 'document:read', 'document:kyc', 'document:manage', 'document:template'],
   },
+  'compliance-lead': {
+    id: 'compliance-lead', label: 'Compliance Lead', scope: 'staff', home: '/kyc',
+    summary: 'Leads the KYC compliance officers: assigns and reassigns waiting reviews, sees everyone’s workload and review reports, takes escalations and second reviews, and reopens decided cases. Reviews identity checks like an officer; cannot sell or change billing.',
+    permissions: ['dashboard:read', 'customer:search', 'customer:read', 'kyc:review', 'kyc:assign', 'kyc:report', 'kyc:senior', 'audit:read', 'case:read', 'document:read', 'document:kyc', 'document:manage', 'document:template'],
+  },
   'inventory-ops': {
     id: 'inventory-ops', label: 'Operations Support', scope: 'staff', home: '/inventory',
     summary: 'Looks after stock: keeps warehouse locations, loads stock in batches or one SKU at a time, and writes stock off with a reason. Sees the stock history; cannot sell or change billing.',
@@ -203,14 +211,14 @@ export const ROLE_CODES: Record<BuiltinRoleId, string> = {
   admin: 'ROLE_ADMIN', 'product-configurator': 'ROLE_PRODUCT_CONFIGURATOR', 'billing-ops': 'ROLE_BILLING_OPS', 'rating-charging': 'ROLE_RATING_ADMIN', 'self-serve': 'ROLE_CUSTOMER_SELFCARE',
   'call-center': 'ROLE_CALL_CENTER_AGENT', telesales: 'ROLE_TELESALES', 'retail-store': 'ROLE_RETAIL_AGENT', 'retail-manager': 'ROLE_RETAIL_MANAGER', dealer: 'ROLE_DEALER_AGENT', 'dealer-desk': 'ROLE_DEALER_DESK',
   'customer-service': 'ROLE_CUSTOMER_SERVICE', 'team-lead': 'ROLE_CALL_CENTER_SUPERVISOR', finance: 'ROLE_FINANCE_OFFICER', fraud: 'ROLE_FRAUD_ANALYST', 'revenue-assurance': 'ROLE_REVENUE_ASSURANCE',
-  compliance: 'ROLE_KYC_COMPLIANCE', 'inventory-ops': 'ROLE_OPERATIONS_SUPPORT',
+  compliance: 'ROLE_KYC_COMPLIANCE', 'compliance-lead': 'ROLE_KYC_COMPLIANCE_LEAD', 'inventory-ops': 'ROLE_OPERATIONS_SUPPORT',
 };
 for (const id of ROLE_IDS) ROLES[id].code = ROLE_CODES[id];
 /** The role for a code (ROLE_CALL_CENTER_AGENT → call-center), or undefined. */
 export const roleIdOfCode = (code: string): BuiltinRoleId | undefined => ROLE_IDS.find((r) => ROLE_CODES[r] === code.trim().toUpperCase());
 
 /** Priority for choosing the landing page when a user holds several roles. */
-const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-manager', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'revenue-assurance', 'inventory-ops', 'product-configurator', 'rating-charging', 'self-serve'];
+const HOME_PRIORITY: string[] = ['admin', 'customer-service', 'call-center', 'billing-ops', 'finance', 'retail-manager', 'retail-store', 'dealer', 'dealer-desk', 'telesales', 'fraud', 'compliance', 'compliance-lead', 'revenue-assurance', 'inventory-ops', 'product-configurator', 'rating-charging', 'self-serve'];
 
 // ───────────────────────── modules (navigation) ─────────────────────────
 export interface ModuleDef {

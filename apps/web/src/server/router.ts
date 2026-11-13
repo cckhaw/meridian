@@ -603,18 +603,78 @@ post('/assisted/applications/:id/checkout', 'order:create:RETAIL_ASSISTED', asyn
 post('/assisted/applications/:id/cancel', 'store:assist', async ({ db, user, params }) => { await core.cancelApplication(db, params.id!, staffAccess(user)); return { ok: true }; });
 
 // ───────────────────────── KYC review (compliance) ─────────────────────────
-get('/kyc/cases', 'kyc:review', ({ db, query }) => core.listKycCases(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
-get('/kyc/cases/:id', 'kyc:review', ({ db, user, params }) => core.getKycCase(db, params.id!, user.username));
+/** What this person may do beyond reviewing: assigning cases, and senior work (escalations, second reviews, reopening). */
+const reviewActor = (u: SessionUser): core.ReviewActor => ({ username: u.username, canAssign: u.permissions.has('kyc:assign'), canSenior: u.permissions.has('kyc:senior') });
+const on = (q: URLSearchParams, k: string) => q.get(k) === '1' || q.get(k) === 'true';
+/** The list filters, as the URL carries them. `me` is the signed-in officer: it is what assignee=me and qa=1 mean. */
+const kycFilter = (q: URLSearchParams, user: SessionUser): core.KycListFilter => ({
+  status: str(q, 'status'), assignee: str(q, 'assignee'), q: str(q, 'q'), source: str(q, 'source'), risk: str(q, 'risk'), flag: str(q, 'flag'), overdue: on(q, 'overdue'), escalated: on(q, 'escalated'), qa: on(q, 'qa'),
+  from: str(q, 'from'), to: str(q, 'to'), sort: str(q, 'sort') as core.KycListFilter['sort'], limit: num(q, 'limit'), cursor: str(q, 'cursor'), me: user.username,
+});
+get('/kyc/cases', 'kyc:review', ({ db, user, query }) => core.listKycCases(db, kycFilter(query, user)));
+get('/kyc/cases/:id', 'kyc:review', ({ db, user, params }) => db.tx((q) => core.getKycCase(q, params.id!, user.username, reviewActor(user))));
 get('/kyc/documents/:id', 'kyc:review', async ({ db, user, req, params }) => {
   const d = await core.getKycDocument(db, params.id!, docWho(user, req));
   return new Response(new Uint8Array(d.bytes), { headers: { 'content-type': d.contentType, 'content-disposition': 'inline', 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'no-store' } });
 });
-get('/kyc/summary', 'kyc:review', ({ db }) => core.kycQueueCounts(db));
+get('/kyc/summary', 'kyc:review', ({ db, user }) => core.kycSummary(db, user.username));
+const checklist = z.object({ documentLegible: z.boolean().nullable().optional(), photoMatchesId: z.boolean().nullable().optional(), detailsMatchId: z.boolean().nullable().optional(), notExpired: z.boolean().nullable().optional(), ageOk: z.boolean().nullable().optional(), notDuplicate: z.boolean().nullable().optional(), notes: z.string().max(1000).optional() });
+const decision = z.object({ decision: z.enum(['APPROVE', 'REJECT', 'RETURN']), reason: z.string().max(300).optional(), reasonCode: z.enum(core.REASON_CODES).optional(), reportFraud: z.boolean().optional(), checklist: checklist.optional() });
+const decideOpts = (u: SessionUser) => ({ canReportFraud: u.permissions.has('fraud:manage'), canAssign: u.permissions.has('kyc:assign'), canSenior: u.permissions.has('kyc:senior') });
 post('/kyc/cases/:id/decision', 'kyc:review', async ({ db, user, params, body }) => {
-  const b = z.object({ decision: z.enum(['APPROVE', 'REJECT', 'RETURN']), reason: z.string().max(300).optional(), reasonCode: z.enum(core.REASON_CODES).optional(), reportFraud: z.boolean().optional() }).parse(body);
+  const b = decision.parse(body);
   // The decision, the orders it releases or cancels, and the fraud-register entry are one unit.
-  return db.tx(async (q) => core.decideKycCase(q, params.id!, user.username, b, await core.getStoreSettings(q), { canReportFraud: user.permissions.has('fraud:manage') }));
+  return db.tx(async (q) => core.decideKycCase(q, params.id!, user.username, b, await core.getStoreSettings(q), decideOpts(user)));
 });
+post('/kyc/cases/:id/second-review', 'kyc:review', async ({ db, user, params, body }) => {
+  const b = z.object({ decision: z.enum(['CONFIRM', 'OVERRIDE']), decisionBody: decision.optional(), note: z.string().max(300).optional() }).parse(body);
+  return db.tx(async (q) => core.secondReview(q, { ...reviewActor(user), canReportFraud: user.permissions.has('fraud:manage') }, params.id!, b, await core.getStoreSettings(q)));
+});
+post('/kyc/cases/:id/claim', 'kyc:review', ({ db, user, params }) => core.claimCase(db, user.username, params.id!));
+post('/kyc/cases/:id/release', 'kyc:review', ({ db, user, params, body }) => core.releaseCase(db, reviewActor(user), params.id!, z.object({ reason: z.string().max(300) }).parse(body).reason));
+post('/kyc/cases/:id/take-over', 'kyc:assign', ({ db, user, params, body }) => core.takeOver(db, reviewActor(user), params.id!, z.object({ reason: z.string().max(300) }).parse(body).reason));
+post('/kyc/cases/:id/escalate', 'kyc:review', ({ db, user, params, body }) => core.escalateCase(db, reviewActor(user), params.id!, z.object({ note: z.string().max(500), to: z.string().max(60).optional() }).parse(body)));
+post('/kyc/cases/:id/notes', 'kyc:review', ({ db, user, params, body }) => core.addKycNote(db, user.username, params.id!, z.object({ text: z.string().max(2000) }).parse(body).text));
+post('/kyc/cases/:id/reopen', ['kyc:senior', 'kyc:assign'], ({ db, user, params, body }) => core.reopenCase(db, reviewActor(user), params.id!, z.object({ reason: z.string().max(300) }).parse(body).reason));
+post('/kyc/cases/:id/qa', 'kyc:review', ({ db, user, params, body }) => core.qaReview(db, user.username, params.id!, z.object({ result: z.enum(['AGREE', 'DISAGREE']), note: z.string().max(500).optional() }).parse(body)));
+post('/kyc/next', 'kyc:review', ({ db, user }) => core.nextCase(db, user.username));
+
+// Who can be given cases, how loaded everyone is, and the batch assignment (kyc:assign).
+get('/kyc/officers', 'kyc:assign', async ({ db, query }) => ({ items: await core.listReviewers(db, { q: str(query, 'q'), limit: num(query, 'limit') }) }));
+get('/kyc/workload', 'kyc:assign', ({ db }) => core.kycWorkload(db));
+const assignFilter = z.object({ status: z.string().max(20).optional(), assignee: z.string().max(60).optional(), q: z.string().max(100).optional(), source: z.string().max(20).optional(), risk: z.string().max(10).optional(), flag: z.string().max(40).optional(), overdue: z.boolean().optional(), escalated: z.boolean().optional(), from: date.optional(), to: date.optional() });
+post('/kyc/assignments', 'kyc:assign', ({ db, user, body }) => {
+  const b = z.object({ caseIds: z.array(uuid).max(2000).optional(), filter: assignFilter.optional(), mode: z.enum(['ASSIGN', 'DISTRIBUTE', 'UNASSIGN']), officer: z.string().max(60).optional(), officers: z.array(z.string().max(60)).max(200).optional(), reason: z.string().max(300).optional(), force: z.boolean().optional() }).parse(body);
+  if (!b.caseIds && !b.filter) throw new DomainError('INVALID', 'Choose the cases: caseIds or a filter.');
+  return core.assignCases(db, user.username, b);
+});
+post('/kyc/sweep', ['kyc:assign', 'settings:manage'], async ({ db, user }) => {
+  const r = await core.sweepKycReview(db);
+  await core.audit(db, user.username, 'kyc_case', 'sweep', 'SWEEP_KYC_REVIEW', { ...r });
+  return r;
+});
+
+// An officer's own numbers and availability.
+const statusBody = z.object({ away: z.boolean(), awayUntil: z.string().max(40).nullable().optional(), note: z.string().max(200).nullable().optional() });
+get('/kyc/me', 'kyc:review', ({ db, user }) => core.officerMe(db, user.username));
+post('/kyc/me/status', 'kyc:review', ({ db, user, body }) => core.setOfficerStatus(db, reviewActor(user), user.username, statusBody.parse(body)));
+post('/kyc/officers/:username/status', 'kyc:assign', ({ db, user, params, body }) => core.setOfficerStatus(db, reviewActor(user), params.username!, statusBody.parse(body)));
+
+// Officer KPIs. Everyone who reviews sees their own numbers; every officer's needs kyc:report.
+const reportQuery = (q: URLSearchParams, user: SessionUser): core.ReportQuery => {
+  const own = !user.permissions.has('kyc:report');
+  const officer = str(q, 'officer');
+  if (own && officer && officer.toLowerCase() !== user.username.toLowerCase()) throw forbidden('You can see your own review numbers; the team’s need the permission to see review reports.');
+  return { from: str(q, 'from'), to: str(q, 'to'), by: str(q, 'by') as core.ReportQuery['by'], officer: own ? user.username : officer, source: str(q, 'source') };
+};
+get('/kyc/reports/officers', 'kyc:review', ({ db, user, query }) => core.officerReport(db, reportQuery(query, user)));
+get('/kyc/reports/officers.csv', 'kyc:review', async ({ db, user, query }) => new Response(core.officerReportCsv(await core.officerReport(db, reportQuery(query, user))), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="kyc-officer-report.csv"', 'cache-control': 'no-store' } }));
+
+get('/settings/kyc-review', 'settings:manage', ({ db }) => core.getKycReviewSettings(db));
+post('/settings/kyc-review', 'settings:manage', ({ db, user, body }) => core.setKycReviewSettings(db, user.username, z.object({
+  autoAssign: z.boolean(), strategy: z.enum(['EQUAL', 'ROUND_ROBIN', 'OFF']), maxOpenPerOfficer: z.number().int().min(0).max(1000), stickyOnResubmit: z.boolean(), redistributeAway: z.boolean(), escalateOverdueHours: z.number().int().min(0).max(720),
+  fourEyesHighRisk: z.boolean(), qaSamplePercent: z.number().min(0).max(100), reopenDays: z.number().int().min(0).max(365), requireChecklist: z.boolean(),
+}).partial().strict().parse(body)));
 
 // ───────────────────────── store settings and API keys (Integration permission) ─────────────────────────
 const storeSettingsSchema = z.object({
@@ -1942,11 +2002,14 @@ const MAX_BODY = 1_000_000;
 
 /** Scheduled offers go live on their date: any request notices a due one, at most once every 15 seconds per server. */
 let lastSweep = 0;
+let lastKycSweep = Date.now() - 45_000;   // the first one runs soon after the server starts
 async function sweepScheduled(db: Db) {
   if (Date.now() - lastSweep < 15_000) return;
   lastSweep = Date.now();
   void Promise.all([core.deliverUserAlerts(db), core.deliverSignedCopies(db)]).catch((e) => console.error('[notify] delivery sweep failed', (e as Error).message));
   try { await core.activateDueNodes(db); } catch (e) { console.error('[catalog] scheduled activation failed', (e as Error).message); }
+  // KYC reviews: hand out what nobody holds, take cases back from officers who are away, mark and escalate the overdue ones. Once a minute; safe on several servers at once.
+  if (process.env.NODE_ENV !== 'test' && Date.now() - lastKycSweep >= 60_000) { lastKycSweep = Date.now(); void core.sweepKycReview(db).catch((e) => console.error('[kyc] review sweep failed', (e as Error).message)); }
 }
 
 /** TM Forum error payload (TMF630 guidelines): code, reason, message, status. */
