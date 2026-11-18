@@ -739,6 +739,19 @@ post('/migration/jobs/:id/cancel', 'migration:import', ({ db, user, params }) =>
 post('/migration/jobs/:id/rollback', 'migration:import', ({ db, user, params, body }) => core.rollbackJob(db, user.username, params.id!, z.object({ reason: z.string().max(300).optional() }).parse(body ?? {}).reason));
 get('/migration/jobs/:id/report.csv', migrationAny, async ({ db, params }) => csv(await core.jobReportCsv(db, params.id!), `migration-report-${params.id}.csv`));
 /** For a scheduler: works on whatever import jobs are waiting, so loads go on with nobody watching. */
+// One-off clean-up for a demo or test deployment: removes every order, subscription and bill and the whole catalog (customers, accounts and KYC cases stay), then can build the demo catalog.
+post('/admin/reset-sales-and-catalog', null, async ({ db, user, body }) => {
+  if (!user.isSuperuser) throw new DomainError('FORBIDDEN', 'Only the super user can do this.');
+  const b = z.object({ confirm: z.string().optional(), dryRun: z.boolean().optional(), seedCatalog: z.boolean().optional(), step: z.enum(['documents']).optional() }).parse(body ?? {});
+  if (b.step === 'documents') { if (b.confirm !== core.PURGE_CONFIRMATION) throw new DomainError('INVALID', `Type the confirmation text exactly to run this: ${core.PURGE_CONFIRMATION}`); return core.purgeOrderDocuments(db, 1000); }
+  const purged = await core.purgeSalesAndCatalog(db, { actor: user.username, confirm: b.confirm, dryRun: b.dryRun });
+  const catalog = b.seedCatalog && !b.dryRun ? await core.seedDemoCatalog(db, user.username) : undefined;
+  return { purged, catalog };
+});
+post('/admin/seed-demo-catalog', null, async ({ db, user }) => {
+  if (!user.isSuperuser) throw new DomainError('FORBIDDEN', 'Only the super user can do this.');
+  return core.seedDemoCatalog(db, user.username);
+});
 post('/migration/run', ['billing:run'], ({ db }) => core.runDueMigrationJobs(db));
 
 // ───────────────────────── charging system (OCS): connector, queue, retries ─────────────────────────

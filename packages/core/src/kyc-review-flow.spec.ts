@@ -126,7 +126,7 @@ describe('with real customers: sending back, resubmitting, reopening', () => {
     const a = await applicant();
     const c = await caseRow(db, a.caseId);
     expect(c).toMatchObject({ assignmentSource: 'AUTO', assignedBy: 'system', risk: 'LOW' });
-    expect(c.assignedTo).toMatch(/^r\./);
+    expect(['r.one', 'r.two', 'r.three', 'lead']).toContain(c.assignedTo); // every officer is eligible and ties are broken at random
     expect((await events(db, a.caseId)).map((e) => e.action)).toEqual(['CREATED', 'SUBMITTED', 'ASSIGNED']);
     await placeOrder(db, order(a.customerId));
     await sweepKycReview(db);
