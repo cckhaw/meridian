@@ -164,5 +164,3 @@ export * from './agreements.js';
 export * from './outbox-retry.js';
 export * from './user-notifications.js';
 export * from './signed-copies.js';
-export * from './reset-demo-data.js';
-export * from './demo-catalog.js';
