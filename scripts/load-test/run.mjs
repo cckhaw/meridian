@@ -232,7 +232,7 @@ async function loadStoreSims(stores) {
 const skuAvail = (loc, sku) => { const l = stock.learned.get(`${loc}|${sku}`); const k = stock.sku ? stock.sku.get(loc)?.get(sku) ?? 0 : Infinity; return l === undefined ? k : Math.min(l, k); };
 const bumpSku = (loc, sku, d) => { const m = stock.sku?.get(loc); if (m && m.has(sku)) m.set(sku, m.get(sku) + d); const key = `${loc}|${sku}`; if (stock.learned.has(key)) stock.learned.set(key, Math.max(0, stock.learned.get(key) + d)); };
 
-// ── staff for the work that needs a second person ──
+// ── staff for the work that needs a second person (the reviewer is a compliance lead: cases are assigned to the deployment's own officers, and only they or a supervisor may decide them) ──
 const pw = () => `Lt-${randomBytes(9).toString('base64url')}-9a!`;
 const made = [];
 async function staffUser(username, roles, extra = {}) {
@@ -259,7 +259,7 @@ async function staffUser(username, roles, extra = {}) {
 const staff = { compliance: null, finance: null, agents: [] };
 async function ensureStaff() {
   const todo = [];
-  if (has('kyc') && !staff.compliance) todo.push(staffUser('lt.compliance', ['compliance']).then((u) => { staff.compliance = u; }));
+  if (has('kyc') && !staff.compliance) todo.push(staffUser('lt.compliance', ['compliance-lead']).then((u) => { staff.compliance = u; }));
   if (has('billing') && !staff.finance) todo.push(staffUser('lt.finance', ['finance']).then((u) => { staff.finance = u; }));
   if ((has('care') || has('payments')) && !staff.agents.length) { const slots = Array(AGENT_USERS); staff.agents = slots; for (let i = 1; i <= AGENT_USERS; i++) todo.push(staffUser(`lt.agent.${i}`, ['customer-service']).then((u) => { slots[i - 1] = u; })); }
   if (todo.length) { startPhase('staff logins'); await Promise.all(todo); }
