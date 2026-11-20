@@ -12,6 +12,7 @@
  *   --customers N (60)  --orders N (more orders to place; about 2.2 x customers when customers are created in the same run)  --cases N  --interactions N
  *   --dealers N (3) --agents-per-dealer N (2) --stores N (new stores, 0) --callcentre N --telesales N --backoffice N   (staff accounts left active)
  *   --concurrency N (6, at most 12)  --tag LT  --seed N  --dry (read-only: shows what could be sold and what stock there is)  --keep-users
+ *   --deadline-min N (time limit for the whole run: customers may start until 40% of it, identity reviews until 55%, orders until 100%; the rest is skipped and reported)
  *   --bill-chunk N (500 accounts per bill run)  --cycle-run (also run the bill cycle that has most load-test accounts: bills every account on it!)
  *   --esim-share 0.35  --quicksale-stores N (5)  --groups N  --immediate-share 0.5 (plan changes that apply at once)  --out FILE (report path)
  *
@@ -65,6 +66,11 @@ async function step(key, fn) {
 
 // progress and phase timing
 const t0 = Date.now();
+// --deadline-min N: a time limit for the whole run. New customers may start until 40% of it has passed, identity reviews until 55%, orders until all of it; work that
+// has not started by then is skipped (counted under "deadline" in the report) and the run ends cleanly with its report.
+const DEADLINE_MIN = Number(args['deadline-min'] ?? 0);
+const stopAt = (share = 1) => (DEADLINE_MIN > 0 ? t0 + DEADLINE_MIN * 60_000 * share : Infinity);
+const skippedForTime = {};
 const prog = { phase: 'start', done: 0, total: 0 };
 const timings = {};
 let phaseStart = Date.now();
@@ -81,9 +87,9 @@ function progressLine() {
 }
 setInterval(() => log(progressLine()), 30_000).unref();
 /** Runs fn over items with the configured concurrency, counting progress; a throwing item is counted, not fatal. */
-async function each(label, items, fn) {
+async function each(label, items, fn, until = Infinity) {
   setTotal(items.length);
-  await poolRaw(items, CONC, async (it, i) => { try { await fn(it, i); } finally { prog.done++; } }, (e) => note(`${label} (unexpected)`, false, e.message));
+  await poolRaw(items, CONC, async (it, i) => { try { if (Date.now() > until) { skippedForTime[label] = (skippedForTime[label] ?? 0) + 1; return; } await fn(it, i); } finally { prog.done++; } }, (e) => note(`${label} (unexpected)`, false, e.message));
 }
 
 // ─────────────────────────── fixtures ───────────────────────────
@@ -122,7 +128,7 @@ function buildReport(final = false) {
   const perDealer = S.dealers.map((d) => ({ id: d.id, name: d.name, orders: S.dealerOrders.get(d.id) ?? 0, agents: d.agents.length })).sort((a, b) => b.orders - a.orders);
   const cur = { ...timings, ...(final ? {} : { [prog.phase]: { seconds: Math.round((Date.now() - phaseStart) / 1000), done: prog.done, total: prog.total, running: true } }) };
   return {
-    base: BASE, tag: TAG, phases: [...PHASES], final, startedAt: new Date(t0).toISOString(), updatedAt: new Date().toISOString(), minutes: Math.round((Date.now() - t0) / 600) / 100, timings: cur,
+    base: BASE, tag: TAG, phases: [...PHASES], final, deadline: DEADLINE_MIN ? { minutes: DEADLINE_MIN, skipped: skippedForTime } : undefined, startedAt: new Date(t0).toISOString(), updatedAt: new Date().toISOString(), minutes: Math.round((Date.now() - t0) / 600) / 100, timings: cur,
     calls: { total: metrics.calls, infraFailures: metrics.failures, retries: metrics.retries, perSecond: Math.round((metrics.calls / Math.max(1, (Date.now() - t0) / 1000)) * 10) / 10, effectiveConcurrency: gov.effective, governorTrips: gov.trips },
     steps: steps.stats, errors: steps.errors,
     customers: { known: S.customers.length, created: S.customers.filter((c) => c.created).length, verified: S.customers.filter((c) => c.verified).length, pending: S.customers.filter((c) => !c.verified && /PENDING/.test(c.kycStatus ?? '')).length },
@@ -314,7 +320,7 @@ async function newCustomer(i) {
 const newCust = (c) => ({ company: false, created: false, kycCase: null, kycStatus: null, accountId: null, verified: c.kycStatus === 'VERIFIED', billCycleDay: null, ordersBefore: 0, orders: [], services: [], allServices: [], noService: false, ...c });
 async function customersPhase() {
   startPhase('customers', N);
-  await each('customers', Array.from({ length: N }, (_, i) => i), newCustomer);
+  await each('customers', Array.from({ length: N }, (_, i) => i), newCustomer, stopAt(0.4));
   log(`Created ${S.customers.length} customers.`);
 }
 
@@ -348,7 +354,7 @@ async function kycPhase() {
     else if (roll < 0.80) { if (await step('kyc rejected', () => staff.compliance.call(`/kyc/cases/${c.kycCase}/decision`, 'POST', { decision: 'REJECT', reason: pick(['The ID photo is cut off', 'Selfie does not match the ID', 'ID looks altered']), reasonCode: pick(['UNREADABLE', 'MISMATCH', 'SUSPECTED_FRAUD']) }))) c.kycStatus = 'REJECTED'; }
     else if (roll < 0.87) { if (await step('kyc sent back', () => staff.compliance.call(`/kyc/cases/${c.kycCase}/decision`, 'POST', { decision: 'RETURN', reason: 'Please retake the back of the ID in better light', reasonCode: 'UNREADABLE' }))) c.kycStatus = 'RETURNED'; }
     // the rest stay waiting, so the review queue has work in it
-  });
+  }, stopAt(0.55));
 }
 
 // ─────────────────────────── order planning ───────────────────────────
@@ -693,7 +699,7 @@ async function ordersPhase() {
   setTotal(ORDERS);
   const worker = async () => {
     for (;;) {
-      if (budget.attempts >= budget.cap) return;
+      if (budget.attempts >= budget.cap || Date.now() > stopAt(1)) return;
       if (S.orders.ok + inflight >= ORDERS) { if (!inflight) return; await sleep(25); continue; }
       const job = nextJob(planned, ORDERS - S.orders.ok);
       if (!job) return;
@@ -707,6 +713,7 @@ async function ordersPhase() {
   const refresher = setInterval(() => { loadStock({ quiet: true }).catch(() => {}); }, 5 * 60_000); refresher.unref();
   await Promise.all(Array.from({ length: CONC }, worker));
   clearInterval(refresher);
+  if (Date.now() > stopAt(1)) log(`!!! The ${DEADLINE_MIN}-minute limit was reached with ${S.orders.ok} of ${ORDERS} orders placed.`);
   log(`Orders: ${S.orders.ok} placed in ${S.orders.attempts} attempts (${S.orders.held} waiting on identity checks, ${S.orders.replays} repeats answered from the idempotency key).`);
   S.soldOut = soldOutOffers();
   if (S.soldOut.length) log(`Out of stock everywhere the run could sell from: ${S.soldOut.join(', ')}.`);
