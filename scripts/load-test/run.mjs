@@ -12,6 +12,7 @@
  *   --customers N (60)  --orders N (more orders to place; about 2.2 x customers when customers are created in the same run)  --cases N  --interactions N
  *   --dealers N (3) --agents-per-dealer N (2) --stores N (new stores, 0) --callcentre N --telesales N --backoffice N   (staff accounts left active)
  *   --concurrency N (6, at most 12)  --tag LT  --seed N  --dry (read-only: shows what could be sold and what stock there is)  --keep-users
+ *   --approve-all (kyc phase: approve every waiting case instead of the usual mix of approvals, rejections and send-backs)
  *   --deadline-min N (time limit for the whole run: customers may start until 40% of it, identity reviews until 55%, orders until 100%; the rest is skipped and reported)
  *   --bill-chunk N (500 accounts per bill run)  --cycle-run (also run the bill cycle that has most load-test accounts: bills every account on it!)
  *   --esim-share 0.35  --quicksale-stores N (5)  --groups N  --immediate-share 0.5 (plan changes that apply at once)  --out FILE (report path)
@@ -349,7 +350,7 @@ async function kycPhase() {
   const byCustomer = new Map(todo.map((c) => [c.id, c]));
   if (todo.some((c) => !c.kycCase)) await pages(staff.compliance, '/kyc/cases?status=PENDING&limit=100', (items) => { for (const k of items) { const c = byCustomer.get(k.customerId); if (c && !c.kycCase) c.kycCase = k.id; } }, { maxPages: 100_000 });
   await each('kyc', todo.filter((c) => c.kycCase), async (c) => {
-    const roll = rnd();
+    const roll = args['approve-all'] ? 0 : rnd();   // --approve-all: clear the whole queue by approving every case
     if (roll < 0.72) { const r = await step('kyc approved', () => staff.compliance.call(`/kyc/cases/${c.kycCase}/decision`, 'POST', { decision: 'APPROVE' })); if (r) { c.verified = true; c.kycStatus = 'VERIFIED'; } }
     else if (roll < 0.80) { if (await step('kyc rejected', () => staff.compliance.call(`/kyc/cases/${c.kycCase}/decision`, 'POST', { decision: 'REJECT', reason: pick(['The ID photo is cut off', 'Selfie does not match the ID', 'ID looks altered']), reasonCode: pick(['UNREADABLE', 'MISMATCH', 'SUSPECTED_FRAUD']) }))) c.kycStatus = 'REJECTED'; }
     else if (roll < 0.87) { if (await step('kyc sent back', () => staff.compliance.call(`/kyc/cases/${c.kycCase}/decision`, 'POST', { decision: 'RETURN', reason: 'Please retake the back of the ID in better light', reasonCode: 'UNREADABLE' }))) c.kycStatus = 'RETURNED'; }
