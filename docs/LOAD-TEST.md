@@ -96,6 +96,14 @@ Stop (Ctrl-C) or crash: the report holds what was done. Run the remaining phases
 
 `--resume --tag <TAG>` is the old shortcut: every phase except setup, customers and kyc.
 
+## Adding products and keeping to a time limit
+
+`scripts/load-test/add-products.mjs` adds 75 more demo offers (SIM-only, prepaid-style, business, device and tablet plans, fibre, add-ons, insurance, accessories, audio, networking, smart-home, IoT) through the catalog API: it creates a few new categories and groups, loads the offers with the bulk offers import and the starting stock of their SKUs with the stock import. It runs the imports' own check first and stops on any problem; `--dry` only checks, `--stock-only` and `--no-stock` split the stock step. Offer ids start with `dx-`.
+
+`run.mjs --deadline-min N` puts a time limit on the whole run: new customers may start until 40% of it has passed, identity reviews until 55%, orders until all of it. Anything not started by then is skipped and counted under `deadline` in the report, and the run ends with its report. Measured on the production deployment at concurrency 12: about 16 customers a second, about 37 identity reviews a second and about 13 orders a second, so 10,000 customers and 6,000 orders took about 20 minutes plus 5 minutes of reviews.
+
+Identity reviews: cases are assigned to the deployment's own compliance officers and only they or a supervisor may decide them, so the script's reviewer is a compliance lead (`lt.compliance`). Reviewing thousands of cases leaves a deployment's real officers with a long list of `[TAG]` customers: run the review phase to the end, or use a test deployment.
+
 ## Loading fibre coverage points
 
 `scripts/load-test/load-fibre.mjs` fills the fibre coverage hub with distribution points through the hub's own import (`/api/admin/import`), so the map, the ports page and the serviceability checks have data:
