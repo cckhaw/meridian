@@ -8,6 +8,7 @@ import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.
 import { validateLineItem, validateOffer, validateParent } from './hierarchy.js';
 import { expandKinds, kindsForStep, kindsWhere, prepareOffer } from './offer-config.js';
 import { getRegional, marketMode } from './settings.js';
+import { raiseCatalogEvent, tmfAttributes } from './catalog-events.js';
 
 export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
 
@@ -252,7 +253,9 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
     throw e;
   }
   await audit(q, actor, 'catalog', input.id, 'NODE_CREATED', { level: input.level });
-  return getNode(q, input.id);
+  const created = await getNode(q, input.id);
+  await raiseCatalogEvent(q, 'created', created);
+  return created;
 }
 
 export interface NodePatch {
@@ -331,7 +334,10 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
   }
   await q.query(`UPDATE catalog_nodes SET name=$2, kind=$3, markets=$4, data=$5, version=version+1, updated_at=now() WHERE id=$1`, [id, name, kind, markets, JSON.stringify(data)]);
   await audit(q, actor, 'catalog', id, 'NODE_UPDATED', { fields: Object.keys(patch) });
-  return getNode(q, id);
+  const updated = await getNode(q, id);
+  const changed = Object.keys(patch).filter((k) => !same((node as unknown as Record<string, unknown>)[k], (updated as unknown as Record<string, unknown>)[k]));
+  await raiseCatalogEvent(q, 'changed', updated, { changed: tmfAttributes(changed.length ? changed : Object.keys(patch)) });
+  return updated;
 }
 
 /** A go-live date must be a real date in the future. */
@@ -344,16 +350,23 @@ function scheduleDate(v: string | null | undefined): Date {
 
 export async function setStatus(q: Queryable, id: string, status: 'ACTIVE' | 'RETIRED' | 'DRAFT' | 'SCHEDULED', actor = 'system', activeFrom?: string | null) {
   const when = status === 'SCHEDULED' ? scheduleDate(activeFrom) : null;
+  const before = (await q.query('SELECT status, active_from FROM catalog_nodes WHERE id=$1', [id])).rows[0];
   const r = await q.query('UPDATE catalog_nodes SET status=$2, active_from=$3, version=version+1, updated_at=now() WHERE id=$1', [id, status, when]);
   if (!r.rowCount) throw notFound('catalog node', id);
   await audit(q, actor, 'catalog', id, `STATUS_${status}`, when ? { activeFrom: when.toISOString() } : undefined);
-  return getNode(q, id);
+  const node = await getNode(q, id);
+  if (before?.status !== status) await raiseCatalogEvent(q, 'state', node, { previousStatus: before?.status });
+  else if (status === 'SCHEDULED' && (before?.activeFrom ? new Date(before.activeFrom).getTime() : null) !== (when ? when.getTime() : null)) await raiseCatalogEvent(q, 'changed', node, { changed: ['validFor'] });
+  return node;
 }
 
 /** Makes every scheduled node whose date has arrived live. Cheap (partial index), so it is safe to call often. */
 export async function activateDueNodes(q: Queryable): Promise<number> {
-  const r = await q.query(`UPDATE catalog_nodes SET status='ACTIVE', version=version+1, updated_at=now() WHERE status='SCHEDULED' AND active_from <= now() RETURNING id`);
-  for (const row of r.rows) await audit(q, 'system', 'catalog', row.id as string, 'STATUS_ACTIVE', { scheduled: true });
+  const r = await q.query(`UPDATE catalog_nodes SET status='ACTIVE', version=version+1, updated_at=now() WHERE status='SCHEDULED' AND active_from <= now() RETURNING id, level, name, status, parent_id, version, updated_at`);
+  for (const row of r.rows) {
+    await audit(q, 'system', 'catalog', row.id as string, 'STATUS_ACTIVE', { scheduled: true });
+    await raiseCatalogEvent(q, 'state', row as never, { previousStatus: 'SCHEDULED' });   // a scheduled go-live is how a new catalogue version becomes live
+  }
   return r.rowCount ?? 0;
 }
 
@@ -374,7 +387,9 @@ export async function moveNode(q: Queryable, id: string, newParentId: string | n
   await q.query(`UPDATE catalog_nodes SET path = $2 || substr(path, length($1) + 1), updated_at = now() WHERE path = $1 OR path LIKE $1 || '/%'`, [old, newPath]);
   await q.query('UPDATE catalog_nodes SET parent_id=$2, sort_order=$3 WHERE id=$1', [id, newParentId, next]);
   await audit(q, actor, 'catalog', id, 'NODE_MOVED', { from: old, to: newPath });
-  return getNode(q, id);
+  const moved = await getNode(q, id);
+  await raiseCatalogEvent(q, 'changed', moved, { changed: [cur.level === 'OFFER' ? 'category' : 'parentId'] });
+  return moved;
 }
 
 /** Swaps a node with its previous or next sibling. */
@@ -394,7 +409,7 @@ export async function reorderNode(q: Queryable, id: string, direction: 'up' | 'd
 
 /** Deletes an empty, never-sold, unreferenced node. Anything else should be retired instead. */
 export async function deleteNode(q: Queryable, id: string, actor = 'system') {
-  const cur = (await q.query('SELECT id, level FROM catalog_nodes WHERE id=$1', [id])).rows[0];
+  const cur = (await q.query('SELECT id, level, name, status, parent_id, version, updated_at FROM catalog_nodes WHERE id=$1', [id])).rows[0];
   if (!cur) throw notFound('catalog node', id);
   const kids = (await q.query('SELECT count(*) AS n FROM catalog_nodes WHERE parent_id=$1', [id])).rows[0]!.n as number;
   // An offer's line items are part of it: they go with it. Every other level must be emptied first.
@@ -405,6 +420,7 @@ export async function deleteNode(q: Queryable, id: string, actor = 'system') {
   if (kids) await q.query('DELETE FROM catalog_nodes WHERE parent_id=$1 AND level=\'LINE_ITEM\'', [id]);
   await q.query('DELETE FROM catalog_nodes WHERE id=$1', [id]);
   await audit(q, actor, 'catalog', id, 'NODE_DELETED', { level: cur.level });
+  await raiseCatalogEvent(q, 'deleted', cur as never);
 }
 
 /** Copies one offer's line items onto another (used when creating a new version of an offer). SKUs are not copied twice onto an offer that already lists them. */

@@ -8,8 +8,8 @@ import { queueOutbox } from './lifecycle-state.js';
  * The dispatcher then fans it out into one delivery per outbound webhook, per TM Forum 688 listener and per mapped topic, and delivers each with its own
  * retries. A listener sees only the events it asked for, in TM Forum event shape.
  */
-export type DomainEventType = 'ORDER_CREATED' | 'ORDER_CANCELLED' | 'ORDER_COMPLETED' | 'SIM_SWAPPED' | 'MSISDN_CHANGED' | 'OWNERSHIP_TRANSFERRED' | 'SERVICE_SUSPENDED' | 'SERVICE_RESUMED' | 'SERVICE_BARRED' | 'SERVICE_TERMINATED' | 'PLAN_CHANGED' | 'VAS_CHANGED' | 'PAYMENT_RECEIVED' | 'INVOICE_ISSUED' | 'CONTRACT_GENERATED' | 'KYC_SUBMITTED' | 'KYC_DECIDED';
-export const EVENT_TYPES: DomainEventType[] = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED', 'KYC_SUBMITTED', 'KYC_DECIDED'];
+export type DomainEventType = 'ORDER_CREATED' | 'ORDER_CANCELLED' | 'ORDER_COMPLETED' | 'SIM_SWAPPED' | 'MSISDN_CHANGED' | 'OWNERSHIP_TRANSFERRED' | 'SERVICE_SUSPENDED' | 'SERVICE_RESUMED' | 'SERVICE_BARRED' | 'SERVICE_TERMINATED' | 'PLAN_CHANGED' | 'VAS_CHANGED' | 'PAYMENT_RECEIVED' | 'INVOICE_ISSUED' | 'CONTRACT_GENERATED' | 'KYC_SUBMITTED' | 'KYC_DECIDED' | 'OFFERING_CREATED' | 'OFFERING_STATE_CHANGED' | 'OFFERING_CHANGED' | 'OFFERING_DELETED' | 'CATEGORY_CREATED' | 'CATEGORY_STATE_CHANGED' | 'CATEGORY_CHANGED' | 'CATEGORY_DELETED';
+export const EVENT_TYPES: DomainEventType[] = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED', 'KYC_SUBMITTED', 'KYC_DECIDED', 'OFFERING_CREATED', 'OFFERING_STATE_CHANGED', 'OFFERING_CHANGED', 'OFFERING_DELETED', 'CATEGORY_CREATED', 'CATEGORY_STATE_CHANGED', 'CATEGORY_CHANGED', 'CATEGORY_DELETED'];
 
 /** The TM Forum event each business event is announced as, and the resource it carries. */
 export const TMF_EVENT: Record<DomainEventType, { type: string; resource: string; domain: string }> = {
@@ -30,6 +30,15 @@ export const TMF_EVENT: Record<DomainEventType, { type: string; resource: string
   CONTRACT_GENERATED: { type: 'DocumentCreateEvent', resource: 'document', domain: 'documentManagement' },
   KYC_SUBMITTED: { type: 'PartyIdentificationSubmittedEvent', resource: 'kycCase', domain: 'partyManagement' },
   KYC_DECIDED: { type: 'PartyIdentificationDecidedEvent', resource: 'kycCase', domain: 'partyManagement' },
+  // TMF620: the catalogue changed (see catalog-events.ts). A line item changing is announced as a change of its offering's specification.
+  OFFERING_CREATED: { type: 'ProductOfferingCreateEvent', resource: 'productOffering', domain: 'productCatalogManagement' },
+  OFFERING_STATE_CHANGED: { type: 'ProductOfferingStateChangeEvent', resource: 'productOffering', domain: 'productCatalogManagement' },
+  OFFERING_CHANGED: { type: 'ProductOfferingAttributeValueChangeEvent', resource: 'productOffering', domain: 'productCatalogManagement' },
+  OFFERING_DELETED: { type: 'ProductOfferingDeleteEvent', resource: 'productOffering', domain: 'productCatalogManagement' },
+  CATEGORY_CREATED: { type: 'CategoryCreateEvent', resource: 'category', domain: 'productCatalogManagement' },
+  CATEGORY_STATE_CHANGED: { type: 'CategoryStateChangeEvent', resource: 'category', domain: 'productCatalogManagement' },
+  CATEGORY_CHANGED: { type: 'CategoryAttributeValueChangeEvent', resource: 'category', domain: 'productCatalogManagement' },
+  CATEGORY_DELETED: { type: 'CategoryDeleteEvent', resource: 'category', domain: 'productCatalogManagement' },
 };
 
 // ───────────────────────── raising an event ─────────────────────────
@@ -82,7 +91,7 @@ export async function fanOutEvents(db: Db, o: { limit?: number } = {}): Promise<
       for (const r of rows) {
         const type = r.instruction as DomainEventType;
         const eventId = randomUUID();
-        const body = tmfEnvelope(type, eventId, { ...(r.payload as Record<string, unknown>), serviceId: r.serviceId, accountId: r.accountId });
+        const body = tmfEnvelope(type, eventId, { ...(r.payload as Record<string, unknown>), ...(TMF_EVENT[type].domain === 'productCatalogManagement' ? {} : { serviceId: r.serviceId, accountId: r.accountId }) });
         for (const s of subs) {
           if (!matchesQuery(s, type)) continue;
           await q.query(`INSERT INTO event_deliveries (event_id, event_type, tmf_type, subscription_id, payload) VALUES ($1,$2,$3,$4,$5)`, [eventId, type, TMF_EVENT[type].type, s.id, JSON.stringify(body)]); n++;

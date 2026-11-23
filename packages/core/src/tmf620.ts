@@ -1,6 +1,7 @@
 import { currencyInfo, LINE_ITEM_TYPES, type CatalogNode, type LineItemNode, type OfferNode, type PriceComponent } from '@meridian/types';
 import { createNode, deleteNode, getNode, moveNode, setStatus, toNode, updateNode, type NodeInput, type NodePatch } from './catalog.js';
 import type { Queryable, Row } from './db.js';
+import { LIFECYCLE } from './catalog-events.js';
 import { invalid, notFound } from './errors.js';
 
 /**
@@ -25,7 +26,6 @@ const exponent = (currency: string) => currencyInfo(currency)?.exponent ?? 2;
 
 // ───────────────────────── lifecycle ─────────────────────────
 /** Draft and Scheduled are both "In design": a scheduled offer is In design with a validFor.startDateTime in the future. */
-const LIFECYCLE: Record<string, string> = { DRAFT: 'In design', SCHEDULED: 'In design', ACTIVE: 'Active', RETIRED: 'Retired' };
 
 /** What a TMF lifecycleStatus (and an optional start date) means for the catalog: the status to set, and the go-live date for a scheduled one. */
 export function statusFromLifecycle(lifecycle: unknown, startDateTime?: unknown): { status: 'DRAFT' | 'SCHEDULED' | 'ACTIVE' | 'RETIRED'; activeFrom?: string } {
