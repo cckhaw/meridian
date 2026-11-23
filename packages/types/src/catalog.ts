@@ -36,6 +36,8 @@ export interface GroupNode extends CatalogNodeBase { level: 'GROUP' }
 export type PriceType = 'ONE_TIME' | 'RECURRING' | 'USAGE';
 
 export interface PriceComponent {
+  /** Stable id of this price within the catalogue (TMF620 ProductOfferingPrice). Set when the price is managed through TMF620; a price without one is identified by its position. */
+  id?: string;
   type: PriceType;
   amount: Money;
   /** Billing period for RECURRING. */

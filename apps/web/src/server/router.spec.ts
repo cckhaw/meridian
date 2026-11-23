@@ -2014,6 +2014,196 @@ describe('offer type switches and service types', () => {
     const ep = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'finance', kind: 'SAP_FICO', name: 'SAP', url: 'https://sap.example.com/api', secret: 'super-secret-value' } });
     expect([ep.status, ep.json.hasSecret, JSON.stringify(ep.json).includes('super-secret')]).toEqual([201, true, false]);
   });
+  it('TMF620: a Studio-style client with catalog scopes reads and writes the catalogue over the standard API; a read-only client cannot write', async () => {
+    const su = await root();
+    const mk = async (name: string, scopes: string[]) => {
+      const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name, channel: 'PARTNER', scopes } });
+      expect(made.status).toBe(201);
+      const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: made.json.client.clientId, client_secret: made.json.clientSecret } });
+      return { authorization: `Bearer ${t.json.access_token}` };
+    };
+    const studio = await mk('Catalogue Studio', ['catalog:read', 'catalog:write']);
+    const reader = await mk('Reader', ['catalog:read']);
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const none = await call('GET', `${P}/productOffering`, { origin: null });
+    expect([none.status, none.json.code]).toEqual([401, 'UNAUTHORIZED']);
+    // paging headers, fields selection and the one catalog
+    const list = await call('GET', `${P}/productOffering?limit=3&fields=name,lifecycleStatus`, { origin: null, headers: studio });
+    expect(list.status).toBe(200);
+    expect(list.json).toHaveLength(3);
+    expect(Number(list.headers.get('x-total-count'))).toBeGreaterThan(3);
+    expect(Object.keys(list.json[0]).sort()).toEqual(['@type', 'href', 'id', 'lifecycleStatus', 'name']);
+    const cat = await call('GET', `${P}/catalog`, { origin: null, headers: studio });
+    expect([cat.status, cat.json[0].id, cat.json[0]['@type']]).toEqual([200, 'meridian', 'Catalog']);
+    expect((await call('GET', `${P}/category?isRoot=true`, { origin: null, headers: studio })).json.every((c: any) => c.isRoot)).toBe(true);
+    // create, read, patch, spec, delete
+    const offering = { id: 'studio-promo', name: 'Studio promo', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: { taxIncludedAmount: { unit: 'SGD', value: 9 } } }], '@meridian': { kind: 'VAS' } };
+    const denied = await call('POST', `${P}/productOffering`, { origin: null, headers: reader, body: offering });
+    expect([denied.status, denied.json.code]).toEqual([403, 'FORBIDDEN']);
+    const made = await call('POST', `${P}/productOffering`, { origin: null, headers: studio, body: offering });
+    expect([made.status, made.json.lifecycleStatus, made.json.productOfferingPrice[0].price.taxIncludedAmount.value]).toEqual([201, 'In design', 9]);
+    const dup = await call('POST', `${P}/productOffering`, { origin: null, headers: studio, body: offering });
+    expect([dup.status, dup.json.code]).toEqual([409, 'CONFLICT']);
+    const bad = await call('POST', `${P}/productOffering`, { origin: null, headers: studio, body: { ...offering, id: 'studio-bad', productOfferingPrice: [] } });
+    expect([bad.status, bad.json.code, bad.json['@type']]).toEqual([400, 'INVALID_REQUEST', 'Error']);
+    const live = await call('PATCH', `${P}/productOffering/studio-promo`, { origin: null, headers: studio, body: { lifecycleStatus: 'Active' } });
+    expect([live.status, live.json.lifecycleStatus]).toEqual([200, 'Active']);
+    const spec = await call('PATCH', `${P}/productSpecification/studio-promo`, { origin: null, headers: studio, body: { productSpecCharacteristic: [{ name: '5 GB data', productSpecCharacteristicValue: [{ value: 5, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] } });
+    expect([spec.status, spec.json.productSpecCharacteristic.length]).toEqual([200, 1]);
+    const filtered = await call('GET', `${P}/productOffering?lifecycleStatus=Active&category.id=grp-insurance`, { origin: null, headers: reader });
+    expect(filtered.json.map((o: any) => o.id)).toContain('studio-promo');
+    expect((await call('GET', `${P}/productOffering/nope`, { origin: null, headers: reader })).status).toBe(404);
+    expect((await call('DELETE', `${P}/productOffering/studio-promo`, { origin: null, headers: reader })).status).toBe(403);
+    expect((await call('DELETE', `${P}/productOffering/studio-promo`, { origin: null, headers: studio })).status).toBe(204);
+  });
+
+  it('TMF620: ETag on every resource, 304 for If-None-Match, and 412 for a write whose If-Match is stale', async () => {
+    const su = await root();
+    const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Studio ETag', channel: 'PARTNER', scopes: ['catalog:read', 'catalog:write'] } });
+    const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: made.json.client.clientId, client_secret: made.json.clientSecret } });
+    const h = { authorization: `Bearer ${t.json.access_token}` };
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const price = (v: number) => [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: { taxIncludedAmount: { unit: 'SGD', value: v } } }];
+    const o = (id: string) => `${P}/productOffering/${id}`;
+    const create = await call('POST', o('').replace(/\/$/, ''), { origin: null, headers: h, body: { id: 'etag-promo', name: 'ETag promo', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: price(9), '@meridian': { kind: 'VAS' } } });
+    expect([create.status, create.headers.get('etag')]).toEqual([201, '"1"']);
+    const read = await call('GET', o('etag-promo'), { origin: null, headers: h });
+    expect([read.status, read.headers.get('etag'), read.json.version]).toEqual([200, '"1"', '1']);
+    // 304 while nothing changed, weak validators and lists accepted
+    for (const inm of ['"1"', 'W/"1"', '"7", "1"', '*']) {
+      const same = await call('GET', o('etag-promo'), { origin: null, headers: { ...h, 'if-none-match': inm } });
+      expect([inm, same.status, same.headers.get('etag')]).toEqual([inm, 304, '"1"']);
+    }
+    expect((await call('GET', o('etag-promo'), { origin: null, headers: { ...h, 'if-none-match': '"0"' } })).status).toBe(200);
+    // a stale If-Match is refused and changes nothing
+    const stale = await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"99"' }, body: { productOfferingPrice: price(1) } });
+    expect([stale.status, stale.json.code, stale.json['@type']]).toEqual([412, 'PRECONDITION_FAILED', 'Error']);
+    expect((await call('GET', o('etag-promo'), { origin: null, headers: h })).json.productOfferingPrice[0].price.taxIncludedAmount.value).toBe(9);
+    // the right one goes through and the answer carries the new ETag
+    const ok = await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productOfferingPrice: price(12) } });
+    expect([ok.status, ok.headers.get('etag'), ok.json.productOfferingPrice[0].price.taxIncludedAmount.value]).toEqual([200, '"2"', 12]);
+    // two editors who both read version 1: the second one is refused instead of overwriting
+    const second = await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productOfferingPrice: price(15) } });
+    expect(second.status).toBe(412);
+    // no If-Match means unconditional, and * means "if it exists"
+    expect((await call('PATCH', o('etag-promo'), { origin: null, headers: h, body: { description: 'no precondition' } })).headers.get('etag')).toBe('"3"');
+    expect((await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '*' }, body: { description: 'star' } })).headers.get('etag')).toBe('"4"');
+    // the specification shares the offering's ETag, and changing what the offer includes changes it
+    const spec0 = await call('GET', `${P}/productSpecification/etag-promo`, { origin: null, headers: h });
+    expect(spec0.headers.get('etag')).toBe('"4"');
+    const specStale = await call('PATCH', `${P}/productSpecification/etag-promo`, { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productSpecCharacteristic: [] } });
+    expect(specStale.status).toBe(412);
+    const specOk = await call('PATCH', `${P}/productSpecification/etag-promo`, { origin: null, headers: { ...h, 'if-match': '"4"' }, body: { productSpecCharacteristic: [{ name: '5 GB data', productSpecCharacteristicValue: [{ value: 5, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] } });
+    expect([specOk.status, specOk.headers.get('etag')]).toEqual([200, '"5"']);
+    expect((await call('GET', o('etag-promo'), { origin: null, headers: h })).headers.get('etag')).toBe('"5"');
+    // categories too; and a stale delete is refused
+    const cat = await call('GET', `${P}/category/grp-insurance`, { origin: null, headers: h });
+    expect(cat.headers.get('etag')).toMatch(/^"\d+"$/);
+    expect((await call('PATCH', `${P}/category/grp-insurance`, { origin: null, headers: { ...h, 'if-match': '"9999"' }, body: { name: 'Insurance' } })).status).toBe(412);
+    expect((await call('DELETE', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"1"' } })).status).toBe(412);
+    expect((await call('DELETE', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"5"' } })).status).toBe(204);
+  });
+
+  it('TMF620: productOfferingPrice is a resource of its own: list, read with an ETag, add, change, remove, and the offering rules apply', async () => {
+    const su = await root();
+    const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Studio prices', channel: 'PARTNER', scopes: ['catalog:read', 'catalog:write'] } });
+    const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: made.json.client.clientId, client_secret: made.json.clientSecret } });
+    const h = { authorization: `Bearer ${t.json.access_token}` };
+    const reader = await (async () => {
+      const m = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Price reader', channel: 'PARTNER', scopes: ['catalog:read'] } });
+      const tk = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: m.json.client.clientId, client_secret: m.json.clientSecret } });
+      return { authorization: `Bearer ${tk.json.access_token}` };
+    })();
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const pop = `${P}/productOfferingPrice`;
+    const money = (v: number) => ({ taxIncludedAmount: { unit: 'SGD', value: v } });
+    await call('POST', `${P}/productOffering`, { origin: null, headers: h, body: { id: 'price-http', name: 'Price http', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: money(9) }], '@meridian': { kind: 'VAS' } } });
+    // list, filter, fields, paging header
+    const list = await call('GET', `${pop}?productOffering.id=price-http&fields=priceType`, { origin: null, headers: reader });
+    expect([list.status, list.json.length, Number(list.headers.get('x-total-count'))]).toEqual([200, 1, 1]);
+    expect(Object.keys(list.json[0]).sort()).toEqual(['@type', 'href', 'id', 'priceType']);
+    expect((await call('GET', `${pop}?priceType=oneTime&limit=2`, { origin: null, headers: reader })).json.every((x: any) => x.priceType === 'oneTime')).toBe(true);
+    expect((await call('GET', `${pop}?priceType=weird`, { origin: null, headers: reader })).status).toBe(400);
+    // read with the offering's ETag, and a 304
+    const one = await call('GET', `${pop}/price-http-price-1`, { origin: null, headers: reader });
+    expect([one.status, one.headers.get('etag'), one.json.productOffering.id, one.json.price.taxIncludedAmount.value]).toEqual([200, '"1"', 'price-http', 9]);
+    expect((await call('GET', `${pop}/price-http-price-1`, { origin: null, headers: { ...reader, 'if-none-match': '"1"' } })).status).toBe(304);
+    expect((await call('GET', `${pop}/no-such-price`, { origin: null, headers: reader })).status).toBe(404);
+    // add (a reader may not), with the ETag of the offering as the precondition
+    const body = { productOffering: { id: 'price-http' }, id: 'setup-fee', priceType: 'oneTime', price: money(5) };
+    expect((await call('POST', pop, { origin: null, headers: reader, body })).status).toBe(403);
+    expect((await call('POST', pop, { origin: null, headers: { ...h, 'if-match': '"7"' }, body })).status).toBe(412);
+    const add = await call('POST', pop, { origin: null, headers: { ...h, 'if-match': '"1"' }, body });
+    expect([add.status, add.json.id, add.headers.get('etag'), add.json.price.taxIncludedAmount.value]).toEqual([201, 'setup-fee', '"2"', 5]);
+    expect((await call('POST', pop, { origin: null, headers: h, body })).status).toBe(409);
+    // change only the amount, then the offering shows the same prices with the same ids
+    const chg = await call('PATCH', `${pop}/setup-fee`, { origin: null, headers: { ...h, 'if-match': '"2"' }, body: { price: { taxIncludedAmount: { value: 7.5 } } } });
+    expect([chg.status, chg.headers.get('etag'), chg.json.price.taxIncludedAmount, chg.json.priceType]).toEqual([200, '"3"', { unit: 'SGD', value: 7.5 }, 'oneTime']);
+    expect((await call('PATCH', `${pop}/setup-fee`, { origin: null, headers: { ...h, 'if-match': '"2"' }, body: { price: { taxIncludedAmount: { value: 1 } } } })).status).toBe(412);
+    const off = await call('GET', `${P}/productOffering/price-http`, { origin: null, headers: reader });
+    expect(off.json.productOfferingPrice.map((x: any) => [x.id, x.price.taxIncludedAmount.value])).toEqual([['price-http-price-1', 9], ['setup-fee', 7.5]]);
+    expect(off.json.productOfferingPrice[1].href).toMatch(/\/productOfferingPrice\/setup-fee$/);
+    // remove: a stale precondition is refused, the right one works, and the last price stays
+    expect((await call('DELETE', `${pop}/setup-fee`, { origin: null, headers: { ...h, 'if-match': '"1"' } })).status).toBe(412);
+    expect((await call('DELETE', `${pop}/setup-fee`, { origin: null, headers: { ...h, 'if-match': '"3"' } })).status).toBe(204);
+    expect((await call('GET', `${pop}/setup-fee`, { origin: null, headers: reader })).status).toBe(404);
+    const last = await call('DELETE', `${pop}/price-http-price-1`, { origin: null, headers: h });
+    expect([last.status, last.json.code]).toEqual([400, 'INVALID_REQUEST']);
+  });
+
+  it('TMF620: ?dryRun=true answers as the real write would and stores nothing; refusals are the real ones', async () => {
+    const su = await root();
+    const mk = async (name: string, scopes: string[]) => {
+      const m = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name, channel: 'PARTNER', scopes } });
+      const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: m.json.client.clientId, client_secret: m.json.clientSecret } });
+      return { authorization: `Bearer ${t.json.access_token}` };
+    };
+    const h = await mk('Studio dry', ['catalog:read', 'catalog:write']);
+    const reader = await mk('Dry reader', ['catalog:read']);
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const price = (v: number) => [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: { taxIncludedAmount: { unit: 'SGD', value: v } } }];
+    const offering = { id: 'dry-promo', name: 'Dry promo', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: price(9), '@meridian': { kind: 'VAS' } };
+    // create: the answer a real create gives, flagged, with no ETag, and nothing stored
+    const dry = await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: h, body: offering });
+    expect([dry.status, dry.headers.get('x-dry-run'), dry.headers.get('etag'), dry.json.id, dry.json.lifecycleStatus]).toEqual([201, 'true', null, 'dry-promo', 'In design']);
+    expect((await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader })).status).toBe(404);
+    // the same rules: a bad body, a missing kind, a read-only client
+    expect((await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: h, body: { ...offering, productOfferingPrice: [] } })).status).toBe(400);
+    expect((await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: reader, body: offering })).status).toBe(403);
+    // only true and false are understood: anything else must not turn into a real write
+    expect((await call('POST', `${P}/productOffering?dryRun=yes`, { origin: null, headers: h, body: offering })).status).toBe(400);
+    expect((await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader })).status).toBe(404);
+    // dryRun=false is a real write
+    const real = await call('POST', `${P}/productOffering?dryRun=false`, { origin: null, headers: h, body: offering });
+    expect([real.status, real.headers.get('x-dry-run'), real.headers.get('etag')]).toEqual([201, null, '"1"']);
+    // a duplicate is refused in a dry run exactly as for real
+    expect((await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: h, body: offering })).status).toBe(409);
+    // patch: shows the change and the would-be state, but the stored offering and its ETag stay
+    const patch = await call('PATCH', `${P}/productOffering/dry-promo?dryRun=true`, { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productOfferingPrice: price(12), lifecycleStatus: 'Active' } });
+    expect([patch.status, patch.headers.get('x-dry-run'), patch.json.productOfferingPrice[0].price.taxIncludedAmount.value, patch.json.lifecycleStatus]).toEqual([200, 'true', 12, 'Active']);
+    const still = await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader });
+    expect([still.headers.get('etag'), still.json.productOfferingPrice[0].price.taxIncludedAmount.value, still.json.lifecycleStatus]).toEqual(['"1"', 9, 'In design']);
+    // a stale If-Match is refused in a dry run too
+    expect((await call('PATCH', `${P}/productOffering/dry-promo?dryRun=true`, { origin: null, headers: { ...h, 'if-match': '"9"' }, body: { description: 'x' } })).status).toBe(412);
+    // prices and specification
+    const addPrice = await call('POST', `${P}/productOfferingPrice?dryRun=true`, { origin: null, headers: h, body: { productOffering: { id: 'dry-promo' }, id: 'dry-fee', priceType: 'oneTime', price: { taxIncludedAmount: { unit: 'SGD', value: 3 } } } });
+    expect([addPrice.status, addPrice.headers.get('x-dry-run'), addPrice.json.id]).toEqual([201, 'true', 'dry-fee']);
+    expect((await call('GET', `${P}/productOfferingPrice/dry-fee`, { origin: null, headers: reader })).status).toBe(404);
+    const spec = await call('PATCH', `${P}/productSpecification/dry-promo?dryRun=true`, { origin: null, headers: h, body: { productSpecCharacteristic: [{ name: '5 GB', productSpecCharacteristicValue: [{ value: 5, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] } });
+    expect([spec.status, spec.json.productSpecCharacteristic.length]).toEqual([200, 1]);
+    expect((await call('GET', `${P}/productSpecification/dry-promo`, { origin: null, headers: reader })).json.productSpecCharacteristic).toHaveLength(0);
+    // delete: 204, and it is still there
+    const del = await call('DELETE', `${P}/productOffering/dry-promo?dryRun=true`, { origin: null, headers: h });
+    expect([del.status, del.headers.get('x-dry-run')]).toEqual([204, 'true']);
+    expect((await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader })).status).toBe(200);
+    // categories
+    const cat = await call('POST', `${P}/category?dryRun=true`, { origin: null, headers: h, body: { id: 'grp-dry', name: 'Dry group', parentId: 'mobile-postpaid', lifecycleStatus: 'Active' } });
+    expect([cat.status, cat.headers.get('x-dry-run')]).toEqual([201, 'true']);
+    expect((await call('GET', `${P}/category/grp-dry`, { origin: null, headers: reader })).status).toBe(404);
+    // and the real delete after all of that
+    expect((await call('DELETE', `${P}/productOffering/dry-promo`, { origin: null, headers: h })).status).toBe(204);
+  });
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;
