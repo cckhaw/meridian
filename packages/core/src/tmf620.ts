@@ -2,7 +2,7 @@ import { currencyInfo, LINE_ITEM_TYPES, type CatalogNode, type LineItemNode, typ
 import { createNode, deleteNode, getNode, moveNode, setStatus, toNode, updateNode, type NodeInput, type NodePatch } from './catalog.js';
 import type { Queryable, Row } from './db.js';
 import { LIFECYCLE } from './catalog-events.js';
-import { invalid, notFound, preconditionFailed } from './errors.js';
+import { conflict, invalid, notFound, preconditionFailed } from './errors.js';
 
 /**
  * TM Forum TMF620 Product Catalog Management (v4 profile) over the working catalog:
@@ -73,10 +73,30 @@ const STATUSES_FOR_LIFECYCLE: Record<string, string[]> = { 'In design': ['DRAFT'
 const PRICE_TYPE = { ONE_TIME: 'oneTime', RECURRING: 'recurring', USAGE: 'usage' } as const;
 const PRICE_TYPE_IN: Record<string, PriceComponent['type']> = { onetime: 'ONE_TIME', recurring: 'RECURRING', usage: 'USAGE' };
 
-export function toOfferingPrice(p: PriceComponent, offerId: string, i: number): Record<string, unknown> {
+// ───────────────────────── price ids ─────────────────────────
+const PRICE_ID_OK = /^[a-z0-9][a-z0-9-]*$/;
+/**
+ * One id per price of an offer, in order: the price's own id when it has one, otherwise the first free "<offer>-price-<n>" counting from its position. A price that
+ * has never been written through TMF620 therefore has the same id every time it is read; the ids are stored with the offer the first time its prices are written.
+ */
+export function priceIds(offerId: string, prices: ReadonlyArray<{ id?: string }>): string[] {
+  const taken = new Set(prices.map((p) => p.id).filter((x): x is string => !!x));
+  const used = new Set<string>();
+  return prices.map((p, i) => {
+    if (p.id && !used.has(p.id)) { used.add(p.id); return p.id; }
+    let n = i + 1, id = `${offerId}-price-${n}`;
+    while (taken.has(id) || used.has(id)) id = `${offerId}-price-${++n}`;
+    used.add(id);
+    return id;
+  });
+}
+/** The prices with an id on every one (stored with the offer, so the ids stay when the list changes). */
+export const withPriceIds = <T extends PriceComponent>(offerId: string, prices: T[]): Array<T & { id: string }> => { const ids = priceIds(offerId, prices); return prices.map((p, i) => ({ ...p, id: ids[i]! })); };
+
+export function toOfferingPrice(p: PriceComponent, id: string, base?: string): Record<string, unknown> {
   const money = { unit: p.amount.currency, value: p.amount.amountMinor / 10 ** exponent(p.amount.currency) };
   return {
-    id: `${offerId}-price-${i + 1}`, name: p.type === 'RECURRING' ? 'Monthly fee' : p.type === 'USAGE' ? 'Usage' : 'One-time price',
+    id, ...(base ? { href: ref(base, 'productOfferingPrice', id) } : {}), name: p.type === 'RECURRING' ? 'Monthly fee' : p.type === 'USAGE' ? 'Usage' : 'One-time price',
     priceType: PRICE_TYPE[p.type],
     ...(p.type === 'RECURRING' ? { recurringChargePeriodType: 'month', recurringChargePeriodLength: p.periodMonths ?? 1 } : {}),
     price: p.taxInclusive ? { taxIncludedAmount: money } : { dutyFreeAmount: money },
@@ -101,7 +121,8 @@ export function fromOfferingPrices(list: unknown): PriceComponent[] {
       if (!Number.isInteger(len) || len < 1) throw invalid(`${where}.recurringChargePeriodLength is a whole number of 1 or more.`);
       periodMonths = unit === 'year' ? len * 12 : len;
     }
-    return { type, amount: { amountMinor, currency: m.unit }, ...(periodMonths ? { periodMonths } : {}), taxInclusive: !!inclusive } as PriceComponent;
+    if (p.id !== undefined && (typeof p.id !== 'string' || !PRICE_ID_OK.test(p.id) || p.id.length > 70)) throw invalid(`${where}.id is lowercase letters, digits and dashes, up to 70 characters.`);
+    return { ...(p.id ? { id: p.id as string } : {}), type, amount: { amountMinor, currency: m.unit }, ...(periodMonths ? { periodMonths } : {}), taxInclusive: !!inclusive } as PriceComponent;
   });
 }
 
@@ -137,7 +158,7 @@ export function toProductOffering(o: OfferNode & { updatedAt?: unknown }, base: 
     channel: (o.salesChannels ?? []).map((c) => ({ id: c, name: c })),
     place: (o.markets ?? []).map((m) => ({ id: m, name: m, role: 'market', '@referredType': 'GeographicSite' })),
     productSpecification: { id: o.id, href: ref(base, 'productSpecification', o.id), name: o.name, '@referredType': 'ProductSpecification' },
-    productOfferingPrice: (o.prices ?? []).map((p, i) => toOfferingPrice(p, o.id, i)),
+    productOfferingPrice: ((ids) => (o.prices ?? []).map((p, i) => toOfferingPrice(p, ids[i]!, base)))(priceIds(o.id, o.prices ?? [])),
     productOfferingTerm: termsOut(o),
     productOfferingRelationship: [...(o.requires ?? []).map((id) => rel(id, 'dependency')), ...(o.excludes ?? []).map((id) => rel(id, 'exclusivity'))],
     '@type': 'ProductOffering',
@@ -191,6 +212,7 @@ export async function tmfCreateOffering(q: Queryable, body: Record<string, any>,
   if (typeof f.kind !== 'string' || !f.kind) throw invalid('@meridian.kind is required: the offer type id (Settings → Catalog → Offer types).');
   const st = statusFromLifecycle(body.lifecycleStatus ?? 'In design', body.validFor?.startDateTime);
   const id = await newId(q, body.id, body.name);
+  f.prices = withPriceIds(id, f.prices);
   const input = {
     id, level: 'OFFER', code: id, name: f.name.trim(), path: '', parentId, status: st.status, activeFrom: st.activeFrom, markets: f.markets ?? [], kind: f.kind, description: f.description,
     prices: f.prices, contract: f.contract ?? { termMonths: 0 }, fulfilment: f.fulfilment ?? { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [] },
@@ -206,6 +228,7 @@ export async function tmfPatchOffering(q: Queryable, id: string, body: Record<st
   if (cur.level !== 'OFFER') throw notFound('productOffering', id);
   assertIfMatch(o.ifMatch, nodeEtag(cur));
   const fields = offeringFields(body);
+  if (fields.prices) fields.prices = withPriceIds(id, fields.prices);
   if (Object.values(fields).some((v) => v !== undefined)) await updateNode(q, id, fields, actor);
   const toParent = Array.isArray(body.category) ? body.category[0]?.id : undefined;
   if (typeof toParent === 'string' && toParent !== cur.parentId) await moveNode(q, id, toParent, actor);
@@ -408,4 +431,94 @@ export async function tmfPatchSpecification(q: Queryable, id: string, body: Reco
     for (const e of existing) if (!keep.has(e.id)) await deleteNode(q, e.id, actor);
   }
   return tmfGetSpecification(q, id);
+}
+
+// ───────────────────────── ProductOfferingPrice ─────────────────────────
+/**
+ * A price as a resource of its own. In Meridian a price belongs to exactly one offering and is stored with it, so every write goes through the offering's own update (and
+ * its rules: a sold offer cannot be repriced, an offering needs one price, the currency must be known). Its ETag is the offering's, and `productOffering` says whose it is
+ * (a pragmatic extension: the v4 resource has no back-reference). A price is identified by its `id`; see `priceIds`.
+ */
+export function toPriceResource(offer: OfferNode & { updatedAt?: unknown }, price: PriceComponent, id: string, base: string): Record<string, unknown> {
+  return {
+    ...toOfferingPrice(price, id, base),
+    version: String(offer.version ?? 1), lastUpdate: offer.updatedAt, lifecycleStatus: LIFECYCLE[offer.status], ...(offer.status === 'SCHEDULED' && offer.activeFrom ? { validFor: { startDateTime: offer.activeFrom } } : {}),
+    isBundle: false,
+    productOffering: { id: offer.id, href: ref(base, 'productOffering', offer.id), name: offer.name, '@referredType': 'ProductOffering' },
+    '@type': 'ProductOfferingPrice',
+  };
+}
+
+export interface TmfPriceFilter { offset: number; limit: number; offeringId?: string; priceType?: string; lifecycleStatus?: string }
+/** A page of prices (all offerings, or one), in the order of their offerings and then of the offering's list. */
+export async function tmfListPrices(q: Queryable, f: TmfPriceFilter) {
+  const { offset, limit } = pageArgs(f);
+  const where = [`level = 'OFFER'`], args: unknown[] = [];
+  const p = (v: unknown) => { args.push(v); return `$${args.length}`; };
+  if (f.offeringId) where.push(`id = ${p(f.offeringId)}`);
+  if (f.lifecycleStatus) { const st = STATUSES_FOR_LIFECYCLE[f.lifecycleStatus]; if (!st) throw invalid('lifecycleStatus is In design, Active or Retired.'); where.push(`status = ANY(${p(st)})`); }
+  const type = f.priceType ? PRICE_TYPE_IN[f.priceType.toLowerCase()] : undefined;
+  if (f.priceType && !type) throw invalid('priceType is oneTime, recurring or usage.');
+  const offers = (await q.query(`SELECT * FROM catalog_nodes WHERE ${where.join(' AND ')} ORDER BY sort_order, name, id LIMIT 20000`, args)).rows.map(toNode) as Array<OfferNode & { updatedAt?: unknown }>;
+  const all: Array<{ offer: OfferNode & { updatedAt?: unknown }; price: PriceComponent; id: string }> = [];
+  for (const offer of offers) { const prices = offer.prices ?? []; const ids = priceIds(offer.id, prices); prices.forEach((price, i) => { if (!type || price.type === type) all.push({ offer, price, id: ids[i]! }); }); }
+  return { items: all.slice(offset, offset + limit), total: all.length };
+}
+
+/** The offering that owns a price, and the price's place in its list. Prices written through TMF620 are found by the id stored with them, others by their positional id. */
+async function findPrice(q: Queryable, id: string, lock = false) {
+  let row = (await q.query(`SELECT * FROM catalog_nodes WHERE level = 'OFFER' AND data->'prices' @> $1::jsonb LIMIT 1`, [JSON.stringify([{ id }])])).rows[0];
+  if (!row) { const m = /^(.+)-price-(\d+)$/.exec(id); if (m) row = (await q.query(`SELECT * FROM catalog_nodes WHERE level = 'OFFER' AND id = $1`, [m[1]])).rows[0]; }
+  if (!row) throw notFound('productOfferingPrice', id);
+  if (lock) { await q.query('SELECT 1 FROM catalog_nodes WHERE id = $1 FOR UPDATE', [row.id]); row = (await q.query('SELECT * FROM catalog_nodes WHERE id = $1', [row.id])).rows[0]!; }
+  const offer = toNode(row) as OfferNode & { updatedAt?: unknown };
+  const prices = offer.prices ?? [];
+  const ids = priceIds(offer.id, prices);
+  const idx = ids.indexOf(id);
+  if (idx < 0) throw notFound('productOfferingPrice', id);
+  return { offer, prices, ids, idx, price: prices[idx]! };
+}
+export const tmfGetPrice = (q: Queryable, id: string) => findPrice(q, id);
+
+/** POST: adds a price to the offering named in `productOffering`. The id is the one sent, or the next free one. */
+export async function tmfCreatePrice(q: Queryable, body: Record<string, any>, actor: string, o: TmfWriteOptions = {}) {
+  const offeringId = body.productOffering?.id;
+  if (typeof offeringId !== 'string' || !offeringId) throw invalid('productOffering is required: { "id": … } names the offering the price belongs to.');
+  const cur = await lockedNode(q, offeringId);
+  if (cur.level !== 'OFFER') throw notFound('productOffering', offeringId);
+  assertIfMatch(o.ifMatch, nodeEtag(cur));
+  const existing = withPriceIds(offeringId, (cur as OfferNode).prices ?? []);
+  const [incoming] = fromOfferingPrices([body]);
+  if (incoming!.id && (await q.query(`SELECT 1 FROM catalog_nodes WHERE level = 'OFFER' AND data->'prices' @> $1::jsonb LIMIT 1`, [JSON.stringify([{ id: incoming!.id }])])).rows.length) throw conflict(`a price with the id ${incoming!.id} already exists`);
+  const ids = priceIds(offeringId, [...existing, incoming!]);
+  const id = ids[ids.length - 1]!;
+  await updateNode(q, offeringId, { prices: [...existing, { ...incoming!, id }] }, actor);
+  return findPrice(q, id);
+}
+
+/** PATCH (merge-patch): what the request names changes. `price` may name just the amount ({ taxIncludedAmount: { value } }); the unit and the tax treatment stay unless named. */
+export async function tmfPatchPrice(q: Queryable, id: string, body: Record<string, any>, actor: string, o: TmfWriteOptions = {}) {
+  const found = await findPrice(q, id, true);
+  assertIfMatch(o.ifMatch, nodeEtag(found.offer));
+  const current = toOfferingPrice(found.price, id) as Record<string, any>;
+  const merged: Record<string, any> = { ...current, id };
+  for (const k of ['priceType', 'recurringChargePeriodType', 'recurringChargePeriodLength']) if (body[k] !== undefined) merged[k] = body[k];
+  if (body.price && typeof body.price === 'object') {
+    const key = body.price.taxIncludedAmount ? 'taxIncludedAmount' : body.price.dutyFreeAmount ? 'dutyFreeAmount' : undefined;
+    if (!key) throw invalid('price needs taxIncludedAmount or dutyFreeAmount.');
+    merged.price = { [key]: { ...(current.price.taxIncludedAmount ?? current.price.dutyFreeAmount), ...body.price[key] } };
+  }
+  const [next] = fromOfferingPrices([merged]);
+  const prices = found.prices.map((p, i) => (i === found.idx ? next! : { ...p, id: found.ids[i]! }));
+  await updateNode(q, found.offer.id, { prices }, actor);
+  return findPrice(q, id);
+}
+
+/** DELETE: removes a price from its offering. An offering keeps at least one price. */
+export async function tmfDeletePrice(q: Queryable, id: string, actor: string, o: TmfWriteOptions = {}): Promise<void> {
+  const found = await findPrice(q, id, true);
+  assertIfMatch(o.ifMatch, nodeEtag(found.offer));
+  if (found.prices.length === 1) throw invalid('An offering needs at least one price: add the new price first, or delete the offering.');
+  const prices = found.prices.flatMap((p, i) => (i === found.idx ? [] : [{ ...p, id: found.ids[i]! }]));
+  await updateNode(q, found.offer.id, { prices }, actor);
 }

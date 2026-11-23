@@ -3,7 +3,7 @@ import type { Db } from './db.js';
 import { placeOrder } from './orders.js';
 import { freshDb, newCustomer } from './test-helpers.js';
 import {
-  assertIfMatch, etagMatches, fromOfferingPrices, nodeEtag, statusFromLifecycle, tmfCreateCategory, tmfCreateOffering, tmfDelete, tmfGetCategory, tmfGetOffering, tmfGetSpecification, tmfListCategories, tmfListOfferings,
+  assertIfMatch, etagMatches, fromOfferingPrices, nodeEtag, priceIds, statusFromLifecycle, tmfCreatePrice, tmfDeletePrice, tmfGetPrice, tmfListPrices, tmfPatchPrice, toPriceResource, withPriceIds, tmfCreateCategory, tmfCreateOffering, tmfDelete, tmfGetCategory, tmfGetOffering, tmfGetSpecification, tmfListCategories, tmfListOfferings,
   tmfPatchOffering, tmfPatchSpecification, toCategory, toProductOffering, toProductSpecification,
 } from './tmf620.js';
 
@@ -205,5 +205,74 @@ describe('TMF620: ETag and If-Match', () => {
     await expect(tmfDelete(db, 'etag-guard', 'offering', 'studio', { ifMatch: t1 })).rejects.toThrow(/changed since you read it/);
     await tmfDelete(db, 'etag-guard', 'offering', 'studio', { ifMatch: await tag() });
     await expect(tmfGetOffering(db, 'etag-guard')).rejects.toThrow(/not found/);
+  });
+});
+
+describe('TMF620: productOfferingPrice as a resource', () => {
+  it('gives every price a stable id: its own when it has one, else the first free positional one', () => {
+    expect(priceIds('o', [{}, {}, {}])).toEqual(['o-price-1', 'o-price-2', 'o-price-3']);
+    expect(priceIds('o', [{ id: 'o-price-2' }, {}, {}])).toEqual(['o-price-2', 'o-price-3', 'o-price-4']);   // counted from each price's place, skipping taken ids
+    expect(priceIds('o', [{ id: 'x' }, { id: 'x' }])).toEqual(['x', 'o-price-2']);            // a duplicate cannot repeat an id
+    expect(withPriceIds('o', [{ type: 'ONE_TIME', amount: { amountMinor: 1, currency: 'SGD' }, taxInclusive: true }]).map((p) => p.id)).toEqual(['o-price-1']);
+  });
+
+  it('serves the prices of an offer that was never written through TMF620, by positional id, and lists and filters them', async () => {
+    const one = await tmfGetPrice(db, 'plan-sim-5g-price-1');
+    expect(one.offer.id).toBe('plan-sim-5g');
+    const res = toPriceResource(one.offer, one.price, 'plan-sim-5g-price-1', B) as any;
+    expect(res).toMatchObject({ id: 'plan-sim-5g-price-1', '@type': 'ProductOfferingPrice', productOffering: { id: 'plan-sim-5g', '@referredType': 'ProductOffering' }, lifecycleStatus: 'Active', isBundle: false });
+    expect(res.href).toBe('https://x.test/api/tmf-api/productCatalogManagement/v4/productOfferingPrice/plan-sim-5g-price-1');
+    const mine = await tmfListPrices(db, { offset: 0, limit: 50, offeringId: 'plan-sim-5g' });
+    expect(mine.items.map((i) => i.id)).toEqual(['plan-sim-5g-price-1', 'plan-sim-5g-price-2']);
+    expect(mine.total).toBe(2);
+    const recurring = await tmfListPrices(db, { offset: 0, limit: 5, priceType: 'recurring' });
+    expect(recurring.total).toBeGreaterThan(5);
+    expect(recurring.items).toHaveLength(5);
+    expect(recurring.items.every((i) => i.price.type === 'RECURRING')).toBe(true);
+    await expect(tmfListPrices(db, { offset: 0, limit: 5, priceType: 'weird' })).rejects.toThrow(/priceType/);
+    await expect(tmfGetPrice(db, 'plan-sim-5g-price-9')).rejects.toThrow(/not found/);
+    await expect(tmfGetPrice(db, 'no-such-price')).rejects.toThrow(/not found/);
+  });
+
+  it('adds, changes and removes a price, with the offering rules and the offering ETag', async () => {
+    await tmfCreateOffering(db, body({ id: 'price-lab', name: 'Price lab', lifecycleStatus: 'In design' }), 'studio');
+    const v0 = nodeEtag((await tmfGetOffering(db, 'price-lab')).offer);
+    // add a one-time price; ids are stored with the offering from now on
+    const added = await tmfCreatePrice(db, { productOffering: { id: 'price-lab' }, ...price('oneTime', 4) }, 'studio', { ifMatch: v0 });
+    expect(added.ids[added.idx]).toBe('price-lab-price-2');
+    expect(nodeEtag(added.offer)).not.toBe(v0);
+    await expect(tmfCreatePrice(db, { productOffering: { id: 'price-lab' }, ...price('oneTime', 4) }, 'studio', { ifMatch: v0 })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect((await tmfGetOffering(db, 'price-lab')).offer.prices.map((p: any) => p.id)).toEqual(['price-lab-price-1', 'price-lab-price-2']);
+    // a client-chosen id, which cannot be used twice
+    await tmfCreatePrice(db, { productOffering: { id: 'price-lab' }, id: 'launch-fee', ...price('oneTime', 1) }, 'studio');
+    await expect(tmfCreatePrice(db, { productOffering: { id: 'price-lab' }, id: 'launch-fee', ...price('oneTime', 2) }, 'studio')).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(tmfCreatePrice(db, price('oneTime', 2), 'studio')).rejects.toThrow(/productOffering is required/);
+    await expect(tmfCreatePrice(db, { productOffering: { id: 'nope' }, ...price('oneTime', 2) }, 'studio')).rejects.toThrow(/not found/);
+    // change only the amount: unit and tax treatment stay
+    const patched = await tmfPatchPrice(db, 'launch-fee', { price: { taxIncludedAmount: { value: 2.5 } } }, 'studio');
+    expect(patched.price).toMatchObject({ type: 'ONE_TIME', amount: { amountMinor: 250, currency: 'SGD' }, taxInclusive: true, id: 'launch-fee' });
+    // the same id after other prices were removed and the list shifted
+    await tmfDeletePrice(db, 'price-lab-price-2', 'studio');
+    expect((await tmfGetPrice(db, 'launch-fee')).idx).toBe(1);
+    expect((await tmfGetOffering(db, 'price-lab')).offer.prices.map((p: any) => p.id)).toEqual(['price-lab-price-1', 'launch-fee']);
+    await tmfPatchPrice(db, 'launch-fee', { priceType: 'recurring', recurringChargePeriodType: 'month', recurringChargePeriodLength: 3 }, 'studio');
+    expect((await tmfGetPrice(db, 'launch-fee')).price).toMatchObject({ type: 'RECURRING', periodMonths: 3 });
+    await expect(tmfPatchPrice(db, 'launch-fee', { price: {} }, 'studio')).rejects.toThrow(/taxIncludedAmount or dutyFreeAmount/);
+    await expect(tmfPatchPrice(db, 'launch-fee', { price: { taxIncludedAmount: { value: 1 } } }, 'studio', { ifMatch: '"0"' })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    // an offering keeps at least one price
+    await tmfDeletePrice(db, 'launch-fee', 'studio');
+    await expect(tmfDeletePrice(db, 'price-lab-price-1', 'studio')).rejects.toThrow(/at least one price/);
+  });
+
+  it('does not let a sold offering be repriced through its prices, but a round trip that only carries the ids is not a repricing', async () => {
+    const before = (await tmfGetOffering(db, 'plan-phone-12')).offer;
+    expect(await tmfGetPrice(db, 'plan-phone-12-price-1')).toMatchObject({ idx: 0 });
+    await expect(tmfPatchPrice(db, 'plan-phone-12-price-1', { price: { taxIncludedAmount: { value: 1 } } }, 'studio')).rejects.toMatchObject({ code: 'REJECTED' });
+    await expect(tmfCreatePrice(db, { productOffering: { id: 'plan-phone-12' }, ...price('oneTime', 1) }, 'studio')).rejects.toMatchObject({ code: 'REJECTED' });
+    await expect(tmfDeletePrice(db, 'plan-phone-12-price-2', 'studio')).rejects.toMatchObject({ code: 'REJECTED' });
+    // the offering read back and written back unchanged, ids included
+    const read = toProductOffering(before, B, new Map()) as any;
+    await tmfPatchOffering(db, 'plan-phone-12', { productOfferingPrice: read.productOfferingPrice }, 'studio');
+    expect((await tmfGetOffering(db, 'plan-phone-12')).offer.prices).toHaveLength(before.prices.length);
   });
 });

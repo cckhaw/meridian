@@ -271,7 +271,11 @@ export interface NodePatch {
   partnerCode?: string; ocs?: OfferNode['ocs'] | null; characteristics?: OfferNode['characteristics']; requires?: string[]; excludes?: string[]; salesChannels?: string[]; variants?: OfferNode['variants']; deals?: OfferNode['deals']; suspension?: OfferNode['suspension']; group?: OfferNode['group'] | null;
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+/** Prices compared for a commercial change: the id a price carries (TMF620) is a label, not a price. */
+const withoutPriceIds = (prices: PriceComponent[] | undefined) => (prices ?? []).map(({ id: _id, ...rest }) => rest);
+/** Key order does not matter: the database hands JSON back with its own key order, so a value read back and written again must still compare equal. */
+const canonical = (v: unknown): string => JSON.stringify(v ?? null, (_k, val) => (val && typeof val === 'object' && !Array.isArray(val) ? Object.fromEntries(Object.entries(val).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) : val));
+const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
 
 export async function nodeUsage(q: Queryable, id: string): Promise<{ services: number; orders: number; referencedBy: string[] }> {
   const s = (await q.query('SELECT count(*) AS n FROM services WHERE offer_id=$1', [id])).rows[0]!.n as number;
@@ -319,7 +323,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
       group: patch.group === null ? undefined : patch.group ?? o.group,
       ocs: patch.ocs === null ? undefined : patch.ocs ?? o.ocs,
     } as OfferNode;
-    const commercialChange = !same(next.prices, o.prices) || !same(next.contract, o.contract) || next.kind !== o.kind;
+    const commercialChange = !same(withoutPriceIds(next.prices), withoutPriceIds(o.prices)) || !same(next.contract, o.contract) || next.kind !== o.kind;
     if (commercialChange) {
       const u = await nodeUsage(q, id);
       if (u.services + u.orders > 0) throw rejected(`This offer is already sold (${u.services} services, ${u.orders} order lines), so its price, contract or type can’t change in place: existing subscribers would be repriced. Create a new version and retire this one.`);
