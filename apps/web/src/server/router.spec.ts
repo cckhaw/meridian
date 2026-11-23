@@ -2014,6 +2014,49 @@ describe('offer type switches and service types', () => {
     const ep = await call('POST', '/settings/integration-hub/endpoints', { cookie: su, body: { group: 'finance', kind: 'SAP_FICO', name: 'SAP', url: 'https://sap.example.com/api', secret: 'super-secret-value' } });
     expect([ep.status, ep.json.hasSecret, JSON.stringify(ep.json).includes('super-secret')]).toEqual([201, true, false]);
   });
+  it('TMF620: a Studio-style client with catalog scopes reads and writes the catalogue over the standard API; a read-only client cannot write', async () => {
+    const su = await root();
+    const mk = async (name: string, scopes: string[]) => {
+      const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name, channel: 'PARTNER', scopes } });
+      expect(made.status).toBe(201);
+      const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: made.json.client.clientId, client_secret: made.json.clientSecret } });
+      return { authorization: `Bearer ${t.json.access_token}` };
+    };
+    const studio = await mk('Catalogue Studio', ['catalog:read', 'catalog:write']);
+    const reader = await mk('Reader', ['catalog:read']);
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const none = await call('GET', `${P}/productOffering`, { origin: null });
+    expect([none.status, none.json.code]).toEqual([401, 'UNAUTHORIZED']);
+    // paging headers, fields selection and the one catalog
+    const list = await call('GET', `${P}/productOffering?limit=3&fields=name,lifecycleStatus`, { origin: null, headers: studio });
+    expect(list.status).toBe(200);
+    expect(list.json).toHaveLength(3);
+    expect(Number(list.headers.get('x-total-count'))).toBeGreaterThan(3);
+    expect(Object.keys(list.json[0]).sort()).toEqual(['@type', 'href', 'id', 'lifecycleStatus', 'name']);
+    const cat = await call('GET', `${P}/catalog`, { origin: null, headers: studio });
+    expect([cat.status, cat.json[0].id, cat.json[0]['@type']]).toEqual([200, 'meridian', 'Catalog']);
+    expect((await call('GET', `${P}/category?isRoot=true`, { origin: null, headers: studio })).json.every((c: any) => c.isRoot)).toBe(true);
+    // create, read, patch, spec, delete
+    const offering = { id: 'studio-promo', name: 'Studio promo', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: { taxIncludedAmount: { unit: 'SGD', value: 9 } } }], '@meridian': { kind: 'VAS' } };
+    const denied = await call('POST', `${P}/productOffering`, { origin: null, headers: reader, body: offering });
+    expect([denied.status, denied.json.code]).toEqual([403, 'FORBIDDEN']);
+    const made = await call('POST', `${P}/productOffering`, { origin: null, headers: studio, body: offering });
+    expect([made.status, made.json.lifecycleStatus, made.json.productOfferingPrice[0].price.taxIncludedAmount.value]).toEqual([201, 'In design', 9]);
+    const dup = await call('POST', `${P}/productOffering`, { origin: null, headers: studio, body: offering });
+    expect([dup.status, dup.json.code]).toEqual([409, 'CONFLICT']);
+    const bad = await call('POST', `${P}/productOffering`, { origin: null, headers: studio, body: { ...offering, id: 'studio-bad', productOfferingPrice: [] } });
+    expect([bad.status, bad.json.code, bad.json['@type']]).toEqual([400, 'INVALID_REQUEST', 'Error']);
+    const live = await call('PATCH', `${P}/productOffering/studio-promo`, { origin: null, headers: studio, body: { lifecycleStatus: 'Active' } });
+    expect([live.status, live.json.lifecycleStatus]).toEqual([200, 'Active']);
+    const spec = await call('PATCH', `${P}/productSpecification/studio-promo`, { origin: null, headers: studio, body: { productSpecCharacteristic: [{ name: '5 GB data', productSpecCharacteristicValue: [{ value: 5, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] } });
+    expect([spec.status, spec.json.productSpecCharacteristic.length]).toEqual([200, 1]);
+    const filtered = await call('GET', `${P}/productOffering?lifecycleStatus=Active&category.id=grp-insurance`, { origin: null, headers: reader });
+    expect(filtered.json.map((o: any) => o.id)).toContain('studio-promo');
+    expect((await call('GET', `${P}/productOffering/nope`, { origin: null, headers: reader })).status).toBe(404);
+    expect((await call('DELETE', `${P}/productOffering/studio-promo`, { origin: null, headers: reader })).status).toBe(403);
+    expect((await call('DELETE', `${P}/productOffering/studio-promo`, { origin: null, headers: studio })).status).toBe(204);
+  });
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;

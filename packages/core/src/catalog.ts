@@ -11,7 +11,7 @@ import { getRegional, marketMode } from './settings.js';
 
 export type NodeInput = Omit<CatalogNode, 'createdAt' | 'updatedAt' | 'version'> & Partial<OfferNode> & Partial<Pick<LineItemNode, 'itemType' | 'quantity' | 'unit' | 'unlimited' | 'sku'>> & { networkType?: string };
 
-const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
+export const toNode = (r: Row): CatalogNode & { sortOrder: number } => {
   const d = r.data ?? {};
   return {
     id: r.id, level: r.level, code: r.code, name: r.name, path: r.path, parentId: r.parentId, status: r.status, activeFrom: r.activeFrom ? new Date(r.activeFrom).toISOString() : null,

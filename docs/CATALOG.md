@@ -131,6 +131,10 @@ When the device is added to an order together with a plan that has no device of 
 
 The built-in **Plan with a device** type remains for fixed bundles of one plan and one phone.
 
+## Standard API (TMF620)
+
+The catalog is also served as TM Forum TMF620 for partners and design tools: [TMF620.md](TMF620.md).
+
 ## Bulk loading offers from a CSV file
 
 Catalog → **Import or export offers (CSV)…** (needs the catalog-write permission).
