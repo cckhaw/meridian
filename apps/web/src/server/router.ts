@@ -418,6 +418,10 @@ get('/catalog', 'catalog:read', ({ db, user, query }) => core.pageOffers(db, { f
 get('/catalog/browse', 'catalog:read', ({ db, user, query }) => core.browseChildren(db, { parentId: str(query, 'parent') || null, activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/search', 'catalog:read', ({ db, user, query }) => core.searchNodes(db, { q: str(query, 'q') ?? '', level: str(query, 'level'), activeOnly: liveOnly(user), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/summary', 'catalog:read', ({ db, user }) => core.catalogSummary(db, { activeOnly: liveOnly(user) }));
+// Catalogue health (docs/CATALOG.md): things that are probably wrong, found in SQL and paged. Editors only: it lists drafts, retired and scheduled offers too.
+const healthOptions = (query: URLSearchParams) => ({ minAgeDays: num(query, 'minAgeDays'), nearPriceBps: num(query, 'nearPriceBps') });
+get('/catalog/health', 'catalog:write', async ({ db, query }) => ({ cap: core.HEALTH_CAP, checks: await core.catalogHealthSummary(db, healthOptions(query)) }));
+get('/catalog/health/:check', 'catalog:write', ({ db, params, query }) => core.catalogHealthPage(db, params.check!, { ...healthOptions(query), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 get('/catalog/:id/availability', 'catalog:read', ({ db, user, params, query }) => core.variantAvailability(db, params.id!, user.scope.storeId ?? str(query, 'location') ?? core.MAIN_WAREHOUSE).then((items) => ({ items })));
 const ruleBody = z.object({ id: z.string().max(60), name: z.string().max(120), status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), when: z.array(z.string().max(90)).max(6), target: z.string().max(90), percentBps: z.number().int().optional(), amountMinor: z.number().int().optional() });
 get('/bundle-rules', 'catalog:read', async ({ db, user }) => ({ items: await core.listBundleRules(db, liveOnly(user) ? 'ACTIVE' : undefined) }));

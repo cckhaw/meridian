@@ -30,6 +30,7 @@ Every list in Meridian is built so that opening a screen costs the same whether 
 | Inventory | `/inventory`, `/inventory/locations`, `/inventory/movements` | SKU prefix | locations via skip-scan; the movement history pages newest first by id |
 | Audit, users, KYC, GL | `/audit`, `/users`, `/kyc/cases`, `/gl` | actor / username / — | newest first |
 | Catalog | `/catalog/browse`, `/search`, `/:id/detail`, `/summary` | words in name/code | one level at a time; usage counts capped at 100,000 |
+| Catalogue health | `/catalog/health`, `/catalog/health/:check` | — | one read-only SQL query per check over the offers, keyset-paged by a key; counts capped at 10,000 |
 | Sales screens and the store-front | `/catalog`, `/assisted/catalog`, `/store/catalog` | words | a dozen to two dozen offers per page |
 
 ## Indexes
