@@ -2,7 +2,7 @@ import { currencyInfo, LINE_ITEM_TYPES, type CatalogNode, type LineItemNode, typ
 import { createNode, deleteNode, getNode, moveNode, setStatus, toNode, updateNode, type NodeInput, type NodePatch } from './catalog.js';
 import type { Queryable, Row } from './db.js';
 import { LIFECYCLE } from './catalog-events.js';
-import { invalid, notFound } from './errors.js';
+import { invalid, notFound, preconditionFailed } from './errors.js';
 
 /**
  * TM Forum TMF620 Product Catalog Management (v4 profile) over the working catalog:
@@ -23,6 +23,32 @@ const CATALOG_ID = 'meridian';
 const ref = (base: string, path: string, id: string) => `${base}/api/tmf-api/${TMF620}/${path}/${id}`;
 
 const exponent = (currency: string) => currencyInfo(currency)?.exponent ?? 2;
+
+// ───────────────────────── ETag and If-Match ─────────────────────────
+/**
+ * The ETag of a category, an offering or a specification is the node's version in quotes ("7"). Every change to the node, and to what it includes (an offer's line items), raises
+ * the version, so the ETag changes exactly when the resource does. `If-Match` on a write says "only if it is still as I read it": a stale one is refused with 412, and no
+ * `If-Match` at all means unconditionally, as HTTP allows. `If-None-Match` on a read answers 304 while nothing changed.
+ */
+export const nodeEtag = (n: { version?: number | null }): string => `"${n.version ?? 1}"`;
+const plainTag = (t: string) => t.trim().replace(/^W\//, '');
+/** Does the If-Match / If-None-Match header name this ETag (or `*`)? Weak validators (W/"7") are accepted as the strong one. */
+export function etagMatches(header: string | null | undefined, etag: string): boolean {
+  if (!header || !header.trim()) return false;
+  if (header.trim() === '*') return true;
+  return header.split(',').some((t) => plainTag(t) === etag);
+}
+/** Refuses a write whose If-Match is not the resource's current ETag (412). Without an If-Match the write goes ahead. */
+export function assertIfMatch(header: string | null | undefined, current: string): void {
+  if (header === null || header === undefined || !header.trim()) return;
+  if (!etagMatches(header, current)) throw preconditionFailed(`The resource has changed since you read it: its ETag is now ${current}, not ${header.trim()}. Read it again and repeat your change.`);
+}
+export interface TmfWriteOptions { ifMatch?: string | null }
+/** Takes the row lock for the rest of the transaction (so the check and the write cannot be split by another writer), then reads the node. */
+async function lockedNode(q: Queryable, id: string): Promise<CatalogNode> {
+  await q.query('SELECT 1 FROM catalog_nodes WHERE id=$1 FOR UPDATE', [id]);
+  return getNode(q, id);
+}
 
 // ───────────────────────── lifecycle ─────────────────────────
 /** Draft and Scheduled are both "In design": a scheduled offer is In design with a validFor.startDateTime in the future. */
@@ -175,9 +201,10 @@ export async function tmfCreateOffering(q: Queryable, body: Record<string, any>,
 }
 
 /** TMF620 PATCH (merge-patch): the attributes named are changed, the rest stay. Lifecycle and category changes use the catalog's own status and move rules. */
-export async function tmfPatchOffering(q: Queryable, id: string, body: Record<string, any>, actor: string): Promise<OfferNode> {
-  const cur = await getNode(q, id);
+export async function tmfPatchOffering(q: Queryable, id: string, body: Record<string, any>, actor: string, o: TmfWriteOptions = {}): Promise<OfferNode> {
+  const cur = await lockedNode(q, id);
   if (cur.level !== 'OFFER') throw notFound('productOffering', id);
+  assertIfMatch(o.ifMatch, nodeEtag(cur));
   const fields = offeringFields(body);
   if (Object.values(fields).some((v) => v !== undefined)) await updateNode(q, id, fields, actor);
   const toParent = Array.isArray(body.category) ? body.category[0]?.id : undefined;
@@ -282,9 +309,10 @@ export async function tmfCreateCategory(q: Queryable, body: Record<string, any>,
   return createNode(q, { id, level, code: id, name: body.name.trim(), path: '', parentId: parentId ?? null, status: st.status, markets: [], ...(level === 'NETWORK_TYPE' ? { networkType } : {}) } as unknown as NodeInput, actor);
 }
 
-export async function tmfPatchCategory(q: Queryable, id: string, body: Record<string, any>, actor: string): Promise<CatalogNode> {
-  const cur = await getNode(q, id);
+export async function tmfPatchCategory(q: Queryable, id: string, body: Record<string, any>, actor: string, o: TmfWriteOptions = {}): Promise<CatalogNode> {
+  const cur = await lockedNode(q, id);
   if (!CATEGORY_LEVELS.includes(cur.level)) throw notFound('category', id);
+  assertIfMatch(o.ifMatch, nodeEtag(cur));
   const patch: NodePatch = {};
   if (body.name !== undefined) patch.name = String(body.name);
   if (body['@meridian']?.networkType !== undefined) patch.networkType = body['@meridian'].networkType;
@@ -298,9 +326,10 @@ export async function tmfPatchCategory(q: Queryable, id: string, body: Record<st
 }
 
 /** Deletes a category or an offering by the catalog's rule: empty, never sold, not used as a dependency. Otherwise retire it. */
-export async function tmfDelete(q: Queryable, id: string, level: 'category' | 'offering', actor: string): Promise<void> {
-  const n = await getNode(q, id);
+export async function tmfDelete(q: Queryable, id: string, level: 'category' | 'offering', actor: string, o: TmfWriteOptions = {}): Promise<void> {
+  const n = await lockedNode(q, id);
   if (level === 'offering' ? n.level !== 'OFFER' : !CATEGORY_LEVELS.includes(n.level)) throw notFound(level === 'offering' ? 'productOffering' : 'category', id);
+  assertIfMatch(o.ifMatch, nodeEtag(n));
   await deleteNode(q, id, actor);
 }
 
@@ -347,7 +376,10 @@ export async function tmfListSpecifications(q: Queryable, f: { offset: number; l
  * PATCH of a specification: `productSpecCharacteristic`, when sent, is the complete list of what the offer includes. A characteristic with the id of an existing line
  * item updates it; one without an id (or an unknown id) adds a line item; a line item that is not in the list is removed. The catalog's rules apply to each.
  */
-export async function tmfPatchSpecification(q: Queryable, id: string, body: Record<string, any>, actor: string) {
+export async function tmfPatchSpecification(q: Queryable, id: string, body: Record<string, any>, actor: string, o: TmfWriteOptions = {}) {
+  const locked = await lockedNode(q, id);
+  if (locked.level !== 'OFFER') throw notFound('productSpecification', id);
+  assertIfMatch(o.ifMatch, nodeEtag(locked));
   const { offer } = await tmfGetOffering(q, id);
   if (Array.isArray(body.productSpecCharacteristic)) {
     const existing = await lineItems(q, id);

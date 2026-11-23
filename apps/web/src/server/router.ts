@@ -907,6 +907,11 @@ north('DELETE', `${TMF688}/hub/:id`, 'event:subscribe', async ({ db, principal, 
 const TMF620 = `/tmf-api/${core.TMF620}`;
 const fieldsOf = (query: URLSearchParams) => str(query, 'fields');
 const lifecycleOf = (query: URLSearchParams) => str(query, 'lifecycleStatus');
+/** A resource with its ETag (the node's version in quotes); reads answer 304 to a matching If-None-Match, writes take If-Match (412 when stale). */
+const etagged = (body: unknown, tag: string, status = 200) => Response.json(body, { status, headers: { etag: tag } });
+const notModified = (tag: string) => new Response(null, { status: 304, headers: { etag: tag } });
+const unchanged = (req: Request, tag: string) => core.etagMatches(req.headers.get('if-none-match'), tag);
+const ifMatchOf = (req: Request) => ({ ifMatch: req.headers.get('if-match') });
 north('GET', `${TMF620}/catalog`, 'catalog:read', async ({ db, req }) => Response.json([core.toCatalog(await core.tmfCatalog(db), tmfBase(req))]));
 north('GET', `${TMF620}/catalog/:id`, 'catalog:read', async ({ db, params, req }) => { if (params.id !== core.TMF_CATALOG_ID) throw new DomainError('NOT_FOUND', 'catalog not found'); return core.toCatalog(await core.tmfCatalog(db), tmfBase(req)); });
 north('GET', `${TMF620}/category`, 'catalog:read', async ({ db, query, req }) => {
@@ -914,22 +919,22 @@ north('GET', `${TMF620}/category`, 'catalog:read', async ({ db, query, req }) =>
   const r = await core.tmfListCategories(db, { offset, limit, parentId: str(query, 'parentId'), root: str(query, 'isRoot') === 'true', lifecycleStatus: lifecycleOf(query), name: str(query, 'name') });
   return tmfPage(r.items.map((n) => core.selectFields(core.toCategory(n, tmfBase(req), r.children.get(n.id), n.parentId ? r.known.get(n.parentId)?.name : undefined), fieldsOf(query))), r.total, offset);
 });
-north('GET', `${TMF620}/category/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetCategory(db, params.id!); return core.selectFields(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), fieldsOf(query)); });
-north('POST', `${TMF620}/category`, 'catalog:write', async ({ db, principal, body, req }) => { const n = await core.tmfCreateCategory(db, (body ?? {}) as Record<string, unknown>, principal.ref); const r = await core.tmfGetCategory(db, n.id); return created(core.toCategory(r.node, tmfBase(req), r.children, r.parentName)); });
-north('PATCH', `${TMF620}/category/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { await core.tmfPatchCategory(db, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref); const r = await core.tmfGetCategory(db, params.id!); return core.toCategory(r.node, tmfBase(req), r.children, r.parentName); });
-north('DELETE', `${TMF620}/category/:id`, 'catalog:write', async ({ db, principal, params }) => { await core.tmfDelete(db, params.id!, 'category', principal.ref); return new Response(null, { status: 204 }); });
+north('GET', `${TMF620}/category/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetCategory(db, params.id!); const tag = core.nodeEtag(r.node); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), fieldsOf(query)), tag); });
+north('POST', `${TMF620}/category`, 'catalog:write', async ({ db, principal, body, req }) => { const n = await db.tx((q) => core.tmfCreateCategory(q, (body ?? {}) as Record<string, unknown>, principal.ref)); const r = await core.tmfGetCategory(db, n.id); return etagged(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), core.nodeEtag(r.node), 201); });
+north('PATCH', `${TMF620}/category/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { await db.tx((q) => core.tmfPatchCategory(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); const r = await core.tmfGetCategory(db, params.id!); return etagged(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), core.nodeEtag(r.node)); });
+north('DELETE', `${TMF620}/category/:id`, 'catalog:write', async ({ db, principal, params, req }) => { await db.tx((q) => core.tmfDelete(q, params.id!, 'category', principal.ref, ifMatchOf(req))); return new Response(null, { status: 204 }); });
 north('GET', `${TMF620}/productOffering`, 'catalog:read', async ({ db, query, req }) => {
   const { offset, limit } = tmfPaging(query);
   const r = await core.tmfListOfferings(db, { offset, limit, lifecycleStatus: lifecycleOf(query), categoryId: str(query, 'category.id'), name: str(query, 'name'), kind: str(query, 'kind'), updatedAfter: str(query, 'lastUpdate.gt') });
   return tmfPage(r.items.map((o) => core.selectFields(core.toProductOffering(o, tmfBase(req), r.known), fieldsOf(query))), r.total, offset);
 });
-north('GET', `${TMF620}/productOffering/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetOffering(db, params.id!); return core.selectFields(core.toProductOffering(r.offer, tmfBase(req), r.known), fieldsOf(query)); });
-north('POST', `${TMF620}/productOffering`, 'catalog:write', async ({ db, principal, body, req }) => { const o = await core.tmfCreateOffering(db, (body ?? {}) as Record<string, unknown>, principal.ref); const r = await core.tmfGetOffering(db, o.id); return created(core.toProductOffering(r.offer, tmfBase(req), r.known)); });
-north('PATCH', `${TMF620}/productOffering/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { await core.tmfPatchOffering(db, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref); const r = await core.tmfGetOffering(db, params.id!); return core.toProductOffering(r.offer, tmfBase(req), r.known); });
-north('DELETE', `${TMF620}/productOffering/:id`, 'catalog:write', async ({ db, principal, params }) => { await core.tmfDelete(db, params.id!, 'offering', principal.ref); return new Response(null, { status: 204 }); });
+north('GET', `${TMF620}/productOffering/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetOffering(db, params.id!); const tag = core.nodeEtag(r.offer); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toProductOffering(r.offer, tmfBase(req), r.known), fieldsOf(query)), tag); });
+north('POST', `${TMF620}/productOffering`, 'catalog:write', async ({ db, principal, body, req }) => { const o = await db.tx((q) => core.tmfCreateOffering(q, (body ?? {}) as Record<string, unknown>, principal.ref)); const r = await core.tmfGetOffering(db, o.id); return etagged(core.toProductOffering(r.offer, tmfBase(req), r.known), core.nodeEtag(r.offer), 201); });
+north('PATCH', `${TMF620}/productOffering/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { await db.tx((q) => core.tmfPatchOffering(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); const r = await core.tmfGetOffering(db, params.id!); return etagged(core.toProductOffering(r.offer, tmfBase(req), r.known), core.nodeEtag(r.offer)); });
+north('DELETE', `${TMF620}/productOffering/:id`, 'catalog:write', async ({ db, principal, params, req }) => { await db.tx((q) => core.tmfDelete(q, params.id!, 'offering', principal.ref, ifMatchOf(req))); return new Response(null, { status: 204 }); });
 north('GET', `${TMF620}/productSpecification`, 'catalog:read', async ({ db, query, req }) => { const { offset, limit } = tmfPaging(query); const r = await core.tmfListSpecifications(db, { offset, limit }); return tmfPage(r.items.map((s) => core.selectFields(core.toProductSpecification(s.offer, s.items, tmfBase(req)), fieldsOf(query))), r.total, offset); });
-north('GET', `${TMF620}/productSpecification/:id`, 'catalog:read', async ({ db, params, query, req }) => { const s = await core.tmfGetSpecification(db, params.id!); return core.selectFields(core.toProductSpecification(s.offer, s.items, tmfBase(req)), fieldsOf(query)); });
-north('PATCH', `${TMF620}/productSpecification/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { const s = await core.tmfPatchSpecification(db, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref); return core.toProductSpecification(s.offer, s.items, tmfBase(req)); });
+north('GET', `${TMF620}/productSpecification/:id`, 'catalog:read', async ({ db, params, query, req }) => { const sp = await core.tmfGetSpecification(db, params.id!); const tag = core.nodeEtag(sp.offer); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toProductSpecification(sp.offer, sp.items, tmfBase(req)), fieldsOf(query)), tag); });
+north('PATCH', `${TMF620}/productSpecification/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { const sp = await db.tx((q) => core.tmfPatchSpecification(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); return etagged(core.toProductSpecification(sp.offer, sp.items, tmfBase(req)), core.nodeEtag(sp.offer)); });
 
 // ── Northbound: subscriber lifecycle and subscription operations (TMF 638 / 637 / 652) ──
 const northActor = (p: core.GatewayPrincipal) => `northbound:${p.ref}`;
@@ -2056,7 +2061,7 @@ const badIdAnswer = (bad: string, path: string) => {
   return bad !== '' && decoded.includes(bad) ? { status: 404, code: 'NOT_FOUND', message: 'No record has that id.' } : { status: 400, code: 'INVALID', message: 'An id in the request is not valid.' };
 };
 
-const TMF_CODE: Record<string, string> = { NOT_FOUND: 'NOT_FOUND', INVALID: 'INVALID_REQUEST', CONFLICT: 'CONFLICT', REJECTED: 'UNPROCESSABLE', FORBIDDEN: 'FORBIDDEN', UNAUTHENTICATED: 'UNAUTHORIZED', RATE_LIMITED: 'TOO_MANY_REQUESTS' };
+const TMF_CODE: Record<string, string> = { NOT_FOUND: 'NOT_FOUND', INVALID: 'INVALID_REQUEST', CONFLICT: 'CONFLICT', REJECTED: 'UNPROCESSABLE', FORBIDDEN: 'FORBIDDEN', UNAUTHENTICATED: 'UNAUTHORIZED', RATE_LIMITED: 'TOO_MANY_REQUESTS', PRECONDITION_FAILED: 'PRECONDITION_FAILED' };
 
 /** One northbound call: authenticate, check the scope, apply the channel's rate limit, run (once per idempotency key when the route asks), and log it. Errors use the TM Forum shape. */
 async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, who: (u: string) => void): Promise<Response> {
@@ -2076,8 +2081,8 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
     const run = async () => {
       const o = await (rt.handler as (c: PublicCtx & { principal: core.GatewayPrincipal | null }) => unknown)({ ...base, principal } as never);
       if (o instanceof Response) {
-        for (const h of ['x-total-count', 'x-result-count', 'x-offset']) { const v = o.headers.get(h); if (v !== null) headers[h] = v; } // TM Forum paging
-        return { status: o.status, body: o.status === 204 ? null : await o.json().catch(() => null) };
+        for (const h of ['x-total-count', 'x-result-count', 'x-offset', 'etag']) { const v = o.headers.get(h); if (v !== null) headers[h] = v; } // TM Forum paging, and the ETag of a resource
+        return { status: o.status, body: o.status === 204 || o.status === 304 ? null : await o.json().catch(() => null) };
       }
       return { status: 200, body: o ?? { ok: true } };
     };
@@ -2089,7 +2094,7 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
       if (result.replayed) headers['idempotent-replay'] = 'true';
     } else result = await run();
     headers['content-type'] = 'application/json'; headers['cache-control'] = 'no-store';
-    return out(new Response(result.status === 204 || result.body === null ? null : JSON.stringify(result.body), { status: result.status, headers }));
+    return out(new Response(result.status === 204 || result.status === 304 || result.body === null ? null : JSON.stringify(result.body), { status: result.status, headers }));
   } catch (e) {
     if (e instanceof core.GatewayRateLimited) return out(tmfFail(429, 'TOO_MANY_REQUESTS', 'RATE_LIMIT_EXCEEDED', e.message, { 'retry-after': String(e.retryAfterSeconds) }));
     if (e instanceof DomainError) {

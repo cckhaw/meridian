@@ -3,7 +3,7 @@ import type { Db } from './db.js';
 import { placeOrder } from './orders.js';
 import { freshDb, newCustomer } from './test-helpers.js';
 import {
-  fromOfferingPrices, statusFromLifecycle, tmfCreateCategory, tmfCreateOffering, tmfDelete, tmfGetCategory, tmfGetOffering, tmfGetSpecification, tmfListCategories, tmfListOfferings,
+  assertIfMatch, etagMatches, fromOfferingPrices, nodeEtag, statusFromLifecycle, tmfCreateCategory, tmfCreateOffering, tmfDelete, tmfGetCategory, tmfGetOffering, tmfGetSpecification, tmfListCategories, tmfListOfferings,
   tmfPatchOffering, tmfPatchSpecification, toCategory, toProductOffering, toProductSpecification,
 } from './tmf620.js';
 
@@ -154,5 +154,56 @@ describe('TMF620: product specifications (line items)', () => {
     expect(out.productSpecCharacteristic.map((c: any) => [c.id, c.name])).toEqual([[keepId, '200 GB data']]);
     await expect(tmfPatchSpecification(db, 'tmf-spec', { productSpecCharacteristic: [{ name: 'x', '@meridian': { itemType: 'BOGUS' } }] }, 'studio')).rejects.toThrow(/itemType/);
     expect((await tmfGetSpecification(db, 'tmf-spec')).items).toHaveLength(1);
+  });
+});
+
+describe('TMF620: ETag and If-Match', () => {
+  it('matches strong and weak validators, lists and *, and refuses a stale If-Match with a 412', () => {
+    expect(nodeEtag({ version: 3 })).toBe('"3"');
+    expect(nodeEtag({})).toBe('"1"');
+    expect(etagMatches('"3"', '"3"')).toBe(true);
+    expect(etagMatches('W/"3"', '"3"')).toBe(true);
+    expect(etagMatches('"1", "3"', '"3"')).toBe(true);
+    expect(etagMatches('*', '"3"')).toBe(true);
+    expect(etagMatches('"2"', '"3"')).toBe(false);
+    expect(etagMatches('', '"3"')).toBe(false);
+    expect(etagMatches(null, '"3"')).toBe(false);
+    expect(() => assertIfMatch(undefined, '"3"')).not.toThrow();
+    expect(() => assertIfMatch(null, '"3"')).not.toThrow();
+    expect(() => assertIfMatch('"3"', '"3"')).not.toThrow();
+    expect(() => assertIfMatch('"2"', '"3"')).toThrow(/changed since you read it/);
+    try { assertIfMatch('"2"', '"3"'); } catch (e) { expect((e as { status: number; code: string }).status).toBe(412); expect((e as { code: string }).code).toBe('PRECONDITION_FAILED'); }
+  });
+
+  it('raises the version of an offering when what it includes changes, and of a node when it is moved, so the ETag changes with the resource', async () => {
+    await tmfCreateOffering(db, body({ id: 'etag-core', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design' }), 'studio');
+    const v = async (id: string) => Number((await db.query('SELECT version FROM catalog_nodes WHERE id=$1', [id])).rows[0]!.version);
+    const v0 = await v('etag-core');
+    await tmfPatchSpecification(db, 'etag-core', { productSpecCharacteristic: [{ name: '1 GB', productSpecCharacteristicValue: [{ value: 1, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] }, 'studio');
+    const v1 = await v('etag-core');
+    expect(v1).toBeGreaterThan(v0);                                     // a line item added
+    const spec = await tmfGetSpecification(db, 'etag-core');
+    await tmfPatchSpecification(db, 'etag-core', { productSpecCharacteristic: [{ id: spec.items[0]!.id, name: '2 GB', productSpecCharacteristicValue: [{ value: 2, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] }, 'studio');
+    const v2 = await v('etag-core');
+    expect(v2).toBeGreaterThan(v1);                                     // a line item changed
+    await tmfPatchSpecification(db, 'etag-core', { productSpecCharacteristic: [] }, 'studio');
+    expect(await v('etag-core')).toBeGreaterThan(v2);                   // a line item removed
+    const before = await v('etag-core');
+    await tmfPatchOffering(db, 'etag-core', { category: [{ id: 'grp-vas' }] }, 'studio');
+    expect(await v('etag-core')).toBeGreaterThan(before);               // moved to another group
+  });
+
+  it('refuses a stale If-Match on every write, checking inside the write, and lets the right one through', async () => {
+    await tmfCreateOffering(db, body({ id: 'etag-guard', lifecycleStatus: 'In design' }), 'studio');
+    const tag = async () => nodeEtag((await tmfGetOffering(db, 'etag-guard')).offer);
+    const t1 = await tag();
+    await expect(tmfPatchOffering(db, 'etag-guard', { description: 'x' }, 'studio', { ifMatch: '"0"' })).rejects.toThrow(/changed since you read it/);
+    await tmfPatchOffering(db, 'etag-guard', { description: 'x' }, 'studio', { ifMatch: t1 });
+    expect(await tag()).not.toBe(t1);
+    await expect(tmfPatchOffering(db, 'etag-guard', { description: 'y' }, 'studio', { ifMatch: t1 })).rejects.toThrow(/changed since you read it/);
+    await expect(tmfPatchSpecification(db, 'etag-guard', { productSpecCharacteristic: [] }, 'studio', { ifMatch: t1 })).rejects.toThrow(/changed since you read it/);
+    await expect(tmfDelete(db, 'etag-guard', 'offering', 'studio', { ifMatch: t1 })).rejects.toThrow(/changed since you read it/);
+    await tmfDelete(db, 'etag-guard', 'offering', 'studio', { ifMatch: await tag() });
+    await expect(tmfGetOffering(db, 'etag-guard')).rejects.toThrow(/not found/);
   });
 });

@@ -253,9 +253,15 @@ export async function createNode(q: Queryable, input: NodeInput, actor = 'system
     throw e;
   }
   await audit(q, actor, 'catalog', input.id, 'NODE_CREATED', { level: input.level });
+  if ((input.level as CatalogNodeLevel) === 'LINE_ITEM') await touchOffer(q, input.parentId);
   const created = await getNode(q, input.id);
   await raiseCatalogEvent(q, 'created', created);
   return created;
+}
+
+/** A line item is part of its offer: changing one changes the offer, so the offer's version (and with it its ETag) goes up too. */
+async function touchOffer(q: Queryable, offerId: string | null | undefined) {
+  if (offerId) await q.query('UPDATE catalog_nodes SET version = version + 1, updated_at = now() WHERE id = $1', [offerId]);
 }
 
 export interface NodePatch {
@@ -334,6 +340,7 @@ export async function updateNode(q: Queryable, id: string, patch: NodePatch, act
   }
   await q.query(`UPDATE catalog_nodes SET name=$2, kind=$3, markets=$4, data=$5, version=version+1, updated_at=now() WHERE id=$1`, [id, name, kind, markets, JSON.stringify(data)]);
   await audit(q, actor, 'catalog', id, 'NODE_UPDATED', { fields: Object.keys(patch) });
+  if (node.level === 'LINE_ITEM') await touchOffer(q, node.parentId);
   const updated = await getNode(q, id);
   const changed = Object.keys(patch).filter((k) => !same((node as unknown as Record<string, unknown>)[k], (updated as unknown as Record<string, unknown>)[k]));
   await raiseCatalogEvent(q, 'changed', updated, { changed: tmfAttributes(changed.length ? changed : Object.keys(patch)) });
@@ -385,7 +392,7 @@ export async function moveNode(q: Queryable, id: string, newParentId: string | n
   const next = (await q.query('SELECT COALESCE(max(sort_order), 0) + 10 AS n FROM catalog_nodes WHERE parent_id IS NOT DISTINCT FROM $1', [newParentId])).rows[0]!.n as number;
   const old = cur.path as string;
   await q.query(`UPDATE catalog_nodes SET path = $2 || substr(path, length($1) + 1), updated_at = now() WHERE path = $1 OR path LIKE $1 || '/%'`, [old, newPath]);
-  await q.query('UPDATE catalog_nodes SET parent_id=$2, sort_order=$3 WHERE id=$1', [id, newParentId, next]);
+  await q.query('UPDATE catalog_nodes SET parent_id=$2, sort_order=$3, version=version+1 WHERE id=$1', [id, newParentId, next]);
   await audit(q, actor, 'catalog', id, 'NODE_MOVED', { from: old, to: newPath });
   const moved = await getNode(q, id);
   await raiseCatalogEvent(q, 'changed', moved, { changed: [cur.level === 'OFFER' ? 'category' : 'parentId'] });
@@ -394,7 +401,7 @@ export async function moveNode(q: Queryable, id: string, newParentId: string | n
 
 /** Swaps a node with its previous or next sibling. */
 export async function reorderNode(q: Queryable, id: string, direction: 'up' | 'down', actor = 'system') {
-  const cur = (await q.query('SELECT id, parent_id, sort_order FROM catalog_nodes WHERE id=$1', [id])).rows[0];
+  const cur = (await q.query('SELECT id, level, parent_id, sort_order FROM catalog_nodes WHERE id=$1', [id])).rows[0];
   if (!cur) throw notFound('catalog node', id);
   const sibs = (await q.query('SELECT id, sort_order FROM catalog_nodes WHERE parent_id IS NOT DISTINCT FROM $1 ORDER BY sort_order, name', [cur.parentId])).rows;
   const i = sibs.findIndex((s) => s.id === id);
@@ -404,6 +411,7 @@ export async function reorderNode(q: Queryable, id: string, direction: 'up' | 'd
   const order = sibs.map((s) => s.id as string);
   [order[i], order[j]] = [order[j]!, order[i]!];
   for (const [k, sid] of order.entries()) await q.query('UPDATE catalog_nodes SET sort_order=$2 WHERE id=$1', [sid, (k + 1) * 10]);
+  if (cur.level === 'LINE_ITEM') await touchOffer(q, cur.parentId);   // the order of what an offer includes is part of the offer
   await audit(q, actor, 'catalog', id, 'NODE_REORDERED', { direction });
 }
 
@@ -419,6 +427,7 @@ export async function deleteNode(q: Queryable, id: string, actor = 'system') {
   if (u.referencedBy.length) throw rejected(`It is used as a dependency by: ${u.referencedBy.join(', ')}. Remove those dependencies first.`);
   if (kids) await q.query('DELETE FROM catalog_nodes WHERE parent_id=$1 AND level=\'LINE_ITEM\'', [id]);
   await q.query('DELETE FROM catalog_nodes WHERE id=$1', [id]);
+  if (cur.level === 'LINE_ITEM') await touchOffer(q, cur.parentId);
   await audit(q, actor, 'catalog', id, 'NODE_DELETED', { level: cur.level });
   await raiseCatalogEvent(q, 'deleted', cur as never);
 }

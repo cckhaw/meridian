@@ -2057,6 +2057,53 @@ describe('offer type switches and service types', () => {
     expect((await call('DELETE', `${P}/productOffering/studio-promo`, { origin: null, headers: studio })).status).toBe(204);
   });
 
+  it('TMF620: ETag on every resource, 304 for If-None-Match, and 412 for a write whose If-Match is stale', async () => {
+    const su = await root();
+    const made = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name: 'Studio ETag', channel: 'PARTNER', scopes: ['catalog:read', 'catalog:write'] } });
+    const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: made.json.client.clientId, client_secret: made.json.clientSecret } });
+    const h = { authorization: `Bearer ${t.json.access_token}` };
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const price = (v: number) => [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: { taxIncludedAmount: { unit: 'SGD', value: v } } }];
+    const o = (id: string) => `${P}/productOffering/${id}`;
+    const create = await call('POST', o('').replace(/\/$/, ''), { origin: null, headers: h, body: { id: 'etag-promo', name: 'ETag promo', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: price(9), '@meridian': { kind: 'VAS' } } });
+    expect([create.status, create.headers.get('etag')]).toEqual([201, '"1"']);
+    const read = await call('GET', o('etag-promo'), { origin: null, headers: h });
+    expect([read.status, read.headers.get('etag'), read.json.version]).toEqual([200, '"1"', '1']);
+    // 304 while nothing changed, weak validators and lists accepted
+    for (const inm of ['"1"', 'W/"1"', '"7", "1"', '*']) {
+      const same = await call('GET', o('etag-promo'), { origin: null, headers: { ...h, 'if-none-match': inm } });
+      expect([inm, same.status, same.headers.get('etag')]).toEqual([inm, 304, '"1"']);
+    }
+    expect((await call('GET', o('etag-promo'), { origin: null, headers: { ...h, 'if-none-match': '"0"' } })).status).toBe(200);
+    // a stale If-Match is refused and changes nothing
+    const stale = await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"99"' }, body: { productOfferingPrice: price(1) } });
+    expect([stale.status, stale.json.code, stale.json['@type']]).toEqual([412, 'PRECONDITION_FAILED', 'Error']);
+    expect((await call('GET', o('etag-promo'), { origin: null, headers: h })).json.productOfferingPrice[0].price.taxIncludedAmount.value).toBe(9);
+    // the right one goes through and the answer carries the new ETag
+    const ok = await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productOfferingPrice: price(12) } });
+    expect([ok.status, ok.headers.get('etag'), ok.json.productOfferingPrice[0].price.taxIncludedAmount.value]).toEqual([200, '"2"', 12]);
+    // two editors who both read version 1: the second one is refused instead of overwriting
+    const second = await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productOfferingPrice: price(15) } });
+    expect(second.status).toBe(412);
+    // no If-Match means unconditional, and * means "if it exists"
+    expect((await call('PATCH', o('etag-promo'), { origin: null, headers: h, body: { description: 'no precondition' } })).headers.get('etag')).toBe('"3"');
+    expect((await call('PATCH', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '*' }, body: { description: 'star' } })).headers.get('etag')).toBe('"4"');
+    // the specification shares the offering's ETag, and changing what the offer includes changes it
+    const spec0 = await call('GET', `${P}/productSpecification/etag-promo`, { origin: null, headers: h });
+    expect(spec0.headers.get('etag')).toBe('"4"');
+    const specStale = await call('PATCH', `${P}/productSpecification/etag-promo`, { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productSpecCharacteristic: [] } });
+    expect(specStale.status).toBe(412);
+    const specOk = await call('PATCH', `${P}/productSpecification/etag-promo`, { origin: null, headers: { ...h, 'if-match': '"4"' }, body: { productSpecCharacteristic: [{ name: '5 GB data', productSpecCharacteristicValue: [{ value: 5, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] } });
+    expect([specOk.status, specOk.headers.get('etag')]).toEqual([200, '"5"']);
+    expect((await call('GET', o('etag-promo'), { origin: null, headers: h })).headers.get('etag')).toBe('"5"');
+    // categories too; and a stale delete is refused
+    const cat = await call('GET', `${P}/category/grp-insurance`, { origin: null, headers: h });
+    expect(cat.headers.get('etag')).toMatch(/^"\d+"$/);
+    expect((await call('PATCH', `${P}/category/grp-insurance`, { origin: null, headers: { ...h, 'if-match': '"9999"' }, body: { name: 'Insurance' } })).status).toBe(412);
+    expect((await call('DELETE', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"1"' } })).status).toBe(412);
+    expect((await call('DELETE', o('etag-promo'), { origin: null, headers: { ...h, 'if-match': '"5"' } })).status).toBe(204);
+  });
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;
