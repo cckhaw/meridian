@@ -912,6 +912,15 @@ const etagged = (body: unknown, tag: string, status = 200) => Response.json(body
 const notModified = (tag: string) => new Response(null, { status: 304, headers: { etag: tag } });
 const unchanged = (req: Request, tag: string) => core.etagMatches(req.headers.get('if-none-match'), tag);
 const ifMatchOf = (req: Request) => ({ ifMatch: req.headers.get('if-match') });
+/** `?dryRun=true` on a write: the same code runs and its answer is built, then everything is rolled back. Anything else but `false` is refused rather than risk a real write. */
+const dryRunOf = (query: URLSearchParams): boolean => { const v = query.get('dryRun'); if (v === null || v === 'false') return false; if (v === 'true') return true; throw new DomainError('INVALID', 'dryRun is true or false.'); };
+/** A TMF620 write is one transaction. A dry run answers as the real write would (same status and body) with `X-Dry-Run: true` and no ETag, because nothing was stored. */
+const write = async (db: Db, query: URLSearchParams, fn: (q: core.Queryable) => Promise<Response>): Promise<Response> => {
+  if (!dryRunOf(query)) return db.tx(fn);
+  const res = await core.tmfDryRun(db, fn);
+  const headers = new Headers(res.headers); headers.delete('etag'); headers.set('x-dry-run', 'true');
+  return new Response(res.status === 204 ? null : res.body, { status: res.status, headers });
+};
 north('GET', `${TMF620}/catalog`, 'catalog:read', async ({ db, req }) => Response.json([core.toCatalog(await core.tmfCatalog(db), tmfBase(req))]));
 north('GET', `${TMF620}/catalog/:id`, 'catalog:read', async ({ db, params, req }) => { if (params.id !== core.TMF_CATALOG_ID) throw new DomainError('NOT_FOUND', 'catalog not found'); return core.toCatalog(await core.tmfCatalog(db), tmfBase(req)); });
 north('GET', `${TMF620}/category`, 'catalog:read', async ({ db, query, req }) => {
@@ -920,30 +929,30 @@ north('GET', `${TMF620}/category`, 'catalog:read', async ({ db, query, req }) =>
   return tmfPage(r.items.map((n) => core.selectFields(core.toCategory(n, tmfBase(req), r.children.get(n.id), n.parentId ? r.known.get(n.parentId)?.name : undefined), fieldsOf(query))), r.total, offset);
 });
 north('GET', `${TMF620}/category/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetCategory(db, params.id!); const tag = core.nodeEtag(r.node); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), fieldsOf(query)), tag); });
-north('POST', `${TMF620}/category`, 'catalog:write', async ({ db, principal, body, req }) => { const n = await db.tx((q) => core.tmfCreateCategory(q, (body ?? {}) as Record<string, unknown>, principal.ref)); const r = await core.tmfGetCategory(db, n.id); return etagged(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), core.nodeEtag(r.node), 201); });
-north('PATCH', `${TMF620}/category/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { await db.tx((q) => core.tmfPatchCategory(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); const r = await core.tmfGetCategory(db, params.id!); return etagged(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), core.nodeEtag(r.node)); });
-north('DELETE', `${TMF620}/category/:id`, 'catalog:write', async ({ db, principal, params, req }) => { await db.tx((q) => core.tmfDelete(q, params.id!, 'category', principal.ref, ifMatchOf(req))); return new Response(null, { status: 204 }); });
+north('POST', `${TMF620}/category`, 'catalog:write', ({ db, principal, body, query, req }) => write(db, query, async (q) => { const n = await core.tmfCreateCategory(q, (body ?? {}) as Record<string, unknown>, principal.ref); const r = await core.tmfGetCategory(q, n.id); return etagged(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), core.nodeEtag(r.node), 201); }));
+north('PATCH', `${TMF620}/category/:id`, 'catalog:write', ({ db, principal, params, body, query, req }) => write(db, query, async (q) => { await core.tmfPatchCategory(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req)); const r = await core.tmfGetCategory(q, params.id!); return etagged(core.toCategory(r.node, tmfBase(req), r.children, r.parentName), core.nodeEtag(r.node)); }));
+north('DELETE', `${TMF620}/category/:id`, 'catalog:write', ({ db, principal, params, query, req }) => write(db, query, async (q) => { await core.tmfDelete(q, params.id!, 'category', principal.ref, ifMatchOf(req)); return new Response(null, { status: 204 }); }));
 north('GET', `${TMF620}/productOffering`, 'catalog:read', async ({ db, query, req }) => {
   const { offset, limit } = tmfPaging(query);
   const r = await core.tmfListOfferings(db, { offset, limit, lifecycleStatus: lifecycleOf(query), categoryId: str(query, 'category.id'), name: str(query, 'name'), kind: str(query, 'kind'), updatedAfter: str(query, 'lastUpdate.gt') });
   return tmfPage(r.items.map((o) => core.selectFields(core.toProductOffering(o, tmfBase(req), r.known), fieldsOf(query))), r.total, offset);
 });
 north('GET', `${TMF620}/productOffering/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetOffering(db, params.id!); const tag = core.nodeEtag(r.offer); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toProductOffering(r.offer, tmfBase(req), r.known), fieldsOf(query)), tag); });
-north('POST', `${TMF620}/productOffering`, 'catalog:write', async ({ db, principal, body, req }) => { const o = await db.tx((q) => core.tmfCreateOffering(q, (body ?? {}) as Record<string, unknown>, principal.ref)); const r = await core.tmfGetOffering(db, o.id); return etagged(core.toProductOffering(r.offer, tmfBase(req), r.known), core.nodeEtag(r.offer), 201); });
-north('PATCH', `${TMF620}/productOffering/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { await db.tx((q) => core.tmfPatchOffering(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); const r = await core.tmfGetOffering(db, params.id!); return etagged(core.toProductOffering(r.offer, tmfBase(req), r.known), core.nodeEtag(r.offer)); });
-north('DELETE', `${TMF620}/productOffering/:id`, 'catalog:write', async ({ db, principal, params, req }) => { await db.tx((q) => core.tmfDelete(q, params.id!, 'offering', principal.ref, ifMatchOf(req))); return new Response(null, { status: 204 }); });
+north('POST', `${TMF620}/productOffering`, 'catalog:write', ({ db, principal, body, query, req }) => write(db, query, async (q) => { const o = await core.tmfCreateOffering(q, (body ?? {}) as Record<string, unknown>, principal.ref); const r = await core.tmfGetOffering(q, o.id); return etagged(core.toProductOffering(r.offer, tmfBase(req), r.known), core.nodeEtag(r.offer), 201); }));
+north('PATCH', `${TMF620}/productOffering/:id`, 'catalog:write', ({ db, principal, params, body, query, req }) => write(db, query, async (q) => { await core.tmfPatchOffering(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req)); const r = await core.tmfGetOffering(q, params.id!); return etagged(core.toProductOffering(r.offer, tmfBase(req), r.known), core.nodeEtag(r.offer)); }));
+north('DELETE', `${TMF620}/productOffering/:id`, 'catalog:write', ({ db, principal, params, query, req }) => write(db, query, async (q) => { await core.tmfDelete(q, params.id!, 'offering', principal.ref, ifMatchOf(req)); return new Response(null, { status: 204 }); }));
 north('GET', `${TMF620}/productOfferingPrice`, 'catalog:read', async ({ db, query, req }) => {
   const { offset, limit } = tmfPaging(query);
   const r = await core.tmfListPrices(db, { offset, limit, offeringId: str(query, 'productOffering.id'), priceType: str(query, 'priceType'), lifecycleStatus: lifecycleOf(query) });
   return tmfPage(r.items.map((x) => core.selectFields(core.toPriceResource(x.offer, x.price, x.id, tmfBase(req)), fieldsOf(query))), r.total, offset);
 });
 north('GET', `${TMF620}/productOfferingPrice/:id`, 'catalog:read', async ({ db, params, query, req }) => { const r = await core.tmfGetPrice(db, params.id!); const tag = core.nodeEtag(r.offer); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toPriceResource(r.offer, r.price, params.id!, tmfBase(req)), fieldsOf(query)), tag); });
-north('POST', `${TMF620}/productOfferingPrice`, 'catalog:write', async ({ db, principal, body, req }) => { const r = await db.tx((q) => core.tmfCreatePrice(q, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); return etagged(core.toPriceResource(r.offer, r.price, r.ids[r.idx]!, tmfBase(req)), core.nodeEtag(r.offer), 201); });
-north('PATCH', `${TMF620}/productOfferingPrice/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { const r = await db.tx((q) => core.tmfPatchPrice(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); return etagged(core.toPriceResource(r.offer, r.price, params.id!, tmfBase(req)), core.nodeEtag(r.offer)); });
-north('DELETE', `${TMF620}/productOfferingPrice/:id`, 'catalog:write', async ({ db, principal, params, req }) => { await db.tx((q) => core.tmfDeletePrice(q, params.id!, principal.ref, ifMatchOf(req))); return new Response(null, { status: 204 }); });
+north('POST', `${TMF620}/productOfferingPrice`, 'catalog:write', ({ db, principal, body, query, req }) => write(db, query, async (q) => { const r = await core.tmfCreatePrice(q, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req)); return etagged(core.toPriceResource(r.offer, r.price, r.ids[r.idx]!, tmfBase(req)), core.nodeEtag(r.offer), 201); }));
+north('PATCH', `${TMF620}/productOfferingPrice/:id`, 'catalog:write', ({ db, principal, params, body, query, req }) => write(db, query, async (q) => { const r = await core.tmfPatchPrice(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req)); return etagged(core.toPriceResource(r.offer, r.price, params.id!, tmfBase(req)), core.nodeEtag(r.offer)); }));
+north('DELETE', `${TMF620}/productOfferingPrice/:id`, 'catalog:write', ({ db, principal, params, query, req }) => write(db, query, async (q) => { await core.tmfDeletePrice(q, params.id!, principal.ref, ifMatchOf(req)); return new Response(null, { status: 204 }); }));
 north('GET', `${TMF620}/productSpecification`, 'catalog:read', async ({ db, query, req }) => { const { offset, limit } = tmfPaging(query); const r = await core.tmfListSpecifications(db, { offset, limit }); return tmfPage(r.items.map((s) => core.selectFields(core.toProductSpecification(s.offer, s.items, tmfBase(req)), fieldsOf(query))), r.total, offset); });
 north('GET', `${TMF620}/productSpecification/:id`, 'catalog:read', async ({ db, params, query, req }) => { const sp = await core.tmfGetSpecification(db, params.id!); const tag = core.nodeEtag(sp.offer); if (unchanged(req, tag)) return notModified(tag); return etagged(core.selectFields(core.toProductSpecification(sp.offer, sp.items, tmfBase(req)), fieldsOf(query)), tag); });
-north('PATCH', `${TMF620}/productSpecification/:id`, 'catalog:write', async ({ db, principal, params, body, req }) => { const sp = await db.tx((q) => core.tmfPatchSpecification(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req))); return etagged(core.toProductSpecification(sp.offer, sp.items, tmfBase(req)), core.nodeEtag(sp.offer)); });
+north('PATCH', `${TMF620}/productSpecification/:id`, 'catalog:write', ({ db, principal, params, body, query, req }) => write(db, query, async (q) => { const sp = await core.tmfPatchSpecification(q, params.id!, (body ?? {}) as Record<string, unknown>, principal.ref, ifMatchOf(req)); return etagged(core.toProductSpecification(sp.offer, sp.items, tmfBase(req)), core.nodeEtag(sp.offer)); }));
 
 // ── Northbound: subscriber lifecycle and subscription operations (TMF 638 / 637 / 652) ──
 const northActor = (p: core.GatewayPrincipal) => `northbound:${p.ref}`;
@@ -2077,7 +2086,7 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
   const started = Date.now();
   const req = base.req, db = base.db;
   let principal: core.GatewayPrincipal | null = null;
-  let status = 500; let idemKey: string | null = null; let detail: Record<string, unknown> | undefined;
+  let status = 500; let idemKey: string | null = null; let detail: Record<string, unknown> | undefined; let dry = false;
   const out = (res: Response) => { status = res.status; return res; };
   try {
     if (rt.north!.scope !== undefined) {
@@ -2090,7 +2099,7 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
     const run = async () => {
       const o = await (rt.handler as (c: PublicCtx & { principal: core.GatewayPrincipal | null }) => unknown)({ ...base, principal } as never);
       if (o instanceof Response) {
-        for (const h of ['x-total-count', 'x-result-count', 'x-offset', 'etag']) { const v = o.headers.get(h); if (v !== null) headers[h] = v; } // TM Forum paging, and the ETag of a resource
+        for (const h of ['x-total-count', 'x-result-count', 'x-offset', 'etag', 'x-dry-run']) { const v = o.headers.get(h); if (v !== null) headers[h] = v; if (h === 'x-dry-run' && v === 'true') dry = true; } // TM Forum paging, and the ETag of a resource
         return { status: o.status, body: o.status === 204 || o.status === 304 ? null : await o.json().catch(() => null) };
       }
       return { status: 200, body: o ?? { ok: true } };
@@ -2116,7 +2125,8 @@ async function northCall(rt: Route, base: Omit<PublicCtx, 'client'>, p: string, 
     console.error(`[north] ${req.method} ${p}`, e);
     return out(tmfFail(500, 'INTERNAL', 'INTERNAL', 'unexpected server error'));
   } finally {
-    if (req.method !== 'GET' && status < 300) void core.dispatchEvents(db, { limit: 50 }).catch(() => {});
+    if (dry) detail = { ...(detail ?? {}), dryRun: true };
+    if (req.method !== 'GET' && status < 300 && !dry) void core.dispatchEvents(db, { limit: 50 }).catch(() => {});
     void core.logGatewayCall(db, { clientRef: principal?.ref, channel: principal?.channel, method: req.method, path: p, status, scope: rt.north!.scope, idempotencyKey: idemKey, ms: Date.now() - started, detail }).catch(() => {});
   }
 }

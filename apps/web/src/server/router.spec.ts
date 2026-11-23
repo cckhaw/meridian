@@ -2151,6 +2151,59 @@ describe('offer type switches and service types', () => {
     expect([last.status, last.json.code]).toEqual([400, 'INVALID_REQUEST']);
   });
 
+  it('TMF620: ?dryRun=true answers as the real write would and stores nothing; refusals are the real ones', async () => {
+    const su = await root();
+    const mk = async (name: string, scopes: string[]) => {
+      const m = await call('POST', '/settings/integration-hub/oauth-clients', { cookie: su, body: { name, channel: 'PARTNER', scopes } });
+      const t = await call('POST', '/v1/oauth/token', { origin: null, body: { grant_type: 'client_credentials', client_id: m.json.client.clientId, client_secret: m.json.clientSecret } });
+      return { authorization: `Bearer ${t.json.access_token}` };
+    };
+    const h = await mk('Studio dry', ['catalog:read', 'catalog:write']);
+    const reader = await mk('Dry reader', ['catalog:read']);
+    const P = '/tmf-api/productCatalogManagement/v4';
+    const price = (v: number) => [{ priceType: 'recurring', recurringChargePeriodType: 'month', price: { taxIncludedAmount: { unit: 'SGD', value: v } } }];
+    const offering = { id: 'dry-promo', name: 'Dry promo', category: [{ id: 'grp-insurance' }], lifecycleStatus: 'In design', productOfferingPrice: price(9), '@meridian': { kind: 'VAS' } };
+    // create: the answer a real create gives, flagged, with no ETag, and nothing stored
+    const dry = await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: h, body: offering });
+    expect([dry.status, dry.headers.get('x-dry-run'), dry.headers.get('etag'), dry.json.id, dry.json.lifecycleStatus]).toEqual([201, 'true', null, 'dry-promo', 'In design']);
+    expect((await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader })).status).toBe(404);
+    // the same rules: a bad body, a missing kind, a read-only client
+    expect((await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: h, body: { ...offering, productOfferingPrice: [] } })).status).toBe(400);
+    expect((await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: reader, body: offering })).status).toBe(403);
+    // only true and false are understood: anything else must not turn into a real write
+    expect((await call('POST', `${P}/productOffering?dryRun=yes`, { origin: null, headers: h, body: offering })).status).toBe(400);
+    expect((await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader })).status).toBe(404);
+    // dryRun=false is a real write
+    const real = await call('POST', `${P}/productOffering?dryRun=false`, { origin: null, headers: h, body: offering });
+    expect([real.status, real.headers.get('x-dry-run'), real.headers.get('etag')]).toEqual([201, null, '"1"']);
+    // a duplicate is refused in a dry run exactly as for real
+    expect((await call('POST', `${P}/productOffering?dryRun=true`, { origin: null, headers: h, body: offering })).status).toBe(409);
+    // patch: shows the change and the would-be state, but the stored offering and its ETag stay
+    const patch = await call('PATCH', `${P}/productOffering/dry-promo?dryRun=true`, { origin: null, headers: { ...h, 'if-match': '"1"' }, body: { productOfferingPrice: price(12), lifecycleStatus: 'Active' } });
+    expect([patch.status, patch.headers.get('x-dry-run'), patch.json.productOfferingPrice[0].price.taxIncludedAmount.value, patch.json.lifecycleStatus]).toEqual([200, 'true', 12, 'Active']);
+    const still = await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader });
+    expect([still.headers.get('etag'), still.json.productOfferingPrice[0].price.taxIncludedAmount.value, still.json.lifecycleStatus]).toEqual(['"1"', 9, 'In design']);
+    // a stale If-Match is refused in a dry run too
+    expect((await call('PATCH', `${P}/productOffering/dry-promo?dryRun=true`, { origin: null, headers: { ...h, 'if-match': '"9"' }, body: { description: 'x' } })).status).toBe(412);
+    // prices and specification
+    const addPrice = await call('POST', `${P}/productOfferingPrice?dryRun=true`, { origin: null, headers: h, body: { productOffering: { id: 'dry-promo' }, id: 'dry-fee', priceType: 'oneTime', price: { taxIncludedAmount: { unit: 'SGD', value: 3 } } } });
+    expect([addPrice.status, addPrice.headers.get('x-dry-run'), addPrice.json.id]).toEqual([201, 'true', 'dry-fee']);
+    expect((await call('GET', `${P}/productOfferingPrice/dry-fee`, { origin: null, headers: reader })).status).toBe(404);
+    const spec = await call('PATCH', `${P}/productSpecification/dry-promo?dryRun=true`, { origin: null, headers: h, body: { productSpecCharacteristic: [{ name: '5 GB', productSpecCharacteristicValue: [{ value: 5, unitOfMeasure: 'GB' }], '@meridian': { itemType: 'DATA' } }] } });
+    expect([spec.status, spec.json.productSpecCharacteristic.length]).toEqual([200, 1]);
+    expect((await call('GET', `${P}/productSpecification/dry-promo`, { origin: null, headers: reader })).json.productSpecCharacteristic).toHaveLength(0);
+    // delete: 204, and it is still there
+    const del = await call('DELETE', `${P}/productOffering/dry-promo?dryRun=true`, { origin: null, headers: h });
+    expect([del.status, del.headers.get('x-dry-run')]).toEqual([204, 'true']);
+    expect((await call('GET', `${P}/productOffering/dry-promo`, { origin: null, headers: reader })).status).toBe(200);
+    // categories
+    const cat = await call('POST', `${P}/category?dryRun=true`, { origin: null, headers: h, body: { id: 'grp-dry', name: 'Dry group', parentId: 'mobile-postpaid', lifecycleStatus: 'Active' } });
+    expect([cat.status, cat.headers.get('x-dry-run')]).toEqual([201, 'true']);
+    expect((await call('GET', `${P}/category/grp-dry`, { origin: null, headers: reader })).status).toBe(404);
+    // and the real delete after all of that
+    expect((await call('DELETE', `${P}/productOffering/dry-promo`, { origin: null, headers: h })).status).toBe(204);
+  });
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;

@@ -4,7 +4,7 @@ import type { Db, Row } from './db.js';
 import { fanOutEvents, resetEventGate } from './events.js';
 import { registerTmfListener, saveHubWebhook } from './integration-hub.js';
 import { tmfAttributes } from './catalog-events.js';
-import { tmfCreateOffering, tmfPatchOffering } from './tmf620.js';
+import { tmfCreateOffering, tmfDryRun, tmfGetOffering, tmfPatchOffering } from './tmf620.js';
 import { freshDb } from './test-helpers.js';
 
 let db: Db;
@@ -72,6 +72,23 @@ describe('TMF620 events', () => {
     // a listener that asked for state changes only hears those
     const mine = rows.filter((r) => r.subscriptionId === states.id);
     expect(mine.map((r) => r.tmfType)).toEqual(['ProductOfferingStateChangeEvent', 'ProductOfferingStateChangeEvent']);
+  });
+
+  it('a dry run leaves no row, no event and no audit line behind, and passes a refusal on as it is', async () => {
+    const count = async (sql: string) => Number((await db.query(sql)).rows[0]!.n);
+    const nodes = () => count('SELECT count(*)::int AS n FROM catalog_nodes');
+    const outboxNow = () => count(`SELECT count(*)::int AS n FROM lifecycle_outbox WHERE kind='EVENT'`);
+    const audits = () => count(`SELECT count(*)::int AS n FROM audit_log WHERE entity = 'catalog'`);
+    const [n0, o0, a0] = [await nodes(), await outboxNow(), await audits()];
+    const would = await tmfDryRun(db, async (q) => { await tmfCreateOffering(q, offer('ev-dry'), 'studio'); return (await tmfGetOffering(q, 'ev-dry')).offer; });
+    expect(would.id).toBe('ev-dry');                                       // the answer a real create would give
+    expect([await nodes(), await outboxNow(), await audits()]).toEqual([n0, o0, a0]);
+    await expect(tmfGetOffering(db, 'ev-dry')).rejects.toThrow(/not found/);
+    await expect(tmfDryRun(db, (q) => tmfCreateOffering(q, offer('ev-dry', { name: '' }), 'studio'))).rejects.toThrow(/name is required/);
+    expect(await nodes()).toBe(n0);
+    // and a real write afterwards still works
+    await tmfCreateOffering(db, offer('ev-dry'), 'studio');
+    expect(await nodes()).toBe(n0 + 1);
   });
 
   it('names changed fields the way TMF620 does', () => {

@@ -1,6 +1,6 @@
 import { currencyInfo, LINE_ITEM_TYPES, type CatalogNode, type LineItemNode, type OfferNode, type PriceComponent } from '@meridian/types';
 import { createNode, deleteNode, getNode, moveNode, setStatus, toNode, updateNode, type NodeInput, type NodePatch } from './catalog.js';
-import type { Queryable, Row } from './db.js';
+import type { Db, Queryable, Row } from './db.js';
 import { LIFECYCLE } from './catalog-events.js';
 import { conflict, invalid, notFound, preconditionFailed } from './errors.js';
 
@@ -44,6 +44,17 @@ export function assertIfMatch(header: string | null | undefined, current: string
   if (!etagMatches(header, current)) throw preconditionFailed(`The resource has changed since you read it: its ETag is now ${current}, not ${header.trim()}. Read it again and repeat your change.`);
 }
 export interface TmfWriteOptions { ifMatch?: string | null }
+
+class DryRunDone extends Error { constructor(readonly value: unknown) { super('dry run'); } }
+/**
+ * Runs a write for real inside a transaction, hands back what it returned, and rolls everything back: nothing is stored, no event or audit line is left. It is the same code
+ * path as the real write, so every rule answers exactly as it would (a sold offer, a reserved SKU, a missing prerequisite, a stale If-Match); a refusal is thrown as usual.
+ */
+export async function tmfDryRun<T>(db: Db, fn: (q: Queryable) => Promise<T>): Promise<T> {
+  try { await db.tx(async (q) => { throw new DryRunDone(await fn(q)); }); }
+  catch (e) { if (e instanceof DryRunDone) return e.value as T; throw e; }
+  throw new Error('unreachable');
+}
 /** Takes the row lock for the rest of the transaction (so the check and the write cannot be split by another writer), then reads the node. */
 async function lockedNode(q: Queryable, id: string): Promise<CatalogNode> {
   await q.query('SELECT 1 FROM catalog_nodes WHERE id=$1 FOR UPDATE', [id]);
