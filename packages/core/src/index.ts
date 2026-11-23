@@ -123,6 +123,7 @@ export * from './wfm-webhook.js';
 export { WFM_VENDORS, wfmVendor, type WfmVendor, type WfmSlot, type WfmConnector } from './wfm/index.js';
 export * from './tmf.js';
 export * from './tmf620.js';
+export * from './catalog-health.js';
 export * from './dunning-limits.js';
 export * from './dunning-rules.js';
 export * from './dunning-engine.js';

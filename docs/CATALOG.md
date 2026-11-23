@@ -43,6 +43,35 @@ An offer is **sellable now** only when the offer is **Active** and every node ab
 
 Nothing already sold changes: existing orders, services, billing, invoices and renewals never look at the parent's status, so retiring a group does not stop a customer being billed for a plan they already have. Bulk offer import and export are not affected.
 
+## Catalogue health
+
+**Catalog → Catalogue health** (needs the catalog-write permission, because it also lists drafts, retired and scheduled offers) shows what in the catalogue is probably wrong. It only reads: nothing changes by itself, and each finding links to the offer to fix.
+
+| Check | Finds |
+|---|---|
+| **Fix these** | |
+| Active offers that cannot be sold | an Active offer hidden because a group, category or network type above it is not live (the same rule as *When an offer can be sold*), and which one |
+| Prerequisites or exclusions that do not exist | a "customer must first have" or "cannot be bought together with" that names something deleted |
+| Prerequisites that cannot be met | a prerequisite that is retired, not live, under a parent that is not live, or a group with nothing on sale in it: new customers can never buy the offer |
+| Circular prerequisites | A needs B needs C needs A (a group counts as every offer in it); one finding per cycle |
+| Rules that contradict themselves | an offer that requires itself or the group it sits in, excludes itself, or requires and excludes the same product. Saving refuses these, but moving an offer to another group, or an import, can create one |
+| Scheduled go-lives that did not happen | a node still Scheduled more than five minutes after its time |
+| Scheduled offers whose parent will not be live by then | the offer goes live on its date but something above it is not Active and not scheduled for before then |
+| **Look at these** | |
+| Offers never sold | Active or retired offers older than a chosen age (default 30 days) with no service and no order line, ever |
+| Offers with identical prices in one group | same type, contract term and prices (a copy that was never retired) |
+| Overlapping promotions | two Active bundle discounts that discount the same target and share a condition (so they stack), and an offer with two device deals for the same contract length |
+| **For information** | |
+| Exclusions on things no longer on sale | harmless, but the rule can go |
+| Offers with nearly identical prices in one group | monthly fee within a chosen percent (default 1%) of the next one, with different prices |
+| Active offers with nothing listed in them | no active line item |
+| Active offers with no sales channel chosen | no channel ticked, which means every channel |
+| Active offers with no market chosen | only when several markets are on: sold in every market |
+
+The thresholds (age and percent) are on the page. Each check is one read-only SQL query over the offers (a recursive one for the prerequisite graph, with a depth limit of six), ordered by a key and paged with a cursor, and the counts stop at 10,000 (shown as "10,000+"), so the page costs the same with tens of thousands of offers and nothing loads the whole tree ([SCALE.md](SCALE.md)). Two limits: a prerequisite that names a group is judged by whether anything is on sale beneath it, not by what a particular customer owns, and overlapping bundle discounts are judged by the conditions they list, not by every basket that could satisfy them.
+
+API: `GET /api/catalog/health[?minAgeDays=30&nearPriceBps=100]` (the checks with their counts) and `GET /api/catalog/health/:check?limit=50&cursor=…` (the findings of one check: `key`, `id`, `name`, `status`, `message`, `related`, `entity`).
+
 ## What an offer type is
 
 An **offer type** says what kind of thing an offer is. It decides what the flow asks for and what happens when the offer is sold: whether a service is created, whether something ships, whether a contract is offered. The type list is in **Settings → Catalog → Offer types**: add your own, rename them, or switch off the ones you do not use.

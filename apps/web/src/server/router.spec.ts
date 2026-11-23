@@ -2204,6 +2204,43 @@ describe('offer type switches and service types', () => {
     expect((await call('DELETE', `${P}/productOffering/dry-promo`, { origin: null, headers: h })).status).toBe(204);
   });
 
+  it('catalogue health: a summary and paged findings for editors only, with bad options and forged cursors refused', async () => {
+    const su = await root();
+    const mkUser = async (username: string, role: string, ip: string) => {
+      const c = await call('POST', '/users', { cookie: su, body: { username, displayName: username, roles: [role] } });
+      const temp = c.json.temporaryPassword as string;
+      const s = await signIn(username, temp, ip);
+      await call('POST', '/auth/change-password', { cookie: s.cookie, body: { current: temp, next: 'My-Own-Passphrase-2024' } });
+      return (await signIn(username, 'My-Own-Passphrase-2024', `${ip}1`)).cookie!;
+    };
+    const editor = await mkUser('health.editor', 'product-configurator', '10.7.1.');
+    const seller = await mkUser('health.seller', 'call-center', '10.7.2.');
+    const sum = await call('GET', '/catalog/health', { cookie: editor });
+    expect(sum.status).toBe(200);
+    expect(sum.json.cap).toBe(10000);
+    const ids = sum.json.checks.map((c: any) => c.id);
+    expect(ids).toEqual(expect.arrayContaining(['NEVER_SOLD', 'UNREACHABLE', 'DEP_MISSING', 'DEP_CIRCULAR', 'PRICE_DUPLICATE', 'SCHEDULE_OVERDUE']));
+    expect(sum.json.checks.every((c: any) => typeof c.count === 'number' && typeof c.capped === 'boolean' && c.title && c.description && ['ERROR', 'WARNING', 'INFO'].includes(c.severity))).toBe(true);
+    // the seeded offers sell on every channel and most list nothing: enough findings to page through
+    const first = await call('GET', '/catalog/health/NO_CHANNELS?limit=2', { cookie: editor });
+    expect([first.status, first.json.items.length, first.json.check.id]).toEqual([200, 2, 'NO_CHANNELS']);
+    expect(first.json.nextCursor).toBeTruthy();
+    expect(Object.keys(first.json.items[0]).sort()).toEqual(['entity', 'id', 'key', 'message', 'name', 'related', 'status']);
+    const second = await call('GET', `/catalog/health/NO_CHANNELS?limit=2&cursor=${encodeURIComponent(first.json.nextCursor)}`, { cookie: editor });
+    expect(second.json.items.length).toBeGreaterThan(0);
+    expect(second.json.items.map((r: any) => r.key).filter((k: string) => first.json.items.some((f: any) => f.key === k))).toEqual([]);
+    // options and mistakes
+    expect((await call('GET', '/catalog/health/NEVER_SOLD?minAgeDays=0', { cookie: editor })).json.items.length).toBeGreaterThan(0);
+    expect((await call('GET', '/catalog/health/NEVER_SOLD?minAgeDays=abc', { cookie: editor })).status).toBe(400);
+    expect((await call('GET', '/catalog/health?nearPriceBps=99999', { cookie: editor })).status).toBe(400);
+    expect((await call('GET', '/catalog/health/NOPE', { cookie: editor })).status).toBe(400);
+    expect((await call('GET', '/catalog/health/NO_CHANNELS?cursor=forged', { cookie: editor })).status).toBe(400);
+    // sellers (catalog:read only) cannot see it, and anonymous callers get nothing
+    expect((await call('GET', '/catalog/health', { cookie: seller })).status).toBe(403);
+    expect((await call('GET', '/catalog/health/NO_CHANNELS', { cookie: seller })).status).toBe(403);
+    expect((await call('GET', '/catalog/health', {})).status).toBe(401);
+  });
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;

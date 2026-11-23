@@ -1,5 +1,6 @@
 'use client';
 import { Alert, MenuButton, Spinner } from '@meridian/ui';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
@@ -93,7 +94,10 @@ export function CatalogBrowser() {
             onAdd={() => setAdding({ level: location ? CHILD_LEVEL[location.level]! : 'NETWORK_TYPE', parent: detail && !isOffer ? detail.node : location })}
             onReorder={(id, d) => act.run(() => post(`/catalog/${id}/reorder`, { direction: d }))}
             onStatus={a.onStatus} />
-          {editable && <button type="button" onClick={() => setImporting(true)} className="mt-3 inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Import or export offers (CSV)…</button>}
+          {editable && <div className="mt-3 flex flex-wrap items-center gap-x-1">
+            <button type="button" onClick={() => setImporting(true)} className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Import or export offers (CSV)…</button>
+            <Link href="/catalog/health" className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Catalogue health</Link>
+          </div>}
         </aside>
 
         <section aria-live="polite" className={`${showInspectorOnPhone ? '' : 'hidden lg:block'} min-w-0`}>
