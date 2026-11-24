@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "docs:roles": "tsx scripts-roles.mjs",
+    "rekey": "tsx scripts-rekey.mjs",
     "seed:dunning": "tsx scripts-seed-dunning.mjs"
   },
   "dependencies": {
