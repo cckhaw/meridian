@@ -1,7 +1,8 @@
 'use client';
 import { Alert, Badge, Button, Field, Input, MenuButton, Modal, Select, Textarea } from '@meridian/ui';
 import { useState } from 'react';
-import { del, patch, post, useAction } from '@/lib/api';
+import { useAction } from '@/lib/api';
+import { del, patch, post, useActiveReleaseId } from './release';
 import { itemAmount, itemMeta, ITEM_TYPES, STATUS_TEXT } from './catalog-ui';
 import type { CNode as TreeNode } from './catalog-ui';
 import { slug } from './node-modals';
@@ -66,6 +67,7 @@ function LineItemModal({ offer, item, onClose, onDone }: { offer: TreeNode; item
   const [status, setStatus] = useState(item?.status ?? 'ACTIVE');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const act = useAction();
+  const rel = useActiveReleaseId();
   const meta = itemMeta(itemType);
   const pickType = (t: string) => { setItemType(t); if (!item) setUnit(itemMeta(t).unit ?? ''); if (t === 'SERVICE' || t === 'CONTENT' || t === 'OTHER') { setQuantity(''); } };
 
@@ -110,7 +112,7 @@ function LineItemModal({ offer, item, onClose, onDone }: { offer: TreeNode; item
           {item ? (confirmDelete
             ? <span className="flex gap-2"><Button type="button" variant="destructive" onClick={remove} disabled={act.busy}>Confirm delete</Button><Button type="button" variant="secondary" onClick={() => setConfirmDelete(false)}>Keep</Button></span>
             : <Button type="button" variant="secondary" onClick={() => setConfirmDelete(true)}>Delete…</Button>) : <span />}
-          <span className="flex gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={act.busy || !name.trim()}>{act.busy ? 'Saving…' : item ? 'Save' : 'Add'}</Button></span>
+          <span className="flex gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={act.busy || !name.trim()}>{act.busy ? 'Saving…' : rel ? 'Add to release' : item ? 'Save' : 'Add'}</Button></span>
         </div>
       </form>
     </Modal>
