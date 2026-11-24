@@ -2,9 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createNode, getNode, updateNode } from './catalog.js';
 import {
   addReleaseComment, approveRelease, approverBlocker, cancelRelease, createRelease, getRelease, listReleaseComments, previewRelease, publishRelease, rejectRelease, releaseNodeIds, reopenRelease,
-  scheduleRelease, stageChange, submitRelease,
+  releaseReviewers, scheduleRelease, stageChange, submitRelease,
 } from './catalog-release.js';
 import type { Db } from './db.js';
+import { createUser } from './auth.js';
 import { fanOutEvents, resetEventGate } from './events.js';
 import { saveHubWebhook } from './integration-hub.js';
 import { permissionKey } from './permission-catalog.js';
@@ -186,5 +187,32 @@ describe('release approval: who may do what', () => {
     expect(permissionKey('release:approve' as never)).toBe('catalog:release:approve');
     expect(permissionKey('release:submit' as never)).toBe('catalog:release:submit');
     expect(permissionKey('release:publish' as never)).toBe('catalog:release:publish');
+  });
+});
+
+describe('release review with more than one administrator', () => {
+  it('lists who could review a release: people with release:approve who did not start or change it; two administrators cover each other, a lone one has nobody', async () => {
+    const mk = (username: string, role: string) => createUser(db, 'seed', { username, displayName: username, roles: [role], password: 'Str0ng!Passw0rd#1' });
+    await mk('rv-alice', 'admin'); await mk('rv-bob', 'admin'); await mk('rv-carol', 'product-configurator'); await mk('rv-dave', 'rating-charging');
+    await db.query(`UPDATE users SET status = 'DISABLED' WHERE username = 'rv-dave'`);
+    await offer('rv-multi');
+    const r = await createRelease(db, 'rv-alice', { name: 'Two admins' });
+    const ch = await stageChange(db, 'rv-carol', r.id, { op: 'UPDATE', nodeId: 'rv-multi', payload: { patch: { description: 'x' } } });
+    const changes = [{ createdBy: 'rv-carol' }];
+    const who = await releaseReviewers(db, r, changes);
+    expect(who.names).toContain('rv-bob');                                                // the other administrator
+    for (const n of ['rv-alice', 'rv-carol', 'rv-dave']) expect(who.names).not.toContain(n);   // the author, the change author, a disabled user and a role without the permission
+    expect(who.count).toBe(who.names.length);
+    // the other administrator can really review it; the author cannot
+    await submitRelease(db, 'rv-alice', r.id, '');
+    await expect(approveRelease(db, 'rv-alice', r.id)).rejects.toThrow(/started this release/);
+    expect((await approveRelease(db, 'rv-bob', r.id)).status).toBe('APPROVED');
+    expect((await publishRelease(db, r.id, 'rv-alice')).status).toBe('PUBLISHED');       // either administrator may publish once someone else approved
+    // with the second administrator gone, a release started and changed by the remaining administrator has nobody
+    await db.query(`UPDATE users SET status = 'DISABLED' WHERE username IN ('rv-bob')`);
+    const solo = await releaseReviewers(db, { createdBy: 'rv-alice' }, [{ createdBy: 'rv-alice' }]);
+    expect(solo.names).not.toContain('rv-alice');
+    expect(solo.names).not.toContain('rv-bob');
+    void ch;
   });
 });

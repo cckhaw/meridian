@@ -109,7 +109,7 @@ export function ReleaseDetail() {
   const { can } = useAuth();
   const active = useActiveReleaseId();
   const involved = can('catalog:write', 'release:submit', 'release:approve', 'release:publish');
-  const rel = useApi<{ release: Release; changes: Change[]; conflicts: Conflict[]; nodeIds: string[]; comments: Comment[]; review: { blocker: string | null } }>(involved ? `/catalog/releases/${id}` : null);
+  const rel = useApi<{ release: Release; changes: Change[]; conflicts: Conflict[]; nodeIds: string[]; comments: Comment[]; review: { blocker: string | null; reviewers: { count: number; names: string[] } } }>(involved ? `/catalog/releases/${id}` : null);
   const pv = useApi<Preview>(involved ? `/catalog/releases/${id}/preview` : null);
   const reload = async () => { await Promise.all([rel.reload(), pv.reload()]); };
   const act = useAction(reload);
@@ -125,6 +125,7 @@ export function ReleaseDetail() {
   const resultOf = (cid: number) => p?.results.find((x) => x.id === cid);
   const editable = status === 'DRAFT' && can('catalog:write');
   const blocker = rel.data.review.blocker;
+  const reviewers = rel.data.review.reviewers;
   const send = (path: string, body: unknown = {}) => act.run(async () => { await post(`/catalog/releases/${id}/${path}`, body); setText(''); });
   const publish = () => { if (confirm(`Publish ${r.number}? All ${rel.data!.changes.length} changes go live together, now.`)) void act.run(async () => { await post(`/catalog/releases/${id}/publish`); setActiveRelease(null); }); };
   const schedule = () => act.run(() => post(`/catalog/releases/${id}/schedule`, { publishAt: new Date(when).toISOString() }));
@@ -174,7 +175,8 @@ export function ReleaseDetail() {
           {status === 'PUBLISHED' && can('catalog:write') && <Button variant="secondary" onClick={() => void reverse()} disabled={act.busy}>Create a reverse release</Button>}
         </div>
         {status === 'IN_REVIEW' && can('release:approve') && blocker && <Alert tone="info">{blocker}</Alert>}
-        {status === 'IN_REVIEW' && !can('release:approve') && <p className="text-subhead text-label2">Waiting for someone who can approve releases.</p>}
+        {['DRAFT', 'IN_REVIEW'].includes(status) && reviewers.count === 0 && <Alert tone="info">Nobody else can review this release. Someone who holds “approve releases” (a second administrator, say) has to be added in Settings → Users before it can go live.</Alert>}
+        {status === 'IN_REVIEW' && !can('release:approve') && <p className="text-subhead text-label2">Waiting for someone who can approve releases{reviewers.count ? `: ${reviewers.names.join(', ')}${reviewers.count > reviewers.names.length ? ` and ${reviewers.count - reviewers.names.length} more` : ''}` : ''}.</p>}
         {(['DRAFT', 'IN_REVIEW', 'APPROVED', 'REJECTED'].includes(status)) && (status === 'DRAFT' ? can('release:submit') : status === 'IN_REVIEW' ? can('release:approve') && !blocker : false) && note(status === 'DRAFT' ? 'For the reviewer: what this release is for, what to look at' : 'Why you approve it, or what needs to change (required to ask for changes)')}
         {status === 'APPROVED' && !can('release:publish') && <p className="text-subhead text-label2">Waiting for someone who can publish releases.</p>}
       </div>

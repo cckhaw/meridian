@@ -435,7 +435,7 @@ get('/catalog/releases', releaseRead, ({ db, query }) => core.listReleases(db, {
 post('/catalog/releases', 'catalog:write', ({ db, user, body }) => db.tx((q) => core.createRelease(q, user.username, releaseBody.parse(body))));
 get('/catalog/releases/:id', releaseRead, async ({ db, user, params }) => {
   const [release, changes, conflicts, nodeIds, comments] = await Promise.all([core.getRelease(db, params.id!), core.listChanges(db, params.id!), core.releaseConflicts(db, params.id!), core.releaseNodeIds(db, params.id!), core.listReleaseComments(db, params.id!)]);
-  return { release, changes, conflicts, nodeIds, comments, review: { blocker: core.approverBlocker(release, changes, user.username) } };
+  return { release, changes, conflicts, nodeIds, comments, review: { blocker: core.approverBlocker(release, changes, user.username), reviewers: await core.releaseReviewers(db, release, changes) } };
 });
 patch('/catalog/releases/:id', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.updateRelease(q, user.username, params.id!, releaseBody.partial().parse(body))));
 get('/catalog/releases/:id/preview', releaseRead, ({ db, params }) => core.previewRelease(db, params.id!));

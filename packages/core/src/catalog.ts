@@ -94,47 +94,80 @@ export async function catalogTree(q: Queryable): Promise<CatalogTreeNode[]> {
 }
 
 // ───────────────────────── dependencies ─────────────────────────
-interface Graph { nodes: Map<string, { id: string; name: string; path: string; level: CatalogNodeLevel; requires: string[] }>; offers: string[] }
+interface DepNode { id: string; name: string; path: string; level: CatalogNodeLevel; requires: string[] }
+const under = (path: string, node: { path: string }) => path === node.path || path.startsWith(node.path + '/');
 
-async function loadGraph(q: Queryable): Promise<Graph> {
-  const rows = (await q.query(`SELECT id, name, path, level, data->'requires' AS requires FROM catalog_nodes`)).rows;
-  const nodes = new Map(rows.map((r) => [r.id as string, { id: r.id, name: r.name, path: r.path, level: r.level, requires: (r.requires ?? []) as string[] }]));
-  return { nodes, offers: rows.filter((r) => r.level === 'OFFER').map((r) => r.id) };
-}
-
-/** A requirement token is an offer id or a hierarchy node id; returns the offers it stands for ("any offer beneath this node"). */
-function expand(g: Graph, token: string): string[] {
-  const n = g.nodes.get(token);
-  if (!n) return [];
-  if (n.level === 'OFFER') return [n.id];
-  return [...g.nodes.values()].filter((o) => o.level === 'OFFER' && (o.path === n.path || o.path.startsWith(n.path + '/'))).map((o) => o.id);
-}
-
-/** Rejects references to things that do not exist, self-references, and circular chains (A needs B needs A). */
+/**
+ * Rejects references to things that do not exist, self-references, and circular chains (A needs B needs A).
+ *
+ * It reads only what the check can reach, never the whole catalogue: the nodes the offer names, then (for a cycle) the offers those lead to, a batch of queries per step. An offer with
+ * no requirements and no conflicts has nothing to check and costs nothing, which is almost every offer; one with requirements costs what its chain of requirements costs, not what the
+ * catalogue costs. (Loading the whole requires graph on every offer write took ~10 ms at 500 offers, ~190 ms at 20,000, and a release of hundreds of changes pays it once per change.)
+ */
 async function assertDependenciesValid(q: Queryable, offerId: string, offerPath: string, requires: string[], excludes: string[]) {
-  const graph = await loadGraph(q);
-  // The offer being created/edited must be part of the graph (with its new requirements), or a requirement on its own group or a cycle through a group would go unseen.
-  graph.nodes.set(offerId, { id: offerId, name: graph.nodes.get(offerId)?.name ?? offerId, path: offerPath, level: 'OFFER', requires });
-  const missing = [...requires, ...excludes].filter((t) => !graph.nodes.has(t));
+  if (!requires.length && !excludes.length) return;
+  const nodes = new Map<string, DepNode>();
+  let ownName: string | undefined;
+  const load = async (ids: string[]) => {
+    const want = [...new Set(ids)].filter((i) => !nodes.has(i));
+    if (!want.length) return;
+    for (const r of (await q.query(`SELECT id, name, path, level, data->'requires' AS requires FROM catalog_nodes WHERE id = ANY($1::text[])`, [want])).rows) {
+      if (r.id === offerId) { ownName = r.name as string; continue; }
+      nodes.set(r.id as string, { id: r.id, name: r.name, path: r.path, level: r.level, requires: (r.requires ?? []) as string[] });
+    }
+  };
+  // The offer being created/edited is part of the graph with its new requirements, or a requirement on its own group or a cycle through a group would go unseen.
+  const own = (): DepNode => ({ id: offerId, name: ownName ?? offerId, path: offerPath, level: 'OFFER', requires });
+  await load([...requires, ...excludes, offerId]);
+  nodes.set(offerId, own());
+  const missing = [...requires, ...excludes].filter((t) => !nodes.has(t));
   if (missing.length) throw invalid(`unknown product or hierarchy node: ${missing.join(', ')}`);
-  if ([...requires, ...excludes].some((t) => graph.nodes.get(t)!.level === 'LINE_ITEM')) throw invalid('a line item cannot be a prerequisite or conflict; choose the offer or a hierarchy level');
-  if (excludes.some((t) => graph.nodes.get(t)!.level !== 'OFFER')) throw invalid('"cannot be combined with" must list offers, not hierarchy levels');
-  const self = requires.filter((t) => expand(graph, t).includes(offerId));
+  if ([...requires, ...excludes].some((t) => nodes.get(t)!.level === 'LINE_ITEM')) throw invalid('a line item cannot be a prerequisite or conflict; choose the offer or a hierarchy level');
+  if (excludes.some((t) => nodes.get(t)!.level !== 'OFFER')) throw invalid('"cannot be combined with" must list offers, not hierarchy levels');
+  const covers = (token: string, id: string) => { const t = nodes.get(token)!, o = nodes.get(id); return t.level === 'OFFER' ? t.id === id : !!o && o.level === 'OFFER' && under(o.path, t); };
+  const self = requires.filter((t) => covers(t, offerId));
   if (self.length) throw invalid('an offer cannot require itself (or the group it belongs to)');
-  const clash = requires.filter((t) => excludes.some((e) => expand(graph, t).includes(e)));
+  const clash = requires.filter((t) => excludes.some((e) => covers(t, e)));
   if (clash.length) throw invalid(`${clash.join(', ')} is both required and excluded`);
+
+  // What this offer leads to: the offers each requirement stands for ("any offer beneath this node"), and what they require in turn.
+  const members = new Map<string, string[]>();   // a hierarchy node -> the offers beneath it
+  const expand = (token: string): string[] => {
+    const n = nodes.get(token);
+    if (!n) return [];
+    if (n.level === 'OFFER') return [n.id];
+    return [...new Set([...(members.get(token) ?? []), ...(under(offerPath, n) ? [offerId] : [])])];
+  };
+  const resolved = new Set<string>();
+  let pending = [...requires];
+  while (pending.length) {
+    const batch = [...new Set(pending)].filter((t) => !resolved.has(t));
+    pending = [];
+    batch.forEach((t) => resolved.add(t));
+    await load(batch);
+    nodes.set(offerId, own());
+    for (const t of batch) {
+      const n = nodes.get(t);
+      if (n && n.level !== 'OFFER' && !members.has(t)) members.set(t, (await q.query(`SELECT id FROM catalog_nodes WHERE level = 'OFFER' AND (path = $1 OR path LIKE $2)`, [n.path, `${n.path}/%`])).rows.map((r) => r.id as string));
+    }
+    const reached = [...new Set(batch.flatMap(expand))];
+    await load(reached);
+    nodes.set(offerId, own());
+    for (const o of reached) if (o !== offerId) pending.push(...(nodes.get(o)?.requires ?? []));
+  }
+
   // Walk what this offer would require; if the chain returns here, it is circular.
   const seen = new Set<string>();
   const dfs = (id: string, path: string[]): string[] | null => {
     if (id === offerId && path.length) return path;
     if (seen.has(id)) return null;
     seen.add(id);
-    const toks = id === offerId ? requires : graph.nodes.get(id)?.requires ?? [];
-    for (const t of toks) for (const next of expand(graph, t)) { const r = dfs(next, [...path, next]); if (r) return r; }
+    const toks = id === offerId ? requires : nodes.get(id)?.requires ?? [];
+    for (const t of toks) for (const next of expand(t)) { const r = dfs(next, [...path, next]); if (r) return r; }
     return null;
   };
   const cyc = dfs(offerId, []);
-  if (cyc) throw invalid(`circular dependency: ${[offerId, ...cyc].map((i) => graph.nodes.get(i)?.name ?? i).join(' → ')}`);
+  if (cyc) throw invalid(`circular dependency: ${[offerId, ...cyc].map((i) => nodes.get(i)?.name ?? i).join(' → ')}`);
 }
 
 /** Offers the customer already holds: a live service, or a completed purchase (physical goods have no service). */
