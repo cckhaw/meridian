@@ -2,7 +2,8 @@ import type { PriceComponent } from '@meridian/types';
 import { audit } from './audit.js';
 import { copyLineItems, createNode, deleteNode, getNode, getOffer, moveNode, nodeUsage, sameValue, setStatus, toNode, updateNode, withoutPriceIds, type NodeInput, type NodePatch } from './catalog.js';
 import type { Db, Queryable, Row } from './db.js';
-import { conflict, DomainError, invalid, notFound } from './errors.js';
+import { conflict, DomainError, forbidden, invalid, notFound } from './errors.js';
+import { raiseEvent } from './events.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
 import { withRollback } from './rollback.js';
 
@@ -21,20 +22,21 @@ export type ReleaseOp = 'CREATE' | 'UPDATE' | 'MOVE' | 'STATUS' | 'DELETE' | 'CO
 export type ReleaseStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'PUBLISHED' | 'REJECTED' | 'CANCELLED';
 export const RELEASE_MAX_CHANGES = 500;
 /** What a release can be in while changes are still waiting to go live (its nodes are claimed). */
-export const OPEN_RELEASE_STATES: ReleaseStatus[] = ['DRAFT', 'IN_REVIEW', 'APPROVED'];
+export const OPEN_RELEASE_STATES: ReleaseStatus[] = ['DRAFT', 'IN_REVIEW', 'APPROVED', 'REJECTED'];   // a rejected release still holds its nodes: it can be reopened, or thrown away
 const EDITABLE: ReleaseStatus[] = ['DRAFT'];
-const PUBLISHABLE: ReleaseStatus[] = ['DRAFT', 'APPROVED'];
+const PUBLISHABLE: ReleaseStatus[] = ['APPROVED'];     // only a release someone other than its authors has approved goes live
 
 export interface Release {
   id: string; number: string; name: string; description: string | null; status: ReleaseStatus; publishAt: string | null; publishError: string | null; reversesReleaseId: string | null;
-  createdBy: string; createdAt: string; updatedAt: string; publishedBy: string | null; publishedAt: string | null; result: any | null; version: number; changeCount?: number;
+  createdBy: string; createdAt: string; updatedAt: string; publishedBy: string | null; publishedAt: string | null; submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
+  result: any | null; version: number; changeCount?: number;
 }
 export interface ReleaseChange { id: number; releaseId: string; seq: number; op: ReleaseOp; nodeId: string; payload: any; baseVersion: number | null; groupKey: string | null; note: string | null; createdBy: string; createdAt: string }
 
 const iso = (v: unknown): string | null => (v ? new Date(v as string).toISOString() : null);
 const toRelease = (r: Row): Release => ({
   id: r.id, number: r.number, name: r.name, description: r.description ?? null, status: r.status, publishAt: iso(r.publishAt), publishError: r.publishError ?? null, reversesReleaseId: r.reversesReleaseId ?? null,
-  createdBy: r.createdBy, createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!, publishedBy: r.publishedBy ?? null, publishedAt: iso(r.publishedAt), result: r.result ?? null, version: r.version,
+  createdBy: r.createdBy, createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!, publishedBy: r.publishedBy ?? null, publishedAt: iso(r.publishedAt), submittedBy: r.submittedBy ?? null, submittedAt: iso(r.submittedAt), decidedBy: r.decidedBy ?? null, decidedAt: iso(r.decidedAt), result: r.result ?? null, version: r.version,
   ...(r.changeCount !== undefined ? { changeCount: Number(r.changeCount) } : {}),
 });
 const toChange = (r: Row): ReleaseChange => ({ id: Number(r.id), releaseId: r.releaseId, seq: r.seq, op: r.op, nodeId: r.nodeId, payload: r.payload ?? {}, baseVersion: r.baseVersion ?? null, groupKey: r.groupKey ?? null, note: r.note ?? null, createdBy: r.createdBy, createdAt: iso(r.createdAt)! });
@@ -296,7 +298,13 @@ export async function rebaseNode(q: Queryable, actor: string, releaseId: string,
 
 // ───────────────────────── preview ─────────────────────────
 export interface ChangeResult { id: number; seq: number; op: ReleaseOp; nodeId: string; ok: boolean; error?: string }
-export interface ReleasePreview { release: Release; changes: ReleaseChange[]; results: ChangeResult[]; summary: ReleaseSummary; nodes: DiffNode[]; groups: Array<{ key: string; oldId: string; newId: string }>; conflicts: ReleaseConflict[]; canPublish: boolean }
+export interface ReleasePreview {
+  release: Release; changes: ReleaseChange[]; results: ChangeResult[]; summary: ReleaseSummary; nodes: DiffNode[]; groups: Array<{ key: string; oldId: string; newId: string }>; conflicts: ReleaseConflict[];
+  /** The release has changes, every change would be accepted and nothing moved underneath it: it can be sent for review. */
+  ready: boolean;
+  /** Ready, and approved: it can be published. */
+  canPublish: boolean;
+}
 
 const groupsOf = (changes: ReleaseChange[]) => {
   const byNode = new Map<string, string>();
@@ -319,7 +327,7 @@ export async function previewRelease(db: Db, releaseId: string): Promise<Release
   const conflicts = OPEN_RELEASE_STATES.includes(release.status) ? await releaseConflicts(db, releaseId, changes) : [];
   const { byNode, groups } = groupsOf(changes);
   if (release.status === 'PUBLISHED' && release.result?.diff) {
-    return { release, changes, results: changes.map((c) => ({ id: c.id, seq: c.seq, op: c.op, nodeId: c.nodeId, ok: true })), summary: release.result.summary, nodes: release.result.diff, groups, conflicts: [], canPublish: false };
+    return { release, changes, results: changes.map((c) => ({ id: c.id, seq: c.seq, op: c.op, nodeId: c.nodeId, ok: true })), summary: release.result.summary, nodes: release.result.diff, groups, conflicts: [], ready: false, canPublish: false };
   }
   const ran = await withRollback(db, async (q) => {
     const ids = await subjectIds(q, changes);
@@ -335,7 +343,8 @@ export async function previewRelease(db: Db, releaseId: string): Promise<Release
   });
   const nodes = diffNodes(ran.before, ran.after, byNode);
   const errors = ran.results.filter((r) => !r.ok).length;
-  return { release, changes, results: ran.results, summary: summarise(nodes, changes.length, errors), nodes, groups, conflicts, canPublish: OPEN_RELEASE_STATES.includes(release.status) && PUBLISHABLE.includes(release.status) && changes.length > 0 && !errors && !conflicts.length };
+  const ready = OPEN_RELEASE_STATES.includes(release.status) && changes.length > 0 && !errors && !conflicts.length;
+  return { release, changes, results: ran.results, summary: summarise(nodes, changes.length, errors), nodes, groups, conflicts, ready, canPublish: ready && PUBLISHABLE.includes(release.status) };
 }
 
 /**
@@ -386,6 +395,8 @@ export async function publishRelease(db: Db, id: string, actor: string, o: { sch
       [id, actor, JSON.stringify({ summary, diff: nodes, before: beforeJson, lineItemsBefore: itemsBefore, scheduled: !!o.scheduled })]);
     await q.query('DELETE FROM catalog_release_nodes WHERE release_id = $1', [id]);
     await audit(q, actor, 'catalog_release', id, 'RELEASE_PUBLISHED', { number: rel.number, name: rel.name, changes: changes.length, summary, scheduled: !!o.scheduled });
+    await note(q, id, actor, 'PUBLISH', o.scheduled ? 'Published at its scheduled time.' : '');
+    await releaseEvent(q, 'RELEASE_PUBLISHED', await getRelease(q, id), actor, { summary });
     return getRelease(q, id);
   });
 }
@@ -407,17 +418,119 @@ export async function scheduleRelease(q: Queryable, actor: string, id: string, p
 
 /** Publishes the releases whose time has come. Called by the sweep that also activates scheduled offers; safe on several servers at once (the release row is locked and its state checked). */
 export async function publishDueReleases(db: Db, o: { limit?: number } = {}): Promise<{ published: number; failed: number }> {
-  const due = (await db.query(`SELECT id FROM catalog_releases WHERE status IN ('DRAFT','APPROVED') AND publish_at <= now() AND publish_error IS NULL ORDER BY publish_at, id LIMIT $1`, [o.limit ?? 5])).rows;
+  const due = (await db.query(`SELECT id FROM catalog_releases WHERE status = 'APPROVED' AND publish_at <= now() AND publish_error IS NULL ORDER BY publish_at, id LIMIT $1`, [o.limit ?? 5])).rows;
   let published = 0, failed = 0;
   for (const r of due) {
     try { await publishRelease(db, r.id as string, 'scheduler', { scheduled: true }); published++; }
     catch (e) {
       const msg = failureText(e).slice(0, 500);
-      const upd = await db.query(`UPDATE catalog_releases SET publish_error = $2, updated_at = now() WHERE id = $1 AND status IN ('DRAFT','APPROVED') AND publish_error IS NULL`, [r.id, msg]);
+      const upd = await db.query(`UPDATE catalog_releases SET publish_error = $2, updated_at = now() WHERE id = $1 AND status = 'APPROVED' AND publish_error IS NULL`, [r.id, msg]);
       if (upd.rowCount) { failed++; await audit(db, 'scheduler', 'catalog_release', r.id as string, 'RELEASE_SCHEDULE_FAILED', { error: msg }); }
     }
   }
   return { published, failed };
+}
+
+// ───────────────────────── review: submit, approve, reject, reopen, comment ─────────────────────────
+// A release moves DRAFT -> IN_REVIEW -> APPROVED -> PUBLISHED. Someone with release:submit sends a draft for review; someone with release:approve approves it or asks for changes (REJECTED),
+// and that someone can never be the person who started the release or made a change in it; someone with release:publish publishes an approved release (now or scheduled). An approved,
+// rejected or in-review release is not editable: to change it, it goes back to DRAFT (and has to be approved again). Every step is in the audit log and in the release's comments.
+export type CommentKind = 'COMMENT' | 'SUBMIT' | 'APPROVE' | 'REJECT' | 'REOPEN' | 'PUBLISH';
+export interface ReleaseComment { id: number; releaseId: string; author: string; kind: CommentKind; body: string; createdAt: string }
+const toComment = (r: Row): ReleaseComment => ({ id: Number(r.id), releaseId: r.releaseId, author: r.author, kind: r.kind, body: r.body ?? '', createdAt: iso(r.createdAt)! });
+const note = (q: Queryable, id: string, author: string, kind: CommentKind, body = '') => q.query('INSERT INTO catalog_release_comments (release_id, author, kind, body) VALUES ($1, $2, $3, $4)', [id, author, kind, body.slice(0, 2000)]);
+const words = (s: string) => s.toLowerCase().replace('_', ' ');
+
+export async function listReleaseComments(q: Queryable, releaseId: string): Promise<ReleaseComment[]> {
+  return (await q.query('SELECT * FROM catalog_release_comments WHERE release_id = $1 ORDER BY id LIMIT 500', [releaseId])).rows.map(toComment);
+}
+export async function addReleaseComment(q: Queryable, actor: string, releaseId: string, body: string): Promise<ReleaseComment> {
+  const text = (body ?? '').trim();
+  if (!text) throw invalid('Write the comment.');
+  if (text.length > 2000) throw invalid('A comment is up to 2000 characters.');
+  await getRelease(q, releaseId);
+  const r = (await q.query(`INSERT INTO catalog_release_comments (release_id, author, kind, body) VALUES ($1, $2, 'COMMENT', $3) RETURNING *`, [releaseId, actor, text])).rows[0]!;
+  await audit(q, actor, 'catalog_release', releaseId, 'RELEASE_COMMENTED', {});
+  return toComment(r);
+}
+
+/** Why this person may not approve or reject the release (they started it or made a change in it), or null when they may. The rule that makes the review a second pair of eyes. */
+export function approverBlocker(release: Pick<Release, 'createdBy'>, changes: Array<Pick<ReleaseChange, 'createdBy'>>, actor: string): string | null {
+  if (actor === release.createdBy) return 'You started this release, so someone else has to review it.';
+  if (changes.some((c) => c.createdBy === actor)) return 'You made changes in this release, so someone else has to review it.';
+  return null;
+}
+
+async function releaseEvent(q: Queryable, type: 'RELEASE_SUBMITTED' | 'RELEASE_APPROVED' | 'RELEASE_REJECTED' | 'RELEASE_PUBLISHED', rel: Release, by: string, extra: Record<string, unknown> = {}) {
+  await raiseEvent(q, type, { resourceId: rel.id, payload: { number: rel.number, name: rel.name, lifecycleStatus: rel.status, changeCount: rel.changeCount ?? 0, by, ...extra } }, { onlyIfWanted: true });
+}
+const problems = (p: ReleasePreview) => [p.summary.errors ? `${p.summary.errors} change${p.summary.errors === 1 ? '' : 's'} would be refused` : '', p.conflicts.length ? `${p.conflicts.length} node${p.conflicts.length === 1 ? '' : 's'} changed in the live catalog since being staged` : ''].filter(Boolean).join(' and ');
+
+/** Sends a draft for review. It must have changes that would all be accepted and nothing that moved underneath it, so a reviewer is never asked to look at something that cannot be published. */
+export async function submitRelease(db: Db, actor: string, id: string, noteText = ''): Promise<Release> {
+  const pv = await previewRelease(db, id);
+  if (pv.release.status !== 'DRAFT') throw conflict(`${pv.release.number} is ${words(pv.release.status)}: only a draft can be sent for review.`);
+  if (!pv.changes.length) throw invalid('The release has no changes.');
+  if (!pv.ready) throw invalid(`The release cannot be sent for review yet: ${problems(pv)}. Fix it on the review page first.`);
+  return db.tx(async (q) => {
+    const rel = await getRelease(q, id, true);
+    if (rel.status !== 'DRAFT') throw conflict(`${rel.number} is ${words(rel.status)}: only a draft can be sent for review.`);
+    await q.query(`UPDATE catalog_releases SET status = 'IN_REVIEW', submitted_by = $2, submitted_at = now(), decided_by = NULL, decided_at = NULL, publish_at = NULL, publish_error = NULL, updated_at = now(), version = version + 1 WHERE id = $1`, [id, actor]);
+    await note(q, id, actor, 'SUBMIT', noteText);
+    await audit(q, actor, 'catalog_release', id, 'RELEASE_SUBMITTED', { number: rel.number, changes: pv.changes.length, summary: pv.summary });
+    const out = await getRelease(q, id);
+    await releaseEvent(q, 'RELEASE_SUBMITTED', out, actor, { summary: pv.summary });
+    return out;
+  });
+}
+
+/** Approves a release in review. Not by anyone who started it or changed anything in it; and only if it still would apply cleanly. */
+export async function approveRelease(db: Db, actor: string, id: string, noteText = ''): Promise<Release> {
+  const pv = await previewRelease(db, id);
+  if (pv.release.status !== 'IN_REVIEW') throw conflict(`${pv.release.number} is ${words(pv.release.status)}: only a release in review can be approved.`);
+  const blocked = approverBlocker(pv.release, pv.changes, actor);
+  if (blocked) throw forbidden(blocked);
+  if (!pv.ready) throw invalid(`The release cannot be approved as it stands: ${problems(pv)}. Ask for changes.`);
+  return db.tx(async (q) => {
+    const rel = await getRelease(q, id, true);
+    if (rel.status !== 'IN_REVIEW') throw conflict(`${rel.number} is ${words(rel.status)}: only a release in review can be approved.`);
+    await q.query(`UPDATE catalog_releases SET status = 'APPROVED', decided_by = $2, decided_at = now(), updated_at = now(), version = version + 1 WHERE id = $1`, [id, actor]);
+    await note(q, id, actor, 'APPROVE', noteText);
+    await audit(q, actor, 'catalog_release', id, 'RELEASE_APPROVED', { number: rel.number, submittedBy: rel.submittedBy });
+    const out = await getRelease(q, id);
+    await releaseEvent(q, 'RELEASE_APPROVED', out, actor);
+    return out;
+  });
+}
+
+/** Sends a release in review back with the reason. It becomes REJECTED, the author can reopen it, change it and send it again. */
+export async function rejectRelease(db: Db, actor: string, id: string, reason: string): Promise<Release> {
+  const why = (reason ?? '').trim();
+  if (!why) throw invalid('Say what needs to change.');
+  const rel0 = await getRelease(db, id);
+  if (rel0.status !== 'IN_REVIEW') throw conflict(`${rel0.number} is ${words(rel0.status)}: only a release in review can be sent back.`);
+  const blocked = approverBlocker(rel0, await listChanges(db, id), actor);
+  if (blocked) throw forbidden(blocked);
+  return db.tx(async (q) => {
+    const rel = await getRelease(q, id, true);
+    if (rel.status !== 'IN_REVIEW') throw conflict(`${rel.number} is ${words(rel.status)}: only a release in review can be sent back.`);
+    await q.query(`UPDATE catalog_releases SET status = 'REJECTED', decided_by = $2, decided_at = now(), publish_at = NULL, publish_error = NULL, updated_at = now(), version = version + 1 WHERE id = $1`, [id, actor]);
+    await note(q, id, actor, 'REJECT', why);
+    await audit(q, actor, 'catalog_release', id, 'RELEASE_REJECTED', { number: rel.number, reason: why.slice(0, 300) });
+    const out = await getRelease(q, id);
+    await releaseEvent(q, 'RELEASE_REJECTED', out, actor, { reason: why.slice(0, 300) });
+    return out;
+  });
+}
+
+/** Takes a release back to a draft so it can be changed: the author withdrawing it from review, changing a rejected one, or anyone taking approval back (for example to resolve a conflict). It has to be approved again. */
+export async function reopenRelease(q: Queryable, actor: string, id: string, noteText = ''): Promise<Release> {
+  const rel = await getRelease(q, id, true);
+  if (!['IN_REVIEW', 'APPROVED', 'REJECTED'].includes(rel.status)) throw conflict(`${rel.number} is ${words(rel.status)} and cannot be reopened.`);
+  await q.query(`UPDATE catalog_releases SET status = 'DRAFT', submitted_by = NULL, submitted_at = NULL, decided_by = NULL, decided_at = NULL, publish_at = NULL, publish_error = NULL, updated_at = now(), version = version + 1 WHERE id = $1`, [id]);
+  await note(q, id, actor, 'REOPEN', noteText);
+  await audit(q, actor, 'catalog_release', id, 'RELEASE_REOPENED', { number: rel.number, was: rel.status });
+  return getRelease(q, id);
 }
 
 // ───────────────────────── a new version instead of repricing a sold offer ─────────────────────────

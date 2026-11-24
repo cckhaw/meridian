@@ -13,9 +13,9 @@ The API checks **permissions**, never role names. A user holds one or more **rol
 | Role | Code | Scope | Landing page | Credit notes up to | Purpose |
 |---|---|---|---|---|---|
 | **Administrator** (`admin`) | `ROLE_ADMIN` | All records | `/admin/users` | none | Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits. |
-| **Product Configurator** (`product-configurator`) | `ROLE_PRODUCT_CONFIGURATOR` | All records | `/catalog` | none | Designs the product catalog: offers, prices, contracts, ETC rules, fulfilment. |
+| **Product Configurator** (`product-configurator`) | `ROLE_PRODUCT_CONFIGURATOR` | All records | `/catalog` | none | Designs the product catalog: offers, prices, contracts, ETC rules, fulfilment. Prepares catalog releases and sends them for review; someone else approves them. |
 | **Billing Operations** (`billing-ops`) | `ROLE_BILLING_OPS` | All records | `/billing` | unlimited | Prepares bill runs (mock, review, exclusions) and runs dunning, records payments, issues credit notes, handles invoice queries. Approval of a bill run is for Finance or Revenue Assurance. |
-| **Rating & Charging** (`rating-charging`) | `ROLE_RATING_ADMIN` | All records | `/catalog` | none | Reviews tariffs and price plans (read-only). Usage rating is not part of this release. |
+| **Rating & Charging** (`rating-charging`) | `ROLE_RATING_ADMIN` | All records | `/catalog` | none | Reviews tariffs and price plans (read-only) and approves catalog releases that change them. Usage rating is not part of this release. |
 | **Customer (self-serve portal)** (`self-serve`) | `ROLE_CUSTOMER_SELFCARE` | Own customer | `/account` | none | An end customer. Sees and acts only on their own account: shop, orders, bills, cases. Online payments are confirmed by the payment provider webhook, never by the customer. |
 | **Call Center Agent** (`call-center`) | `ROLE_CALL_CENTER_AGENT` | All records | `/customers` | none | Handles customer queries on the Customer 360: profile, services, orders, bills, cases. Can suspend/resume, change SIM or number, take payments. |
 | **Telesales Agent** (`telesales`) | `ROLE_TELESALES` | All records | `/orders/new?channel=TELESALES` | none | Sells by phone: creates customers and telesales orders. |
@@ -97,6 +97,9 @@ The **Code** is the stable name the role goes by outside the database (documents
 | `ledger:ingest` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `catalog:read` | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
 | `catalog:write` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `release:submit` | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `release:approve` | ✓ |  |  | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `release:publish` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `inventory:read` | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  | ✓ |
 | `inventory:write` |  |  |  |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |  |  |  | ✓ |
 | `numbering:read` | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |

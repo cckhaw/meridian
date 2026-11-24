@@ -428,17 +428,25 @@ const releaseBody = z.object({ name: z.string().min(1).max(120), description: z.
 const stagedIn = (query: URLSearchParams) => str(query, 'release');
 const staged = (release: string, id: string, changes: core.ReleaseChange[]) => ({ staged: true, release, id, changes });
 const clean = <T extends Record<string, unknown>>(o: T) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
-get('/catalog/releases', 'catalog:write', ({ db, query }) => core.listReleases(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+// Anyone involved in a release can see it; making changes needs catalog:write, sending it for review release:submit, reviewing it release:approve (never a release you changed), publishing release:publish.
+const releaseRead: Permission[] = ['catalog:write', 'release:submit', 'release:approve', 'release:publish'];
+const noteBody = z.object({ note: z.string().max(2000).optional() });
+get('/catalog/releases', releaseRead, ({ db, query }) => core.listReleases(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
 post('/catalog/releases', 'catalog:write', ({ db, user, body }) => db.tx((q) => core.createRelease(q, user.username, releaseBody.parse(body))));
-get('/catalog/releases/:id', 'catalog:write', async ({ db, params }) => {
-  const [release, changes, conflicts, nodeIds] = await Promise.all([core.getRelease(db, params.id!), core.listChanges(db, params.id!), core.releaseConflicts(db, params.id!), core.releaseNodeIds(db, params.id!)]);
-  return { release, changes, conflicts, nodeIds };
+get('/catalog/releases/:id', releaseRead, async ({ db, user, params }) => {
+  const [release, changes, conflicts, nodeIds, comments] = await Promise.all([core.getRelease(db, params.id!), core.listChanges(db, params.id!), core.releaseConflicts(db, params.id!), core.releaseNodeIds(db, params.id!), core.listReleaseComments(db, params.id!)]);
+  return { release, changes, conflicts, nodeIds, comments, review: { blocker: core.approverBlocker(release, changes, user.username) } };
 });
 patch('/catalog/releases/:id', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.updateRelease(q, user.username, params.id!, releaseBody.partial().parse(body))));
-get('/catalog/releases/:id/preview', 'catalog:write', ({ db, params }) => core.previewRelease(db, params.id!));
+get('/catalog/releases/:id/preview', releaseRead, ({ db, params }) => core.previewRelease(db, params.id!));
 route('DELETE', '/catalog/releases/:id/changes/:changeId', 'catalog:write', async ({ db, user, params }) => { await db.tx((q) => core.removeChange(q, user.username, params.id!, z.coerce.number().int().positive().parse(params.changeId))); return { ok: true }; });
-post('/catalog/releases/:id/publish', 'catalog:write', ({ db, user, params }) => core.publishRelease(db, params.id!, user.username));
-post('/catalog/releases/:id/schedule', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.scheduleRelease(q, user.username, params.id!, z.object({ publishAt: z.string().max(40).nullable() }).parse(body).publishAt)));
+post('/catalog/releases/:id/submit', 'release:submit', ({ db, user, params, body }) => core.submitRelease(db, user.username, params.id!, noteBody.parse(body ?? {}).note));
+post('/catalog/releases/:id/approve', 'release:approve', ({ db, user, params, body }) => core.approveRelease(db, user.username, params.id!, noteBody.parse(body ?? {}).note));
+post('/catalog/releases/:id/reject', 'release:approve', ({ db, user, params, body }) => core.rejectRelease(db, user.username, params.id!, z.object({ reason: z.string().min(1).max(2000) }).parse(body).reason));
+post('/catalog/releases/:id/reopen', releaseRead, ({ db, user, params, body }) => db.tx((q) => core.reopenRelease(q, user.username, params.id!, noteBody.parse(body ?? {}).note)));
+post('/catalog/releases/:id/comments', releaseRead, ({ db, user, params, body }) => db.tx((q) => core.addReleaseComment(q, user.username, params.id!, z.object({ body: z.string().min(1).max(2000) }).parse(body).body)));
+post('/catalog/releases/:id/publish', 'release:publish', ({ db, user, params }) => core.publishRelease(db, params.id!, user.username));
+post('/catalog/releases/:id/schedule', 'release:publish', ({ db, user, params, body }) => db.tx((q) => core.scheduleRelease(q, user.username, params.id!, z.object({ publishAt: z.string().max(40).nullable() }).parse(body).publishAt)));
 post('/catalog/releases/:id/cancel', 'catalog:write', ({ db, user, params }) => db.tx((q) => core.cancelRelease(q, user.username, params.id!)));
 post('/catalog/releases/:id/rebase', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.rebaseNode(q, user.username, params.id!, z.object({ nodeId: z.string().max(80) }).parse(body).nodeId)));
 post('/catalog/releases/:id/reprice', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.stageReprice(q, user.username, params.id!, z.object({ offerId: z.string().max(80), prices: z.array(priceSchema).min(1).max(10), newId: z.string().max(60).optional(), name: z.string().min(1).max(100).optional(), repointDependents: z.boolean().optional() }).parse(body) as never)));

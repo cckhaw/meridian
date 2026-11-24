@@ -29,6 +29,9 @@ const CORE_PERMISSIONS = [
   'finance:configure', // posting rules (SAP accounts, cost centres, profit centres) and the SAP connection settings
   'ledger:ingest', // send financial events to the sub-ledger
   'catalog:read', 'catalog:write',
+  'release:submit', // send a catalog release for review (needs catalog:write to prepare the changes in it)
+  'release:approve', // review a catalog release and approve it or ask for changes; never a release you made changes in yourself
+  'release:publish', // publish an approved catalog release now, or at a chosen time
   'inventory:read', 'inventory:write',
   'numbering:read', // see the pools of numbers, SIMs and identities
   'numbering:select', // choose a number and a SIM while selling
@@ -106,12 +109,13 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
     id: 'admin', label: 'Administrator', scope: 'staff', home: '/admin/users',
     summary: 'Runs the platform: manages users and roles, defines the catalog, reads everything. Cannot take payments or issue credits.',
     permissions: ['dashboard:read', 'numbering:read', 'user:manage', 'audit:read', 'catalog:read', 'catalog:write', 'customer:search', 'customer:read', 'service:read', 'order:read',
-      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage', 'migration:export', 'migration:import', 'document:template'],
+      'billing:read', 'finance:read', 'inventory:read', 'case:read', 'commission:read', 'store:manage', 'migration:export', 'migration:import', 'document:template',
+      'release:submit', 'release:approve', 'release:publish'],
   },
   'product-configurator': {
     id: 'product-configurator', label: 'Product Configurator', scope: 'staff', home: '/catalog',
-    summary: 'Designs the product catalog: offers, prices, contracts, ETC rules, fulfilment.',
-    permissions: ['dashboard:read', 'catalog:read', 'catalog:write', 'inventory:read'],
+    summary: 'Designs the product catalog: offers, prices, contracts, ETC rules, fulfilment. Prepares catalog releases and sends them for review; someone else approves them.',
+    permissions: ['dashboard:read', 'catalog:read', 'catalog:write', 'inventory:read', 'release:submit'],
   },
   'billing-ops': {
     id: 'billing-ops', label: 'Billing Operations', scope: 'staff', home: '/billing', creditLimitMinor: null,
@@ -120,8 +124,8 @@ export const ROLES: Record<BuiltinRoleId, RoleDef> = {
   },
   'rating-charging': {
     id: 'rating-charging', label: 'Rating & Charging', scope: 'staff', home: '/catalog',
-    summary: 'Reviews tariffs and price plans (read-only). Usage rating is not part of this release.',
-    permissions: ['dashboard:read', 'catalog:read'],
+    summary: 'Reviews tariffs and price plans (read-only) and approves catalog releases that change them. Usage rating is not part of this release.',
+    permissions: ['dashboard:read', 'catalog:read', 'release:approve'],
   },
   'self-serve': {
     id: 'self-serve', label: 'Customer (self-serve portal)', scope: 'customer', home: '/account',
