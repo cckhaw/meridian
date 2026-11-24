@@ -3,6 +3,10 @@ on:
   push: { branches: [main] }
   pull_request:
 
+# The CI only reads the repository; nothing here needs more than that.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,12 +19,14 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      # Known vulnerabilities in what ships (production dependencies): a new high or critical advisory fails the build, so it is fixed or consciously waived, not found months later.
+      - run: pnpm audit --prod --audit-level=high
       # The core suite runs on embedded Postgres and again on a real server (partitions, ltree, pooled-style locking).
       - run: pnpm test
       - run: pnpm --filter @meridian/core test

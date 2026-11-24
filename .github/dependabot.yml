@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Application dependencies: one grouped pull request a week, security fixes as they appear.
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+  # The actions the workflows use are pinned to commits; this keeps the pins current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions:
+        patterns: ['*']
+    labels: [dependencies]
