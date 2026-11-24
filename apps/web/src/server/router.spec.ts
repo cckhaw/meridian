@@ -2396,7 +2396,10 @@ describe('offer type switches and service types', () => {
     expect((await call('PATCH', `/catalog/review-a?release=${id}`, { cookie: reviewer, body: { description: 'sneaky' } })).status).toBe(403);   // a reviewer does not change it
     expect((await call('POST', '/catalog/releases', { cookie: reviewer, body: { name: 'x' } })).status).toBe(403);
     // who can see it: everyone involved, nobody else
-    expect((await call('GET', R(id), { cookie: maker })).status).toBe(200);
+    const seen = await call('GET', R(id), { cookie: maker });
+    expect(seen.status).toBe(200);
+    expect(seen.json.review.reviewers.names).toContain('review.reviewer');                                   // who could review it
+    expect(seen.json.review.reviewers.names).not.toContain('review.maker');
     expect((await call('GET', R(id), { cookie: reviewer })).status).toBe(200);
     expect((await call('GET', R(id, '/preview'), { cookie: reviewer })).json.ready).toBe(true);
     expect((await call('GET', R(id), { cookie: seller })).status).toBe(403);
@@ -3115,8 +3118,15 @@ describe('KYC review workflow: who may do what, and the officer view', () => {
 
     const away = await call('POST', '/kyc/me/status', { cookie: o2.cookie, body: { away: true, awayUntil: new Date(Date.now() + 86_400_000).toISOString(), note: 'Leave' } });
     expect(away.json).toMatchObject({ away: true, note: 'Leave' });
-    expect((await call('GET', '/kyc/me', { cookie: o2.cookie })).json).toMatchObject({ username: o2.username, away: true, today: { decided: 1, approved: 1, rejected: 0, returned: 0 }, open: expect.any(Number), overdue: 0 });
-    expect((await call('GET', '/kyc/officers', { cookie: lead.cookie })).json.items.find((o: any) => o.username === o2.username)).toMatchObject({ away: true, eligible: false, notEligibleReason: expect.stringMatching(/Away/) });
+    const me = (await call('GET', '/kyc/me', { cookie: o2.cookie })).json;
+    // one assertion per field, so a failure names the field (and the clock) instead of "object does not match object"
+    expect({ username: me.username, away: me.away }, `/kyc/me at ${new Date().toISOString()}: ${JSON.stringify(me)}`).toEqual({ username: o2.username, away: true });
+    expect(me.today, `today's decisions at ${new Date().toISOString()}: ${JSON.stringify(me)}`).toEqual({ decided: 1, approved: 1, rejected: 0, returned: 0 });
+    expect(me.overdue, `overdue cases for ${o2.username}: ${JSON.stringify(me)}`).toBe(0);
+    expect(typeof me.open).toBe('number');
+    const seen = (await call('GET', '/kyc/officers', { cookie: lead.cookie })).json.items.find((o: any) => o.username === o2.username);
+    expect(seen, `officer list entry for ${o2.username} at ${new Date().toISOString()}`).toMatchObject({ away: true, eligible: false });
+    expect(String(seen.notEligibleReason)).toMatch(/Away/);
     expect((await call('POST', `/kyc/officers/${o2.username}/status`, { cookie: lead.cookie, body: { away: false } })).json).toMatchObject({ away: false });
     expect((await call('POST', `/kyc/officers/${o1.username}/status`, { cookie: o2.cookie, body: { away: true } })).status).toBe(403);
   });

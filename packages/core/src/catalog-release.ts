@@ -5,6 +5,8 @@ import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, forbidden, invalid, notFound } from './errors.js';
 import { raiseEvent } from './events.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
+import { permissionsOf, ROLE_IDS, rolePermissions } from './rbac.js';
+import { getRoleOverrides } from './roles-config.js';
 import { withRollback } from './rollback.js';
 
 /**
@@ -459,6 +461,18 @@ export function approverBlocker(release: Pick<Release, 'createdBy'>, changes: Ar
   if (actor === release.createdBy) return 'You started this release, so someone else has to review it.';
   if (changes.some((c) => c.createdBy === actor)) return 'You made changes in this release, so someone else has to review it.';
   return null;
+}
+
+/**
+ * Who could review this release: the active people who hold `release:approve` and did not start it or change anything in it. Shown on the release page so the person who prepared
+ * it can see whether anyone is able to review it (a deployment with a single administrator has nobody), and who to ask.
+ */
+export async function releaseReviewers(q: Queryable, release: Pick<Release, 'createdBy'>, changes: Array<Pick<ReleaseChange, 'createdBy'>>): Promise<{ count: number; names: string[] }> {
+  const book = await getRoleOverrides(q);
+  const roles = [...ROLE_IDS, ...Object.keys(book.custom)].filter((id) => rolePermissions(id, book).includes('release:approve'));
+  const users = (await q.query(`SELECT username, display_name, roles, is_superuser FROM users WHERE status = 'ACTIVE' AND (is_superuser OR roles && $1::text[]) ORDER BY lower(username) LIMIT 1000`, [roles])).rows;
+  const names = users.filter((u) => permissionsOf({ isSuperuser: u.isSuperuser, roles: u.roles }, book).has('release:approve') && !approverBlocker(release, changes, u.username as string)).map((u) => u.username as string);
+  return { count: names.length, names: names.slice(0, 10) };
 }
 
 async function releaseEvent(q: Queryable, type: 'RELEASE_SUBMITTED' | 'RELEASE_APPROVED' | 'RELEASE_REJECTED' | 'RELEASE_PUBLISHED', rel: Release, by: string, extra: Record<string, unknown> = {}) {
