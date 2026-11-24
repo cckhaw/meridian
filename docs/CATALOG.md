@@ -72,6 +72,10 @@ The thresholds (age and percent) are on the page. Each check is one read-only SQ
 
 API: `GET /api/catalog/health[?minAgeDays=30&nearPriceBps=100]` (the checks with their counts) and `GET /api/catalog/health/:check?limit=50&cursor=…` (the findings of one check: `key`, `id`, `name`, `status`, `message`, `related`, `entity`).
 
+## Releases: change management
+
+By default an edit is live the moment it is saved. **Catalog → Releases** batches changes so they can be reviewed, tested against the rules, and published together, now or at a chosen time, with conflict detection, an atomic publish and a reverse release. Nothing changes for people who do not use it: [RELEASES.md](RELEASES.md).
+
 ## What an offer type is
 
 An **offer type** says what kind of thing an offer is. It decides what the flow asks for and what happens when the offer is sold: whether a service is created, whether something ships, whether a contract is offered. The type list is in **Settings → Catalog → Offer types**: add your own, rename them, or switch off the ones you do not use.

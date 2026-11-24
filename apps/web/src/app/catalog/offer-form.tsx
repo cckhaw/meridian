@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMultiMarket } from '@/lib/markets';
 import { useRegional } from '@/components/settings-provider';
-import { patch, post, useAction, useApi } from '@/lib/api';
+import { useAction, useApi } from '@/lib/api';
+import { detailPath, patch, post, useActiveReleaseId } from './release';
 import { useAuth } from '@/lib/auth';
 import { label, step as moneyStep, toInput, toMinor } from '@/lib/format';
 import { NodePicker, type Picked } from './node-picker';
@@ -76,8 +77,8 @@ export function OfferForm({ offerId, parentId, fromId }: { offerId?: string; par
   const sourceId = offerId ?? fromId ?? null;
   const meta = useApi('/meta');
   const config = useApi<any>('/catalog-config');
-  const src = useApi(sourceId ? `/catalog/${sourceId}/detail` : null);
-  const parent = useApi(!sourceId && parentId ? `/catalog/${parentId}/detail` : null);
+  const src = useApi(sourceId ? detailPath(sourceId) : null);                  // as the release would leave it, while one is selected
+  const parent = useApi(!sourceId && parentId ? detailPath(parentId) : null);
   if ((meta.loading && !meta.data) || (config.loading && !config.data) || (sourceId && src.loading && !src.data) || (parent.loading && !parent.data)) return <Spinner />;
   if (meta.error || config.error || src.error || parent.error) return <Alert>{meta.error ?? config.error ?? src.error ?? parent.error}</Alert>;
   const d = src.data;
@@ -107,6 +108,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
     return { ...blank(defaultMarket), parentId: parentId ?? '' };
   });
   const { run, busy, error } = useAction();
+  const relId = useActiveReleaseId();
   const createdId = useRef('');
   const touchedOptions = useRef(editing || !!fromId);
   const [names, setNames] = useState(initialNames);
@@ -202,7 +204,7 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
       }
       return true;
     });
-    if (ok) router.push(`/catalog?node=${encodeURIComponent(editing ? offerId! : createdId.current || f.parentId)}`);
+    if (ok) router.push(relId ? `/catalog/releases/${encodeURIComponent(relId)}` : `/catalog?node=${encodeURIComponent(editing ? offerId! : createdId.current || f.parentId)}`);   // staged: review the release, the offer is not live yet
   };
 
   const chosen = new Set([...f.requires, ...f.excludes, offerId ?? '']);
@@ -449,8 +451,8 @@ function Inner({ offerId, parentId, fromId, source, names: initialNames, where: 
         {at > 0 && <Button type="button" variant="secondary" onClick={() => go(at - 1)}>Back</Button>}
         {stepId !== 'review'
           ? <Button type="button" disabled={!!blocked} onClick={() => go(at + 1)}>Continue</Button>
-          : <Button type="button" disabled={busy || !!blocked || !f.parentId || !f.name.trim() || !f.kind} onClick={() => void submit()}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create offer'}</Button>}
-        {editing && stepId !== 'review' && <Button type="button" variant="plain" disabled={busy || !!blocked} onClick={() => void submit()}>Save now</Button>}
+          : <Button type="button" disabled={busy || !!blocked || !f.parentId || !f.name.trim() || !f.kind} onClick={() => void submit()}>{busy ? 'Saving…' : relId ? 'Add to release' : editing ? 'Save changes' : 'Create offer'}</Button>}
+        {editing && stepId !== 'review' && <Button type="button" variant="plain" disabled={busy || !!blocked} onClick={() => void submit()}>{relId ? 'Add to release now' : 'Save now'}</Button>}
         <Link href={offerId ? `/catalog?node=${offerId}` : f.parentId ? `/catalog?node=${f.parentId}` : '/catalog'} className="inline-flex min-h-tap items-center rounded-control px-4 text-body font-medium text-accent hover:bg-surface2">Cancel</Link>
         {blocked && <p role="status" className="basis-full text-footnote text-label2">{blocked}</p>}
       </div>

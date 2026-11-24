@@ -276,6 +276,7 @@ const withoutPriceIds = (prices: PriceComponent[] | undefined) => (prices ?? [])
 /** Key order does not matter: the database hands JSON back with its own key order, so a value read back and written again must still compare equal. */
 const canonical = (v: unknown): string => JSON.stringify(v ?? null, (_k, val) => (val && typeof val === 'object' && !Array.isArray(val) ? Object.fromEntries(Object.entries(val).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) : val));
 const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
+export { same as sameValue, withoutPriceIds };
 
 export async function nodeUsage(q: Queryable, id: string): Promise<{ services: number; orders: number; referencedBy: string[] }> {
   const s = (await q.query('SELECT count(*) AS n FROM services WHERE offer_id=$1', [id])).rows[0]!.n as number;

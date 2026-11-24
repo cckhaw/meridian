@@ -1,7 +1,8 @@
 'use client';
 import { Alert, Button, Field, Input, Modal, Select } from '@meridian/ui';
 import { useState } from 'react';
-import { del, patch, post, useAction } from '@/lib/api';
+import { useAction } from '@/lib/api';
+import { del, patch, post, useActiveReleaseId } from './release';
 import type { CNode as TreeNode } from './catalog-ui';
 import { NodePicker } from './node-picker';
 
@@ -24,6 +25,7 @@ export function AddNodeModal({ level, parent, onClose, onDone }: { level: TreeNo
   const [name, setName] = useState('');
   const [networkType, setNetworkType] = useState('mobile');
   const act = useAction();
+  const rel = useActiveReleaseId();
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const id = idFor(level, name, parent);
@@ -44,7 +46,7 @@ export function AddNodeModal({ level, parent, onClose, onDone }: { level: TreeNo
         )}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={act.busy || !slug(name)}>{act.busy ? 'Adding…' : 'Add'}</Button>
+          <Button type="submit" disabled={act.busy || !slug(name)}>{act.busy ? 'Adding…' : rel ? 'Add to release' : 'Add'}</Button>
         </div>
       </form>
     </Modal>
@@ -58,6 +60,7 @@ export function EditNodeModal({ node, parentName, onClose, onDone }: { node: Tre
   const [parentId, setParentId] = useState(node.parentId ?? '');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const act = useAction();
+  const rel = useActiveReleaseId();
   const parentLevel = PARENT_LEVEL[node.level];
   const [newParentName, setNewParentName] = useState<string | null>(null);
   const [changingParent, setChangingParent] = useState(false);
@@ -110,7 +113,7 @@ export function EditNodeModal({ node, parentName, onClose, onDone }: { node: Tre
           ) : <Button type="button" variant="secondary" onClick={() => setConfirmDelete(true)}>Delete…</Button>}
           <span className="flex gap-2">
             <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={act.busy || !name.trim()}>{act.busy ? 'Saving…' : 'Save'}</Button>
+            <Button type="submit" disabled={act.busy || !name.trim()}>{act.busy ? 'Saving…' : rel ? 'Add to release' : 'Save'}</Button>
           </span>
         </div>
       </form>

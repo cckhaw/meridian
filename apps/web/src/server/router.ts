@@ -422,30 +422,83 @@ get('/catalog/summary', 'catalog:read', ({ db, user }) => core.catalogSummary(db
 const healthOptions = (query: URLSearchParams) => ({ minAgeDays: num(query, 'minAgeDays'), nearPriceBps: num(query, 'nearPriceBps') });
 get('/catalog/health', 'catalog:write', async ({ db, query }) => ({ cap: core.HEALTH_CAP, checks: await core.catalogHealthSummary(db, healthOptions(query)) }));
 get('/catalog/health/:check', 'catalog:write', ({ db, params, query }) => core.catalogHealthPage(db, params.check!, { ...healthOptions(query), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+
+// ── Releases (docs/RELEASES.md): batches of catalog changes that go live together. Staging reuses the catalog write routes with `?release=<id>`. ──
+const releaseBody = z.object({ name: z.string().min(1).max(120), description: z.string().max(1000).optional() });
+const stagedIn = (query: URLSearchParams) => str(query, 'release');
+const staged = (release: string, id: string, changes: core.ReleaseChange[]) => ({ staged: true, release, id, changes });
+const clean = <T extends Record<string, unknown>>(o: T) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+get('/catalog/releases', 'catalog:write', ({ db, query }) => core.listReleases(db, { status: str(query, 'status'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
+post('/catalog/releases', 'catalog:write', ({ db, user, body }) => db.tx((q) => core.createRelease(q, user.username, releaseBody.parse(body))));
+get('/catalog/releases/:id', 'catalog:write', async ({ db, params }) => {
+  const [release, changes, conflicts, nodeIds] = await Promise.all([core.getRelease(db, params.id!), core.listChanges(db, params.id!), core.releaseConflicts(db, params.id!), core.releaseNodeIds(db, params.id!)]);
+  return { release, changes, conflicts, nodeIds };
+});
+patch('/catalog/releases/:id', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.updateRelease(q, user.username, params.id!, releaseBody.partial().parse(body))));
+get('/catalog/releases/:id/preview', 'catalog:write', ({ db, params }) => core.previewRelease(db, params.id!));
+route('DELETE', '/catalog/releases/:id/changes/:changeId', 'catalog:write', async ({ db, user, params }) => { await db.tx((q) => core.removeChange(q, user.username, params.id!, z.coerce.number().int().positive().parse(params.changeId))); return { ok: true }; });
+post('/catalog/releases/:id/publish', 'catalog:write', ({ db, user, params }) => core.publishRelease(db, params.id!, user.username));
+post('/catalog/releases/:id/schedule', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.scheduleRelease(q, user.username, params.id!, z.object({ publishAt: z.string().max(40).nullable() }).parse(body).publishAt)));
+post('/catalog/releases/:id/cancel', 'catalog:write', ({ db, user, params }) => db.tx((q) => core.cancelRelease(q, user.username, params.id!)));
+post('/catalog/releases/:id/rebase', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.rebaseNode(q, user.username, params.id!, z.object({ nodeId: z.string().max(80) }).parse(body).nodeId)));
+post('/catalog/releases/:id/reprice', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.stageReprice(q, user.username, params.id!, z.object({ offerId: z.string().max(80), prices: z.array(priceSchema).min(1).max(10), newId: z.string().max(60).optional(), name: z.string().min(1).max(100).optional(), repointDependents: z.boolean().optional() }).parse(body) as never)));
+post('/catalog/releases/:id/reverse', 'catalog:write', ({ db, user, params }) => db.tx((q) => core.createReverseRelease(q, user.username, params.id!)));
 get('/catalog/:id/availability', 'catalog:read', ({ db, user, params, query }) => core.variantAvailability(db, params.id!, user.scope.storeId ?? str(query, 'location') ?? core.MAIN_WAREHOUSE).then((items) => ({ items })));
 const ruleBody = z.object({ id: z.string().max(60), name: z.string().max(120), status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), when: z.array(z.string().max(90)).max(6), target: z.string().max(90), percentBps: z.number().int().optional(), amountMinor: z.number().int().optional() });
 get('/bundle-rules', 'catalog:read', async ({ db, user }) => ({ items: await core.listBundleRules(db, liveOnly(user) ? 'ACTIVE' : undefined) }));
 post('/bundle-rules', 'catalog:write', async ({ db, user, body }) => { const r = await core.saveBundleRule(db, ruleBody.parse(body), true); await core.audit(db, user.username, 'catalog', r.id, 'BUNDLE_RULE_CREATED'); return r; });
 patch('/bundle-rules/:id', 'catalog:write', async ({ db, user, params, body }) => { const r = await core.saveBundleRule(db, { ...ruleBody.parse({ ...(body as object), id: params.id }) }, false); await core.audit(db, user.username, 'catalog', r.id, 'BUNDLE_RULE_UPDATED'); return r; });
 route('DELETE', '/bundle-rules/:id', 'catalog:write', async ({ db, user, params }) => { await core.deleteBundleRule(db, params.id!); await core.audit(db, user.username, 'catalog', params.id!, 'BUNDLE_RULE_DELETED'); return { ok: true }; });
-get('/catalog/:id/detail', 'catalog:read', ({ db, user, params }) => core.nodeDetail(db, params.id!, { activeOnly: liveOnly(user) }));
+get('/catalog/:id/detail', 'catalog:read', ({ db, user, params, query }) => {
+  const rel = stagedIn(query);   // with ?release=, the node as that release would leave it (editors only)
+  if (rel) { if (liveOnly(user)) throw forbidden('Releases are for people who maintain the catalog.'); return core.inReleaseState(db, rel, (q) => core.nodeDetail(q, params.id!, {})); }
+  return core.nodeDetail(db, params.id!, { activeOnly: liveOnly(user) });
+});
 get('/catalog/:id', 'catalog:read', async ({ db, user, params }) => {
   const n = await core.getNode(db, params.id!);
   if (n.status !== 'ACTIVE' && !user.permissions.has('catalog:write')) throw new DomainError('NOT_FOUND', 'not found');
   return n;
 });
 get('/catalog/:id/usage', 'catalog:write', ({ db, params }) => core.nodeUsage(db, params.id!));
-post('/catalog', 'catalog:write', ({ db, user, body }) => core.createNode(db, nodeInput.parse(body) as unknown as core.NodeInput, user.username));
-patch('/catalog/:id', 'catalog:write', async ({ db, user, params, body }) => {
+post('/catalog', 'catalog:write', ({ db, user, body, query }) => {
+  const input = nodeInput.parse(body) as unknown as core.NodeInput;
+  const rel = stagedIn(query);
+  if (rel) return db.tx(async (q) => staged(rel, input.id, [await core.stageChange(q, user.username, rel, { op: 'CREATE', nodeId: input.id, payload: { input } })]));
+  return core.createNode(db, input, user.username);
+});
+patch('/catalog/:id', 'catalog:write', async ({ db, user, params, body, query }) => {
   const { status, activeFrom, ...fields } = nodePatch.parse(body);
   const edited = Object.values(fields).some((v) => v !== undefined);
+  const rel = stagedIn(query);
+  if (rel) return db.tx(async (q) => {
+    const changes: core.ReleaseChange[] = [];
+    if (edited) changes.push(await core.stageChange(q, user.username, rel, { op: 'UPDATE', nodeId: params.id!, payload: { patch: clean(fields) } }));
+    if (status) changes.push(await core.stageChange(q, user.username, rel, { op: 'STATUS', nodeId: params.id!, payload: { status, activeFrom } }));
+    if (!changes.length) throw new DomainError('INVALID', 'Nothing to change.');
+    return staged(rel, params.id!, changes);
+  });
   if (edited) await core.updateNode(db, params.id!, fields as core.NodePatch, user.username);
   return status ? core.setStatus(db, params.id!, status, user.username, activeFrom) : core.getNode(db, params.id!);
 });
-post('/catalog/:id/move', 'catalog:write', ({ db, user, params, body }) => core.moveNode(db, params.id!, z.object({ parentId: z.string().nullable() }).parse(body).parentId, user.username));
-post('/catalog/:id/reorder', 'catalog:write', async ({ db, user, params, body }) => { await core.reorderNode(db, params.id!, z.object({ direction: z.enum(['up', 'down']) }).parse(body).direction, user.username); return { ok: true }; });
-route('DELETE', '/catalog/:id', 'catalog:write', async ({ db, user, params }) => { await core.deleteNode(db, params.id!, user.username); return { ok: true }; });
-post('/catalog/:id/line-items/copy-from', 'catalog:write', async ({ db, user, params, body }) => ({ copied: await core.copyLineItems(db, z.object({ fromId: z.string().max(80) }).parse(body).fromId, params.id!, user.username) }));
+post('/catalog/:id/move', 'catalog:write', ({ db, user, params, body, query }) => {
+  const parentId = z.object({ parentId: z.string().nullable() }).parse(body).parentId;
+  const rel = stagedIn(query);
+  if (rel) return db.tx(async (q) => staged(rel, params.id!, [await core.stageChange(q, user.username, rel, { op: 'MOVE', nodeId: params.id!, payload: { parentId } })]));
+  return core.moveNode(db, params.id!, parentId, user.username);
+});
+post('/catalog/:id/reorder', 'catalog:write', async ({ db, user, params, body, query }) => { if (stagedIn(query)) throw new DomainError('INVALID', 'Reordering is not part of a release: it applies at once.'); await core.reorderNode(db, params.id!, z.object({ direction: z.enum(['up', 'down']) }).parse(body).direction, user.username); return { ok: true }; });
+route('DELETE', '/catalog/:id', 'catalog:write', async ({ db, user, params, query }) => {
+  const rel = stagedIn(query);
+  if (rel) return db.tx(async (q) => staged(rel, params.id!, [await core.stageChange(q, user.username, rel, { op: 'DELETE', nodeId: params.id!, payload: {} })]));
+  await core.deleteNode(db, params.id!, user.username);
+  return { ok: true };
+});
+post('/catalog/:id/line-items/copy-from', 'catalog:write', async ({ db, user, params, body, query }) => {
+  const fromId = z.object({ fromId: z.string().max(80) }).parse(body).fromId;
+  const rel = stagedIn(query);
+  if (rel) return db.tx(async (q) => staged(rel, params.id!, [await core.stageChange(q, user.username, rel, { op: 'COPY_LINE_ITEMS', nodeId: params.id!, payload: { fromId } })]));
+  return { copied: await core.copyLineItems(db, fromId, params.id!, user.username) };
+});
 get('/catalog/:id/etc', 'catalog:read', ({ db, params, query }) =>
   core.etcQuoteForOffer(db, params.id!, new Date(query.get('contractStart') ?? Date.now()), new Date(query.get('terminationDate') ?? Date.now())));
 
@@ -2063,6 +2116,7 @@ async function sweepScheduled(db: Db) {
   lastSweep = Date.now();
   void Promise.all([core.deliverUserAlerts(db), core.deliverSignedCopies(db)]).catch((e) => console.error('[notify] delivery sweep failed', (e as Error).message));
   try { await core.activateDueNodes(db); } catch (e) { console.error('[catalog] scheduled activation failed', (e as Error).message); }
+  try { await core.publishDueReleases(db); } catch (e) { console.error('[catalog] scheduled release publish failed', (e as Error).message); }
   // KYC reviews: hand out what nobody holds, take cases back from officers who are away, mark and escalate the overdue ones. Once a minute; safe on several servers at once.
   if (process.env.NODE_ENV !== 'test' && Date.now() - lastKycSweep >= 60_000) { lastKycSweep = Date.now(); void core.sweepKycReview(db).catch((e) => console.error('[kyc] review sweep failed', (e as Error).message)); }
 }

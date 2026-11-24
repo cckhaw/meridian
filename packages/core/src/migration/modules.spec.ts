@@ -32,6 +32,8 @@ const LEFT_OUT: Record<string, string> = {
   lifecycle_outbox: 'outbound queue', ocs_jobs: 'provisioning queue', print_jobs: 'print-house queue', ledger_events: 'posting de-duplication', ledger_dead_letters: 'posting failures', order_counters: 'number counters', shard_map: 'deployment topology',
   number_reservation_locks: 'live holds', inventory_reservations: 'live holds', msisdn_quarantine: 'rebuilt from the number pool', identifier_registry: 'rebuilt from services', simulation_ledger: 'scratch what-if data', simulation_runs: 'scratch what-if data',
   bill_run_items: 'per-account results of a run (the invoices are exported)', bill_run_exclusions: 'part of a run', dunning_steps: 'step history of past runs', journal_batch_files: 'journal file contents (checksums are in the batches)', legacy_group_memberships: 'retired table',
+  // working state of the change process, not catalog data (the catalog itself is exported)
+  catalog_releases: 'catalog change-management drafts and history: the published catalog is what moves', catalog_release_changes: 'part of a release', catalog_release_nodes: 'which open release holds a node',
   // binary content
   assets: 'logos and images (upload them again)', kyc_documents: 'identity document images (copy from the vault bucket; only the records are exported)',
   // fibre working data that the provider systems own

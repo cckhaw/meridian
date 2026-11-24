@@ -3,7 +3,9 @@ import { Alert, MenuButton, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { patch, post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
+import { post, useAction, useApi, useDebounced, usePaged } from '@/lib/api';
+import { patch } from './release';
+import { ReleaseBar } from './release-bar';
 import { useAuth } from '@/lib/auth';
 import { BrowseList, type Crumb } from './browse-list';
 import { CHILD_LEVEL, type CNode } from './catalog-ui';
@@ -78,6 +80,7 @@ export function CatalogBrowser() {
   if (nodeId && detailApi.loading && !detail) return <Spinner />;
   return (
     <>
+      {editable && <ReleaseBar nodeId={nodeId} />}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)] lg:items-start">
         <aside className={`${showInspectorOnPhone ? 'hidden lg:block' : ''} min-w-0 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto lg:pr-1`}>
           <div className="mb-3 flex items-center justify-between gap-2 lg:hidden">
@@ -96,6 +99,7 @@ export function CatalogBrowser() {
             onStatus={a.onStatus} />
           {editable && <div className="mt-3 flex flex-wrap items-center gap-x-1">
             <button type="button" onClick={() => setImporting(true)} className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Import or export offers (CSV)…</button>
+            <Link href="/catalog/releases" className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Releases</Link>
             <Link href="/catalog/health" className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Catalogue health</Link>
           </div>}
         </aside>
