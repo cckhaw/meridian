@@ -54,6 +54,7 @@ export function configIssues(env: NodeJS.ProcessEnv = process.env, superuserProb
   if (!env.DATABASE_URL && env.MERIDIAN_ALLOW_EMBEDDED_DB !== 'true') issues.push('DATABASE_URL is not set (the embedded demo database is not allowed in production)');
   if ((env.MERIDIAN_ID_PEPPER ?? '').length < 16) issues.push('MERIDIAN_ID_PEPPER must be set to a secret of at least 16 characters');
   if (superuserProblem) issues.push(superuserProblem);
+  if (env.MERIDIAN_CRON_SECRET && env.MERIDIAN_CRON_SECRET.length < 32) issues.push('MERIDIAN_CRON_SECRET must be at least 32 characters (or unset, which turns the scheduled-job routes off)');
   if (env.MERIDIAN_SEED === 'demo' && env.MERIDIAN_ALLOW_DEMO_DATA !== 'true') issues.push('MERIDIAN_SEED=demo loads fake customers; it is not allowed in production');
   return issues;
 }

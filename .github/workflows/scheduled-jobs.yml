@@ -1,0 +1,34 @@
+name: Scheduled jobs
+
+# Calls the background jobs of the production app with the job secret (see docs/OPERATIONS.md, "Scheduled jobs"). Does nothing until the repository secret MERIDIAN_CRON_SECRET and the
+# repository variable MERIDIAN_URL (for example https://meridian.example.com) are both set.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scheduled-jobs
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MERIDIAN_URL: ${{ vars.MERIDIAN_URL }}
+      MERIDIAN_CRON_SECRET: ${{ secrets.MERIDIAN_CRON_SECRET }}
+    steps:
+      - name: Run the jobs
+        run: |
+          if [ -z "$MERIDIAN_URL" ] || [ -z "$MERIDIAN_CRON_SECRET" ]; then echo "MERIDIAN_URL and MERIDIAN_CRON_SECRET are not both set: nothing to do."; exit 0; fi
+          base="${MERIDIAN_URL%/}"
+          failed=0
+          for job in deliver-otp deliver-notifications dispatch-events sweep-orders expire-applications kyc-sweep directory-sync; do
+            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -m 120 -X POST -H "Authorization: Bearer $MERIDIAN_CRON_SECRET" "$base/api/cron/$job" || echo 000)
+            echo "$job -> $code"
+            [ "$code" = "200" ] || { failed=1; head -c 300 /tmp/out.json; echo; }
+          done
+          exit $failed

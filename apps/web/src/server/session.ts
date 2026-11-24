@@ -28,10 +28,16 @@ export function clearCookie(req: Request): string {
   return `${cookieName(secure)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secure ? '; Secure' : ''}`;
 }
 
-/** The address Meridian sees for rate limiting. Only trust forwarding headers when running behind your own proxy (Vercel, a load balancer). */
-export function clientIp(req: Request): string {
-  const fwd = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return fwd || req.headers.get('x-real-ip') || 'unknown';
+/**
+ * The address Meridian sees for rate limiting. A client can put anything at the front of `X-Forwarded-For`; each proxy in front of the app appends the address it received the request
+ * from, so the trustworthy entry is the one the nearest trusted proxy added: counted from the **end**. MERIDIAN_TRUSTED_PROXY_HOPS is how many proxies are in front (default 1: Vercel, or
+ * one load balancer; add one for each extra CDN or proxy). With no forwarding header the address is "unknown".
+ */
+export function clientIp(req: Request, env: Record<string, string | undefined> = process.env): string {
+  const hops = Math.min(Math.max(Math.floor(Number(env.MERIDIAN_TRUSTED_PROXY_HOPS ?? 1)) || 1, 1), 10);
+  const chain = (req.headers.get('x-forwarded-for') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (chain.length) return chain[Math.max(0, chain.length - hops)]!.slice(0, 64);
+  return req.headers.get('x-real-ip')?.trim().slice(0, 64) || 'unknown';
 }
 
 /** CSRF defence for state-changing requests: the browser's Origin must be this site. */

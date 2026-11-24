@@ -19,4 +19,9 @@ export function sameSite(req: Request): boolean {
   try { return new URL(origin).host === (req.headers.get('x-forwarded-host') ?? req.headers.get('host')); } catch { return false; }
 }
 export const shopperUa = (req: Request) => req.headers.get('user-agent')?.slice(0, 300) || null;
-export const shopperIp = (req: Request) => (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim().slice(0, 45) || null;
+/** The shopper's address as the nearest trusted proxy saw it: the entry it appended to `X-Forwarded-For`, counted from the end (MERIDIAN_TRUSTED_PROXY_HOPS proxies, default 1); anything a client put in front is ignored. */
+export const shopperIp = (req: Request): string | null => {
+  const hops = Math.min(Math.max(Math.floor(Number(process.env.MERIDIAN_TRUSTED_PROXY_HOPS ?? 1)) || 1, 1), 10);
+  const chain = (req.headers.get('x-forwarded-for') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return chain.length ? chain[Math.max(0, chain.length - hops)]!.slice(0, 45) : null;
+};

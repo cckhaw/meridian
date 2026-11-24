@@ -16,7 +16,7 @@ pnpm --filter @meridian/storefront dev  # store-front http://localhost:3100 (nee
 pnpm --filter @meridian/fiber-coverage dev  # fibre coverage service and hub http://localhost:3200/settings/fiber-coverage (see docs/FIBER_COVERAGE.md)
 ```
 
-Sign in as `admin` / `local-dev-only-Passphrase-1` (from `apps/web/.env.development`, development only). With no `DATABASE_URL` it runs an
+Copy `apps/web/.env.local.example` to `apps/web/.env.local` (git ignores it), choose your own super-user password there, and sign in as `admin` with it. With no `DATABASE_URL` it runs an
 embedded PostgreSQL seeded with sample data. Then create staff under **Users & roles** and sign in as them to see each role’s view.
 
 ```bash
