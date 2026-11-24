@@ -338,16 +338,24 @@ export async function previewRelease(db: Db, releaseId: string): Promise<Release
   return { release, changes, results: ran.results, summary: summarise(nodes, changes.length, errors), nodes, groups, conflicts, canPublish: OPEN_RELEASE_STATES.includes(release.status) && PUBLISHABLE.includes(release.status) && changes.length > 0 && !errors && !conflicts.length };
 }
 
-/** A node as the release would leave it (for the offer form to start from): the changes applied in a rolled-back transaction, failures skipped. Null when the release deletes it. */
-export async function nodeInRelease(db: Db, releaseId: string, nodeId: string): Promise<{ node: any; lineItems: any[] } | null> {
+/**
+ * Reads something as the release would leave the catalog: its changes are applied in a transaction that is rolled back (a change that fails is skipped), and `read` runs in it.
+ * The offer form uses this to start from the staged state of an offer, the catalog screen to show what a release does to a group.
+ */
+export async function inReleaseState<T>(db: Db, releaseId: string, read: (q: Queryable) => Promise<T>): Promise<T> {
   const changes = await listChanges(db, releaseId);
   return withRollback(db, async (q) => {
     for (const [i, c] of changes.entries()) {
       await q.query(`SAVEPOINT s${i}`);
       try { await applyChange(q, c, 'release-preview'); await q.query(`RELEASE SAVEPOINT s${i}`); } catch { await q.query(`ROLLBACK TO SAVEPOINT s${i}`); }
     }
-    return (await snapshot(q, [nodeId])).get(nodeId) ?? null;
+    return read(q);
   });
+}
+
+/** A node as the release would leave it (for the offer form to start from). Null when the release deletes it or it does not exist. */
+export async function nodeInRelease(db: Db, releaseId: string, nodeId: string): Promise<{ node: any; lineItems: any[] } | null> {
+  return inReleaseState(db, releaseId, async (q) => (await snapshot(q, [nodeId])).get(nodeId) ?? null);
 }
 
 // ───────────────────────── publishing ─────────────────────────

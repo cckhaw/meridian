@@ -15,7 +15,7 @@ beforeAll(async () => { db = await freshDb(); }, 60_000);
 afterAll(async () => { await db.close(); });
 
 const who = 'maker';
-const price = (minor: number, extra: Record<string, unknown> = {}) => ({ type: 'RECURRING', amount: { amountMinor: minor, currency: 'SGD' }, periodMonths: 1, taxInclusive: true, ...extra });
+const price = (minor: number, extra: Record<string, unknown> = {}) => ({ type: 'RECURRING' as const, amount: { amountMinor: minor, currency: 'SGD' }, periodMonths: 1, taxInclusive: true, ...extra });
 const offerInput = (id: string, over: Record<string, unknown> = {}) => ({
   level: 'OFFER', id, code: id, name: `Rel ${id}`, path: '', parentId: 'grp-vas', status: 'DRAFT', markets: [], kind: 'VAS', prices: [price(1000)], contract: { termMonths: 0 },
   fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: false, inventorySkus: [] }, requires: [], excludes: [], salesChannels: [], variants: [], deals: [], ...over,

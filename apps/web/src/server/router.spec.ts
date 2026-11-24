@@ -2241,6 +2241,123 @@ describe('offer type switches and service types', () => {
     expect((await call('GET', '/catalog/health', {})).status).toBe(401);
   });
 
+  it('releases: stage with ?release=, review, conflicts, publish, schedule, cancel, reprice and reverse over HTTP, for editors only', async () => {
+    const su = await root();
+    const mkUser = async (username: string, role: string, ip: string) => {
+      const c = await call('POST', '/users', { cookie: su, body: { username, displayName: username, roles: [role] } });
+      const temp = c.json.temporaryPassword as string;
+      const s = await signIn(username, temp, ip);
+      await call('POST', '/auth/change-password', { cookie: s.cookie, body: { current: temp, next: 'My-Own-Passphrase-2024' } });
+      return (await signIn(username, 'My-Own-Passphrase-2024', `${ip}1`)).cookie!;
+    };
+    const seller = await mkUser('release.seller', 'call-center', '10.6.2.');
+    const offer = (id: string, extra: Record<string, unknown> = {}) => ({ level: 'OFFER', id, name: id, parentId: 'grp-sim-only', kind: 'SIM_ONLY', status: 'DRAFT', markets: [], prices: [{ type: 'RECURRING', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { options: [] }, ...extra });
+    // permissions: releases are for people who maintain the catalog
+    expect((await call('GET', '/catalog/releases', { cookie: seller })).status).toBe(403);
+    expect((await call('POST', '/catalog/releases', { cookie: seller, body: { name: 'x' } })).status).toBe(403);
+    expect((await call('GET', '/catalog/releases', {})).status).toBe(401);
+    // create and list
+    expect((await call('POST', '/catalog/releases', { cookie: su, body: { name: '' } })).status).toBe(400);
+    const made = await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Autumn promotion', description: 'New plan and a price move' } });
+    expect([made.status, made.json.status]).toEqual([200, 'DRAFT']);
+    expect(made.json.number).toMatch(/^REL-\d{4,}$/);
+    const id = made.json.id as string;
+    const R = (path: string) => `/catalog/releases/${id}${path}`;
+    const list = await call('GET', '/catalog/releases?status=DRAFT&limit=1', { cookie: su });
+    expect([list.status, list.json.items[0].id]).toEqual([200, id]);
+    // a live offer to change, and staged changes through the ordinary catalog routes
+    expect((await call('POST', '/catalog', { cookie: su, body: offer('rel-http-live', { status: 'ACTIVE' }) })).status).toBe(200);
+    expect((await call('POST', '/catalog', { cookie: su, body: offer('rel-http-gone', { status: 'DRAFT' }) })).status).toBe(200);
+    const create = await call('POST', `/catalog?release=${id}`, { cookie: su, body: offer('rel-http-new') });
+    expect([create.status, create.json.staged, create.json.id, create.json.changes[0].op]).toEqual([200, true, 'rel-http-new', 'CREATE']);
+    expect((await call('GET', '/catalog/rel-http-new', { cookie: su })).status).toBe(404);                  // not live
+    expect((await call('PATCH', `/catalog/rel-http-new?release=${id}`, { cookie: su, body: { status: 'ACTIVE' } })).json.changes[0].op).toBe('STATUS');
+    const edit = await call('PATCH', `/catalog/rel-http-live?release=${id}`, { cookie: su, body: { description: 'staged text', prices: [{ type: 'RECURRING', amount: { amountMinor: 1500, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }] } });
+    expect(edit.json.changes.map((c: any) => c.op)).toEqual(['UPDATE']);
+    expect((await call('PATCH', `/catalog/rel-http-live?release=${id}`, { cookie: su, body: {} })).status).toBe(400);
+    expect((await call('POST', `/catalog/rel-http-live/move?release=${id}`, { cookie: su, body: { parentId: 'grp-family' } })).json.changes[0].op).toBe('MOVE');
+    expect((await call('POST', `/catalog?release=${id}`, { cookie: su, body: { level: 'LINE_ITEM', id: 'rel-http-live-i1', name: 'Data', parentId: 'rel-http-live', itemType: 'DATA', quantity: 5, unit: 'GB', status: 'ACTIVE' } })).status).toBe(200);
+    expect((await call('POST', `/catalog/rel-http-new/line-items/copy-from?release=${id}`, { cookie: su, body: { fromId: 'rel-http-live' } })).json.changes[0].op).toBe('COPY_LINE_ITEMS');
+    expect((await call('DELETE', `/catalog/rel-http-gone?release=${id}`, { cookie: su })).json.changes[0].op).toBe('DELETE');
+    expect((await call('POST', `/catalog/rel-http-live/reorder?release=${id}`, { cookie: su, body: { direction: 'up' } })).status).toBe(400);   // not part of a release
+    expect((await call('POST', `/catalog?release=${id}`, { cookie: seller, body: offer('rel-http-x') })).status).toBe(403);
+    // nothing is live yet, and the staged state is what the form starts from
+    const liveNow = await call('GET', '/catalog/rel-http-live/detail', { cookie: su });
+    expect([liveNow.json.node.description, liveNow.json.node.parentId]).toEqual([undefined, 'grp-sim-only']);
+    const stagedNow = await call('GET', `/catalog/rel-http-live/detail?release=${id}`, { cookie: su });
+    expect([stagedNow.json.node.description, stagedNow.json.node.parentId, stagedNow.json.lineItems.length]).toEqual(['staged text', 'grp-family', 1]);
+    expect((await call('GET', `/catalog/rel-http-live/detail?release=${id}`, { cookie: seller })).status).toBe(403);
+    expect((await call('GET', `/catalog/rel-http-gone/detail?release=${id}`, { cookie: su })).status).toBe(404);   // the release deletes it
+    // the release: its changes, the nodes it holds, rename
+    const got = await call('GET', R(''), { cookie: su });
+    expect([got.json.release.changeCount, got.json.changes.length, got.json.conflicts.length]).toEqual([7, 7, 0]);
+    expect(got.json.nodeIds).toEqual(expect.arrayContaining(['rel-http-new', 'rel-http-live', 'rel-http-gone', 'rel-http-live-i1']));
+    expect((await call('PATCH', R(''), { cookie: su, body: { name: 'Autumn promotion v2' } })).json.name).toBe('Autumn promotion v2');
+    expect((await call('GET', '/catalog/releases/00000000-0000-0000-0000-000000000000', { cookie: su })).status).toBe(404);
+    expect((await call('GET', '/catalog/releases/not-a-uuid', { cookie: su })).status).toBe(404);
+    // review: the diff, rolled back
+    const pv = await call('GET', R('/preview'), { cookie: su });
+    expect(pv.status).toBe(200);
+    expect(pv.json.results.every((r: any) => r.ok)).toBe(true);
+    expect(pv.json.summary).toMatchObject({ changes: 7, added: 1, deleted: 1, repriced: 1, moved: 1, errors: 0 });
+    expect(pv.json.canPublish).toBe(true);
+    expect(pv.json.nodes.find((n: any) => n.id === 'rel-http-live').fields.map((f: any) => f.field).sort()).toEqual(['description', 'parentId', 'prices']);
+    expect((await call('GET', '/catalog/rel-http-gone', { cookie: su })).status).toBe(200);                // still there
+    // a live edit after staging is a conflict until it is accepted
+    expect((await call('PATCH', '/catalog/rel-http-live', { cookie: su, body: { name: 'Edited live' } })).status).toBe(200);
+    const conflicted = await call('GET', R(''), { cookie: su });
+    expect(conflicted.json.conflicts.map((c: any) => [c.nodeId, c.kind])).toEqual([['rel-http-live', 'CHANGED_LIVE']]);
+    expect((await call('GET', R('/preview'), { cookie: su })).json.canPublish).toBe(false);
+    const blocked = await call('POST', R('/publish'), { cookie: su });
+    expect([blocked.status, blocked.json.error.code]).toEqual([409, 'CONFLICT']);
+    expect((await call('GET', '/catalog/rel-http-new', { cookie: su })).status).toBe(404);                  // nothing was applied
+    expect((await call('POST', R('/rebase'), { cookie: su, body: { nodeId: 'rel-http-live' } })).status).toBe(200);
+    expect((await call('GET', R(''), { cookie: su })).json.conflicts).toEqual([]);
+    // remove a change, then publish
+    const removable = (await call('GET', R(''), { cookie: su })).json.changes.find((c: any) => c.op === 'DELETE');
+    expect((await call('DELETE', R(`/changes/${removable.id}`), { cookie: su })).status).toBe(200);
+    expect((await call('DELETE', R('/changes/999999999'), { cookie: su })).status).toBe(404);
+    expect((await call('POST', R('/publish'), { cookie: seller })).status).toBe(403);
+    const pub = await call('POST', R('/publish'), { cookie: su });
+    expect([pub.status, pub.json.status, pub.json.publishedBy]).toEqual([200, 'PUBLISHED', SU.username]);
+    expect(pub.json.result.summary).toMatchObject({ added: 1, repriced: 1, moved: 1 });
+    const after = await call('GET', '/catalog/rel-http-live/detail', { cookie: su });
+    expect([after.json.node.description, after.json.node.parentId, after.json.node.name]).toEqual(['staged text', 'grp-family', 'Edited live']);
+    expect((await call('GET', '/catalog/rel-http-new', { cookie: su })).json.status).toBe('ACTIVE');
+    expect((await call('POST', `/catalog?release=${id}`, { cookie: su, body: offer('rel-http-late') })).status).toBe(409);   // a published release takes no more changes
+    expect((await call('POST', R('/publish'), { cookie: su })).status).toBe(409);
+    // scheduling and cancelling
+    const r2 = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Later' } })).json;
+    await call('PATCH', `/catalog/rel-http-new?release=${r2.id}`, { cookie: su, body: { description: 'later' } });
+    const S = (path: string) => `/catalog/releases/${r2.id}${path}`;
+    expect((await call('POST', S('/schedule'), { cookie: su, body: { publishAt: new Date(Date.now() - 60_000).toISOString() } })).status).toBe(400);
+    const when = new Date(Date.now() + 86_400_000).toISOString();
+    expect((await call('POST', S('/schedule'), { cookie: su, body: { publishAt: when } })).json.publishAt).toBe(when);
+    expect((await call('POST', S('/schedule'), { cookie: su, body: { publishAt: null } })).json.publishAt).toBeNull();
+    expect((await call('POST', S('/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
+    expect((await call('POST', S('/cancel'), { cookie: su })).status).toBe(409);
+    expect((await call('PATCH', `/catalog/rel-http-new?release=${r2.id}`, { cookie: su, body: { description: 'x' } })).status).toBe(409);
+    // a sold offer is repriced as a new version, and a published release can be reversed
+    const buyer = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Release Buyer', idDocument: 'S9753186A' } })).json.customer;
+    await placeOrder(db, { customerId: buyer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-sim-5g' }] });
+    const r3 = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Reprice the 5G plan' } })).json;
+    const T = (path: string) => `/catalog/releases/${r3.id}${path}`;
+    const unsold = await call('POST', T('/reprice'), { cookie: su, body: { offerId: 'rel-http-new', prices: [{ type: 'RECURRING', amount: { amountMinor: 2000, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }] } });
+    expect([unsold.status, unsold.json.error.message]).toEqual([400, expect.stringMatching(/never been sold/)]);
+    const rp = await call('POST', T('/reprice'), { cookie: su, body: { offerId: 'plan-sim-5g', prices: [{ type: 'RECURRING', amount: { amountMinor: 3900, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }, { type: 'ONE_TIME', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true }] } });
+    expect([rp.status, rp.json.newId]).toEqual([200, 'plan-sim-5g-v2']);
+    const rpv = await call('GET', T('/preview'), { cookie: su });
+    expect(rpv.json.summary).toMatchObject({ repriced: 1, added: 0, retired: 0, errors: 0 });
+    expect(rpv.json.groups).toEqual([{ key: 'reprice:plan-sim-5g', oldId: 'plan-sim-5g', newId: 'plan-sim-5g-v2' }]);
+    expect((await call('POST', T('/publish'), { cookie: su })).json.status).toBe('PUBLISHED');
+    expect([(await call('GET', '/catalog/plan-sim-5g', { cookie: su })).json.status, (await call('GET', '/catalog/plan-sim-5g-v2', { cookie: su })).json.status]).toEqual(['RETIRED', 'ACTIVE']);
+    const rev = await call('POST', T('/reverse'), { cookie: su });
+    expect([rev.status, rev.json.status, rev.json.reversesReleaseId]).toEqual([200, 'DRAFT', r3.id]);
+    expect((await call('POST', S('/reverse'), { cookie: su })).status).toBe(409);                            // a cancelled release has nothing to reverse
+    const revPv = await call('GET', `/catalog/releases/${rev.json.id}/preview`, { cookie: su });
+    expect(revPv.json.results.some((r: any) => r.op === 'STATUS')).toBe(true);
+  });
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;
