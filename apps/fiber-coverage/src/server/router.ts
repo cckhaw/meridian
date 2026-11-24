@@ -114,11 +114,11 @@ admin('GET', '/admin/me', ({ user }) => ({ username: user!.username, displayName
 admin('GET', '/admin/module', async ({ db }) => ({ enabled: await fiber.moduleEnabled(db), envDefault: (process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '').trim() === '' || /^(1|true|on|yes)$/i.test(process.env.FEATURE_FIBER_COVERAGE_MODULE_ENABLED ?? '') }));
 admin('PUT', '/admin/module', async (c) => ({ enabled: await fiber.setModuleEnabled(c.db, actor(c), z.object({ enabled: z.boolean() }).parse(c.body).enabled) }));
 admin('GET', '/admin/settings', ({ db }) => fiber.getFiberSettings(db));
-admin('PATCH', '/admin/settings', (c) => fiber.setFiberSettings(c.db, actor(c), z.object({ lockMinutes: z.number(), cacheHours: z.number(), partnerTimeoutMs: z.number(), lowPortsAbsolute: z.number(), lowPortsPercent: z.number(), adapters: z.record(z.boolean()) }).partial().parse(c.body)).catch((e) => { throw e instanceof Error && !(e instanceof DomainError) ? new DomainError('INVALID', e.message) : e; }));
+admin('PATCH', '/admin/settings', (c) => fiber.setFiberSettings(c.db, actor(c), z.object({ lockMinutes: z.number(), cacheHours: z.number(), partnerTimeoutMs: z.number(), lowPortsAbsolute: z.number(), lowPortsPercent: z.number(), adapters: z.record(z.string(), z.boolean()) }).partial().parse(c.body)).catch((e) => { throw e instanceof Error && !(e instanceof DomainError) ? new DomainError('INVALID', e.message) : e; }));
 
 const providerBody = z.object({
   code: z.string(), name: z.string(), type: z.enum(fiber.PROVIDER_TYPES), agreementId: z.string().max(80).nullish(), costPerPortMinor: z.number().int().min(0).optional(), currency: z.string().length(3).optional(), installLeadDays: z.number().int().optional(), slaResponseHours: z.number().int().optional(),
-  speedTiersMbps: z.array(z.number().int()).optional(), adapterKind: z.enum(fiber.ADAPTER_KINDS).optional(), adapterUrl: z.string().max(500).nullish(), adapterConfig: z.record(z.any()).optional(), adapterEnabled: z.boolean().optional(), enabled: z.boolean().optional(), adapterSecret: z.string().max(2000).optional(),
+  speedTiersMbps: z.array(z.number().int()).optional(), adapterKind: z.enum(fiber.ADAPTER_KINDS).optional(), adapterUrl: z.string().max(500).nullish(), adapterConfig: z.record(z.string(), z.any()).optional(), adapterEnabled: z.boolean().optional(), enabled: z.boolean().optional(), adapterSecret: z.string().max(2000).optional(),
 });
 admin('GET', '/admin/providers', async ({ db }) => ({ items: (await fiber.listProviders(db)).map((r) => fiber.providerView(r)) }));
 admin('POST', '/admin/providers', async (c) => fiber.providerView(await fiber.saveProvider(c.db, actor(c), providerBody.parse(c.body))), { created: true });
