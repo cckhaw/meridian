@@ -67,6 +67,12 @@ Pool management needs `numbering:manage`; sellers hold only `numbering:select`. 
 - Order placement accepts an `Idempotency-Key` so retries cannot double-order.
 - Fail closed: a production deployment with missing or weak secrets serves nothing.
 
+## Scheduled jobs and client addresses
+
+**Jobs without a sign-in.** A scheduler (GitHub Actions, Vercel Cron, a cron service) has no user, and giving it a staff password or a long-lived session would hand a high-privilege account to a machine. Instead `MERIDIAN_CRON_SECRET` (32+ characters) authorises exactly seven background jobs at `/api/cron/<job>` (`Authorization: Bearer <secret>`, compared in constant time). Nothing else opens with it, it is not a user and cannot sign in, every run is audited as `cron`, and the routes do not exist while the secret is unset. The older `/api/jobs/*` routes still need a staff session with the permission shown.
+
+**Rate-limit addresses.** The sign-in limiter keys on the address the nearest trusted proxy appended to `X-Forwarded-For`, counted from the end (`MERIDIAN_TRUSTED_PROXY_HOPS`, default 1), so a client cannot rotate a forged first entry to dodge the per-address limit. The per-user lockout never depended on the address.
+
 ## Outbound requests (SSRF)
 
 Anything the server calls on an address somebody typed in (a webhook target, a TM Forum 688 listener callback, a connector's URL) is checked so it cannot reach the deployment's own network or the cloud metadata service. The check is on the **address the connection is made to**, not on the name: every outbound connection resolves the name once, refuses if any answer is not allowed, and connects to those very addresses (so a name that changes its answer between check and use, "DNS rebinding", gets nothing). Addresses are classified from their numbers however they are written: decimal or hex IPv4, IPv4 inside IPv6 (`::ffff:127.0.0.1`), NAT64 and 6to4, `100.64.0.0/10`, unique-local `fc00::/7`, link-local, multicast and reserved ranges. Redirects are checked the same way, per connection.

@@ -3,6 +3,7 @@ import * as core from '@meridian/core';
 import { DomainError, forbidden, getDb, type Db, type Permission, type SessionUser } from '@meridian/core';
 import { formatMoney, LINE_ITEM_TYPES, THEMES } from '@meridian/types';
 import { z, ZodError } from 'zod';
+import { cronAuth } from './cron.js';
 import { assertCustomer, assertOrder } from './access';
 import { clearCookie, clientIp, readToken, sameOrigin, sessionCookie } from './session';
 
@@ -1078,6 +1079,29 @@ post('/jobs/directory-sync', ['settings:manage', 'integration:manage'], ({ db })
 post('/jobs/deliver-otp', ['settings:manage', 'integration:manage'], ({ db }) => core.deliverOtpMessages(db));
 /** Retries what waits for the SMS / WhatsApp gateway besides one-time codes: staff alerts and signed agreement copies. Also runs on the 15-second heartbeat below. */
 post('/jobs/deliver-notifications', ['settings:manage', 'integration:manage'], async ({ db }) => ({ alerts: await core.deliverUserAlerts(db), signedCopies: await core.deliverSignedCopies(db) }));
+
+// ── Scheduled jobs for a scheduler without a sign-in: one secret (MERIDIAN_CRON_SECRET), a fixed list of jobs, no user ──
+const CRON_JOBS: Record<string, (db: Db) => Promise<unknown>> = {
+  'directory-sync': (db) => core.runDueDirectorySyncs(db),
+  'deliver-otp': (db) => core.deliverOtpMessages(db),
+  'deliver-notifications': async (db) => ({ alerts: await core.deliverUserAlerts(db), signedCopies: await core.deliverSignedCopies(db) }),
+  'dispatch-events': (db) => core.dispatchEvents(db),
+  'sweep-orders': async (db) => ({ ...(await core.sweepOrders(db, new Date(), 'cron')), documents: await core.sweepDocuments(db, new Date(), 'cron'), signedCopies: await core.deliverSignedCopies(db) }),
+  'expire-applications': (db) => core.expireApplications(db),
+  'kyc-sweep': (db) => core.sweepKycReview(db),
+};
+const cronRun = async ({ db, params, req }: PublicCtx) => {
+  const auth = cronAuth(req.headers.get('authorization'));
+  if (auth === 'disabled') throw new DomainError('NOT_FOUND', 'not found');                       // off unless the secret is set: the route does not even exist
+  if (auth === 'denied') throw new DomainError('UNAUTHENTICATED', 'A valid job secret is required.');
+  const job = CRON_JOBS[params.job!];
+  if (!job) throw new DomainError('NOT_FOUND', 'not found');
+  const result = await job(db);
+  await core.audit(db, 'cron', 'job', params.job!, 'CRON_RUN', { result: JSON.parse(JSON.stringify(result ?? null)) });
+  return result ?? { ok: true };
+};
+open('POST', '/cron/:job', cronRun, { noCsrf: true });
+open('GET', '/cron/:job', cronRun, { noCsrf: true });          // Vercel Cron calls with GET
 post('/settings/integration-hub/events/dispatch', 'integration:manage', ({ db }) => core.dispatchEvents(db));
 get('/settings/integration-hub/deliveries', 'integration:manage', ({ db, query }) => core.listDeliveries(db, { status: str(query, 'status'), subscriptionId: str(query, 'subscriptionId'), limit: num(query, 'limit') }));
 post('/settings/integration-hub/deliveries/:id/retry', 'integration:manage', ({ db, params }) => core.retryDelivery(db, Number(params.id)));

@@ -17,7 +17,12 @@ export function readToken(req: Request): string | undefined {
 }
 export const sessionCookie = (req: Request, token: string, expires: Date) => `${name(isSecureRequest(req))}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Expires=${expires.toUTCString()}${isSecureRequest(req) ? '; Secure' : ''}`;
 export const clearCookie = (req: Request) => `${name(isSecureRequest(req))}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${isSecureRequest(req) ? '; Secure' : ''}`;
-export const clientIp = (req: Request) => req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
+/** The address the nearest trusted proxy saw: the entry it appended to `X-Forwarded-For`, counted from the end (MERIDIAN_TRUSTED_PROXY_HOPS proxies, default 1); anything a client put in front is ignored. */
+export const clientIp = (req: Request) => {
+  const hops = Math.min(Math.max(Math.floor(Number(process.env.MERIDIAN_TRUSTED_PROXY_HOPS ?? 1)) || 1, 1), 10);
+  const chain = (req.headers.get('x-forwarded-for') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return (chain.length ? chain[Math.max(0, chain.length - hops)]! : req.headers.get('x-real-ip')?.trim()) || 'unknown';
+};
 
 /** CSRF defence for state-changing requests that carry the session cookie: the browser's Origin must be this site. */
 export function sameOrigin(req: Request): boolean {

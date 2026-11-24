@@ -2460,6 +2460,31 @@ describe('offer type switches and service types', () => {
     expect((await call('POST', R(own.id, '/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
   });
 
+  it('scheduled jobs: off without a secret, one secret and no user otherwise, a fixed list of jobs, audited', async () => {
+    const was = process.env.MERIDIAN_CRON_SECRET;
+    try {
+      delete process.env.MERIDIAN_CRON_SECRET;
+      expect((await call('POST', '/cron/deliver-otp', { origin: null, headers: { authorization: `Bearer ${'c'.repeat(40)}` } })).status).toBe(404);   // the route does not exist without the secret
+      process.env.MERIDIAN_CRON_SECRET = 'c'.repeat(40);
+      const good = { authorization: `Bearer ${'c'.repeat(40)}` };
+      expect((await call('POST', '/cron/deliver-otp', { origin: null })).status).toBe(401);
+      expect((await call('POST', '/cron/deliver-otp', { origin: null, headers: { authorization: `Bearer ${'d'.repeat(40)}` } })).status).toBe(401);
+      expect((await call('POST', '/cron/deliver-otp', { origin: 'https://evil.example', headers: { authorization: 'Bearer nope' } })).status).toBe(401);
+      for (const job of ['directory-sync', 'deliver-otp', 'deliver-notifications', 'dispatch-events', 'sweep-orders', 'expire-applications', 'kyc-sweep']) {
+        const r = await call('POST', `/cron/${job}`, { origin: null, headers: good });
+        expect([job, r.status]).toEqual([job, 200]);
+      }
+      expect((await call('GET', '/cron/deliver-otp', { origin: null, headers: good })).status).toBe(200);          // Vercel Cron calls with GET
+      expect((await call('POST', '/cron/drop-everything', { origin: null, headers: good })).status).toBe(404);       // only the listed jobs
+      expect((await call('POST', '/cron/../users', { origin: null, headers: good })).status).not.toBe(200);
+      const su = await root();
+      expect((await call('GET', '/users', { headers: good })).status).toBe(401);          // the secret is not a session: nothing else opens with it
+      const audit = await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE action = 'CRON_RUN' AND actor = 'cron'`);
+      expect(audit.rows[0]!.n).toBeGreaterThanOrEqual(7);
+      expect((await call('GET', '/audit?limit=1', { cookie: su })).status).toBeLessThan(500);
+    } finally { if (was === undefined) delete process.env.MERIDIAN_CRON_SECRET; else process.env.MERIDIAN_CRON_SECRET = was; }
+  });
+
   it('release impact and what-if: who is affected, sample baskets, and the price before and after', async () => {
     const su = await root();
     const mkUser = async (username: string, role: string, ip: string) => {

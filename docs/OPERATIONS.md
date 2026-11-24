@@ -29,6 +29,8 @@ Meridian refuses to serve traffic in production unless it is configured safely: 
 | `MERIDIAN_WFM_WEBHOOK_SECRET`, `MERIDIAN_WFM_*` | no | The secret (16+ characters) the field-service system signs its callbacks with, and the token for the field-service REST connector. The names are set in Integration → Field service and logistics and must start with `MERIDIAN_WFM_` ([CASES.md](CASES.md)). |
 | `MERIDIAN_MIGRATION_S3_*`, `MERIDIAN_MIGRATION_DB_MAX_MB` | no | Object storage for large data-migration uploads, and the size limit when uploads go through the database (default 256 MB) ([MIGRATION.md](MIGRATION.md#object-storage-optional)). |
 | `MERIDIAN_PRIVATE_NETWORK_HOSTS` | no | Comma-separated host names or addresses on a **private network** that an administrator-configured connector (SMS gateway, OCS, partner, directory) may call, such as an OCS inside your own network. Everything else on a private network, and loopback, link-local (the cloud metadata service) and reserved addresses, is refused in production. TM Forum listener callbacks ignore this list. |
+| `MERIDIAN_CRON_SECRET` | no | 32+ characters. Lets a scheduler without a sign-in run the background jobs: `POST` (or `GET`, for Vercel Cron) `/api/cron/<job>` with `Authorization: Bearer <secret>`, for the jobs `directory-sync`, `deliver-otp`, `deliver-notifications`, `dispatch-events`, `sweep-orders`, `expire-applications` and `kyc-sweep`. Nothing else opens with it and it is not a user; each run is audited as `cron`. The routes do not exist while it is unset. Rotate it by changing it here and in the scheduler. |
+| `MERIDIAN_TRUSTED_PROXY_HOPS` | no | How many proxies are in front of the app (default 1: Vercel or one load balancer; add one for each extra CDN or proxy). The sign-in rate limit uses the address the nearest trusted proxy appended to `X-Forwarded-For`, counted from the end, so a client cannot dodge the limit by sending its own header. |
 | `MERIDIAN_ALLOW_EMBEDDED_DB` | no | Production only: `true` allows the in-memory demo database when `DATABASE_URL` is unset. Never for real data; everything is lost on restart. |
 | `MERIDIAN_ALLOW_DEMO_DATA` | no | Production only: `true` allows `MERIDIAN_SEED=demo` (fake customers). Never for real data. |
 | `MERIDIAN_DATA_DIR` | no | Development only: persist the embedded database to this folder. Ignored when `DATABASE_URL` is set. |
@@ -112,6 +114,10 @@ Once the new deployment is **Ready and has its production domain** (it is live),
 The workflow is hardened: actions are pinned to commits (Dependabot keeps the pins current), the Vercel CLI is pinned, the token is given only to the steps that call Vercel, and CI fails on a new high or critical advisory in production dependencies (`pnpm audit --prod --audit-level=high`). CodeQL scans the TypeScript and the workflows weekly and on every pull request.
 
 Set under **Settings → Secrets and variables → Actions**: `VERCEL_TOKEN` (a secret), and `VERCEL_ORG_ID` or `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID` (secrets or variables). The Vercel project's Root Directory is `apps/web`. The store-front and fiber-coverage apps are separate projects and keep their own Vercel Git deployments.
+
+### Scheduled jobs
+
+The app runs its own heartbeat on every request, but quiet periods need a scheduler. Set `MERIDIAN_CRON_SECRET` on the deployment and call the jobs from anywhere that can send an HTTP request (the list is in the variable's description). The repository includes `.github/workflows/scheduled-jobs.yml`, which does this every 15 minutes from GitHub Actions: set the repository secret `MERIDIAN_CRON_SECRET` (the same value) and the repository variable `MERIDIAN_URL` (for example `https://meridian.example.com`); until both exist it does nothing. The jobs are safe to run on several servers at once and to run more often than needed. Vercel's free Hobby plan runs cron jobs only once a day, which is why this is not a `vercel.json` cron.
 
 ### Rotating the data key
 
