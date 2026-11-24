@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Badge, Button, Empty, Field, Input, LargeTitle, Modal, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Empty, Field, Input, LargeTitle, Modal, Spinner, Textarea } from '@meridian/ui';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -15,14 +15,20 @@ interface Conflict { nodeId: string; name: string | null; kind: 'CHANGED_LIVE' |
 interface DiffField { field: string; before: unknown; after: unknown }
 interface DiffItem { id: string; name: string; summary: string }
 interface DiffNode { id: string; name: string; level: string; kind: 'ADDED' | 'CHANGED' | 'DELETED'; groupKey: string | null; fields: DiffField[]; lineItems: { added: DiffItem[]; removed: DiffItem[]; changed: Array<DiffItem & { fields: DiffField[] }> } }
+interface Comment { id: number; author: string; kind: 'COMMENT' | 'SUBMIT' | 'APPROVE' | 'REJECT' | 'REOPEN' | 'PUBLISH'; body: string; createdAt: string }
 interface Preview {
-  release: Release; changes: Change[]; results: Array<{ id: number; ok: boolean; error?: string }>; conflicts: Conflict[]; canPublish: boolean;
+  release: Release; changes: Change[]; results: Array<{ id: number; ok: boolean; error?: string }>; conflicts: Conflict[]; ready: boolean; canPublish: boolean;
   summary: { changes: number; added: number; changed: number; retired: number; repriced: number; moved: number; madeLive: number; deleted: number; lineItems: number; errors: number };
   nodes: DiffNode[]; groups: Array<{ key: string; oldId: string; newId: string }>;
 }
 
 const OP: Record<string, string> = { CREATE: 'Create', UPDATE: 'Change', MOVE: 'Move', STATUS: 'Status', DELETE: 'Delete', COPY_LINE_ITEMS: 'Copy line items' };
 const FIELD: Record<string, string> = { parentId: 'Group', kind: 'Type', salesChannels: 'Channels', activeFrom: 'Goes live', partnerCode: 'Partner code', validityDays: 'Valid for (days)', ocs: 'Charging plan', group: 'Group plan terms', requires: 'Customer must first have', excludes: 'Cannot be bought with', prices: 'Prices' };
+const STEP: Record<Comment['kind'], string> = { COMMENT: 'commented', SUBMIT: 'sent it for review', APPROVE: 'approved it', REJECT: 'asked for changes', REOPEN: 'took it back to a draft', PUBLISH: 'published it' };
+const WHERE: Record<string, string> = {
+  DRAFT: 'A draft: changes can still be added. Send it for review when it is ready.', IN_REVIEW: 'In review: it is frozen until it is approved or sent back.', APPROVED: 'Approved: it can be published now or at a chosen time.',
+  REJECTED: 'Sent back: reopen it to change it and send it again.', PUBLISHED: 'Published: these changes are live.', CANCELLED: 'Thrown away: nothing in it went live.',
+};
 const CONFLICT: Record<string, string> = { CHANGED_LIVE: 'changed in the live catalog after it was added here', DELETED_LIVE: 'was deleted from the live catalog', EXISTS_LIVE: 'now exists in the live catalog, and this release creates it' };
 
 /** A stored value as a person reads it. */
@@ -95,25 +101,30 @@ function RepriceModal({ releaseId, onClose, onDone }: { releaseId: string; onClo
   );
 }
 
-/** One release: what it changes, whether it would apply, what has moved underneath it, and the actions to publish, schedule, cancel or reverse it. */
+/** One release: what it changes, whether it would apply, what has moved underneath it, who reviewed it, and the actions for each stage (send for review, approve or send back, publish, schedule, throw away, reverse). */
 export function ReleaseDetail() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { can } = useAuth();
   const active = useActiveReleaseId();
-  const rel = useApi<{ release: Release; changes: Change[]; conflicts: Conflict[]; nodeIds: string[] }>(can('catalog:write') ? `/catalog/releases/${id}` : null);
-  const pv = useApi<Preview>(can('catalog:write') ? `/catalog/releases/${id}/preview` : null);
+  const involved = can('catalog:write', 'release:submit', 'release:approve', 'release:publish');
+  const rel = useApi<{ release: Release; changes: Change[]; conflicts: Conflict[]; nodeIds: string[]; comments: Comment[]; review: { blocker: string | null } }>(involved ? `/catalog/releases/${id}` : null);
+  const pv = useApi<Preview>(involved ? `/catalog/releases/${id}/preview` : null);
   const reload = async () => { await Promise.all([rel.reload(), pv.reload()]); };
   const act = useAction(reload);
   const [when, setWhen] = useState('');
+  const [text, setText] = useState('');
   const [reprice, setReprice] = useState(false);
-  if (!can('catalog:write')) return <Alert tone="info">Releases are for people who maintain the catalog.</Alert>;
+  if (!involved) return <Alert tone="info">Releases are for people who maintain or review the catalog.</Alert>;
   if (rel.error) return <Alert>{rel.error}</Alert>;
   if (!rel.data) return <Spinner />;
   const r = rel.data.release;
-  const draft = r.status === 'DRAFT';
+  const status = r.status;
   const p = pv.data;
   const resultOf = (cid: number) => p?.results.find((x) => x.id === cid);
+  const editable = status === 'DRAFT' && can('catalog:write');
+  const blocker = rel.data.review.blocker;
+  const send = (path: string, body: unknown = {}) => act.run(async () => { await post(`/catalog/releases/${id}/${path}`, body); setText(''); });
   const publish = () => { if (confirm(`Publish ${r.number}? All ${rel.data!.changes.length} changes go live together, now.`)) void act.run(async () => { await post(`/catalog/releases/${id}/publish`); setActiveRelease(null); }); };
   const schedule = () => act.run(() => post(`/catalog/releases/${id}/schedule`, { publishAt: new Date(when).toISOString() }));
   const unschedule = () => act.run(() => post(`/catalog/releases/${id}/schedule`, { publishAt: null }));
@@ -121,34 +132,50 @@ export function ReleaseDetail() {
   const reverse = async () => { const rv = await act.run(() => post<Release>(`/catalog/releases/${id}/reverse`)); if (rv) router.push(`/catalog/releases/${rv.id}`); };
   const S = p?.summary;
   const chips: Array<[string, number | undefined]> = [['Added', S?.added], ['Changed', S?.changed], ['Repriced', S?.repriced], ['Made live', S?.madeLive], ['Retired', S?.retired], ['Moved', S?.moved], ['Deleted', S?.deleted], ['Line items', S?.lineItems]];
+  const note = (placeholder: string) => <Field label="Note" optional><Textarea rows={2} value={text} maxLength={2000} placeholder={placeholder} onChange={(e) => setText(e.target.value)} /></Field>;
   return (
     <>
       <LargeTitle subtitle={r.description ?? 'A batch of catalog changes that go live together.'}>{r.number} · {r.name}</LargeTitle>
       <p className="mb-4"><Link href="/catalog/releases" className="text-subhead text-accent">← All releases</Link></p>
-      <p className="mb-4 flex flex-wrap items-center gap-2 text-subhead text-label2">
-        <Badge tone={STATUS_TONE[r.status] ?? 'neutral'}>{label(r.status)}</Badge>
+      <p className="mb-2 flex flex-wrap items-center gap-2 text-subhead text-label2">
+        <Badge tone={STATUS_TONE[status] ?? 'neutral'}>{label(status)}</Badge>
         {r.publishAt && !r.publishedAt && <Badge tone={r.publishError ? 'danger' : 'neutral'}>{`Publishes ${dt(r.publishAt)}`}</Badge>}
         <span>Started by {r.createdBy}, {dt(r.createdAt)}</span>
+        {r.submittedBy && status !== 'DRAFT' && <span>· sent for review by {r.submittedBy}</span>}
+        {r.decidedBy && (status === 'APPROVED' || status === 'PUBLISHED') && <span>· approved by {r.decidedBy}</span>}
+        {r.decidedBy && status === 'REJECTED' && <span>· sent back by {r.decidedBy}</span>}
         {r.publishedAt && <span>· published by {r.publishedBy ?? ''} {dt(r.publishedAt)}</span>}
         {r.reversesReleaseId && <Link href={`/catalog/releases/${r.reversesReleaseId}`} className="text-accent">· reverses another release</Link>}
       </p>
+      <p className="mb-4 text-subhead text-label2">{WHERE[status]}</p>
       {(act.error || pv.error) && <div className="mb-4"><Alert>{act.error ?? pv.error}</Alert></div>}
-      {r.publishError && <div className="mb-4"><Alert>The scheduled publish did not happen: {r.publishError} Fix it, then schedule again or publish now.</Alert></div>}
+      {r.publishError && <div className="mb-4"><Alert>The scheduled publish did not happen: {r.publishError} Take approval back, fix it and approve it again, or publish now.</Alert></div>}
 
-      <div className="mb-6 flex flex-wrap items-end gap-3 rounded-card bg-surface p-4 shadow-card">
-        {draft && <>
-          {active === id ? <Button variant="secondary" onClick={() => setActiveRelease(null)}>Stop working in it</Button> : <Button variant="secondary" onClick={() => setActiveRelease(id)}>Work in this release</Button>}
-          <Button onClick={publish} disabled={act.busy || !p?.canPublish} title={p && !p.canPublish ? 'Resolve the problems below first' : undefined}>Publish now</Button>
-          <span className="flex flex-wrap items-end gap-2">
-            <Field label="Publish at"><Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></Field>
-            <Button variant="secondary" onClick={() => void schedule()} disabled={act.busy || !when || !p?.canPublish}>Schedule</Button>
-            {r.publishAt && <Button variant="secondary" onClick={() => void unschedule()} disabled={act.busy}>Clear schedule</Button>}
-          </span>
-          <Button variant="secondary" onClick={() => setReprice(true)}>New version of a sold offer…</Button>
-          <Button variant="destructive" onClick={cancel} disabled={act.busy}>Throw away…</Button>
-        </>}
-        {r.status === 'PUBLISHED' && <Button variant="secondary" onClick={() => void reverse()} disabled={act.busy}>Create a reverse release</Button>}
-        {!draft && r.status !== 'PUBLISHED' && <p className="text-subhead text-label2">This release is {label(r.status).toLowerCase()}.</p>}
+      <div className="mb-6 space-y-4 rounded-card bg-surface p-4 shadow-card">
+        <div className="flex flex-wrap items-end gap-3">
+          {editable && (active === id ? <Button variant="secondary" onClick={() => setActiveRelease(null)}>Stop working in it</Button> : <Button variant="secondary" onClick={() => setActiveRelease(id)}>Work in this release</Button>)}
+          {editable && <Button variant="secondary" onClick={() => setReprice(true)}>New version of a sold offer…</Button>}
+          {status === 'DRAFT' && can('release:submit') && <Button onClick={() => void send('submit', { note: text.trim() || undefined })} disabled={act.busy || !p?.ready} title={p && !p.ready ? 'Resolve the problems below first' : undefined}>Send for review</Button>}
+          {status === 'IN_REVIEW' && can('release:approve') && !blocker && <>
+            <Button onClick={() => void send('approve', { note: text.trim() || undefined })} disabled={act.busy || !p?.ready}>Approve</Button>
+            <Button variant="secondary" onClick={() => void send('reject', { reason: text.trim() })} disabled={act.busy || !text.trim()} title={!text.trim() ? 'Say what needs to change' : undefined}>Ask for changes</Button>
+          </>}
+          {(status === 'IN_REVIEW' || status === 'APPROVED' || status === 'REJECTED') && can('catalog:write', 'release:approve', 'release:publish') && <Button variant="secondary" onClick={() => void send('reopen', { note: text.trim() || undefined })} disabled={act.busy}>{status === 'IN_REVIEW' ? 'Take it back to a draft' : status === 'APPROVED' ? 'Take approval back' : 'Reopen to change it'}</Button>}
+          {status === 'APPROVED' && can('release:publish') && <>
+            <Button onClick={publish} disabled={act.busy || !p?.canPublish} title={p && !p.canPublish ? 'Resolve the problems below first' : undefined}>Publish now</Button>
+            <span className="flex flex-wrap items-end gap-2">
+              <Field label="Publish at"><Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></Field>
+              <Button variant="secondary" onClick={() => void schedule()} disabled={act.busy || !when || !p?.canPublish}>Schedule</Button>
+              {r.publishAt && <Button variant="secondary" onClick={() => void unschedule()} disabled={act.busy}>Clear schedule</Button>}
+            </span>
+          </>}
+          {['DRAFT', 'IN_REVIEW', 'APPROVED', 'REJECTED'].includes(status) && can('catalog:write') && <Button variant="destructive" onClick={cancel} disabled={act.busy}>Throw away…</Button>}
+          {status === 'PUBLISHED' && can('catalog:write') && <Button variant="secondary" onClick={() => void reverse()} disabled={act.busy}>Create a reverse release</Button>}
+        </div>
+        {status === 'IN_REVIEW' && can('release:approve') && blocker && <Alert tone="info">{blocker}</Alert>}
+        {status === 'IN_REVIEW' && !can('release:approve') && <p className="text-subhead text-label2">Waiting for someone who can approve releases.</p>}
+        {(['DRAFT', 'IN_REVIEW', 'APPROVED', 'REJECTED'].includes(status)) && (status === 'DRAFT' ? can('release:submit') : status === 'IN_REVIEW' ? can('release:approve') && !blocker : false) && note(status === 'DRAFT' ? 'For the reviewer: what this release is for, what to look at' : 'Why you approve it, or what needs to change (required to ask for changes)')}
+        {status === 'APPROVED' && !can('release:publish') && <p className="text-subhead text-label2">Waiting for someone who can publish releases.</p>}
       </div>
 
       {pv.loading && !p && <Spinner label="Working out what publishing would do" />}
@@ -167,11 +194,11 @@ export function ReleaseDetail() {
                 {p.conflicts.map((c) => (
                   <li key={c.nodeId} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     <p className="min-w-0 flex-1 text-subhead"><Link href={`/catalog?node=${encodeURIComponent(c.nodeId)}`} className="font-medium text-accent">{c.name ?? c.nodeId}</Link> {CONFLICT[c.kind]}{c.lastBy ? ` (by ${c.lastBy}${c.lastAt ? `, ${dt(c.lastAt)}` : ''})` : ''}.</p>
-                    {draft && c.kind === 'CHANGED_LIVE' && <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => post(`/catalog/releases/${id}/rebase`, { nodeId: c.nodeId }))}>Keep the live change and apply mine on top</Button>}
+                    {editable && c.kind === 'CHANGED_LIVE' && <Button variant="secondary" disabled={act.busy} onClick={() => act.run(() => post(`/catalog/releases/${id}/rebase`, { nodeId: c.nodeId }))}>Keep the live change and apply mine on top</Button>}
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 px-1 text-footnote text-label2">Publishing is blocked until each of these is accepted or its changes are removed.</p>
+              <p className="mt-2 px-1 text-footnote text-label2">{status === 'DRAFT' ? 'It cannot be sent for review until each of these is accepted or its changes are removed.' : 'Take the release back to a draft to resolve these, then send it for review again.'}</p>
             </section>
           )}
 
@@ -185,10 +212,10 @@ export function ReleaseDetail() {
                     <li key={c.id} className="flex flex-wrap items-start gap-3 px-4 py-3">
                       <span className="w-6 shrink-0 text-footnote text-label2">{c.seq}</span>
                       <div className="min-w-0 flex-1">
-                        <p className="text-subhead"><Badge tone="neutral">{OP[c.op] ?? c.op}</Badge> <span className="font-medium">{c.nodeId}</span>{c.note ? <span className="text-label2"> · {c.note}</span> : null}</p>
+                        <p className="text-subhead"><Badge tone="neutral">{OP[c.op] ?? c.op}</Badge> <span className="font-medium">{c.nodeId}</span>{c.note ? <span className="text-label2"> · {c.note}</span> : null} <span className="text-footnote text-label2">· {c.createdBy}</span></p>
                         {res && !res.ok && <p className="mt-1 text-footnote text-danger">Would be refused: {res.error}</p>}
                       </div>
-                      {draft && <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" disabled={act.busy} onClick={() => act.run(() => del(`/catalog/releases/${id}/changes/${c.id}`))}>Remove</Button>}
+                      {editable && <Button variant="secondary" className="!min-h-[36px] max-lg:!min-h-tap !px-3 !text-subhead" disabled={act.busy} onClick={() => act.run(() => del(`/catalog/releases/${id}/changes/${c.id}`))}>Remove</Button>}
                     </li>
                   );
                 })}
@@ -197,8 +224,8 @@ export function ReleaseDetail() {
           </section>
 
           {p.nodes.length > 0 && (
-            <section aria-label="What changes">
-              <h2 className="mb-2 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">What publishing would change</h2>
+            <section className="mb-6" aria-label="What changes">
+              <h2 className="mb-2 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">{status === 'PUBLISHED' ? 'What publishing changed' : 'What publishing would change'}</h2>
               <ul className="space-y-3">
                 {p.nodes.map((n) => (
                   <li key={n.id} className="rounded-card bg-surface p-4 shadow-card">
@@ -223,7 +250,35 @@ export function ReleaseDetail() {
           )}
         </>
       )}
+
+      <section aria-label="Review conversation" className="mb-6">
+        <h2 className="mb-2 px-1 text-footnote font-semibold uppercase tracking-wide text-label2">Review</h2>
+        {!rel.data.comments.length ? <Empty>Nothing yet. Comments and review decisions appear here.</Empty> : (
+          <ul className="divide-y divide-separator overflow-hidden rounded-card bg-surface shadow-card">
+            {rel.data.comments.map((c) => (
+              <li key={c.id} className="px-4 py-3">
+                <p className="text-subhead"><span className="font-medium">{c.author}</span> <span className="text-label2">{STEP[c.kind]} · {dt(c.createdAt)}</span></p>
+                {c.body && <p className="mt-1 whitespace-pre-wrap break-words text-subhead">{c.body}</p>}
+              </li>
+            ))}
+          </ul>
+        )}
+        <CommentBox releaseId={id} onDone={reload} />
+      </section>
       {reprice && <RepriceModal releaseId={id} onClose={() => setReprice(false)} onDone={() => { setReprice(false); void reload(); }} />}
     </>
+  );
+}
+
+function CommentBox({ releaseId, onDone }: { releaseId: string; onDone: () => Promise<void> }) {
+  const [body, setBody] = useState('');
+  const act = useAction(onDone);
+  const add = async (e: React.FormEvent) => { e.preventDefault(); if (await act.run(() => post(`/catalog/releases/${releaseId}/comments`, { body: body.trim() }))) setBody(''); };
+  return (
+    <form onSubmit={add} className="mt-3 space-y-2">
+      {act.error && <Alert>{act.error}</Alert>}
+      <Field label="Add a comment"><Textarea rows={2} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} /></Field>
+      <Button type="submit" variant="secondary" disabled={act.busy || !body.trim()}>{act.busy ? 'Adding…' : 'Comment'}</Button>
+    </form>
   );
 }

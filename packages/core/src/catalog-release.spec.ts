@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createNode, getNode, updateNode } from './catalog.js';
 import {
-  applyChange, cancelRelease, createRelease, createReverseRelease, getRelease, listChanges, listReleases, nodeInRelease, previewRelease, publishDueReleases, publishRelease, rebaseNode, releaseConflicts,
-  releaseNodeIds, removeChange, RELEASE_MAX_CHANGES, scheduleRelease, stageChange, stageReprice, updateRelease,
+  applyChange, approveRelease, cancelRelease, createRelease, createReverseRelease, getRelease, listChanges, listReleases, nodeInRelease, previewRelease, publishDueReleases, publishRelease, rebaseNode, releaseConflicts,
+  releaseNodeIds, removeChange, reopenRelease, RELEASE_MAX_CHANGES, scheduleRelease, stageChange, stageReprice, submitRelease, updateRelease,
 } from './catalog-release.js';
 import type { Db } from './db.js';
 import { resetEventGate } from './events.js';
@@ -15,6 +15,12 @@ beforeAll(async () => { db = await freshDb(); }, 60_000);
 afterAll(async () => { await db.close(); });
 
 const who = 'maker';
+/** Sent for review by the maker and approved by a second person. */
+const approve = async (id: string) => { await submitRelease(db, who, id); return approveRelease(db, 'checker', id); };
+/** The whole way: reviewed, approved, published. */
+const ship = async (id: string) => { await approve(id); return publishRelease(db, id, 'publisher'); };
+/** A release forced to approved, to test what publishing does with one that is no longer sound (the workflow itself refuses those). */
+const forceApproved = (id: string) => db.query(`UPDATE catalog_releases SET status = 'APPROVED' WHERE id = $1`, [id]);
 const price = (minor: number, extra: Record<string, unknown> = {}) => ({ type: 'RECURRING' as const, amount: { amountMinor: minor, currency: 'SGD' }, periodMonths: 1, taxInclusive: true, ...extra });
 const offerInput = (id: string, over: Record<string, unknown> = {}) => ({
   level: 'OFFER', id, code: id, name: `Rel ${id}`, path: '', parentId: 'grp-vas', status: 'DRAFT', markets: [], kind: 'VAS', prices: [price(1000)], contract: { termMonths: 0 },
@@ -103,7 +109,7 @@ describe('releases: preview and diff, rolled back', () => {
     const [n0, o0, a0, vEdit] = [await nodes(), await outbox(), await audits(), (await getNode(db, 'rel-pv-edit')).version];
     const pv = await previewRelease(db, r.id);
     expect(pv.results.every((x) => x.ok)).toBe(true);
-    expect(pv.canPublish).toBe(true);
+    expect([pv.ready, pv.canPublish]).toEqual([true, false]);                              // sound, but not approved yet
     const by = (id: string) => pv.nodes.find((n) => n.id === id)!;
     expect(by('grp-rel-pv').kind).toBe('ADDED');
     expect(by('rel-pv-new')).toMatchObject({ kind: 'ADDED', madeLive: true });
@@ -169,7 +175,7 @@ describe('releases: a new version instead of repricing a sold offer', () => {
     expect(pv.groups).toEqual([{ key: 'reprice:plan-phone-12', oldId: 'plan-phone-12', newId: 'plan-phone-12-v2' }]);
     expect(pv.summary).toMatchObject({ repriced: 1, added: 0, retired: 0, errors: 0 });       // one idea: repriced, not "added" and "retired"
     expect(pv.nodes.find((n) => n.id === 'rel-needs-phone')!.fields.map((f) => f.field)).toEqual(['requires']);
-    const published = await publishRelease(db, r.id, 'checker');
+    const published = await ship(r.id);
     expect(published.status).toBe('PUBLISHED');
     expect((await getNode(db, 'plan-phone-12')).status).toBe('RETIRED');
     expect((await getNode(db, 'plan-phone-12-v2') as any).status).toBe('ACTIVE');
@@ -192,11 +198,14 @@ describe('releases: conflicts', () => {
     expect(cf[0]!.liveVersion).toBeGreaterThan(cf[0]!.baseVersion!);
     const pv = await previewRelease(db, r.id);
     expect([pv.canPublish, pv.conflicts.length]).toEqual([false, 1]);
+    await expect(submitRelease(db, who, r.id)).rejects.toThrow(/cannot be sent for review yet: 1 node changed in the live catalog/);   // a reviewer is not asked to look at it
+    await forceApproved(r.id);
     await expect(publishRelease(db, r.id, 'checker')).rejects.toThrow(/changed in the live catalog since being staged \(rel-cf\)/);
     expect((await getNode(db, 'rel-cf') as any).description).toBeUndefined();                     // nothing was applied
+    await reopenRelease(db, 'checker', r.id, 'a live edit got in first');
     await rebaseNode(db, 'checker', r.id, 'rel-cf');
     expect(await releaseConflicts(db, r.id)).toEqual([]);
-    await publishRelease(db, r.id, 'checker');
+    await ship(r.id);
     const n = await getNode(db, 'rel-cf') as any;
     expect([n.name, n.description]).toEqual(['Edited live meanwhile', 'from the release']);       // the live edit and the release's edit both stand
   });
@@ -223,17 +232,19 @@ describe('releases: atomic and scheduled publishing', () => {
     await stage(r.id, 'UPDATE', 'rel-at-edit', { patch: { description: 'edited by the release' } });
     const bad = await stage(r.id, 'UPDATE', 'rel-at-edit', { patch: { prices: [{ ...price(1), amount: { amountMinor: 1, currency: 'USD' } }] } });
     const [n0, o0, a0, v0] = [await nodes(), await outbox(), await audits(), (await getNode(db, 'rel-at-edit')).version];
+    await forceApproved(r.id);                                                                              // (the workflow would not have approved it)
     await expect(publishRelease(db, r.id, 'checker')).rejects.toThrow(/Change 3 \(UPDATE rel-at-edit\) was refused, so nothing was published: .*prices are in SGD/);
     expect([await nodes(), await outbox(), await audits(), (await getNode(db, 'rel-at-edit')).version]).toEqual([n0, o0, a0, v0]);
     expect(await exists('rel-at-new')).toBe(false);
-    expect((await getRelease(db, r.id)).status).toBe('DRAFT');
+    expect((await getRelease(db, r.id)).status).toBe('APPROVED');
     expect(await releaseNodeIds(db, r.id)).toEqual(expect.arrayContaining(['rel-at-new', 'rel-at-edit']));    // still claimed
+    await reopenRelease(db, 'checker', r.id);
     await removeChange(db, who, r.id, bad.id);
     const sub = await saveHubWebhook(db, 'root', { kind: 'OUTBOUND', name: 'Release listener', targetUrl: 'https://listener.example.com/hook', authKind: 'HMAC', secret: 'a-signing-key-12345', events: [] });
     resetEventGate();
     const out0 = await outbox();
-    const done = await publishRelease(db, r.id, 'checker');
-    expect([done.status, done.publishedBy]).toEqual(['PUBLISHED', 'checker']);
+    const done = await ship(r.id);
+    expect([done.status, done.publishedBy]).toEqual(['PUBLISHED', 'publisher']);
     expect(done.result.summary).toMatchObject({ changes: 2, added: 1, changed: 1 });
     expect((await getNode(db, 'rel-at-new')).status).toBe('ACTIVE');
     expect(((await getNode(db, 'rel-at-edit')) as any).description).toBe('edited by the release');
@@ -243,13 +254,15 @@ describe('releases: atomic and scheduled publishing', () => {
     expect(await releaseNodeIds(db, r.id)).toEqual([]);                                                      // claims freed
     expect(done.result.before['rel-at-new']).toBeNull();
     expect(done.result.before['rel-at-edit'].id).toBe('rel-at-edit');
-    await expect(publishRelease(db, r.id, 'checker')).rejects.toThrow(/is published and cannot be published/);
+    await expect(publishRelease(db, r.id, 'publisher')).rejects.toThrow(/is published and cannot be published/);
     await expect(stage(r.id, 'DELETE', 'rel-at-new')).rejects.toThrow(/only be added to a draft/);
     void sub;
   });
 
   it('refuses to publish an empty release', async () => {
     const r = await newRelease('Empty');
+    await expect(submitRelease(db, who, r.id)).rejects.toThrow(/no changes/);
+    await forceApproved(r.id);
     await expect(publishRelease(db, r.id, 'checker')).rejects.toThrow(/no changes/);
     await cancelRelease(db, who, r.id);
   });
@@ -259,6 +272,8 @@ describe('releases: atomic and scheduled publishing', () => {
     const ok = await newRelease('Scheduled ok'); const failing = await newRelease('Scheduled failing');
     await stage(ok.id, 'UPDATE', 'rel-sc-a', { patch: { description: 'on schedule' } });
     await stage(failing.id, 'UPDATE', 'rel-sc-b', { patch: { description: 'x' } });
+    await expect(scheduleRelease(db, 'publisher', ok.id, new Date(Date.now() + 3_600_000).toISOString())).rejects.toThrow(/cannot be scheduled/);   // a draft has not been approved
+    await approve(ok.id); await approve(failing.id);
     await expect(scheduleRelease(db, who, ok.id, new Date(Date.now() - 60_000).toISOString())).rejects.toThrow(/future/);
     await expect(scheduleRelease(db, who, ok.id, 'tomorrow-ish')).rejects.toThrow(/date and time/);
     const soon = new Date(Date.now() + 3_600_000).toISOString();
@@ -273,17 +288,18 @@ describe('releases: atomic and scheduled publishing', () => {
     expect(((await getNode(db, 'rel-sc-a')) as any).description).toBe('on schedule');
     expect((await getRelease(db, ok.id))).toMatchObject({ status: 'PUBLISHED', publishedBy: 'scheduler' });
     const f = await getRelease(db, failing.id);
-    expect(f.status).toBe('DRAFT');
+    expect(f.status).toBe('APPROVED');
     expect(f.publishError).toMatch(/changed in the live catalog/);
     expect(await publishDueReleases(db)).toEqual({ published: 0, failed: 0 });                               // not retried every sweep
     expect(await count(`SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1 AND action = 'RELEASE_SCHEDULE_FAILED'`, [failing.id])).toBe(1);
     // accept the live edit and schedule again: the error is cleared and it publishes
+    await reopenRelease(db, 'checker', failing.id, 'edited live');
     await rebaseNode(db, 'checker', failing.id, 'rel-sc-b');
+    await approve(failing.id);
     await scheduleRelease(db, who, failing.id, soon);
     expect((await getRelease(db, failing.id)).publishError).toBeNull();
     await db.query(`UPDATE catalog_releases SET publish_at = now() - interval '1 minute' WHERE id = $1`, [failing.id]);
     expect(await publishDueReleases(db)).toEqual({ published: 1, failed: 0 });
-    expect(await scheduleRelease(db, who, (await newRelease('Cleared')).id, null).catch((e) => e.message)).toBeTruthy();
   });
 });
 
@@ -310,9 +326,9 @@ describe('releases: the staged state of a node, and reversing a release', () => 
     await stage(fwd.id, 'CREATE', 'rel-rv-new', { input: offerInput('rel-rv-new', { parentId: 'grp-rel-rv', status: 'ACTIVE' }) });
     await stage(fwd.id, 'CREATE', 'rel-rv-new-i1', { input: { level: 'LINE_ITEM', id: 'rel-rv-new-i1', code: 'rel-rv-new-i1', name: 'Item', path: '', parentId: 'rel-rv-new', status: 'ACTIVE', markets: [], itemType: 'DATA', quantity: 1, unit: 'GB' } });
     await expect(createReverseRelease(db, who, fwd.id)).rejects.toThrow(/not published/);
-    await publishRelease(db, fwd.id, 'checker');
+    await ship(fwd.id);
     expect(await exists('rel-rv-new')).toBe(true);
-    const rev = await createReverseRelease(db, 'checker', fwd.id);
+    const rev = await createReverseRelease(db, who, fwd.id);
     expect(rev.reversesReleaseId).toBe(fwd.id);
     expect(rev.name).toMatch(/^Reverse of REL-\d+: Forward$/);
     const ops = (await listChanges(db, rev.id)).map((c) => `${c.op}:${c.nodeId}`);
@@ -321,7 +337,7 @@ describe('releases: the staged state of a node, and reversing a release', () => 
     expect(ops.indexOf('DELETE:rel-rv-new')).toBeLessThan(ops.indexOf('DELETE:grp-rel-rv'));             // children before parents
     const pv = await previewRelease(db, rev.id);
     expect(pv.results.filter((x) => !x.ok)).toEqual([]);
-    await publishRelease(db, rev.id, 'checker');
+    await ship(rev.id);
     const e = await getNode(db, 'rel-rv-edit') as any;
     expect([e.name, e.description || undefined, e.prices[0].amount.amountMinor]).toEqual(['Original name', undefined, 1000]);
     const m = await getNode(db, 'rel-rv-move');
@@ -333,12 +349,12 @@ describe('releases: the staged state of a node, and reversing a release', () => 
   it('retires, rather than deletes, a created offer that has been sold since', async () => {
     const fwd = await newRelease('Forward sold');
     await stage(fwd.id, 'CREATE', 'rel-rs-new', { input: offerInput('rel-rs-new', { status: 'ACTIVE', kind: 'SIM_ONLY', fulfilment: { requiresShipping: false, requiresInstallation: false, requiresSimActivation: true, inventorySkus: [] } }) });
-    await publishRelease(db, fwd.id, 'checker');
+    await ship(fwd.id);
     const { customer } = await newCustomer(db);
     await placeOrder(db, { customerId: customer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CASH' }, lines: [{ offerId: 'rel-rs-new' }] });
-    const rev = await createReverseRelease(db, 'checker', fwd.id);
+    const rev = await createReverseRelease(db, who, fwd.id);
     expect((await listChanges(db, rev.id)).map((c) => `${c.op}:${c.nodeId}`)).toEqual(['STATUS:rel-rs-new']);
-    await publishRelease(db, rev.id, 'checker');
+    await ship(rev.id);
     expect((await getNode(db, 'rel-rs-new')).status).toBe('RETIRED');
   });
 

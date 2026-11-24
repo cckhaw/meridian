@@ -15,7 +15,7 @@ const KEYS: Record<string, string> = {
   'billing:read': 'billing:invoice:read', 'billing:pay': 'billing:payment:record', 'billing:credit': 'billing:credit_note:issue', 'billing:run': 'billing:run:execute', 'billing:simulate': 'billing:simulation:run',
   'billing:template': 'billing:template:design', 'billing:print': 'billing:print:produce', 'billing:approve': 'billing:run:approve',
   'finance:read': 'finance:ledger:read', 'finance:export': 'finance:journal:export', 'finance:configure': 'finance:posting_rule:configure', 'ledger:ingest': 'finance:event:ingest',
-  'catalog:read': 'catalog:offer:read', 'catalog:write': 'catalog:offer:write',
+  'catalog:read': 'catalog:offer:read', 'catalog:write': 'catalog:offer:write', 'release:submit': 'catalog:release:submit', 'release:approve': 'catalog:release:approve', 'release:publish': 'catalog:release:publish',
   'inventory:read': 'inventory:stock:read', 'inventory:write': 'inventory:stock:receive', 'inventory:transfer': 'inventory:transfer:manage', 'inventory:writeoff': 'inventory:stock:writeoff', 'warehouse:manage': 'inventory:warehouse:manage',
   'numbering:read': 'numbering:pool:read', 'numbering:select': 'numbering:number:select', 'numbering:manage': 'numbering:pool:manage',
   'case:read': 'case:case:read', 'case:create': 'case:case:create', 'case:write': 'case:case:update', 'case:supervise': 'case:sla:supervise', 'collections:manage': 'collections:debt:manage',

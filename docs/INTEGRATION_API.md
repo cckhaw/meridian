@@ -92,6 +92,7 @@ Every operation above (and orders, payments and invoices however they are made) 
 | `INVOICE_ISSUED` | `CustomerBillCreateEvent` |
 | `OFFERING_CREATED`, `OFFERING_STATE_CHANGED`, `OFFERING_CHANGED`, `OFFERING_DELETED` | `ProductOfferingCreateEvent`, `…StateChangeEvent`, `…AttributeValueChangeEvent`, `…DeleteEvent` (see [TMF620.md](TMF620.md#events)) |
 | `CATEGORY_CREATED`, `CATEGORY_STATE_CHANGED`, `CATEGORY_CHANGED`, `CATEGORY_DELETED` | `CategoryCreateEvent`, `…StateChangeEvent`, `…AttributeValueChangeEvent`, `…DeleteEvent` |
+| `RELEASE_SUBMITTED`, `RELEASE_APPROVED`, `RELEASE_REJECTED`, `RELEASE_PUBLISHED` | `CatalogReleaseSubmittedEvent`, `…ApprovedEvent`, `…RejectedEvent`, `…PublishedEvent` (a catalog release moving through review; see [RELEASES.md](RELEASES.md#approval)) |
 
 Webhooks are POSTed as JSON with `X-Meridian-Event-Id`, `X-Meridian-Event-Type` and, depending on the webhook, `Authorization: Bearer …` or `X-Meridian-Signature: t=…,v1=…` (HMAC-SHA256 of `"<t>.<body>"`). Any `2xx` is success. Anything else, or a timeout (10 s), is retried after the webhook's wait, doubling each time (at most a day), until its retries are used up; the delivery is then marked failed and can be sent again from **Events → Recent deliveries**. Redirects are not followed. A listener registered through TMF 688 gets only the event types in its `query`.
 

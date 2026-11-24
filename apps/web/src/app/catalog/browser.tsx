@@ -102,6 +102,7 @@ export function CatalogBrowser() {
             <Link href="/catalog/releases" className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Releases</Link>
             <Link href="/catalog/health" className="inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Catalogue health</Link>
           </div>}
+          {!editable && can('release:submit', 'release:approve', 'release:publish') && <Link href="/catalog/releases" className="mt-3 inline-flex min-h-tap items-center rounded-control px-3 text-subhead font-medium text-accent hover:bg-surface2">Releases to review</Link>}
         </aside>
 
         <section aria-live="polite" className={`${showInspectorOnPhone ? '' : 'hidden lg:block'} min-w-0`}>

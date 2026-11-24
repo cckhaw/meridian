@@ -8,8 +8,8 @@ import { queueOutbox } from './lifecycle-state.js';
  * The dispatcher then fans it out into one delivery per outbound webhook, per TM Forum 688 listener and per mapped topic, and delivers each with its own
  * retries. A listener sees only the events it asked for, in TM Forum event shape.
  */
-export type DomainEventType = 'ORDER_CREATED' | 'ORDER_CANCELLED' | 'ORDER_COMPLETED' | 'SIM_SWAPPED' | 'MSISDN_CHANGED' | 'OWNERSHIP_TRANSFERRED' | 'SERVICE_SUSPENDED' | 'SERVICE_RESUMED' | 'SERVICE_BARRED' | 'SERVICE_TERMINATED' | 'PLAN_CHANGED' | 'VAS_CHANGED' | 'PAYMENT_RECEIVED' | 'INVOICE_ISSUED' | 'CONTRACT_GENERATED' | 'KYC_SUBMITTED' | 'KYC_DECIDED' | 'OFFERING_CREATED' | 'OFFERING_STATE_CHANGED' | 'OFFERING_CHANGED' | 'OFFERING_DELETED' | 'CATEGORY_CREATED' | 'CATEGORY_STATE_CHANGED' | 'CATEGORY_CHANGED' | 'CATEGORY_DELETED';
-export const EVENT_TYPES: DomainEventType[] = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED', 'KYC_SUBMITTED', 'KYC_DECIDED', 'OFFERING_CREATED', 'OFFERING_STATE_CHANGED', 'OFFERING_CHANGED', 'OFFERING_DELETED', 'CATEGORY_CREATED', 'CATEGORY_STATE_CHANGED', 'CATEGORY_CHANGED', 'CATEGORY_DELETED'];
+export type DomainEventType = 'ORDER_CREATED' | 'ORDER_CANCELLED' | 'ORDER_COMPLETED' | 'SIM_SWAPPED' | 'MSISDN_CHANGED' | 'OWNERSHIP_TRANSFERRED' | 'SERVICE_SUSPENDED' | 'SERVICE_RESUMED' | 'SERVICE_BARRED' | 'SERVICE_TERMINATED' | 'PLAN_CHANGED' | 'VAS_CHANGED' | 'PAYMENT_RECEIVED' | 'INVOICE_ISSUED' | 'CONTRACT_GENERATED' | 'KYC_SUBMITTED' | 'KYC_DECIDED' | 'OFFERING_CREATED' | 'OFFERING_STATE_CHANGED' | 'OFFERING_CHANGED' | 'OFFERING_DELETED' | 'CATEGORY_CREATED' | 'CATEGORY_STATE_CHANGED' | 'CATEGORY_CHANGED' | 'CATEGORY_DELETED' | 'RELEASE_SUBMITTED' | 'RELEASE_APPROVED' | 'RELEASE_REJECTED' | 'RELEASE_PUBLISHED';
+export const EVENT_TYPES: DomainEventType[] = ['ORDER_CREATED', 'ORDER_CANCELLED', 'ORDER_COMPLETED', 'SIM_SWAPPED', 'MSISDN_CHANGED', 'OWNERSHIP_TRANSFERRED', 'SERVICE_SUSPENDED', 'SERVICE_RESUMED', 'SERVICE_BARRED', 'SERVICE_TERMINATED', 'PLAN_CHANGED', 'VAS_CHANGED', 'PAYMENT_RECEIVED', 'INVOICE_ISSUED', 'CONTRACT_GENERATED', 'KYC_SUBMITTED', 'KYC_DECIDED', 'OFFERING_CREATED', 'OFFERING_STATE_CHANGED', 'OFFERING_CHANGED', 'OFFERING_DELETED', 'CATEGORY_CREATED', 'CATEGORY_STATE_CHANGED', 'CATEGORY_CHANGED', 'CATEGORY_DELETED', 'RELEASE_SUBMITTED', 'RELEASE_APPROVED', 'RELEASE_REJECTED', 'RELEASE_PUBLISHED'];
 
 /** The TM Forum event each business event is announced as, and the resource it carries. */
 export const TMF_EVENT: Record<DomainEventType, { type: string; resource: string; domain: string }> = {
@@ -39,6 +39,11 @@ export const TMF_EVENT: Record<DomainEventType, { type: string; resource: string
   CATEGORY_STATE_CHANGED: { type: 'CategoryStateChangeEvent', resource: 'category', domain: 'productCatalogManagement' },
   CATEGORY_CHANGED: { type: 'CategoryAttributeValueChangeEvent', resource: 'category', domain: 'productCatalogManagement' },
   CATEGORY_DELETED: { type: 'CategoryDeleteEvent', resource: 'category', domain: 'productCatalogManagement' },
+  // a catalog release moving through review (see catalog-release.ts); TMF620 has no release resource, so these are Meridian's own, in the same domain
+  RELEASE_SUBMITTED: { type: 'CatalogReleaseSubmittedEvent', resource: 'catalogRelease', domain: 'productCatalogManagement' },
+  RELEASE_APPROVED: { type: 'CatalogReleaseApprovedEvent', resource: 'catalogRelease', domain: 'productCatalogManagement' },
+  RELEASE_REJECTED: { type: 'CatalogReleaseRejectedEvent', resource: 'catalogRelease', domain: 'productCatalogManagement' },
+  RELEASE_PUBLISHED: { type: 'CatalogReleasePublishedEvent', resource: 'catalogRelease', domain: 'productCatalogManagement' },
 };
 
 // ───────────────────────── raising an event ─────────────────────────
