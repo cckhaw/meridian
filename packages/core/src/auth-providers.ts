@@ -9,6 +9,7 @@ import { getRoleOverrides } from './roles-config.js';
 import { missingBinding, roleDef, roleIdOfCode, type RoleId } from './rbac.js';
 import { effectiveMarket } from './settings.js';
 import { openFederatedSession, revokeUserSessions, type LoginResult } from './auth.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * Sign-in integrations: single sign-on with OpenID Connect, the company directory (LDAP / Active Directory) and the SMS/WhatsApp gateway for one-time codes.
@@ -16,8 +17,8 @@ import { openFederatedSession, revokeUserSessions, type LoginResult } from './au
  * so tests (and a different directory library) can stand in for it.
  */
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-let httpImpl: Fetch = (url, init) => fetch(url, init);
-export const setAuthHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => fetch(url, init)); };
+let httpImpl: Fetch = (url, init) => connectorFetch(url, init as never);
+export const setAuthHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => connectorFetch(url, init as never)); };
 const http = (url: string, init: RequestInit = {}, timeoutMs = 10_000) => httpImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 /** The same call, for the other OpenID Connect integrations (MyDigital ID) so one test seam serves them all. */
 export const authHttp = http;

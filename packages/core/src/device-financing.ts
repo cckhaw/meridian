@@ -4,6 +4,7 @@ import { hashIdDocument } from './customers.js';
 import type { Queryable, Row } from './db.js';
 import { invalid, notFound, rejected } from './errors.js';
 import { hubEndpointWithSecret } from './integration-hub.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * Device financing. A device sold on a contract is paid for by the price after the subsidy, spread evenly over the whole contract and billed with the monthly plan
@@ -85,7 +86,7 @@ export async function askBureau(q: Queryable, c: { idNumber: string; fullName?: 
   let last: unknown;
   for (const url of [ep.url, ep.fallbackUrl].filter(Boolean) as string[]) {
     try {
-      const res = await fetch(url, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(ep.timeoutMs) });
+      const res = await connectorFetch(url, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(ep.timeoutMs) });
       if (!res.ok) throw new Error(`The credit bureau answered HTTP ${res.status}.`);
       const j = await res.json();
       const rawScore = dig(j, cfg.scorePath || 'score'); const rawUp = cfg.upfrontPath ? dig(j, cfg.upfrontPath) : undefined;

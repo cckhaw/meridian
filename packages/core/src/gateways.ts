@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { paymentMode } from './config.js';
 import { DomainError, invalid } from './errors.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * Payment gateways. The store only ever talks to this interface, so adding a second provider means writing one object that implements it
@@ -29,9 +30,9 @@ export interface PaymentGateway {
 
 // ───────────────────────── Stripe (REST + signed webhooks, no SDK) ─────────────────────────
 type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
-let httpFetch: FetchLike = (url, init) => fetch(url, init) as unknown as ReturnType<FetchLike>;
+let httpFetch: FetchLike = (url, init) => connectorFetch(url, init as never) as unknown as ReturnType<FetchLike>;
 /** Test seam: lets tests stand in for api.stripe.com. */
-export const setGatewayFetch = (f: FetchLike | null) => { httpFetch = f ?? ((url, init) => fetch(url, init) as unknown as ReturnType<FetchLike>); };
+export const setGatewayFetch = (f: FetchLike | null) => { httpFetch = f ?? ((url, init) => connectorFetch(url, init as never) as unknown as ReturnType<FetchLike>); };
 
 const STRIPE_TOLERANCE_S = 300;
 export const stripeGateway: PaymentGateway = {
