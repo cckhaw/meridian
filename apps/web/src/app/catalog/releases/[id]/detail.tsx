@@ -7,6 +7,7 @@ import { del, post, useAction, useApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { dt, label, money, toInput, toMinor } from '@/lib/format';
 import { NodePicker, type Picked } from '../../node-picker';
+import { ImpactPanel, WhatIfPanel } from './impact';
 import { setActiveRelease, useActiveReleaseId } from '../../release';
 import { STATUS_TONE, type Release } from '../list';
 
@@ -222,6 +223,8 @@ export function ReleaseDetail() {
               </ul>
             )}
           </section>
+
+          {p.nodes.length > 0 && !['PUBLISHED', 'CANCELLED'].includes(status) && <><ImpactPanel releaseId={id} /><WhatIfPanel releaseId={id} /></>}
 
           {p.nodes.length > 0 && (
             <section className="mb-6" aria-label="What changes">

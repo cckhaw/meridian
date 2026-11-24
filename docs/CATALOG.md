@@ -74,7 +74,7 @@ API: `GET /api/catalog/health[?minAgeDays=30&nearPriceBps=100]` (the checks with
 
 ## Releases: change management
 
-By default an edit is live the moment it is saved. **Catalog → Releases** batches changes so they can be reviewed, tested against the rules, and published together, now or at a chosen time, with conflict detection, an atomic publish and a reverse release. Nothing changes for people who do not use it: [RELEASES.md](RELEASES.md).
+By default an edit is live the moment it is saved. **Catalog → Releases** batches changes so they can be reviewed, tested against the rules, and published together, now or at a chosen time, with conflict detection, an atomic publish and a reverse release, and a review that shows who is affected and what it does to the price of sample baskets. Nothing changes for people who do not use it: [RELEASES.md](RELEASES.md).
 
 ## What an offer type is
 

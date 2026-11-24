@@ -168,3 +168,4 @@ export * from './outbox-retry.js';
 export * from './user-notifications.js';
 export * from './signed-copies.js';
 export * from './catalog-release.js';
+export * from './catalog-impact.js';
