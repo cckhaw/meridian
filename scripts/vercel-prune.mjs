@@ -11,6 +11,9 @@
 const API = process.env.VERCEL_API_URL || 'https://api.vercel.com';
 const IN_FLIGHT = new Set(['QUEUED', 'INITIALIZING', 'BUILDING']);
 
+/** The deployment to keep, as the API wants it: an id, or a host name without the scheme (`vercel deploy` prints a full URL). */
+export const deploymentRef = (ref) => String(ref).trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+
 /** Which deployments to delete. Pure, so it is tested without the network. */
 export function pickDeletions(all, keep) {
   return all.filter((d) => d.uid !== keep.id && Number(d.created ?? d.createdAt) < Number(keep.createdAt) && !IN_FLIGHT.has(d.state ?? d.readyState));
@@ -58,7 +61,7 @@ async function main() {
   const dry = flags.includes('--dry-run');
   for (const k of ['VERCEL_TOKEN', 'VERCEL_PROJECT_ID']) if (!process.env[k]) throw new Error(`${k} is not set.`);
   if (!ref) throw new Error('Say which deployment to keep (its id or URL).');
-  const keep = await waitUntilLive(ref);
+  const keep = await waitUntilLive(deploymentRef(ref));
   console.log(`Live: ${keep.id} (${keep.url}), created ${new Date(keep.createdAt ?? keep.created).toISOString()}`);
   const doomed = pickDeletions(await listAll(process.env.VERCEL_PROJECT_ID), { id: keep.id, createdAt: keep.createdAt ?? keep.created });
   console.log(`${doomed.length} older deployment${doomed.length === 1 ? '' : 's'} to delete${dry ? ' (dry run: nothing is deleted)' : ''}.`);
