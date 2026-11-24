@@ -124,6 +124,7 @@ export { WFM_VENDORS, wfmVendor, type WfmVendor, type WfmSlot, type WfmConnector
 export * from './tmf.js';
 export * from './tmf620.js';
 export * from './catalog-health.js';
+export * from './rollback.js';
 export * from './dunning-limits.js';
 export * from './dunning-rules.js';
 export * from './dunning-engine.js';
@@ -166,3 +167,4 @@ export * from './agreements.js';
 export * from './outbox-retry.js';
 export * from './user-notifications.js';
 export * from './signed-copies.js';
+export * from './catalog-release.js';
