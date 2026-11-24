@@ -60,8 +60,8 @@ async function discover(ep: HubEndpoint): Promise<Discovery> {
 
 /** The buttons for the sign-in page: the enabled single sign-on providers, with nothing else about them. */
 export async function listSignInProviders(q: Queryable): Promise<Array<{ id: string; label: string; vendor: string }>> {
-  const rows = (await q.query(`SELECT id, name, config FROM integration_endpoints WHERE group_key='auth' AND kind='IDP_OIDC' AND enabled ORDER BY name`)).rows;
-  return rows.map((r) => ({ id: r.id, label: (r.config?.buttonLabel as string) || `Sign in with ${r.name}`, vendor: (r.config?.vendor as string) ?? 'OTHER' }));
+  const rows = (await q.query(`SELECT id, name, kind, config FROM integration_endpoints WHERE group_key='auth' AND kind IN ('IDP_OIDC','IDP_SAML') AND enabled ORDER BY name`)).rows;
+  return rows.map((r) => ({ id: r.id, label: (r.config?.buttonLabel as string) || `Sign in with ${r.name}`, vendor: r.kind === 'IDP_SAML' ? 'SAML' : (r.config?.vendor as string) ?? 'OTHER' }));
 }
 async function oidcEndpoint(q: Queryable, id: string) {
   const r = (await q.query(`SELECT * FROM integration_endpoints WHERE id=$1 AND group_key='auth' AND kind='IDP_OIDC' AND enabled`, [id])).rows[0];
@@ -133,17 +133,25 @@ export async function oidcFinish(db: Db, i: { state: string; code: string; ip?: 
   return openFederatedSession(db, userId, `oidc:${ep.name}`, { ip: i.ip, userAgent: i.userAgent });
 }
 
+/** Who someone who signed in through an identity provider is, as that provider said it (OpenID Connect claims or a SAML assertion), after the provider has been trusted. */
+export interface FederatedIdentity { source: 'OIDC' | 'SAML'; subject: string; username: string; display: string; email: string | null; groups: string[] }
+
 async function userForClaims(db: Db, ep: HubEndpoint, claims: Claims, ip?: string): Promise<string> {
   const c = ep.config;
   const sub = String(claims.sub);
-  const roles = await rolesForGroups(db, claimList(claims, c.groupsClaim ?? 'groups'), c.roleMappings as Record<string, string> | undefined, c.defaultRole as string | undefined);
-  const email = claimText(claims, 'email');
   const uname = claimText(claims, c.usernameClaim ?? 'email') ?? claimText(claims, 'preferred_username') ?? sub;
-  const display = claimText(claims, c.nameClaim ?? 'name') ?? uname;
+  return userForIdentity(db, ep, { source: 'OIDC', subject: sub, username: uname, display: claimText(claims, c.nameClaim ?? 'name') ?? uname, email: claimText(claims, 'email'), groups: claimList(claims, c.groupsClaim ?? 'groups') }, ip);
+}
+
+/** Finds, links or creates the Meridian user for a person an identity provider has vouched for, and brings their roles in line with their groups. Shared by OpenID Connect and SAML. */
+export async function userForIdentity(db: Db, ep: HubEndpoint, who: FederatedIdentity, ip?: string): Promise<string> {
+  const c = ep.config;
+  const { source, subject: sub, username: uname, display, email } = who;
+  const roles = await rolesForGroups(db, who.groups, c.roleMappings as Record<string, string> | undefined, c.defaultRole as string | undefined);
   return db.tx(async (q) => {
     const book = await getRoleOverrides(q);
     const bind = { storeId: (c.storeId as string) ?? null, dealerId: (c.dealerId as string) ?? null };
-    const existing = (await q.query(`SELECT * FROM users WHERE auth_source='OIDC' AND external_id=$1 FOR UPDATE`, [sub])).rows[0];
+    const existing = (await q.query(`SELECT * FROM users WHERE auth_source=$2 AND external_id=$1 FOR UPDATE`, [sub, source])).rows[0];
     if (existing) {
       if (existing.status !== 'ACTIVE') { await audit(q, existing.username, 'auth', existing.id, 'SSO_REFUSED_DISABLED', { ip }); throw rejected('This account is switched off.'); }
       const sets = ['display_name=$2', 'email=COALESCE($3,email)']; const vals: unknown[] = [existing.id, display, email];
@@ -160,7 +168,7 @@ async function userForClaims(db: Db, ep: HubEndpoint, claims: Claims, ip?: strin
     const clash = (await q.query('SELECT auth_source FROM users WHERE lower(username)=$1', [username])).rows[0];
     if (clash) {
       if (clash.authSource === 'LOCAL' && c.linkExisting === true) {
-        const r = (await q.query(`UPDATE users SET auth_source='OIDC', external_id=$2, display_name=$3, email=COALESCE($4,email), roles=$5, updated_at=now() WHERE lower(username)=$1 AND NOT is_superuser AND status='ACTIVE' RETURNING id`, [username, sub, display, email, roles])).rows[0];
+        const r = (await q.query(`UPDATE users SET auth_source=$6, external_id=$2, display_name=$3, email=COALESCE($4,email), roles=$5, updated_at=now() WHERE lower(username)=$1 AND NOT is_superuser AND status='ACTIVE' RETURNING id`, [username, sub, display, email, roles, source])).rows[0];
         if (!r) throw rejected('That account cannot be linked.');
         await audit(q, username, 'auth', r.id, 'SSO_LINKED', { provider: ep.name });
         return r.id as string;
@@ -170,8 +178,8 @@ async function userForClaims(db: Db, ep: HubEndpoint, claims: Claims, ip?: strin
     }
     const r = (await q.query(
       `INSERT INTO users (username, display_name, email, password_hash, roles, must_change_password, store_id, dealer_id, market_code, created_by, auth_source, external_id)
-       VALUES ($1,$2,$3,$4,$5,false,$6,$7,$8,'sso','OIDC',$9) RETURNING id`,
-      [username, display, email, await hashPassword(randomBytes(32).toString('base64url')), roles, bind.storeId, bind.dealerId, await effectiveMarket(q, undefined), sub])).rows[0]!;
+       VALUES ($1,$2,$3,$4,$5,false,$6,$7,$8,'sso',$10,$9) RETURNING id`,
+      [username, display, email, await hashPassword(randomBytes(32).toString('base64url')), roles, bind.storeId, bind.dealerId, await effectiveMarket(q, undefined), sub, source])).rows[0]!;
     await audit(q, 'sso', 'user', r.id, 'USER_CREATED', { username, roles, provider: ep.name, viaSso: true });
     return r.id as string;
   });

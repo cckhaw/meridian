@@ -112,7 +112,25 @@ open('POST', '/auth/2fa/send-code', async ({ db, body }) => {
 open('POST', '/internal/fiber/deliver-otp', ({ db, raw, req }) => core.handleOtpRelay(db, raw, req.headers.get('x-meridian-signature')), { noCsrf: true });
 // Single sign-on: the buttons on the sign-in page, the redirect to the provider, and the return with a code.
 open('GET', '/auth/sso/providers', async ({ db }) => ({ items: await core.listSignInProviders(db) }));
-open('POST', '/auth/sso/start', async ({ db, body }) => core.oidcBegin(db, z.object({ providerId: uuid }).parse(body).providerId));
+open('POST', '/auth/sso/start', async ({ db, body }) => {
+  const b = z.object({ providerId: uuid, next: z.string().max(300).optional() }).parse(body);
+  const kind = (await db.query(`SELECT kind FROM integration_endpoints WHERE id=$1 AND group_key='auth' AND enabled`, [b.providerId])).rows[0]?.kind;
+  return kind === 'IDP_SAML' ? core.samlBegin(db, b.providerId, b.next) : core.oidcBegin(db, b.providerId);
+});
+// SAML: the provider posts its signed answer here from the person's browser (a cross-site form post, so no Origin check; the signature, the request id and the one-time relay state are the protection).
+open('POST', '/auth/saml/acs/:id', async ({ db, params, body, req }) => {
+  const b = z.object({ SAMLResponse: z.string().min(20).max(400_000), RelayState: z.string().max(200).optional() }).safeParse(body);
+  const back = (msg: string) => new Response(null, { status: 303, headers: { location: `/login?sso_error=${encodeURIComponent(msg)}`, 'cache-control': 'no-store' } });
+  if (!b.success || !uuid.safeParse(params.id).success) return back('The sign-in response was not valid. Please try again.');
+  try {
+    const r = await core.samlFinish(db, { endpointId: params.id!, samlResponse: b.data.SAMLResponse, relayState: b.data.RelayState, ip: clientIp(req), userAgent: req.headers.get('user-agent') ?? undefined });
+    return new Response(null, { status: 303, headers: { location: r.next, 'set-cookie': sessionCookie(req, r.token, r.expiresAt), 'cache-control': 'no-store' } });
+  } catch (e) { return back(e instanceof DomainError ? e.message : 'The sign-in could not be completed. Please try again.'); }
+}, { noCsrf: true, maxBody: 512_000 });
+open('GET', '/auth/saml/metadata/:id', async ({ db, params }) => {
+  if (!uuid.safeParse(params.id).success) throw new DomainError('NOT_FOUND', 'not found');
+  return new Response(await core.samlMetadata(db, params.id!), { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'no-store' } });
+});
 open('POST', '/auth/sso/callback', async ({ db, body, req }) => {
   const b = z.object({ state: z.string().min(10).max(200), code: z.string().min(1).max(4000) }).parse(body);
   try {

@@ -3,7 +3,7 @@ import { emailGatewayProblem } from './email-gateway-config.js';
 /**
  * The settings of the sign-in integrations (the hub's `auth` group), checked when an administrator saves them.
  *  - IDP_OIDC  single sign-on with OpenID Connect (Microsoft Entra ID, Okta, Ping, Keycloak and any other compliant provider). `url` is the issuer.
- *  - IDP_SAML  SAML 2.0 provider settings. They are kept and checked, but Meridian does not yet accept SAML assertions (see docs/SECURITY.md).
+ *  - IDP_SAML  single sign-on with SAML 2.0 (service-provider initiated, signed assertions only; see saml.ts). `url` is the provider's single sign-on address.
  *  - LDAP      Active Directory / LDAP: staff accounts are synced on a schedule and sign in with their directory password. `url` is ldaps://host:636.
  *  - OTP_GATEWAY  the SMS or WhatsApp gateway that carries one-time codes (second factor, password recovery), staff alerts and signed agreement copies.
  *  - EMAIL_GATEWAY  the e-mail sender (HTTPS API, SMTP or the simulator) that carries e-mail codes, staff alerts and signed agreement copies; see email-gateway.ts.
@@ -28,11 +28,16 @@ export function authEndpointProblem(kind: string, i: { url?: string | null; conf
       if (c.vendor !== undefined && !(OIDC_VENDORS as readonly string[]).includes(String(c.vendor))) return `The provider is one of ${OIDC_VENDORS.join(', ')}.`;
       return null;
     }
-    case 'IDP_SAML':
-      if (!i.url) return 'Enter the provider’s single sign-on address.';
-      if (!str(c.entityId, 500)) return 'Enter the provider’s entity id.';
-      if (!str(c.certificate, 8000) || !/-----BEGIN CERTIFICATE-----/.test(String(c.certificate))) return 'Paste the provider’s signing certificate (PEM, starting with -----BEGIN CERTIFICATE-----).';
+    case 'IDP_SAML': {
+      if (!i.url || !/^https:\/\//.test(i.url)) return 'Enter the provider’s single sign-on address (https://…).';
+      if (!str(c.entityId, 500)) return 'Enter the provider’s entity id (its issuer).';
+      if (!str(c.certificate, 20000) || !/-----BEGIN CERTIFICATE-----/.test(String(c.certificate))) return 'Paste the provider’s signing certificate (PEM, starting with -----BEGIN CERTIFICATE-----; paste the old and the new one while it rotates).';
+      const site = str(c.siteUrl, 300);
+      if (!site || !/^https:\/\/[^/]+\/?$/.test(site)) return 'Enter this site’s address (https://your-site), from which the assertion consumer address and the metadata address are made.';
+      if (c.spEntityId !== undefined && !str(c.spEntityId, 500)) return 'This site’s entity id, if you set one, cannot be empty.';
+      if (c.requiredAuthnContext !== undefined && !(Array.isArray(c.requiredAuthnContext) && c.requiredAuthnContext.every((x) => typeof x === 'string' && x.length > 0 && x.length < 300))) return 'The accepted authentication contexts are a list of the context class addresses the provider reports.';
       return null;
+    }
     case 'LDAP': {
       if (!i.url || !/^ldaps?:\/\//.test(i.url)) return 'The directory address starts with ldaps:// (or ldap:// inside a private network).';
       if (!str(c.bindDn, 500)) return 'Enter the service account that reads the directory (its distinguished name).';

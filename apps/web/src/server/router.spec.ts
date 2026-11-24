@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, setAuthHttp, setFiberFetch, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
+import { base32Decode, createCustomer, createUser, hotp, markVerified, getDb, placeOrder, saveHubEndpoint, setAuthHttp, setFiberFetch, requestPortOut, totpCounter, wfmSignature, type Db, type NewUser } from '@meridian/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from './router';
 
@@ -2458,6 +2458,24 @@ describe('offer type switches and service types', () => {
     // a release in review or approved can be thrown away, and its nodes are free again
     expect((await call('POST', R(mixed.id, '/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
     expect((await call('POST', R(own.id, '/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
+  });
+
+  it('SAML: the sign-in button starts it, the provider\'s metadata is public, and a bad answer goes back to the sign-in page with a reason, never a session', async () => {
+    const ep = await saveHubEndpoint(db, 'admin', { group: 'auth', kind: 'IDP_SAML', name: 'HTTP SAML', url: 'https://idp.example.com/sso', config: { entityId: 'https://idp.example.com/m', siteUrl: 'https://crm.example.com', buttonLabel: 'Sign in with Contoso',
+      certificate: '-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0d2bm9uZXRlc3Rjb250ZW50MDAwMAowCgYIKoZIzj0EAwIwEDEOMAwGA1UEAwwFdGVzdDAeFw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMBAxDjAMBgNVBAMMBXRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAT=\n-----END CERTIFICATE-----' } } as never);
+    const list = await call('GET', '/auth/sso/providers');
+    expect(list.json.items).toContainEqual({ id: ep.id, label: 'Sign in with Contoso', vendor: 'SAML' });
+    expect((await call('GET', `/auth/saml/metadata/${ep.id}`)).status).toBeLessThan(500);
+    expect((await call('GET', '/auth/saml/metadata/not-an-id')).status).toBe(404);
+    // an answer posted from the provider's page is a cross-site form post: no Origin, no cookie, and nothing is accepted without a valid signed assertion
+    const form = (o: Record<string, string | undefined>) => ({ origin: 'https://idp.example.com', raw: new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined) as Array<[string, string]>).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    for (const body of [{ SAMLResponse: 'x'.repeat(40) }, { SAMLResponse: Buffer.from('<not-saml/>').toString('base64').padEnd(40, 'A'), RelayState: 'nope' }, {}]) {
+      const r = await call('POST', `/auth/saml/acs/${ep.id}`, form(body));
+      expect([r.status, r.headers.get('location')?.startsWith('/login?sso_error=')]).toEqual([303, true]);
+      expect(r.headers.get('set-cookie')).toBeNull();
+    }
+    const bad = await call('POST', '/auth/saml/acs/not-an-id', form({ SAMLResponse: 'x'.repeat(40) }));
+    expect([bad.status, bad.headers.get('set-cookie')]).toEqual([303, null]);
   });
 
   it('scheduled jobs: off without a secret, one secret and no user otherwise, a fixed list of jobs, audited', async () => {
