@@ -389,7 +389,7 @@ const dealSchema = z.object({ termMonths: z.number().int(), subsidyMinor: z.numb
 const offerFields = {
   kind: z.string().min(1).max(40), // an offer type id (Settings → Catalog → Offer types)
   description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10), contract: contractSchema.optional(), fulfilment: fulfilmentSchema,
-  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), ocs: z.object({ planCode: z.string().max(60), params: z.record(z.union([z.string().max(100), z.number(), z.boolean()])).optional() }).optional(), characteristics: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), ocs: z.object({ planCode: z.string().max(60), params: z.record(z.string(), z.union([z.string().max(100), z.number(), z.boolean()])).optional() }).optional(), characteristics: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
   requires: z.array(z.string().max(80)).max(20).default([]), excludes: z.array(z.string().max(80)).max(20).default([]), salesChannels: z.array(CHANNEL_ENUM).default([]), variants: z.array(variantSchema).max(40).default([]), deals: z.array(dealSchema).max(3).default([]), suspension: z.object({ mode: z.enum(['PAUSE', 'MAINTENANCE_FEE']), monthlyFeeMinor: z.number().int().min(0).max(100_000_000).optional() }).optional(),
   group: z.object({ isGroupOffer: z.boolean(), maxGroupMembers: z.number().int().min(1).max(20), allowedMemberOfferIds: z.array(z.string().max(70)).max(50).default([]), sharedPoolQuotaGb: z.number().min(0).max(100_000).optional() }).nullable().optional(),
 };
@@ -408,7 +408,7 @@ const nodePatch = z.object({
   itemType: z.enum(LINE_ITEM_TYPES).optional(), quantity: z.number().int().min(1).max(1_000_000).nullable().optional(), unit: z.string().max(20).optional(), unlimited: z.boolean().optional(), sku: z.string().max(50).optional(),
   status: z.enum(['DRAFT', 'SCHEDULED', 'ACTIVE', 'RETIRED']).optional(), activeFrom: z.string().max(40).optional(), name: z.string().min(1).max(100).optional(), networkType: z.enum(['mobile', 'fiber', 'iot', 'none']).optional(), markets: z.array(z.string().length(2)).optional(),
   kind: offerFields.kind.optional(), description: z.string().max(500).optional(), prices: z.array(priceSchema).max(10).optional(), contract: contractSchema.optional(), fulfilment: fulfilmentSchema.optional(),
-  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), ocs: z.object({ planCode: z.string().max(60), params: z.record(z.union([z.string().max(100), z.number(), z.boolean()])).nullable().optional() }).nullable().optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
+  partnerCode: z.string().max(50).optional(), validityDays: z.number().int().min(1).max(3650).optional(), ocs: z.object({ planCode: z.string().max(60), params: z.record(z.string(), z.union([z.string().max(100), z.number(), z.boolean()])).nullable().optional() }).nullable().optional(), characteristics: offerFields.characteristics, requires: z.array(z.string().max(80)).max(20).optional(), excludes: z.array(z.string().max(80)).max(20).optional(), salesChannels: z.array(CHANNEL_ENUM).optional(), variants: z.array(variantSchema).max(40).optional(), deals: z.array(dealSchema).max(3).optional(), suspension: offerFields.suspension, group: offerFields.group,
 });
 
 /** Sales-only roles see only live nodes; editors see everything. */
@@ -775,7 +775,7 @@ get('/migration/templates/:entity', migrationAny, async ({ db, params, query }) 
 post('/migration/exports', 'migration:export', async ({ db, user, body }) => {
   const b = z.object({
     entities: z.array(z.string().max(40)).max(40).optional(), domains: z.array(z.string().max(20)).max(10).optional(), format: z.enum(['CSV', 'JSON']), unmasked: z.boolean().optional(), reason: z.string().max(300).optional(),
-    maxRowsPerEntity: z.number().int().min(1).max(100_000_000).optional(), resume: z.record(z.string().max(300)).optional(), nest: z.boolean().optional(),
+    maxRowsPerEntity: z.number().int().min(1).max(100_000_000).optional(), resume: z.record(z.string(), z.string().max(300)).optional(), nest: z.boolean().optional(),
   }).parse(body);
   const job = await core.createExportJob(db, user.username, b, { canUnmask: user.permissions.has('settings:manage') });
   return Response.json({ id: job.id, downloadUrl: `/api/migration/exports/${job.id}/download`, masked: job.masked }, { status: 201 });
@@ -883,7 +883,7 @@ post('/settings/cancellation/preview', 'settings:manage', async ({ db, body }) =
 post('/settings/cancellation/default', 'settings:manage', async ({ db, user, body }) => { await core.setCancellationSettings(db, user.username, { defaultAllow: z.object({ defaultAllow: z.boolean() }).parse(body).defaultAllow }); return cancellationView(db); });
 post('/settings/cancellation/reset', 'settings:manage', async ({ db, user }) => { await core.resetRules(db, user.username); return cancellationView(db); });
 post('/settings/cancellation/simulate', 'settings:manage', async ({ db, body }) => {
-  const b = z.object({ action: z.enum(core.RULE_ACTIONS as [string, ...string[]]), group: z.enum(['GOODS', 'INSTALL', 'ACTIVATION']), facts: z.record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).default({}), paidMinor: z.number().int().min(0).default(0), canOverride: z.boolean().default(false) }).parse(body);
+  const b = z.object({ action: z.enum(core.RULE_ACTIONS as [string, ...string[]]), group: z.enum(['GOODS', 'INSTALL', 'ACTIVATION']), facts: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).default({}), paidMinor: z.number().int().min(0).default(0), canOverride: z.boolean().default(false) }).parse(body);
   return core.simulate(db, { ...b, action: b.action as core.RuleAction, group: b.group, facts: b.facts as core.Facts, currency: (await core.getRegional(db)).currency });
 });
 
@@ -892,7 +892,7 @@ const dunStep = z.object({
   id: uuid.optional(), position: z.number().int().optional(), name: z.string().min(1).max(core.DUNNING_LIMITS.stepNameMax), enabled: z.boolean().default(true),
   trigger: z.discriminatedUnion('kind', [z.object({ kind: z.literal('DAYS_PAST_DUE'), days: z.number().int() }), z.object({ kind: z.literal('BALANCE'), balanceMinor: z.number().int(), minDays: z.number().int().default(0) })]),
   action: z.enum(core.DUNNING_STEP_ACTIONS as unknown as [string, ...string[]]),
-  params: z.record(z.unknown()).default({}), exclusions: z.object({ dispute: z.boolean().optional(), vip: z.boolean().optional(), arrangement: z.boolean().optional() }).default({}),
+  params: z.record(z.string(), z.unknown()).default({}), exclusions: z.object({ dispute: z.boolean().optional(), vip: z.boolean().optional(), arrangement: z.boolean().optional() }).default({}),
 });
 const dunRule = z.object({
   code: z.string().max(60).optional(), name: z.string().min(1).max(core.DUNNING_LIMITS.nameMax), description: z.string().max(core.DUNNING_LIMITS.descriptionMax).default(''), active: z.boolean().default(true), priority: z.number().int().default(100),
@@ -912,7 +912,7 @@ post('/settings/dunning-rules/late-fees', 'settings:manage', async ({ db, user, 
 patch('/settings/dunning-rules/late-fees/:id', 'settings:manage', async ({ db, user, params, body }) => core.saveLateFee(db, user.username, { ...z.object({ name: z.string().min(1).max(80), mode: z.enum(['FLAT', 'PERCENT']), flatMinor: z.number().int().min(0).optional(), percentBps: z.number().int().min(0).max(10000).optional(), minMinor: z.number().int().min(0).optional(), maxMinor: z.number().int().min(0).nullable().optional(), taxable: z.boolean().optional(), active: z.boolean().optional() }).parse(body), id: params.id! }));
 route('DELETE', '/settings/dunning-rules/late-fees/:id', 'settings:manage', async ({ db, user, params }) => core.deleteLateFee(db, user.username, params.id!));
 get('/settings/dunning-rules/payments', 'settings:manage', ({ db }) => core.getDunningPayments(db));
-post('/settings/dunning-rules/payments', 'settings:manage', ({ db, user, body }) => core.setDunningPayments(db, user.username, z.object({ baseUrl: z.string().max(200).optional(), bureau: z.string().max(80).optional(), merchants: z.record(z.object({ name: z.string().max(25), city: z.string().max(15), proxy: z.string().max(40).optional(), uen: z.string().max(20).optional(), accounts: z.record(z.string().max(99)).optional() })).optional() }).parse(body) as Partial<core.DunningPaymentSettings>));
+post('/settings/dunning-rules/payments', 'settings:manage', ({ db, user, body }) => core.setDunningPayments(db, user.username, z.object({ baseUrl: z.string().max(200).optional(), bureau: z.string().max(80).optional(), merchants: z.record(z.string(), z.object({ name: z.string().max(25), city: z.string().max(15), proxy: z.string().max(40).optional(), uen: z.string().max(20).optional(), accounts: z.record(z.string(), z.string().max(99)).optional() })).optional() }).parse(body) as Partial<core.DunningPaymentSettings>));
 post('/settings/dunning-rules/preview', 'settings:manage', async ({ db, body }) => { const b = z.object({ accountId: uuid, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(body); return core.explainLadder(db, b.accountId, b.date ?? core.today(), await core.listDunningRules(db, { activeOnly: true })); });
 get('/settings/dunning-rules/:id', 'settings:manage', ({ db, params }) => core.getDunningRule(db, params.id!));
 patch('/settings/dunning-rules/:id', 'settings:manage', ({ db, user, params, body }) => core.saveDunningRule(db, user.username, dunRule.parse(body) as core.DunningRuleInput, params.id!));
@@ -920,7 +920,7 @@ route('DELETE', '/settings/dunning-rules/:id', 'settings:manage', ({ db, user, p
 
 // ───────────────────────── integration hub (Integration → Integration hub) ─────────────────────────
 const hubGroup = z.enum(core.HUB_GROUPS);
-const endpointBody = z.object({ group: hubGroup, kind: z.string().max(40), name: z.string().min(1).max(80), url: z.string().max(500).nullish(), fallbackUrl: z.string().max(500).nullish(), timeoutMs: z.number().int().optional(), config: z.record(z.unknown()).optional(), enabled: z.boolean().optional(), secret: z.string().max(20000).optional() });
+const endpointBody = z.object({ group: hubGroup, kind: z.string().max(40), name: z.string().min(1).max(80), url: z.string().max(500).nullish(), fallbackUrl: z.string().max(500).nullish(), timeoutMs: z.number().int().optional(), config: z.record(z.string(), z.unknown()).optional(), enabled: z.boolean().optional(), secret: z.string().max(20000).optional() });
 const webhookBody = z.object({ kind: z.enum(['OUTBOUND', 'INBOUND', 'TMF688']), name: z.string().min(1).max(80), targetUrl: z.string().max(500).nullish(), authKind: z.enum(['NONE', 'BEARER', 'HMAC']).optional(), secret: z.string().max(2000).optional(), provider: z.string().max(60).nullish(), events: z.array(z.string().max(60)).max(40).optional(), query: z.string().max(500).nullish(), retryMax: z.number().int().optional(), retryBackoffSeconds: z.number().int().optional(), status: z.enum(['ACTIVE', 'PAUSED', 'FAILED']).optional() });
 const scopeList = z.array(z.string().max(40)).max(40);
 const hubView = async (db: Db) => ({
@@ -1096,7 +1096,7 @@ route('DELETE', '/settings/etc/rules/:id', 'settings:manage', ({ db, user, param
 post('/settings/etc/standard', 'settings:manage', async ({ db, user }) => ({ ...(await core.seedStandardEtcRules(db, user.username)), rules: await core.listEtcRules(db) }));
 post('/settings/etc/check', 'settings:manage', ({ body }) => { const f = z.object({ formula: z.string().max(500) }).parse(body).formula; try { core.compileFormula(f); return { ok: true }; } catch (e) { return { ok: false, error: (e as Error).message }; } });
 post('/settings/etc/preview', 'settings:manage', ({ db, body }) => core.previewEtc(db, z.object({ scenario: z.enum(core.ETC_SCENARIOS.map((s) => s.id) as [core.EtcScenario, ...core.EtcScenario[]]), segment: z.string().max(60).optional(), vip: z.boolean().optional(), hasDevice: z.boolean().optional(), formula: z.string().max(500).optional(), ruleId: uuid.optional(),
-  figures: z.record(z.number()).default({}) }).parse(body) as Parameters<typeof core.previewEtc>[1]));
+  figures: z.record(z.string(), z.number()).default({}) }).parse(body) as Parameters<typeof core.previewEtc>[1]));
 // ── Collections: where an account stands on its ladder, payment arrangements, debt placed with agencies ──
 get('/accounts/:id/collections', ['billing:read'], async ({ db, user, params }) => { const a = await core.getAccount(db, params.id!); assertCustomer(user, a.customerId); return { ladder: await core.explainLadder(db, params.id!, core.today(), await core.listDunningRules(db, { activeOnly: true })), arrangements: await core.listArrangements(db, params.id!) }; });
 post('/accounts/:id/collections/run', ['billing:run'], async ({ db, user, params, body }) => {
@@ -1247,7 +1247,7 @@ post('/customers/:id/accounts', 'customer:write', async ({ db, params, body }) =
 // ───────────────────────── segments and customer settings ─────────────────────────
 get('/segments', 'customer:search', ({ db }) => core.listSegments(db, { activeOnly: true }));
 get('/settings/customers', 'settings:manage', async ({ db }) => ({ settings: await core.getCustomerSettings(db), segments: await core.listSegments(db, { withCounts: true }) }));
-post('/settings/customers', 'settings:manage', ({ db, user, body }) => core.setCustomerSettings(db, user.username, z.object({ allowCreateWithoutOrder: z.boolean(), fields: z.record(z.enum(core.FIELD_MODES as [string, ...string[]])).optional() }).parse(body) as never));
+post('/settings/customers', 'settings:manage', ({ db, user, body }) => core.setCustomerSettings(db, user.username, z.object({ allowCreateWithoutOrder: z.boolean(), fields: z.record(z.string(), z.enum(core.FIELD_MODES as [string, ...string[]])).optional() }).parse(body) as never));
 get('/settings/markets', 'settings:manage', async ({ db }) => ({ ...(await core.getMarketSettings(db)), home: (await core.getRegional(db)).country, known: Object.values(core.MARKETS) }));
 post('/settings/markets', 'settings:manage', ({ db, user, body }) => core.setMarketSettings(db, user.username, z.object({ multiple: z.boolean(), defaultMarket: z.string().length(2).optional(), markets: z.array(z.object({ code: z.string().length(2), name: z.string().max(60), dialCode: z.string().max(5), taxName: z.string().max(20), taxBps: z.number().int().min(0).max(10000) })).max(60).optional() }).parse(body) as never));
 get('/settings/bill-cycles', 'settings:manage', ({ db }) => core.getBillCycles(db));
@@ -1775,7 +1775,7 @@ get('/finance/batches/:id/file', 'finance:export', async ({ db, user, params }) 
 });
 post('/finance/batches/:id/redeliver', 'finance:export', ({ db, user, params }) => core.redeliverBatch(db, params.id!, user.username));
 post('/finance/batches/:id/ack', 'finance:export', ({ db, user, params, body }) => {
-  const b = z.object({ reference: z.string().max(100).optional(), debitMinor: money.min(0), creditMinor: money.min(0), byAccount: z.record(z.object({ debitMinor: money, creditMinor: money })).optional() }).parse(body);
+  const b = z.object({ reference: z.string().max(100).optional(), debitMinor: money.min(0), creditMinor: money.min(0), byAccount: z.record(z.string(), z.object({ debitMinor: money, creditMinor: money })).optional() }).parse(body);
   return core.acknowledgeBatch(db, params.id!, b, user.username);
 });
 get('/finance/reconciliation', 'finance:read', ({ db, query }) => core.listReports(db, { status: str(query, 'status'), batchId: str(query, 'batchId'), limit: num(query, 'limit'), cursor: str(query, 'cursor') }));
@@ -1905,7 +1905,7 @@ post('/appointments/:id/reschedule', 'case:write', ({ db, user, params, body }) 
 /** Delivers the cancellations queued for the field-service system. Schedule it with the SLA sweep. */
 post('/cases/wfm-outbox', superv, ({ db }) => core.deliverWfmCancels(db));
 get('/integrations/field-service', 'integration:manage', ({ db }) => core.wfmOverview(db));
-post('/integrations/field-service', 'integration:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), bookAtOrder: z.boolean().optional(), config: z.record(z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
+post('/integrations/field-service', 'integration:manage', async ({ db, user, body }) => { const b = z.object({ vendor: z.string().max(40).nullable(), enabled: z.boolean(), bookAtOrder: z.boolean().optional(), config: z.record(z.string(), z.unknown()).optional(), webhookSecretEnv: z.string().max(60).optional() }).parse(body); await core.setWfmSettings(db, user.username, b); return core.wfmOverview(db); });
 post('/integrations/field-service/test', 'integration:manage', ({ db }) => core.testWfm(db));
 
 // ── TM Forum Open APIs: TMF621 trouble tickets, TMF656 service problems, TMF683 party interactions ──
@@ -1931,7 +1931,7 @@ get('/interactions', 'case:read', ({ db, user, query }) => {
 });
 post('/interactions', 'case:create', async ({ db, user, body }) => {
   const b = z.object({ customerId: uuid, channel: z.enum(core.INTERACTION_CHANNELS), direction: z.enum(core.DIRECTIONS), subject: z.string().min(1).max(200), summary: z.string().max(8000).optional(), serviceId: uuid.optional(), caseId: uuid.optional(),
-    agent: z.string().max(80).optional(), sessionRef: z.string().max(120).optional(), durationSec: z.number().int().min(0).max(86_400).optional(), occurredAt: z.string().max(40).optional(), metadata: z.record(z.unknown()).optional() }).parse(body);
+    agent: z.string().max(80).optional(), sessionRef: z.string().max(120).optional(), durationSec: z.number().int().min(0).max(86_400).optional(), occurredAt: z.string().max(40).optional(), metadata: z.record(z.string(), z.unknown()).optional() }).parse(body);
   assertCustomer(user, b.customerId);
   return Response.json(await core.logInteraction(db, { ...b, agent: b.agent ?? user.username }, user.username), { status: 201 });
 });
@@ -1975,7 +1975,7 @@ get('/inventory/transfers', 'inventory:read', ({ db, user, query }) => core.list
 post('/inventory/transfers', 'inventory:transfer', ({ db, user, body }) => core.requestTransfer(db, user.username, z.object({ from: z.string().max(40), to: z.string().max(40), lines: z.array(z.object({ sku: z.string().max(60), quantity: z.number().int() })).max(200).optional(), sims: z.object({ iccids: z.array(z.string().max(25)).max(20000).optional(), count: z.number().int().optional() }).optional(), note: z.string().max(300).optional() }).parse(body), xferScope(user)));
 get('/inventory/transfers/:id', 'inventory:read', async ({ db, user, params }) => { const t = await core.getTransfer(db, params.id!); if (user.scope.storeId && t.fromLocation !== user.scope.storeId && t.toLocation !== user.scope.storeId) throw forbidden('That transfer does not involve your store.'); return t; });
 post('/inventory/transfers/:id/dispatch', 'inventory:transfer', ({ db, user, params }) => core.dispatchTransfer(db, user.username, params.id!, xferScope(user)));
-post('/inventory/transfers/:id/receive', 'inventory:transfer', ({ db, user, params, body }) => core.receiveTransfer(db, user.username, params.id!, z.object({ received: z.record(z.number().int()).optional(), iccids: z.array(z.string().max(25)).max(20000).optional(), note: z.string().max(300).optional() }).parse(body ?? {}), xferScope(user)));
+post('/inventory/transfers/:id/receive', 'inventory:transfer', ({ db, user, params, body }) => core.receiveTransfer(db, user.username, params.id!, z.object({ received: z.record(z.string(), z.number().int()).optional(), iccids: z.array(z.string().max(25)).max(20000).optional(), note: z.string().max(300).optional() }).parse(body ?? {}), xferScope(user)));
 post('/inventory/transfers/:id/cancel', 'inventory:transfer', ({ db, user, params }) => core.cancelTransfer(db, user.username, params.id!, xferScope(user)));
 get('/warehouses', 'inventory:read', async ({ db }) => ({ items: await core.listWarehouses(db) }));
 post('/warehouses', 'warehouse:manage', ({ db, user, body }) => core.createWarehouse(db, user.username, z.object({ name: z.string().min(1).max(80), address: blank(z.string().max(300)) }).parse(body)));

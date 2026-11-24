@@ -11,7 +11,7 @@
     "embed": "node scripts-embed.mjs"
   },
   "dependencies": {
-    "drizzle-orm": "^0.36.4",
+    "drizzle-orm": "^0.45.4",
     "pg": "^8.13.1"
   },
   "devDependencies": {
