@@ -2476,6 +2476,7 @@ describe('offer type switches and service types', () => {
     }
     const bad = await call('POST', '/auth/saml/acs/not-an-id', form({ SAMLResponse: 'x'.repeat(40) }));
     expect([bad.status, bad.headers.get('set-cookie')]).toEqual([303, null]);
+    await db.query('DELETE FROM integration_endpoints WHERE id = $1', [ep.id]);          // the sign-in page of the other tests lists providers: leave none behind
   });
 
   it('scheduled jobs: off without a secret, one secret and no user otherwise, a fixed list of jobs, audited', async () => {

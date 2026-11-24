@@ -226,9 +226,9 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'sso-saml', group: 'Sign-in and identity', name: 'Single sign-on (SAML 2.0)', with: 'A SAML 2.0 identity provider',
-    summary: 'The provider’s address, entity id and signing certificate are stored and checked. Meridian does not accept SAML assertions yet, so sign-in through SAML is not available; use OpenID Connect, which every major provider also offers.',
-    maturity: 'STUB', direction: 'IN',
-    needs: ['Prefer OpenID Connect where the provider supports it', 'A SAML assertion consumer needs a vetted SAML library and a security review before it is switched on'],
+    summary: 'Staff sign in through a SAML 2.0 provider (Entra ID, Okta, ADFS, Ping and others): the browser is sent to the provider and comes back with a signed assertion that is checked, accepted once, and mapped to roles through the provider’s groups.',
+    maturity: 'BUILT', direction: 'IN',
+    needs: ['The provider’s single sign-on address, entity id and signing certificate', 'This site’s address; give the provider the assertion consumer address and metadata shown after saving', 'Optional: the authentication context that proves a second factor'],
     doc: 'SECURITY.md', keywords: 'saml 2.0 assertion idp sso adfs',
   },
   {
@@ -496,8 +496,7 @@ export async function integrationOverview(q: Queryable, env: NodeJS.ProcessEnv =
       case 'sso-oidc': case 'sso-saml': case 'ldap': case 'otp-gateway': {
         const kind = { 'sso-oidc': 'IDP_OIDC', 'sso-saml': 'IDP_SAML', ldap: 'LDAP', 'otp-gateway': 'OTP_GATEWAY' }[def.id]!;
         const n = authCounts.get(kind) ?? 0;
-        if (def.id === 'sso-saml') { status = 'STAND_IN'; detail = n ? `${n} provider${n === 1 ? '' : 's'} stored. Sign-in through SAML is not available yet.` : 'Not available yet; use OpenID Connect.'; }
-        else if (!n) { status = 'NEEDS_SETUP'; detail = 'Nothing connected yet.'; }
+        if (!n) { status = 'NEEDS_SETUP'; detail = 'Nothing connected yet.'; }
         else { status = 'CONNECTED'; detail = def.id === 'ldap' ? `${n} director${n === 1 ? 'y' : 'ies'} connected.${lastSync ? ` Last sync ${lastSync.slice(0, 16).replace('T', ' ')} UTC.` : ' Not synced yet.'}` : `${n} connected.`; }
         break;
       }

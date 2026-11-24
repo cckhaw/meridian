@@ -7,6 +7,7 @@ import type { Db, Queryable, Row } from './db.js';
 import { conflict, DomainError, invalid, notFound, rejected } from './errors.js';
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from './passwords.js';
 import { verifyDirectoryPassword } from './auth-providers.js';
+import { decryptText, encryptText } from './field-crypto.js';
 import { checkChallenge, confirmedKinds, openLoginChallenge, type LoginChallenge } from './mfa.js';
 import { checkPassword, getSecurityPolicy, idleMinutesFor, isReusedPassword, mfaRequiredFor, rememberPassword } from './security-policy.js';
 import { decodeCursor, pageSize, sqlBuilder, toPage, type Page } from './paging.js';
@@ -27,14 +28,22 @@ export const authConfig = () => ({
   windowMinutes: 15,
 });
 
-export interface SuperuserConfig { username: string; password: string }
+export interface SuperuserConfig { username: string; password: string; /** Base32 secret of an authenticator app (MERIDIAN_SUPERUSER_TOTP_SECRET): when set, signing in as the super user also needs a code from it. */ totpSecret?: string }
+const totpSecretFromEnv = (): { secret?: string; problem?: string } => {
+  const raw = process.env.MERIDIAN_SUPERUSER_TOTP_SECRET?.replace(/[\s-]/g, '').toUpperCase();
+  if (!raw) return {};
+  if (!/^[A-Z2-7]{16,128}$/.test(raw)) return { problem: 'MERIDIAN_SUPERUSER_TOTP_SECRET must be a base32 secret of at least 16 characters (letters A-Z and digits 2-7), as an authenticator app shows it' };
+  return { secret: raw };
+};
 /** The super user lives in the environment, never in the database. Returns null (disabled) unless both values are usable. */
 export function superuserConfig(): SuperuserConfig | null {
   const username = process.env.MERIDIAN_SUPERUSER_USERNAME?.trim();
   const password = process.env.MERIDIAN_SUPERUSER_PASSWORD;
   if (!username || !password) return null;
   if (username.length < 3 || passwordProblem(password, username)) return null;
-  return { username, password };
+  const t = totpSecretFromEnv();
+  if (t.problem) return null;                       // asked for a second factor but it is unusable: the super user stays off rather than quietly signing in without one
+  return { username, password, ...(t.secret ? { totpSecret: t.secret } : {}) };
 }
 export function superuserProblem(): string | null {
   const username = process.env.MERIDIAN_SUPERUSER_USERNAME?.trim();
@@ -42,13 +51,14 @@ export function superuserProblem(): string | null {
   if (!username && !password) return 'MERIDIAN_SUPERUSER_USERNAME and MERIDIAN_SUPERUSER_PASSWORD are not set';
   if (!username || username.length < 3) return 'MERIDIAN_SUPERUSER_USERNAME must be at least 3 characters';
   const p = passwordProblem(password ?? '', username);
-  return p ? `MERIDIAN_SUPERUSER_PASSWORD is not acceptable: ${p}` : null;
+  if (p) return `MERIDIAN_SUPERUSER_PASSWORD is not acceptable: ${p}`;
+  return totpSecretFromEnv().problem ?? null;
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const safeEq = (a: string, b: string) => { const x = createHash('sha256').update(a).digest(), y = createHash('sha256').update(b).digest(); return timingSafeEqual(x, y); };
 /** Changes whenever the super-user credentials change, which invalidates their sessions. */
-const epochOf = (c: SuperuserConfig) => sha256(`${c.username}\u0000${c.password}`).slice(0, 24);
+const epochOf = (c: SuperuserConfig) => sha256(`${c.username}\u0000${c.password}\u0000${c.totpSecret ?? ''}`).slice(0, 24);
 const superuserId = (username: string) => { const h = sha256(`meridian-superuser:${username.toLowerCase()}`); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`; };
 
 // ───────────────────────── the authenticated user ─────────────────────────
@@ -128,6 +138,17 @@ async function ensureSuperuserRow(q: Queryable, su: SuperuserConfig): Promise<Ro
   return (await q.query('SELECT * FROM users WHERE id=$1', [id])).rows[0]!;
 }
 
+/** Makes the super user's authenticator row match MERIDIAN_SUPERUSER_TOTP_SECRET: added or changed when the secret is set, removed when it is not. An unchanged secret keeps its replay counter. */
+async function syncSuperuserTotp(q: Queryable, userId: string, secret?: string) {
+  if (!secret) { await q.query(`DELETE FROM mfa_methods WHERE user_id=$1`, [userId]); return; }
+  const cur = (await q.query(`SELECT secret_enc FROM mfa_methods WHERE user_id=$1 AND kind='TOTP' AND confirmed_at IS NOT NULL`, [userId])).rows[0];
+  let same = false;
+  try { same = !!cur && decryptText(cur.secretEnc) === secret; } catch { same = false; }
+  if (same) return;
+  await q.query(`DELETE FROM mfa_methods WHERE user_id=$1`, [userId]);
+  await q.query(`INSERT INTO mfa_methods (user_id, kind, secret_enc, confirmed_at, last_counter) VALUES ($1,'TOTP',$2, now(), 0)`, [userId, encryptText(secret)]);
+}
+
 async function openSession(q: Queryable, userId: string, epoch: string, ip?: string, ua?: string) {
   const token = randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + (await getSecurityPolicy(q)).session.absoluteHours * 3_600_000);
@@ -169,8 +190,19 @@ export async function login(db: Db, i: { username: string; password: string; ip?
       await audit(db, username, 'auth', username, 'LOGIN_FAILED', { ip: i.ip, superuser: true });
       throw rejected(BAD_LOGIN);
     }
+    // The super user's second factor lives in the environment too: its authenticator secret is copied into the second-factor table (encrypted) so the ordinary challenge handles it, and
+    // removed again when the variable is removed, so what is in force always follows the environment.
+    const row = await db.tx(async (q) => {
+      const r = await ensureSuperuserRow(q, su);
+      await syncSuperuserTotp(q, r.id, su.totpSecret);
+      return r;
+    });
+    if (su.totpSecret) {
+      const challenge = await openLoginChallenge(db, { id: row.id, name: row.displayName, email: null, phone: null }, { ip: i.ip, userAgent: i.userAgent });
+      await audit(db, row.username, 'auth', row.id, 'LOGIN_MFA_CHALLENGE', { ip: i.ip, method: challenge.method, superuser: true });
+      throw new MfaRequired(challenge);
+    }
     return db.tx(async (q) => {
-      const row = await ensureSuperuserRow(q, su);
       await q.query('UPDATE users SET last_login_at = now() WHERE id=$1', [row.id]);
       const { token, expiresAt } = await openSession(q, row.id, epochOf(su), i.ip, i.userAgent);
       await audit(q, row.username, 'auth', row.id, 'LOGIN', { ip: i.ip, superuser: true });
@@ -241,6 +273,18 @@ export async function verifyMfaLogin(db: Db, i: { challenge: string; code?: stri
   catch (e) { await recordFailure(db, `mfa:${ikey}`); throw e; }
   const row = (await db.query('SELECT * FROM users WHERE id=$1', [r.userId])).rows[0];
   if (!row || row.status !== 'ACTIVE') throw rejected(BAD_LOGIN);
+  if (row.isSuperuser) {                                   // the environment-defined super user: its session is tied to the credentials in force now
+    const su = superuserConfig();
+    if (!su || su.username.toLowerCase() !== String(row.username).toLowerCase() || !su.totpSecret) throw rejected(BAD_LOGIN);
+    return db.tx(async (q) => {
+      await q.query('UPDATE users SET last_login_at = now() WHERE id=$1', [row.id]);
+      const { token, expiresAt } = await openSession(q, row.id, epochOf(su), i.ip ?? r.ip ?? undefined, i.userAgent ?? r.userAgent ?? undefined);
+      await audit(q, row.username, 'auth', row.id, 'LOGIN_MFA', { ip: i.ip, superuser: true });
+      const user = toUser({ ...row, mustChangePassword: false }, await getRoleOverrides(q));
+      user.mfaEnrollRequired = false;
+      return { token, user, expiresAt };
+    });
+  }
   if (row.lockedUntil && new Date(row.lockedUntil) > new Date()) throw rejected('This account is locked. Try again later or ask an administrator.');
   const policy = await getSecurityPolicy(db);
   const age = policy.password.maxAgeDays;

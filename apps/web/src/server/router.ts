@@ -205,6 +205,7 @@ const securityPolicyBody = z.object({
   mfa: z.object({ requirement: z.enum(['OFF', 'ROLES', 'ALL']), roleIds: z.array(z.string().max(60)).max(50), methods: z.array(z.enum(['TOTP', 'SMS', 'EMAIL'])).max(3), challengeMinutes: z.number().int() }).partial().optional(),
   email: z.object({ codesEnabled: z.boolean(), signedCopyFirst: z.enum(['GATEWAY', 'EMAIL']) }).partial().optional(),
 });
+get('/settings/security-posture', 'settings:manage', async ({ db }) => ({ items: await core.securityPosture(db) }));
 get('/settings/security-policy', 'settings:manage', async ({ db }) => ({ policy: await core.getSecurityPolicy(db), defaults: core.defaultSecurityPolicy(), emailSender: await core.emailSenderStatus(db) }));
 post('/settings/security-policy', 'settings:manage', async ({ db, user, body }) => ({ policy: await core.setSecurityPolicy(db, user.username, securityPolicyBody.parse(body) as Partial<core.SecurityPolicy>) }));
 
