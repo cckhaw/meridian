@@ -5,6 +5,7 @@ import { decryptText, encryptText, sha256Hex } from './field-crypto.js';
 import { resetEventGate } from './events.js';
 import { authEndpointProblem } from './auth-provider-config.js';
 import { identityEndpointProblem } from './kyc-provider-config.js';
+import { hostProblem, resolveProblem } from './net-guard.js';
 
 /**
  * Integration hub: the settings behind the northbound API gateway and the outside systems Meridian talks to, in six groups. Secrets entered here are encrypted
@@ -92,7 +93,7 @@ export async function saveHubEndpoint(q: Queryable, actor: string, i: HubEndpoin
   if (!kinds.includes(i.kind)) throw invalid(`Choose a kind of endpoint for this group (${kinds.join(', ') || 'none'}).`);
   const name = (i.name ?? '').trim();
   if (!name || name.length > 80) throw invalid('Give it a name of up to 80 characters.');
-  for (const [v, what] of [[i.url, 'The address'], [i.fallbackUrl, 'The fallback address']] as const) if (v) { const p = hubUrlProblem(v, what); if (p) throw invalid(p); }
+  for (const [v, what] of [[i.url, 'The address'], [i.fallbackUrl, 'The fallback address']] as const) if (v) { const p = hubUrlProblem(v, what) ?? (prod() ? hostProblem(v, 'connector') : null); if (p) throw invalid(p); }
   const authProblem = i.group === 'auth' ? authEndpointProblem(i.kind, { url: i.url, config: i.config }) : i.group === 'identity' ? identityEndpointProblem(i.kind, { url: i.url, config: i.config }) : null;
   if (authProblem) throw invalid(authProblem);
   const timeout = i.timeoutMs ?? 10000;
@@ -225,7 +226,7 @@ export async function saveHubWebhook(q: Queryable, actor: string, i: HubWebhookI
   const auth = i.authKind ?? (i.kind === 'INBOUND' ? 'HMAC' : 'NONE');
   if (i.kind !== 'INBOUND') {
     if (!i.targetUrl) throw invalid('Where should notifications be sent? Give the target address.');
-    const p = hubUrlProblem(i.targetUrl, 'The target address'); if (p) throw invalid(p);
+    const p = hubUrlProblem(i.targetUrl, 'The target address') ?? (prod() ? hostProblem(i.targetUrl, 'connector') : null); if (p) throw invalid(p);
     if (prod() && !i.targetUrl.startsWith('https://')) throw invalid('The target address must use https://.');
   }
   if (i.kind === 'INBOUND' && !(i.provider ?? '').trim()) throw invalid('Say which outside system sends these callbacks (a payment gateway, a courier, a dealer channel).');
@@ -267,14 +268,12 @@ export async function inboundWebhookKey(q: Queryable, provider: string): Promise
 // TM Forum 688 (Event Management): a client registers a listener with a callback and a query.
 /** A callback a client supplied may not point at the deployment's own network. */
 export function privateHostProblem(url: string): string | null {
-  let u: URL; try { u = new URL(url); } catch { return null; }
-  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  const priv = h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local') || h === '::1' || /^(127|10|0)\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || h.startsWith('fe80:');
-  return priv && prod() ? 'The callback cannot be an address inside a private network.' : null;
+  return hostProblem(url, 'client') && prod() ? 'The callback cannot be an address inside a private network.' : null;
 }
 export interface TmfHub { id: string; callback: string; query?: string }
 export async function registerTmfListener(q: Queryable, clientRef: string, i: { callback: string; query?: string }): Promise<TmfHub> {
   const p = hubUrlProblem(i.callback, 'The callback') ?? privateHostProblem(i.callback); if (p) throw invalid(p);
+  if (prod()) { const r = await resolveProblem(i.callback, 'client'); if (r) throw invalid(`The callback cannot be called: ${r}`); }   // the name's own answer, not just its spelling
   if (prod() && !i.callback.startsWith('https://')) throw invalid('The callback must use https://.');
   const events = [...(i.query ?? '').matchAll(/eventType=([A-Za-z]+)/g)].map((m) => m[1]!);
   resetEventGate();

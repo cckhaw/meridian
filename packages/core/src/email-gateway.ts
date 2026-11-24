@@ -4,6 +4,7 @@ import { invalid, notFound } from './errors.js';
 import { hubEndpointByIdWithSecret, hubEndpointWithSecret } from './integration-hub.js';
 import { emailAddressProblem, hasControl, parseBodyTemplate, renderBodyTemplate, type EmailConfig, type EmailMode } from './email-gateway-config.js';
 import { getSecurityPolicy } from './security-policy.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * The e-mail sender of the Integration hub (Messaging, kind EMAIL_GATEWAY) and the one place that talks to it: `sendEmail` for everything Meridian sends by e-mail
@@ -15,9 +16,9 @@ import { getSecurityPolicy } from './security-policy.js';
  * error. A result says whether another try could help (`retryable`): timeouts, connection failures, 408/425/429 and 5xx can be tried again; the rest cannot.
  */
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-let httpImpl: Fetch = (url, init) => fetch(url, init);
+let httpImpl: Fetch = (url, init) => connectorFetch(url, init as never);
 /** Tests replace the HTTP call (like setOtpHttp for the SMS gateway). */
-export const setEmailHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => fetch(url, init)); };
+export const setEmailHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => connectorFetch(url, init as never)); };
 
 type Sender = NonNullable<Awaited<ReturnType<typeof emailSender>>>;
 /** The one e-mail sender the product has: the first enabled EMAIL_GATEWAY in the Integration hub. */

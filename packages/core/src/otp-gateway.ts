@@ -2,6 +2,7 @@ import type { Db, Queryable } from './db.js';
 import { audit } from './audit.js';
 import { emailCodesAvailable, sendEmail } from './email-gateway.js';
 import { hubEndpointWithSecret } from './integration-hub.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * Sends the one-time codes that the sign-in code (second factor) and password recovery put in the outbox. Codes by SMS or WhatsApp go through the messaging gateway
@@ -12,8 +13,8 @@ import { hubEndpointWithSecret } from './integration-hub.js';
  * `channel` is SMS or WHATSAPP, as the administrator chose; WhatsApp usually needs an approved template, so the template ids are sent too.
  */
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-let httpImpl: Fetch = (url, init) => fetch(url, init);
-export const setOtpHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => fetch(url, init)); };
+let httpImpl: Fetch = (url, init) => connectorFetch(url, init as never);
+export const setOtpHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => connectorFetch(url, init as never)); };
 
 type GatewayEndpoint = NonNullable<Awaited<ReturnType<typeof hubEndpointWithSecret>>>;
 /** The one SMS / WhatsApp gateway the product has: the enabled OTP_GATEWAY in the Integration hub. Alerts and signed agreement copies use it too (e-mail has its own sender, email-gateway.ts). */

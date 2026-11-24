@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { decryptText } from './field-crypto.js';
 import type { Db, Queryable, Row } from './db.js';
 import { queueOutbox } from './lifecycle-state.js';
+import { clientFetch, connectorFetch } from './net-guard.js';
 
 /**
  * Business events leave Meridian in two steps. The code that causes one (an order, a SIM swap, a payment) writes it to the outbox in the same transaction.
@@ -123,7 +124,7 @@ export async function deliverEvents(db: Db, o: DeliveryOptions = {}): Promise<{ 
   const out = { delivered: 0, failed: 0, retrying: 0, published: 0 };
   const now = o.nowMs ?? Date.now();
   const rows = (await db.query(`SELECT * FROM event_deliveries WHERE status='PENDING' AND next_attempt_at <= $1 ORDER BY id LIMIT $2`, [new Date(now).toISOString(), o.limit ?? 50])).rows;
-  const doFetch = o.fetchImpl ?? fetch;
+  const send = (kind: string) => o.fetchImpl ?? ((kind === 'TMF688' ? clientFetch : connectorFetch) as unknown as typeof fetch);   // a listener's callback was typed by an outside client
   for (const d of rows) {
     const claimed = await db.query(`UPDATE event_deliveries SET attempts = attempts + 1, next_attempt_at = $2 WHERE id=$1 AND status='PENDING' AND attempts = $3`, [d.id, new Date(now + 120_000).toISOString(), d.attempts]);   // another server may have it
     if (!claimed.rowCount) continue;
@@ -135,7 +136,7 @@ export async function deliverEvents(db: Db, o: DeliveryOptions = {}): Promise<{ 
     if (sub.authKind === 'HMAC' && sub.secretEnc) { const t = Math.floor(now / 1000); headers['x-meridian-signature'] = `t=${t},v1=${createHmac('sha256', decryptText(sub.secretEnc)).update(`${t}.${body}`).digest('hex')}`; }
     let error: string | null = null, status: number | null = null;
     try {
-      const res = await doFetch(sub.targetUrl, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(o.timeoutMs ?? 10_000) });
+      const res = await send(sub.kind)(sub.targetUrl, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(o.timeoutMs ?? 10_000) });
       status = res.status;
       if (res.status < 200 || res.status >= 300) error = `HTTP ${res.status}`;
     } catch (e) { error = (e as Error).name === 'TimeoutError' ? 'timed out' : (e as Error).message.slice(0, 200); }

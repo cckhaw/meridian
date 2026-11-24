@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Queryable } from './db.js';
 import { loadDocumentBytes } from './documents.js';
 import { hubEndpointWithSecret } from './integration-hub.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * The ID check service (hub group `identity`, kind KYC_OCR): a REST service that reads the photographs, compares the face and judges liveness.
@@ -35,9 +36,9 @@ export interface ProviderInput {
 }
 
 type HttpLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
-let http: HttpLike = (url, init) => fetch(url, init) as unknown as ReturnType<HttpLike>;
+let http: HttpLike = (url, init) => connectorFetch(url, init as never) as unknown as ReturnType<HttpLike>;
 /** Test seam: stands in for the ID check service. */
-export const setKycProviderHttp = (f: HttpLike | null) => { http = f ?? ((url, init) => fetch(url, init) as unknown as ReturnType<HttpLike>); };
+export const setKycProviderHttp = (f: HttpLike | null) => { http = f ?? ((url, init) => connectorFetch(url, init as never) as unknown as ReturnType<HttpLike>); };
 
 export const DEFAULT_MAP: Record<string, string> = {
   verdict: 'verdict', reasons: 'reasons', reference: 'id',

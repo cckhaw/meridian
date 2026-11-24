@@ -2,6 +2,7 @@ import { audit } from './audit.js';
 import type { Queryable } from './db.js';
 import { conflict, invalid, rejected } from './errors.js';
 import { kindsWhere } from './offer-config.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * How the CRM and the store-front use the fibre coverage service (apps/fiber-coverage): a switch, and a small asynchronous client. Nothing else in the core knows
@@ -40,8 +41,8 @@ export async function hiddenFixedKinds(q: Queryable): Promise<string[]> {
 
 // ───────────────────────── the client ─────────────────────────
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-let httpImpl: Fetch = (url, init) => fetch(url, init);
-export const setFiberFetch = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => fetch(url, init)); };
+let httpImpl: Fetch = (url, init) => connectorFetch(url, init as never);
+export const setFiberFetch = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => connectorFetch(url, init as never)); };
 const TIMEOUT_MS = 3500;
 
 async function call<T>(path: string, init: { method?: string; json?: unknown } = {}): Promise<T> {

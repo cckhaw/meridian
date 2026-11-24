@@ -4,6 +4,7 @@ import { DomainError } from './errors.js';
 import { hubUrlProblem } from './integration-hub.js';
 import { deliverOtpMessages } from './otp-gateway.js';
 import { verifyWfmSignature, wfmSignature } from './wfm-webhook.js';
+import { connectorFetch } from './net-guard.js';
 
 /**
  * The fibre hub is a separate deployment that shares the CRM's database, so it normally hands sign-in codes to the SMS/WhatsApp gateway itself (the gateway's address and
@@ -17,8 +18,8 @@ import { verifyWfmSignature, wfmSignature } from './wfm-webhook.js';
  */
 export const OTP_RELAY_PATH = '/api/internal/fiber/deliver-otp';
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-let httpImpl: Fetch = (url, init) => fetch(url, init);
-export const setOtpRelayHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => fetch(url, init)); };
+let httpImpl: Fetch = (url, init) => connectorFetch(url, init as never);
+export const setOtpRelayHttp = (f: Fetch | null) => { httpImpl = f ?? ((url, init) => connectorFetch(url, init as never)); };
 
 const secretOf = (): string | null => { const k = process.env.MERIDIAN_FIBER_API_KEY?.trim(); return k && k.length >= 16 ? createHmac('sha256', 'meridian-fiber-otp-relay-v1').update(k).digest('hex') : null; };
 const crmBase = (): string | null => { const u = process.env.MERIDIAN_CRM_URL?.trim().replace(/\/$/, ''); return u && !hubUrlProblem(u) ? u : null; };

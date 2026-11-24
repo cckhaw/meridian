@@ -67,6 +67,12 @@ Pool management needs `numbering:manage`; sellers hold only `numbering:select`. 
 - Order placement accepts an `Idempotency-Key` so retries cannot double-order.
 - Fail closed: a production deployment with missing or weak secrets serves nothing.
 
+## Outbound requests (SSRF)
+
+Anything the server calls on an address somebody typed in (a webhook target, a TM Forum 688 listener callback, a connector's URL) is checked so it cannot reach the deployment's own network or the cloud metadata service. The check is on the **address the connection is made to**, not on the name: every outbound connection resolves the name once, refuses if any answer is not allowed, and connects to those very addresses (so a name that changes its answer between check and use, "DNS rebinding", gets nothing). Addresses are classified from their numbers however they are written: decimal or hex IPv4, IPv4 inside IPv6 (`::ffff:127.0.0.1`), NAT64 and 6to4, `100.64.0.0/10`, unique-local `fc00::/7`, link-local, multicast and reserved ranges. Redirects are checked the same way, per connection.
+
+A **client-supplied** address (a listener callback) may reach public addresses only. An **administrator-configured** connector may in addition reach a private network if its host is named in `MERIDIAN_PRIVATE_NETWORK_HOSTS`; loopback and link-local never. Addresses are also checked when they are saved (a listener callback is resolved at registration). The guard is always on in production; outside production it is off so a developer can call localhost (set `MERIDIAN_SSRF_GUARD=on` to try it). The code is `packages/core/src/net-guard.ts`.
+
 ## Data protection
 - ID documents entered in the CRM’s customer form are never stored; only a masked form and a keyed hash for duplicate detection.
 - **KYC evidence** (ID number, ID/selfie/signature images) collected for sign-ups is stored **encrypted** (AES-256-GCM; key from `MERIDIAN_DATA_KEY`/`MERIDIAN_ID_PEPPER`), checked for integrity on read, shown only to `kyc:review`, and every view is audited. File types are identified by signature; SVG is never accepted.
