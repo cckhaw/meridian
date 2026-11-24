@@ -12,7 +12,9 @@ Meridian refuses to serve traffic in production unless it is configured safely: 
 | `MERIDIAN_PAYMENT_MODE` | no | `manual` (default in production) or `simulated` (development only). |
 | `MERIDIAN_PAYMENT_WEBHOOK_SECRET` | no | Enables the generic payment webhook (section 4). |
 | `MERIDIAN_STRIPE_SECRET_KEY`, `_PUBLISHABLE_KEY`, `_WEBHOOK_SECRET` | no | Enable Stripe for the store-front ([STOREFRONT.md](STOREFRONT.md#5-payments)). |
-| `MERIDIAN_DATA_KEY` | no | Secret for encrypting KYC data (ID numbers, document images). Falls back to `MERIDIAN_ID_PEPPER`. **Back it up with the database; losing it makes stored identity data unreadable. Rotating it needs a re-encryption step.** |
+| `MERIDIAN_DATA_KEY` | no | Secret for encrypting KYC data (ID numbers, document images). Falls back to `MERIDIAN_ID_PEPPER`. **Back it up with the database; losing it makes stored identity data unreadable. It can be rotated: see “Rotating the data key”.** There is no default key in production. |
+| `MERIDIAN_DATA_KEY_ID` | no | The id (1 to 255, default 1) of the current `MERIDIAN_DATA_KEY`. Everything is written with a header naming this id. |
+| `MERIDIAN_DATA_KEYS_OLD` | no | Earlier keys, still readable but never used to write: a JSON object of id to secret, for example `{"1":"the old secret"}`. Only needed while something is still encrypted with them. |
 | `MERIDIAN_SEED` | no | `none` (default in production), `starter`, `demo` (development only; blocked in production). |
 | `MERIDIAN_SESSION_IDLE_MINUTES` / `_MAX_HOURS` | no | 30 minutes idle / 12 hours absolute. These are the defaults; **Settings → Security policy** overrides them once saved ([SECURITY.md](SECURITY.md)). |
 | `MERIDIAN_LOCK_AFTER_FAILURES` / `_LOCK_MINUTES` | no | Lock an account after 5 failures for 15 minutes (defaults; Security policy overrides them). |
@@ -110,6 +112,17 @@ Once the new deployment is **Ready and has its production domain** (it is live),
 The workflow is hardened: actions are pinned to commits (Dependabot keeps the pins current), the Vercel CLI is pinned, the token is given only to the steps that call Vercel, and CI fails on a new high or critical advisory in production dependencies (`pnpm audit --prod --audit-level=high`). CodeQL scans the TypeScript and the workflows weekly and on every pull request.
 
 Set under **Settings → Secrets and variables → Actions**: `VERCEL_TOKEN` (a secret), and `VERCEL_ORG_ID` or `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID` (secrets or variables). The Vercel project's Root Directory is `apps/web`. The store-front and fiber-coverage apps are separate projects and keep their own Vercel Git deployments.
+
+### Rotating the data key
+
+The data key encrypts identity data and stored secrets (see section 1). Values carry the id of the key they were written with, so a key can be replaced without stopping anything:
+
+1. Keep the current secret: put it under its id in `MERIDIAN_DATA_KEYS_OLD`, for example `{"1":"<the current MERIDIAN_DATA_KEY>"}` (if you never set `MERIDIAN_DATA_KEY`, the old secret is `MERIDIAN_ID_PEPPER`).
+2. Set a new `MERIDIAN_DATA_KEY` and a new `MERIDIAN_DATA_KEY_ID` (for example 2). Deploy. New writes use the new key; everything old is still read.
+3. Re-encrypt what is stored: `pnpm --filter @meridian/core rekey --dry-run`, then `pnpm --filter @meridian/core rekey` (needs `DATABASE_URL` and the same key variables). It rewrites KYC ID numbers, integration and webhook secrets, API-key signing secrets, authenticator secrets, fibre partner secrets, document images and signatures on applications, in batches, and is safe to run while the system is in use and to run again. A value it cannot read is reported and left alone: add the key it was written with to `MERIDIAN_DATA_KEYS_OLD` and run it again.
+4. When a run reports 0 rewritten and 0 could not be read, the old key can be removed. Keep a backup of it for as long as you keep database backups from before the rotation.
+
+The same key also signs the northbound access tokens and invoice download links, which a rotation invalidates (see section 1).
 
 ## 7. Starting fresh (reset checklist)
 

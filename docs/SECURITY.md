@@ -75,7 +75,7 @@ A **client-supplied** address (a listener callback) may reach public addresses o
 
 ## Data protection
 - ID documents entered in the CRM’s customer form are never stored; only a masked form and a keyed hash for duplicate detection.
-- **KYC evidence** (ID number, ID/selfie/signature images) collected for sign-ups is stored **encrypted** (AES-256-GCM; key from `MERIDIAN_DATA_KEY`/`MERIDIAN_ID_PEPPER`), checked for integrity on read, shown only to `kyc:review`, and every view is audited. File types are identified by signature; SVG is never accepted.
+- **KYC evidence** (ID number, ID/selfie/signature images) collected for sign-ups is stored **encrypted** (AES-256-GCM; key from `MERIDIAN_DATA_KEY`/`MERIDIAN_ID_PEPPER`, each value carries the id of its key so the key can be rotated: see OPERATIONS.md, “Rotating the data key”), checked for integrity on read, shown only to `kyc:review`, and every view is audited. File types are identified by signature; SVG is never accepted.
 - Money is integer minor units. Every financial event posts a balanced journal; reconciliation checks it.
 - Encryption at rest and in transit is the database and hosting platform’s job (TLS to the database is required in production).
 
