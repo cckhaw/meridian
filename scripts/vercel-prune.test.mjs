@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { pickDeletions } from './vercel-prune.mjs';
+import { deploymentRef, pickDeletions } from './vercel-prune.mjs';
 
 const d = (uid, created, state = 'READY', target = 'production') => ({ uid, created, state, target });
 
@@ -16,4 +16,11 @@ test('never touches a deployment that is still building or one created after the
 
 test('has nothing to delete when only the latest exists', () => {
   assert.deepEqual(pickDeletions([d('only', 1)], { id: 'only', createdAt: 1 }), []);
+});
+
+test('accepts what `vercel deploy` prints (a URL), a host name or an id', () => {
+  assert.equal(deploymentRef('https://meridian-abc-team.vercel.app'), 'meridian-abc-team.vercel.app');
+  assert.equal(deploymentRef('https://meridian-abc-team.vercel.app/\n'), 'meridian-abc-team.vercel.app');
+  assert.equal(deploymentRef('meridian-abc-team.vercel.app'), 'meridian-abc-team.vercel.app');
+  assert.equal(deploymentRef('dpl_123'), 'dpl_123');
 });
