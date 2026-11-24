@@ -63,7 +63,8 @@ Pool management needs `numbering:manage`; sellers hold only `numbering:select`. 
 ## Request hardening
 - State-changing requests must carry a matching `Origin` (CSRF). The payment webhook is exempt and uses an HMAC signature instead.
 - Request bodies are capped at 1 MB and validated with schemas. Errors never include stack traces or SQL.
-- Headers: CSP (self-only; `unsafe-inline` for the framework’s inline scripts and styles), `X-Frame-Options: DENY`, HSTS, `nosniff`, `Referrer-Policy`, `Permissions-Policy`.
+- Headers: CSP with **a script nonce per request** (the middleware of each app issues it; Next.js puts it on its own scripts and the layout on the theme script, and `'strict-dynamic'` lets those load their chunks), so an injected `<script>` or inline event handler does not run; there is no `unsafe-inline` for scripts. Styles keep `unsafe-inline` (a style cannot run code). The API's responses carry a scripts-`'self'` policy. Also `X-Frame-Options: DENY`, HSTS, `nosniff`, `Referrer-Policy`, `Permissions-Policy`.
+- **Agreement HTML** is cleaned with `sanitize-html` (a maintained sanitizer) configured to headings, paragraphs, emphasis, lists, simple tables and rules; every attribute the author wrote is dropped except a recognised alignment, and cleaning clean output changes nothing.
 - Order placement accepts an `Idempotency-Key` so retries cannot double-order.
 - Fail closed: a production deployment with missing or weak secrets serves nothing.
 
@@ -113,7 +114,7 @@ Staff get alerts for four events: `caseAssigned`, `caseUpdates`, `systemAlerts` 
 ## Not covered yet (plan for these before regulated go-live)
 - **Multi-factor authentication and single sign-on** (SAML/OIDC). Strongly recommended for staff before handling real customer data.
 - **Portal sign-up** (needs identity verification). Self-service password reset by e-mail or SMS is built (see above).
-- **Per-request CSP nonces** (removing `unsafe-inline`), WAF and DDoS protection, and distributed rate limiting at the edge.
+- WAF and DDoS protection, and distributed rate limiting at the edge.
 - **Column-level encryption** for contact details, retention and erasure workflows, and consent records (GDPR/PDPA).
 - An independent **penetration test** and a review against your regulator’s requirements (for example MAS TRM, PDPA, local telecom licensing rules).
 - Approval workflows (maker-checker) beyond the per-role credit limit.

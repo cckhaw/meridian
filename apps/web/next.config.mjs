@@ -1,15 +1,11 @@
-const isDev = process.env.NODE_ENV !== 'production';
-
-// Next.js needs inline scripts/styles for hydration and the theme bootstrap; everything else is locked to this origin.
-// (Tighten script-src with per-request nonces if your security policy requires removing 'unsafe-inline'.)
-const csp = [
+// Pages get their policy, with a script nonce per request, from src/middleware.ts (src/lib/csp.ts). What the API serves (JSON, PDFs, downloads) has no scripts at all.
+const apiCsp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
+  "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self' data:",
   "connect-src 'self'",
-  // The bill-template designer shows its PDF preview in a same-origin blob: frame.
   "frame-src 'self' blob:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -33,7 +29,6 @@ export default {
     return [{
       source: '/:path*',
       headers: [
-        { key: 'Content-Security-Policy', value: csp },
         { key: 'X-Frame-Options', value: 'DENY' },
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
@@ -42,6 +37,7 @@ export default {
         { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
       ],
     },
+    { source: '/api/:path*', headers: [{ key: 'Content-Security-Policy', value: apiCsp }] },
     // A document is shown to staff inside the Documents page (a frame of our own origin), so these two addresses, and only these, may be framed by us.
     ...['/api/documents/:id/file', '/api/documents/file/:token'].map((source) => ({ source, headers: [
       { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },

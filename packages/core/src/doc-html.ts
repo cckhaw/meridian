@@ -3,6 +3,8 @@
  * emphasis, lists, simple tables and rules. Everything else (scripts, styles, links, images, event handlers, unknown tags and attributes) is
  * removed on the way in, so the same text can be shown in the CRM, turned into a PDF, and never carries anything executable.
  */
+import sanitizeLib from 'sanitize-html';
+
 const BLOCK = new Set(['h1', 'h2', 'h3', 'p', 'ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div']);
 const INLINE = new Set(['strong', 'b', 'em', 'i', 'u', 'span']);
 const VOID = new Set(['br', 'hr']);
@@ -17,31 +19,47 @@ const alignOf = (attrs: string): string | null => {
   return m && ALIGN.has(m[1]!.toLowerCase()) ? m[1]!.toLowerCase() : null;
 };
 
+const ALIGNED = new Set(['p', 'h1', 'h2', 'h3', 'th', 'td', 'li', 'blockquote']);
+const TAGS = [...BLOCK, ...INLINE, ...VOID];
+const cleanTag = (): sanitizeLib.Transformer => (tag, attribs) => {
+  const tagName = NORMAL[tag] ?? tag;
+  const kept = ALIGN.has((attribs['data-align'] ?? '').toLowerCase()) ? attribs['data-align']!.toLowerCase() : null;     // what an earlier pass wrote
+  const a = kept ?? alignOf(`${attribs.style ?? ''} ${attribs.align ? `align=${attribs.align}` : ''}`);
+  const out: Record<string, string> = a && ALIGNED.has(tagName) ? { 'data-align': a } : {};
+  return { tagName, attribs: out };   // every attribute the author wrote is dropped; only an alignment we recognised is written
+};
+
+/**
+ * Cleans author HTML with sanitize-html (a maintained, widely used sanitizer built on the htmlparser2 parser) configured to the subset above, then shapes its output the way the rest of
+ * the code expects (see `toBlocks`): `<strong>`/`<em>`/`<p>` for `b`/`i`/`div`, alignment as `data-align`, list items always inside a list. The shaping works only on the cleaned
+ * output, whose grammar is just those tags and `data-align="…"`.
+ */
 export function sanitizeHtml(input: string): string {
   const src = String(input ?? '').slice(0, 400_000);
-  const re = /<!--[\s\S]*?-->|<\/?([a-zA-Z][a-zA-Z0-9]*)((?:\s+[^<>]*?)?)\s*\/?>|([^<]+)|</g;
+  const clean = sanitizeLib(src, {
+    allowedTags: TAGS,
+    allowedAttributes: { '*': ['data-align'] },
+    allowedSchemes: [],
+    nonTextTags: ['script', 'style', 'textarea', 'option', ...DROP_WITH_CONTENT],
+    transformTags: Object.fromEntries(TAGS.filter((t) => !VOID.has(t)).map((t) => [t, cleanTag()])),
+    disallowedTagsMode: 'discard',
+    parser: { decodeEntities: true },
+  });
+  // Shape the cleaned output: quotes and no-break spaces in text, `<br>`/`<hr>` without a slash, and a list item that is not in a list gets one.
+  const re = /<(\/?)([a-z0-9]+)((?: data-align="[a-z]+")?)\s*\/?>|([^<]+)/g;
   const out: string[] = [], stack: string[] = [];
-  let skipUntil: string | null = null, m: RegExpExecArray | null;
-  while ((m = re.exec(src))) {
-    const whole = m[0];
-    if (whole.startsWith('<!--')) continue;
-    if (m[3] !== undefined) { if (!skipUntil) out.push(escapeHtml(unescapeText(m[3]))); continue; }
-    if (!m[1]) { if (!skipUntil) out.push('&lt;'); continue; }
-    const raw = m[1].toLowerCase(), closing = whole.startsWith('</');
-    if (skipUntil) { if (closing && raw === skipUntil) skipUntil = null; continue; }
-    if (DROP_WITH_CONTENT.has(raw)) { if (!closing && !whole.endsWith('/>')) skipUntil = raw; continue; }
-    const tag = NORMAL[raw] ?? raw;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(clean))) {
+    if (m[4] !== undefined) { out.push(m[4].replace(/\u00a0/g, ' ').replace(/"/g, '&quot;')); continue; }
+    const closing = m[1] === '/', tag = m[2]!;
     if (VOID.has(tag)) { if (!closing) out.push(`<${tag}>`); continue; }
-    if (!BLOCK.has(raw) && !INLINE.has(raw)) continue;      // unknown tag: its text is kept, the tag is not
     if (closing) {
       const at = stack.lastIndexOf(tag);
       if (at < 0) continue;
       while (stack.length > at) out.push(`</${stack.pop()}>`);
     } else {
-      const a = alignOf(m[2] ?? '');
-      const align = a && ['p', 'h1', 'h2', 'h3', 'th', 'td', 'li', 'blockquote'].includes(tag) ? ` data-align="${a}"` : '';
-      if ((tag === 'li' && !['ul', 'ol'].includes(stack[stack.length - 1] ?? '')) ) { out.push('<ul>'); stack.push('ul'); }
-      stack.push(tag); out.push(`<${tag}${align}>`);
+      if (tag === 'li' && !['ul', 'ol'].includes(stack[stack.length - 1] ?? '')) { out.push('<ul>'); stack.push('ul'); }
+      stack.push(tag); out.push(`<${tag}${m[3] ?? ''}>`);
     }
   }
   while (stack.length) out.push(`</${stack.pop()}>`);
