@@ -2,6 +2,7 @@ import { DEFAULT_REGIONAL, DEFAULT_THEME, themeCss, type ThemeId } from '@meridi
 import { themeInitScript } from '@meridian/ui';
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
 import { ConfigProvider, type StoreConfig } from '@/components/config';
 import { core } from '@/server/core';
@@ -23,10 +24,11 @@ export const viewport: Viewport = { width: 'device-width', initialScale: 1, view
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const { cfg, ok } = await load();
+  const nonce = (await headers()).get('x-nonce') ?? undefined;     // this request's script nonce, set by the middleware
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <style dangerouslySetInnerHTML={{ __html: themeCss(cfg.brand.theme as ThemeId) }} />
       </head>
       <body>

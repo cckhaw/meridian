@@ -1,5 +1,6 @@
 import { themeInitScript } from '@meridian/ui';
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
 import { Providers } from '@/components/providers';
 import { loadPresentation } from '@/server/presentation';
@@ -17,10 +18,11 @@ export const viewport: Viewport = { width: 'device-width', initialScale: 1, view
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const p = await loadPresentation();
+  const nonce = (await headers()).get('x-nonce') ?? undefined;     // this request's script nonce, set by the middleware
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <style dangerouslySetInnerHTML={{ __html: p.css }} />
       </head>
       <body><Providers presentation={{ name: p.name, logoUrl: p.logoUrl, regional: p.regional }}>{children}</Providers></body>

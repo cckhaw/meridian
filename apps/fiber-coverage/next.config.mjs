@@ -1,9 +1,7 @@
-const isDev = process.env.NODE_ENV !== 'production';
-
 // Map tiles are the one outside resource: OpenStreetMap's tile servers (change the tile host here and in src/components/map.tsx to use another provider).
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
+  `script-src 'self'`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org",
   "font-src 'self' data:",
@@ -29,7 +27,6 @@ export default {
     return [{
       source: '/:path*',
       headers: [
-        { key: 'Content-Security-Policy', value: csp },
         { key: 'X-Frame-Options', value: 'DENY' },
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
@@ -37,6 +34,8 @@ export default {
         { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
         { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
       ],
-    }];
+    },
+    // Pages get their policy, with a script nonce per request, from src/middleware.ts (src/lib/csp.ts); what the API serves has no scripts at all.
+    ...['/api/:path*', '/tmf-api/:path*'].map((source) => ({ source, headers: [{ key: 'Content-Security-Policy', value: csp }] }))];
   },
 };

@@ -1,6 +1,7 @@
 import { themeCss, type ThemeId } from '@meridian/types';
 import { themeInitScript } from '@meridian/ui';
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
 import { BrandProvider } from '@/components/brand';
 import { loadBrand } from '@/server/brand';
@@ -17,10 +18,11 @@ export const viewport: Viewport = { width: 'device-width', initialScale: 1, view
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const b = await loadBrand();
+  const nonce = (await headers()).get('x-nonce') ?? undefined;     // this request's script nonce, set by the middleware
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <style dangerouslySetInnerHTML={{ __html: themeCss(b.theme as ThemeId) }} />
       </head>
       <body><BrandProvider value={{ name: b.name, logoUrl: b.logo ? `/brand/logo?v=${b.logo.sha256.slice(0, 12)}` : null }}>{children}</BrandProvider></body>
