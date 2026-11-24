@@ -2457,6 +2457,57 @@ describe('offer type switches and service types', () => {
     expect((await call('POST', R(own.id, '/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
   });
 
+  it('release impact and what-if: who is affected, sample baskets, and the price before and after', async () => {
+    const su = await root();
+    const mkUser = async (username: string, role: string, ip: string) => {
+      const c = await call('POST', '/users', { cookie: su, body: { username, displayName: username, roles: [role] } });
+      const temp = c.json.temporaryPassword as string;
+      const s = await signIn(username, temp, ip);
+      await call('POST', '/auth/change-password', { cookie: s.cookie, body: { current: temp, next: 'My-Own-Passphrase-2024' } });
+      return (await signIn(username, 'My-Own-Passphrase-2024', `${ip}1`)).cookie!;
+    };
+    const maker = await mkUser('whatif.maker', 'product-configurator', '10.5.6.');
+    const reviewer = await mkUser('whatif.reviewer', 'rating-charging', '10.5.7.');
+    const seller = await mkUser('whatif.seller', 'call-center', '10.5.8.');
+    const offer = { level: 'OFFER', id: 'whatif-a', name: 'Whatif A', parentId: 'grp-sim-only', kind: 'SIM_ONLY', status: 'ACTIVE', markets: [], prices: [{ type: 'RECURRING', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { options: [] } };
+    expect((await call('POST', '/catalog', { cookie: su, body: offer })).status).toBe(200);
+    const basket = { channel: 'SELF_SERVE', payment: { method: 'CREDIT_CARD' }, lines: [{ offerId: 'whatif-a' }] };
+    // sample baskets: anyone involved reads, only catalogue editors write
+    expect((await call('POST', '/catalog/pricing-personas', { cookie: reviewer, body: { name: 'x', basket } })).status).toBe(403);
+    expect((await call('POST', '/catalog/pricing-personas', { cookie: seller, body: { name: 'x', basket } })).status).toBe(403);
+    const made = await call('POST', '/catalog/pricing-personas', { cookie: maker, body: { name: 'Whatif basket', basket } });
+    expect(made.status).toBe(200);
+    expect((await call('POST', '/catalog/pricing-personas', { cookie: maker, body: { name: 'Whatif basket', basket } })).status).toBe(409);
+    expect((await call('POST', '/catalog/pricing-personas', { cookie: maker, body: { name: 'Bad', basket: { ...basket, lines: [] } } })).status).toBe(400);
+    expect((await call('GET', '/catalog/pricing-personas', { cookie: reviewer })).json.items.map((p: { name: string }) => p.name)).toContain('Whatif basket');
+    expect((await call('GET', '/catalog/pricing-personas', { cookie: seller })).status).toBe(403);
+    // a release that raises the price
+    const rel = (await call('POST', '/catalog/releases', { cookie: maker, body: { name: 'Whatif release' } })).json.id as string;
+    const staged = await call('PATCH', `/catalog/whatif-a?release=${rel}`, { cookie: maker, body: { prices: [{ type: 'RECURRING', amount: { amountMinor: 1500, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }] } });
+    expect(staged.json.staged).toBe(true);
+    const impact = await call('GET', `/catalog/releases/${rel}/impact`, { cookie: reviewer });
+    expect(impact.status).toBe(200);
+    expect(impact.json.offers.map((o: { id: string; why: string[] }) => [o.id, o.why])).toEqual([['whatif-a', ['repriced']]]);
+    const wi = await call('POST', `/catalog/releases/${rel}/what-if`, { cookie: reviewer, body: {} });
+    expect(wi.status).toBe(200);
+    const row = wi.json.rows.find((r: { name: string }) => r.name === 'Whatif basket');
+    expect(row.changed).toBe(true);
+    expect(row.after.monthlyPlanMinor - row.before.monthlyPlanMinor).toBe(500);
+    expect(row.delta.monthlyPlanMinor).toBe(500);
+    expect((await call('GET', `/catalog/whatif-a`, { cookie: su })).json.prices[0].amount.amountMinor).toBe(1000);   // live is untouched
+    for (const path of ['impact']) expect((await call('GET', `/catalog/releases/${rel}/${path}`, { cookie: seller })).status).toBe(403);
+    expect((await call('POST', `/catalog/releases/${rel}/what-if`, { cookie: seller, body: {} })).status).toBe(403);
+    expect((await call('POST', `/catalog/releases/${rel}/what-if`, { cookie: reviewer, body: { personaIds: ['nope'] } })).status).toBe(400);
+    // update and delete
+    const pid = made.json.id as string;
+    expect((await call('PATCH', `/catalog/pricing-personas/${pid}`, { cookie: maker, body: { name: 'Renamed', basket } })).json.name).toBe('Renamed');
+    expect((await call('DELETE', `/catalog/pricing-personas/${pid}`, { cookie: reviewer })).status).toBe(403);
+    expect((await call('DELETE', `/catalog/pricing-personas/${pid}`, { cookie: maker })).status).toBe(200);
+    expect((await call('DELETE', `/catalog/pricing-personas/${pid}`, { cookie: maker })).status).toBe(404);
+    await call('POST', `/catalog/releases/${rel}/cancel`, { cookie: maker });
+  });
+
+
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
     const su = await root();
     const cust = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'North Nina', idDocument: 'S2468013A' } })).json.customer;

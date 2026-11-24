@@ -451,6 +451,12 @@ post('/catalog/releases/:id/cancel', 'catalog:write', ({ db, user, params }) => 
 post('/catalog/releases/:id/rebase', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.rebaseNode(q, user.username, params.id!, z.object({ nodeId: z.string().max(80) }).parse(body).nodeId)));
 post('/catalog/releases/:id/reprice', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.stageReprice(q, user.username, params.id!, z.object({ offerId: z.string().max(80), prices: z.array(priceSchema).min(1).max(10), newId: z.string().max(60).optional(), name: z.string().min(1).max(100).optional(), repointDependents: z.boolean().optional() }).parse(body) as never)));
 post('/catalog/releases/:id/reverse', 'catalog:write', ({ db, user, params }) => db.tx((q) => core.createReverseRelease(q, user.username, params.id!)));
+get('/catalog/releases/:id/impact', releaseRead, ({ db, params }) => core.releaseImpact(db, params.id!));
+post('/catalog/releases/:id/what-if', releaseRead, ({ db, params, body }) => core.releaseWhatIf(db, params.id!, z.object({ personaIds: z.array(z.string().uuid()).max(50).optional(), baskets: z.array(z.object({ name: z.string().min(1).max(80), basket: z.any() })).max(10).optional() }).parse(body ?? {}) as never));
+get('/catalog/pricing-personas', releaseRead, async ({ db }) => ({ items: await core.listPersonas(db) }));
+post('/catalog/pricing-personas', 'catalog:write', ({ db, user, body }) => db.tx((q) => core.savePersona(q, user.username, body as never)));
+patch('/catalog/pricing-personas/:id', 'catalog:write', ({ db, user, params, body }) => db.tx((q) => core.savePersona(q, user.username, body as never, params.id!)));
+route('DELETE', '/catalog/pricing-personas/:id', 'catalog:write', async ({ db, user, params }) => { await db.tx((q) => core.deletePersona(q, user.username, params.id!)); return { ok: true }; });
 get('/catalog/:id/availability', 'catalog:read', ({ db, user, params, query }) => core.variantAvailability(db, params.id!, user.scope.storeId ?? str(query, 'location') ?? core.MAIN_WAREHOUSE).then((items) => ({ items })));
 const ruleBody = z.object({ id: z.string().max(60), name: z.string().max(120), status: z.enum(['DRAFT', 'ACTIVE', 'RETIRED']).optional(), when: z.array(z.string().max(90)).max(6), target: z.string().max(90), percentBps: z.number().int().optional(), amountMinor: z.number().int().optional() });
 get('/bundle-rules', 'catalog:read', async ({ db, user }) => ({ items: await core.listBundleRules(db, liveOnly(user) ? 'ACTIVE' : undefined) }));
