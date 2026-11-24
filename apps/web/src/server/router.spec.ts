@@ -2251,6 +2251,12 @@ describe('offer type switches and service types', () => {
       return (await signIn(username, 'My-Own-Passphrase-2024', `${ip}1`)).cookie!;
     };
     const seller = await mkUser('release.seller', 'call-center', '10.6.2.');
+    const approver = await mkUser('release.approver', 'rating-charging', '10.6.3.');
+    /** Sent for review by the super user (who prepared it) and approved by a second person. */
+    const review = async (rid: string) => {
+      expect((await call('POST', `/catalog/releases/${rid}/submit`, { cookie: su, body: {} })).json.status).toBe('IN_REVIEW');
+      expect((await call('POST', `/catalog/releases/${rid}/approve`, { cookie: approver, body: {} })).json.status).toBe('APPROVED');
+    };
     const offer = (id: string, extra: Record<string, unknown> = {}) => ({ level: 'OFFER', id, name: id, parentId: 'grp-sim-only', kind: 'SIM_ONLY', status: 'DRAFT', markets: [], prices: [{ type: 'RECURRING', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { options: [] }, ...extra });
     // permissions: releases are for people who maintain the catalog
     expect((await call('GET', '/catalog/releases', { cookie: seller })).status).toBe(403);
@@ -2300,7 +2306,7 @@ describe('offer type switches and service types', () => {
     expect(pv.status).toBe(200);
     expect(pv.json.results.every((r: any) => r.ok)).toBe(true);
     expect(pv.json.summary).toMatchObject({ changes: 7, added: 1, deleted: 1, repriced: 1, moved: 1, errors: 0 });
-    expect(pv.json.canPublish).toBe(true);
+    expect([pv.json.ready, pv.json.canPublish]).toEqual([true, false]);                                      // sound, but not approved yet
     expect(pv.json.nodes.find((n: any) => n.id === 'rel-http-live').fields.map((f: any) => f.field).sort()).toEqual(['description', 'parentId', 'prices']);
     expect((await call('GET', '/catalog/rel-http-gone', { cookie: su })).status).toBe(200);                // still there
     // a live edit after staging is a conflict until it is accepted
@@ -2308,8 +2314,10 @@ describe('offer type switches and service types', () => {
     const conflicted = await call('GET', R(''), { cookie: su });
     expect(conflicted.json.conflicts.map((c: any) => [c.nodeId, c.kind])).toEqual([['rel-http-live', 'CHANGED_LIVE']]);
     expect((await call('GET', R('/preview'), { cookie: su })).json.canPublish).toBe(false);
+    const notReady = await call('POST', R('/submit'), { cookie: su, body: {} });
+    expect([notReady.status, notReady.json.error.code]).toEqual([400, 'INVALID']);                    // a reviewer is not asked to look at it
     const blocked = await call('POST', R('/publish'), { cookie: su });
-    expect([blocked.status, blocked.json.error.code]).toEqual([409, 'CONFLICT']);
+    expect([blocked.status, blocked.json.error.code]).toEqual([409, 'CONFLICT']);                             // and a draft cannot be published
     expect((await call('GET', '/catalog/rel-http-new', { cookie: su })).status).toBe(404);                  // nothing was applied
     expect((await call('POST', R('/rebase'), { cookie: su, body: { nodeId: 'rel-http-live' } })).status).toBe(200);
     expect((await call('GET', R(''), { cookie: su })).json.conflicts).toEqual([]);
@@ -2318,6 +2326,7 @@ describe('offer type switches and service types', () => {
     expect((await call('DELETE', R(`/changes/${removable.id}`), { cookie: su })).status).toBe(200);
     expect((await call('DELETE', R('/changes/999999999'), { cookie: su })).status).toBe(404);
     expect((await call('POST', R('/publish'), { cookie: seller })).status).toBe(403);
+    await review(id);
     const pub = await call('POST', R('/publish'), { cookie: su });
     expect([pub.status, pub.json.status, pub.json.publishedBy]).toEqual([200, 'PUBLISHED', SU.username]);
     expect(pub.json.result.summary).toMatchObject({ added: 1, repriced: 1, moved: 1 });
@@ -2330,6 +2339,8 @@ describe('offer type switches and service types', () => {
     const r2 = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Later' } })).json;
     await call('PATCH', `/catalog/rel-http-new?release=${r2.id}`, { cookie: su, body: { description: 'later' } });
     const S = (path: string) => `/catalog/releases/${r2.id}${path}`;
+    expect((await call('POST', S('/schedule'), { cookie: su, body: { publishAt: new Date(Date.now() + 86_400_000).toISOString() } })).status).toBe(409);   // not approved yet
+    await review(r2.id);
     expect((await call('POST', S('/schedule'), { cookie: su, body: { publishAt: new Date(Date.now() - 60_000).toISOString() } })).status).toBe(400);
     const when = new Date(Date.now() + 86_400_000).toISOString();
     expect((await call('POST', S('/schedule'), { cookie: su, body: { publishAt: when } })).json.publishAt).toBe(when);
@@ -2350,6 +2361,7 @@ describe('offer type switches and service types', () => {
     const rpv = await call('GET', T('/preview'), { cookie: su });
     expect(rpv.json.summary).toMatchObject({ repriced: 1, added: 0, retired: 0, errors: 0 });
     expect(rpv.json.groups).toEqual([{ key: 'reprice:rel-http-sold', oldId: 'rel-http-sold', newId: 'rel-http-sold-v2' }]);
+    await review(r3.id);
     expect((await call('POST', T('/publish'), { cookie: su })).json.status).toBe('PUBLISHED');
     expect([(await call('GET', '/catalog/rel-http-sold', { cookie: su })).json.status, (await call('GET', '/catalog/rel-http-sold-v2', { cookie: su })).json.status]).toEqual(['RETIRED', 'ACTIVE']);
     const rev = await call('POST', T('/reverse'), { cookie: su });
@@ -2357,6 +2369,92 @@ describe('offer type switches and service types', () => {
     expect((await call('POST', S('/reverse'), { cookie: su })).status).toBe(409);                            // a cancelled release has nothing to reverse
     const revPv = await call('GET', `/catalog/releases/${rev.json.id}/preview`, { cookie: su });
     expect(revPv.json.results.some((r: any) => r.op === 'STATUS')).toBe(true);
+  });
+
+  it('release review: who may prepare, review and publish, a second person for every release, comments and sending back', async () => {
+    const su = await root();
+    const mkUser = async (username: string, role: string, ip: string) => {
+      const c = await call('POST', '/users', { cookie: su, body: { username, displayName: username, roles: [role] } });
+      const temp = c.json.temporaryPassword as string;
+      const s = await signIn(username, temp, ip);
+      await call('POST', '/auth/change-password', { cookie: s.cookie, body: { current: temp, next: 'My-Own-Passphrase-2024' } });
+      return (await signIn(username, 'My-Own-Passphrase-2024', `${ip}1`)).cookie!;
+    };
+    const maker = await mkUser('review.maker', 'product-configurator', '10.5.1.');        // catalog:write + release:submit
+    const reviewer = await mkUser('review.reviewer', 'rating-charging', '10.5.2.');        // release:approve (and reads the catalog)
+    const seller = await mkUser('review.seller', 'call-center', '10.5.3.');                // none of it
+    const offer = (id: string) => ({ level: 'OFFER', id, name: id, parentId: 'grp-sim-only', kind: 'SIM_ONLY', status: 'ACTIVE', markets: [], prices: [{ type: 'RECURRING', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }], contract: { termMonths: 0 }, characteristics: {}, fulfilment: { options: [] } });
+    expect((await call('POST', '/catalog', { cookie: su, body: offer('review-a') })).status).toBe(200);
+    expect((await call('POST', '/catalog', { cookie: su, body: offer('review-b') })).status).toBe(200);
+    expect((await call('POST', '/catalog', { cookie: su, body: offer('review-c') })).status).toBe(200);
+    const R = (id: string, path = '') => `/catalog/releases/${id}${path}`;
+    // the maker prepares one
+    const made = await call('POST', '/catalog/releases', { cookie: maker, body: { name: 'Review me' } });
+    expect(made.status).toBe(200);
+    const id = made.json.id as string;
+    expect((await call('PATCH', `/catalog/review-a?release=${id}`, { cookie: maker, body: { description: 'by the maker' } })).json.staged).toBe(true);
+    expect((await call('PATCH', `/catalog/review-a?release=${id}`, { cookie: reviewer, body: { description: 'sneaky' } })).status).toBe(403);   // a reviewer does not change it
+    expect((await call('POST', '/catalog/releases', { cookie: reviewer, body: { name: 'x' } })).status).toBe(403);
+    // who can see it: everyone involved, nobody else
+    expect((await call('GET', R(id), { cookie: maker })).status).toBe(200);
+    expect((await call('GET', R(id), { cookie: reviewer })).status).toBe(200);
+    expect((await call('GET', R(id, '/preview'), { cookie: reviewer })).json.ready).toBe(true);
+    expect((await call('GET', R(id), { cookie: seller })).status).toBe(403);
+    expect((await call('GET', '/catalog/releases', { cookie: seller })).status).toBe(403);
+    // who can do what
+    expect((await call('POST', R(id, '/submit'), { cookie: reviewer, body: {} })).status).toBe(403);          // no release:submit
+    expect((await call('POST', R(id, '/approve'), { cookie: maker, body: {} })).status).toBe(403);            // no release:approve
+    expect((await call('POST', R(id, '/publish'), { cookie: maker })).status).toBe(403);
+    expect((await call('POST', R(id, '/publish'), { cookie: reviewer })).status).toBe(403);
+    expect((await call('POST', R(id, '/approve'), { cookie: reviewer, body: {} })).status).toBe(409);         // not in review yet
+    const sent = await call('POST', R(id, '/submit'), { cookie: maker, body: { note: 'please check' } });
+    expect([sent.status, sent.json.status, sent.json.submittedBy]).toEqual([200, 'IN_REVIEW', 'review.maker']);
+    expect((await call('PATCH', `/catalog/review-a?release=${id}`, { cookie: maker, body: { description: 'late change' } })).status).toBe(409);   // frozen while reviewed
+    // comments, from anyone involved
+    expect((await call('POST', R(id, '/comments'), { cookie: reviewer, body: { body: 'Is the description final?' } })).status).toBe(200);
+    expect((await call('POST', R(id, '/comments'), { cookie: maker, body: { body: 'Yes.' } })).status).toBe(200);
+    expect((await call('POST', R(id, '/comments'), { cookie: reviewer, body: { body: '' } })).status).toBe(400);
+    expect((await call('POST', R(id, '/comments'), { cookie: seller, body: { body: 'hi' } })).status).toBe(403);
+    // sent back with a reason, reopened by its author
+    expect((await call('POST', R(id, '/reject'), { cookie: reviewer, body: {} })).status).toBe(400);          // a reason is required
+    const back = await call('POST', R(id, '/reject'), { cookie: reviewer, body: { reason: 'Add a line item first.' } });
+    expect([back.status, back.json.status, back.json.decidedBy]).toEqual([200, 'REJECTED', 'review.reviewer']);
+    expect((await call('POST', R(id, '/reopen'), { cookie: maker, body: { note: 'adding it' } })).json.status).toBe('DRAFT');
+    expect((await call('POST', R(id, '/reopen'), { cookie: maker, body: {} })).status).toBe(409);               // already a draft
+    expect((await call('POST', R(id, '/reopen'), { cookie: seller, body: {} })).status).toBe(403);
+    expect((await call('POST', R(id, '/submit'), { cookie: maker, body: {} })).json.status).toBe('IN_REVIEW');
+    const approved = await call('POST', R(id, '/approve'), { cookie: reviewer, body: { note: 'good' } });
+    expect([approved.status, approved.json.status, approved.json.decidedBy]).toEqual([200, 'APPROVED', 'review.reviewer']);
+    const got = await call('GET', R(id), { cookie: reviewer });
+    expect(got.json.comments.map((c: any) => [c.kind, c.author])).toEqual([['SUBMIT', 'review.maker'], ['COMMENT', 'review.reviewer'], ['COMMENT', 'review.maker'], ['REJECT', 'review.reviewer'], ['REOPEN', 'review.maker'], ['SUBMIT', 'review.maker'], ['APPROVE', 'review.reviewer']]);
+    expect(got.json.comments[3].body).toBe('Add a line item first.');
+    expect(got.json.review.blocker).toBeNull();                                                                  // the reviewer may review it
+    expect((await call('GET', R(id), { cookie: maker })).json.review.blocker).toMatch(/You started this release/);
+    // publishing is its own permission
+    expect((await call('POST', R(id, '/publish'), { cookie: maker })).status).toBe(403);
+    const pub = await call('POST', R(id, '/publish'), { cookie: su });
+    expect([pub.status, pub.json.status, pub.json.publishedBy]).toEqual([200, 'PUBLISHED', SU.username]);
+    expect((await call('GET', '/catalog/review-a/detail', { cookie: su })).json.node.description).toBe('by the maker');
+    // the person who started a release cannot review it, however much they may do otherwise
+    const own = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Super user\'s own' } })).json;
+    await call('PATCH', `/catalog/review-b?release=${own.id}`, { cookie: su, body: { description: 'mine' } });
+    expect((await call('POST', R(own.id, '/submit'), { cookie: su, body: {} })).json.status).toBe('IN_REVIEW');
+    const self = await call('POST', R(own.id, '/approve'), { cookie: su, body: {} });
+    expect([self.status, self.json.error.code]).toEqual([403, 'FORBIDDEN']);
+    expect(self.json.error.message).toMatch(/You started this release, so someone else has to review it/);
+    expect((await call('POST', R(own.id, '/reject'), { cookie: su, body: { reason: 'no' } })).status).toBe(403);
+    expect((await call('GET', R(own.id), { cookie: su })).json.review.blocker).toMatch(/started/);
+    expect((await call('POST', R(own.id, '/approve'), { cookie: reviewer, body: {} })).json.status).toBe('APPROVED');
+    // a release someone else changed something in cannot be reviewed by that person either
+    const mixed = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Mixed' } })).json;
+    await call('PATCH', `/catalog/review-a?release=${mixed.id}`, { cookie: su, body: { description: 'su change' } });
+    expect((await call('PATCH', `/catalog/review-c?release=${mixed.id}`, { cookie: maker, body: { description: 'maker change' } })).json.staged).toBe(true);
+    expect((await call('POST', R(mixed.id, '/submit'), { cookie: su, body: {} })).status).toBe(200);
+    expect((await call('GET', R(mixed.id), { cookie: maker })).json.review.blocker).toBe('You made changes in this release, so someone else has to review it.');
+    expect((await call('POST', R(mixed.id, '/approve'), { cookie: reviewer, body: {} })).status).toBe(200);
+    // a release in review or approved can be thrown away, and its nodes are free again
+    expect((await call('POST', R(mixed.id, '/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
+    expect((await call('POST', R(own.id, '/cancel'), { cookie: su })).json.status).toBe('CANCELLED');
   });
 
   it('northbound subscriber API: scopes, mandatory idempotency keys with replay, and the SIM swap flow with a one-time password', async () => {
