@@ -2339,18 +2339,19 @@ describe('offer type switches and service types', () => {
     expect((await call('PATCH', `/catalog/rel-http-new?release=${r2.id}`, { cookie: su, body: { description: 'x' } })).status).toBe(409);
     // a sold offer is repriced as a new version, and a published release can be reversed
     const buyer = (await call('POST', '/customers', { cookie: su, body: { ...IDENTITY(), context: 'order', segment: 'CONSUMER', displayName: 'Release Buyer', idDocument: 'S9753186A' } })).json.customer;
-    await placeOrder(db, { customerId: buyer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CASH' }, lines: [{ offerId: 'plan-sim-5g' }] });
-    const r3 = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Reprice the 5G plan' } })).json;
+    expect((await call('POST', '/catalog', { cookie: su, body: offer('rel-http-sold', { status: 'ACTIVE', fulfilment: { requiresSimActivation: true } }) })).status).toBe(200);   // its own offer: the shared ones are used by other tests
+    await placeOrder(db, { customerId: buyer.id, channel: 'RETAIL_ASSISTED', attribution: { storeId: 'STORE-SG-001', salespersonId: 'a1' }, payment: { method: 'CASH' }, lines: [{ offerId: 'rel-http-sold' }] });
+    const r3 = (await call('POST', '/catalog/releases', { cookie: su, body: { name: 'Reprice the sold plan' } })).json;
     const T = (path: string) => `/catalog/releases/${r3.id}${path}`;
     const unsold = await call('POST', T('/reprice'), { cookie: su, body: { offerId: 'rel-http-new', prices: [{ type: 'RECURRING', amount: { amountMinor: 2000, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }] } });
     expect([unsold.status, unsold.json.error.message]).toEqual([400, expect.stringMatching(/never been sold/)]);
-    const rp = await call('POST', T('/reprice'), { cookie: su, body: { offerId: 'plan-sim-5g', prices: [{ type: 'RECURRING', amount: { amountMinor: 3900, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }, { type: 'ONE_TIME', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true }] } });
-    expect([rp.status, rp.json.newId]).toEqual([200, 'plan-sim-5g-v2']);
+    const rp = await call('POST', T('/reprice'), { cookie: su, body: { offerId: 'rel-http-sold', prices: [{ type: 'RECURRING', amount: { amountMinor: 3900, currency: 'SGD' }, taxInclusive: true, periodMonths: 1 }, { type: 'ONE_TIME', amount: { amountMinor: 1000, currency: 'SGD' }, taxInclusive: true }] } });
+    expect([rp.status, rp.json.newId]).toEqual([200, 'rel-http-sold-v2']);
     const rpv = await call('GET', T('/preview'), { cookie: su });
     expect(rpv.json.summary).toMatchObject({ repriced: 1, added: 0, retired: 0, errors: 0 });
-    expect(rpv.json.groups).toEqual([{ key: 'reprice:plan-sim-5g', oldId: 'plan-sim-5g', newId: 'plan-sim-5g-v2' }]);
+    expect(rpv.json.groups).toEqual([{ key: 'reprice:rel-http-sold', oldId: 'rel-http-sold', newId: 'rel-http-sold-v2' }]);
     expect((await call('POST', T('/publish'), { cookie: su })).json.status).toBe('PUBLISHED');
-    expect([(await call('GET', '/catalog/plan-sim-5g', { cookie: su })).json.status, (await call('GET', '/catalog/plan-sim-5g-v2', { cookie: su })).json.status]).toEqual(['RETIRED', 'ACTIVE']);
+    expect([(await call('GET', '/catalog/rel-http-sold', { cookie: su })).json.status, (await call('GET', '/catalog/rel-http-sold-v2', { cookie: su })).json.status]).toEqual(['RETIRED', 'ACTIVE']);
     const rev = await call('POST', T('/reverse'), { cookie: su });
     expect([rev.status, rev.json.status, rev.json.reversesReleaseId]).toEqual([200, 'DRAFT', r3.id]);
     expect((await call('POST', S('/reverse'), { cookie: su })).status).toBe(409);                            // a cancelled release has nothing to reverse
