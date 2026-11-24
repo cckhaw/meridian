@@ -1,0 +1,70 @@
+name: Deploy production
+
+# Production only: no preview deployments are built from branches or pull requests. A push to main that changes the web app (or what it is made of) builds and
+# deploys it to Vercel; once the new deployment is live, every older deployment of the project is deleted and only the latest is kept.
+# Needs the repository's VERCEL_TOKEN (a secret) and VERCEL_ORG_ID / VERCEL_TEAM_ID / VERCEL_PROJECT_ID (secrets or variables) under Settings → Secrets and variables → Actions.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'services/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - 'tsconfig.base.json'
+      - 'scripts/vercel-prune.mjs'
+      - '.github/workflows/deploy-production.yml'
+  workflow_dispatch:
+
+# One production deploy at a time, in order; a newer push waits for the one running instead of cancelling it half way.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || secrets.VERCEL_TEAM_ID || vars.VERCEL_TEAM_ID }}
+  VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID || vars.VERCEL_TEAM_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check the Vercel settings are present
+        run: |
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            [ -n "${!v}" ] || { echo "::error::$v is not set under Settings → Secrets and variables → Actions"; exit 1; }
+          done
+      - uses: actions/checkout@v4
+      - run: node --test scripts/vercel-prune.test.mjs
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: npm install --global vercel@latest
+
+      # Built here, from the repository root (the project's Root Directory is apps/web), then uploaded as it is: Vercel does not build it again.
+      - name: Pull the production settings
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy to production
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1)
+          echo "Deployed $url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Deployed to production" >> "$GITHUB_STEP_SUMMARY"
+          echo "$url" >> "$GITHUB_STEP_SUMMARY"
+
+      # Only when the new deployment is READY and has its production alias (it is live): delete everything older, previews and failed builds included.
+      - name: Delete the previous deployments
+        run: node scripts/vercel-prune.mjs "${{ steps.deploy.outputs.url }}"
