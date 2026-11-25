@@ -1,5 +1,5 @@
 'use client';
-import { Alert, Button, Card, Field, Input, SectionTitle, Select, Spinner } from '@meridian/ui';
+import { Alert, Badge, Button, Card, Field, Input, SectionTitle, Select, Spinner } from '@meridian/ui';
 import Link from 'next/link';
 import { useState } from 'react';
 import { post, useAction, useApi } from '@/lib/api';
@@ -18,6 +18,29 @@ const Check = ({ checked, onChange, children, hint }: { checked: boolean; onChan
   <label className="flex items-start gap-2 text-subhead"><input type="checkbox" className="mt-1" checked={checked} onChange={(e) => onChange(e.target.checked)} /> <span>{children}{hint && <span className="block text-footnote text-label2">{hint}</span>}</span></label>
 );
 const n = (v: string) => (v === '' ? 0 : Number(v));
+
+interface PostureItem { id: string; title: string; status: 'OK' | 'ATTENTION' | 'INFO'; detail: string }
+/** Where this deployment stands on the settings that matter most (second factor, keys, outside access): a read-only list, with what still needs a decision first. */
+function Posture() {
+  const r = useApi<{ items: PostureItem[] }>('/settings/security-posture');
+  if (r.error || !r.data) return null;
+  const rank = { ATTENTION: 0, INFO: 1, OK: 2 } as const;
+  const items = [...r.data.items].sort((a, b) => rank[a.status] - rank[b.status]);
+  const open = items.filter((i) => i.status === 'ATTENTION').length;
+  return (
+    <section aria-label="Security posture" className="space-y-3">
+      <SectionTitle>Where you stand{open ? ` · ${open} to look at` : ''}</SectionTitle>
+      <Card className="divide-y divide-separator p-0">
+        {items.map((i) => (
+          <div key={i.id} className="flex items-start gap-3 px-4 py-3">
+            <Badge tone={i.status === 'OK' ? 'success' : i.status === 'ATTENTION' ? 'warning' : 'neutral'}>{i.status === 'OK' ? 'In place' : i.status === 'ATTENTION' ? 'Look at' : 'Choice'}</Badge>
+            <div className="min-w-0"><p className="text-subhead font-medium">{i.title}</p><p className="text-footnote text-label2">{i.detail}</p></div>
+          </div>
+        ))}
+      </Card>
+    </section>
+  );
+}
 
 /** Settings → Security policy: how strong passwords must be, when accounts lock, when idle screens sign out, and how a forgotten password is recovered. */
 export function SecurityPolicySettings() {
@@ -38,6 +61,8 @@ export function SecurityPolicySettings() {
     <div className="space-y-6">
       <Card><p className="text-subhead text-label2">These rules apply to every password and sign-in. <strong className="text-label">Until you save, the defaults are what they were before</strong>: 12 characters, lock after 5 failures for 15 minutes, 30 minutes idle. A change applies at once. The super user’s password is set in the server’s environment and is not subject to expiry or history.</p></Card>
       {act.error && <Alert>{act.error}</Alert>}{act.ok && <Alert tone="success">{act.ok}</Alert>}
+
+      <Posture />
 
       <section aria-label="Passwords" className="space-y-3">
         <SectionTitle>Passwords</SectionTitle>

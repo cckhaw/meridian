@@ -171,3 +171,5 @@ export * from './catalog-release.js';
 export * from './catalog-impact.js';
 export * from './net-guard.js';
 export * from './rekey.js';
+export * from './saml.js';
+export * from './security-posture.js';
