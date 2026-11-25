@@ -8,6 +8,6 @@
   "exports": { ".": "./src/index.ts", "./tokens.css": "./src/tokens.css", "./tailwind-preset": "./src/tailwind-preset.cjs" },
   "scripts": { "typecheck": "tsc --noEmit" },
   "dependencies": { "@meridian/types": "workspace:*" },
-  "peerDependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" },
-  "devDependencies": { "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "react": "^19.0.0", "react-dom": "^19.0.0", "typescript": "^5.6.3" }
+  "peerDependencies": { "react": "^19.3.1", "react-dom": "^19.3.1" },
+  "devDependencies": { "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "react": "^19.3.1", "react-dom": "^19.3.1", "typescript": "^5.6.3" }
 }
