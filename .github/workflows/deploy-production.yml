@@ -18,6 +18,12 @@ on:
       - 'scripts/vercel-prune.mjs'
       - '.github/workflows/deploy-production.yml'
   workflow_dispatch:
+    inputs:
+      keep_production:
+        description: 'Production deployments to keep this time, the live one included (1 deletes every older deployment). Empty uses the repository variable KEEP_PRODUCTION_DEPLOYMENTS, or 3.'
+        required: false
+        default: ''
+        type: string
 
 # One production deploy at a time, in order; a newer push waits for the one running instead of cancelling it half way.
 concurrency:
@@ -77,6 +83,6 @@ jobs:
       - name: Delete the previous deployments
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          KEEP_PRODUCTION_DEPLOYMENTS: ${{ vars.KEEP_PRODUCTION_DEPLOYMENTS }}
+          KEEP_PRODUCTION_DEPLOYMENTS: ${{ inputs.keep_production || vars.KEEP_PRODUCTION_DEPLOYMENTS }}
           DEPLOYED_URL: ${{ steps.deploy.outputs.url }}
         run: node scripts/vercel-prune.mjs "$DEPLOYED_URL"
